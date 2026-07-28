@@ -2,6 +2,7 @@ import { validateProxyKey } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
+import { mergeRequestOverrides } from "@/lib/request-overrides"
 import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
 import { readData } from "@/lib/store"
 import { protocolPaths, type Protocol } from "@/lib/types"
@@ -78,6 +79,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   const { model, provider, protocol: modelProtocol } = route
 
   try {
+    payload = mergeRequestOverrides(payload, model.requestOverrides || {})
     payload.model = model.upstreamModel
     const headers = new Headers()
     request.headers.forEach((value, key) => {

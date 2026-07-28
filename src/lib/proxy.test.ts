@@ -61,6 +61,30 @@ describe("proxy request", () => {
     expect(upstream).not.toHaveBeenCalled()
   })
 
+  test("deep merges configured model request overrides before proxying", async () => {
+    await updateData((data) => {
+      const model = data.models.find((entry) => entry.id === "cx/codex")
+      if (model) model.requestOverrides = { reasoning: { effort: "none" }, temperature: 0 }
+    })
+    let capturedBody: Record<string, unknown> | undefined
+    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    }) as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", reasoning: { effort: "high", summary: "auto" }, temperature: 1 }),
+    }), "openai-responses")
+
+    expect(capturedBody).toEqual({ model: "gpt-upstream", input: "hello", reasoning: { effort: "none", summary: "auto" }, temperature: 0 })
+    await updateData((data) => {
+      const model = data.models.find((entry) => entry.id === "cx/codex")
+      if (model) delete model.requestOverrides
+    })
+  })
+
   test("returns a controlled error for a legacy malformed provider header", async () => {
     await updateData((data) => {
       const provider = data.providers.find((entry) => entry.id === "cx")

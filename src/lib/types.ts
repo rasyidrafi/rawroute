@@ -24,6 +24,7 @@ export interface Model {
   protocol?: Protocol
   upstreamPath?: string
   unprefixed?: boolean
+  requestOverrides?: Record<string, unknown>
   enabled: boolean
   createdAt: string
 }

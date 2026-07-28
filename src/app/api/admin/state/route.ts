@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth"
 import { cleanId, gatewayModelId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
+import { validateRequestOverrides } from "@/lib/request-overrides"
 import { hashPassword, readData, updateData, validatePasswordUpdate } from "@/lib/store"
 import type { ApiKey, Model, Protocol, Provider } from "@/lib/types"
 
@@ -117,6 +118,7 @@ export async function POST(request: Request) {
           ...(input.protocol ? { protocol: input.protocol } : {}),
           ...(input.upstreamPath?.trim() ? { upstreamPath: input.upstreamPath.trim() } : {}),
           ...(input.unprefixed ? { unprefixed: true } : {}),
+          ...(input.requestOverrides && Object.keys(input.requestOverrides).length ? { requestOverrides: validateRequestOverrides(input.requestOverrides) } : {}),
           enabled: input.enabled !== false,
           createdAt: existing?.createdAt || new Date().toISOString(),
         }
