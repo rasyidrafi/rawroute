@@ -1,7 +1,8 @@
 import { requireAdmin } from "@/lib/auth"
 import { cleanId, gatewayModelId, jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
-import { hashPassword, readData, updateData } from "@/lib/store"
+import { hashPassword, readData, updateData, validatePasswordUpdate } from "@/lib/store"
 import type { ApiKey, Model, Protocol, Provider } from "@/lib/types"
 
 export const runtime = "nodejs"
@@ -41,6 +42,16 @@ export async function POST(request: Request) {
         const password = String(body.password || "")
         if (password.length < 10) throw new Error("Password must be at least 10 characters.")
         data.admin.passwordHash = hashPassword(password)
+        data.admin.mustChangePassword = false
+        return
+      }
+
+      if (body.action === "update-password") {
+        const currentPassword = String(body.currentPassword || "")
+        const newPassword = String(body.newPassword || "")
+        const confirmPassword = String(body.confirmPassword || "")
+        validatePasswordUpdate(currentPassword, newPassword, confirmPassword, data.admin.passwordHash)
+        data.admin.passwordHash = hashPassword(newPassword)
         data.admin.mustChangePassword = false
         return
       }
@@ -119,9 +130,12 @@ export async function POST(request: Request) {
       }
 
       if (body.action === "create-api-key") {
+        const name = String(body.name || "").trim()
+        if (!name) throw new Error("API key name is required.")
+        if (name.length > 80) throw new Error("API key name must be 80 characters or fewer.")
         const key: ApiKey = {
           id: crypto.randomUUID(),
-          name: String(body.name || "Gateway key"),
+          name,
           key: `sk-rr-${crypto.randomUUID().replaceAll("-", "")}`,
           createdAt: new Date().toISOString(),
         }
@@ -138,8 +152,10 @@ export async function POST(request: Request) {
       throw new Error("Unknown action.")
     })
 
+    writeLog("info", "admin", "Dashboard action completed", { action: body.action })
     return Response.json({ ok: true, mustChangePassword: data.admin.mustChangePassword })
   } catch (error) {
+    writeLog("error", "admin", "Dashboard action failed", { action: body.action, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to save changes.", 400)
   }
 }

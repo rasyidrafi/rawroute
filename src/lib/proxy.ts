@@ -1,5 +1,6 @@
 import { validateProxyKey } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
 import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
 import { readData } from "@/lib/store"
@@ -49,7 +50,10 @@ async function readBoundedBody(request: Request, maximum: number) {
 }
 
 export async function proxyRequest(request: Request, requestedProtocol: Protocol) {
-  if (!(await validateProxyKey(request))) return jsonError("Invalid gateway API key.", 401)
+  if (!(await validateProxyKey(request))) {
+    writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: requestedProtocol })
+    return jsonError("Invalid gateway API key.", 401)
+  }
   if (!request.headers.get("content-type")?.includes("application/json")) {
     return jsonError("Content-Type must be application/json.", 415)
   }
@@ -67,7 +71,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   if (typeof payload.model !== "string") return jsonError("A model ID is required.", 400)
   const data = await readData()
   const route = resolveRoute(data.providers, data.models, payload.model, requestedProtocol)
-  if (!route.ok) return jsonError(route.message, route.status)
+  if (!route.ok) {
+    writeLog("warn", "gateway", "Request could not be routed", { model: payload.model, protocol: requestedProtocol, status: route.status })
+    return jsonError(route.message, route.status)
+  }
   const { model, provider, protocol: modelProtocol } = route
 
   try {
@@ -98,8 +105,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     })
     responseHeaders.set("x-rawroute-provider", provider.id)
     responseHeaders.set("x-rawroute-model", model.id)
+    writeLog(upstream.ok ? "info" : "warn", "gateway", "Upstream response opened", { provider: provider.id, model: model.id, protocol: modelProtocol, status: upstream.status })
     return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
+    writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: model.id, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError("Upstream request failed.", 502, error instanceof Error ? error.message : undefined)
   }
 }

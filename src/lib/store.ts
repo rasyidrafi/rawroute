@@ -50,6 +50,13 @@ export function verifyPassword(password: string, stored: string) {
   return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
+export function validatePasswordUpdate(currentPassword: string, newPassword: string, confirmPassword: string, storedHash: string) {
+  if (!verifyPassword(currentPassword, storedHash)) throw new Error("Current password is incorrect.")
+  if (newPassword.length < 10) throw new Error("New password must be at least 10 characters.")
+  if (newPassword !== confirmPassword) throw new Error("New passwords do not match.")
+  if (currentPassword === newPassword) throw new Error("New password must be different from the current password.")
+}
+
 function initialData(): AppData {
   if (process.env.NODE_ENV === "production") assertProductionBootstrap(process.env)
   return {

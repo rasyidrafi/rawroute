@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { assertProductionBootstrap, hashPassword, readData, stripUndefined, updateData, verifyPassword } from "@/lib/store"
+import { assertProductionBootstrap, hashPassword, readData, stripUndefined, updateData, validatePasswordUpdate, verifyPassword } from "@/lib/store"
 
 describe("admin passwords", () => {
   test("stores a salted hash rather than the password", () => {
@@ -12,6 +12,13 @@ describe("admin passwords", () => {
   test("rejects the wrong password", () => {
     const hash = hashPassword("correct-password")
     expect(verifyPassword("wrong-password", hash)).toBe(false)
+  })
+
+  test("validates current password and matching replacement", () => {
+    const hash = hashPassword("current-password")
+    expect(() => validatePasswordUpdate("wrong-password", "new-password-123", "new-password-123", hash)).toThrow("Current password is incorrect.")
+    expect(() => validatePasswordUpdate("current-password", "new-password-123", "different-password", hash)).toThrow("New passwords do not match.")
+    expect(() => validatePasswordUpdate("current-password", "new-password-123", "new-password-123", hash)).not.toThrow()
   })
 })
 

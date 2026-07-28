@@ -1,6 +1,6 @@
 "use client"
 
-import { BoxesIcon, KeyRoundIcon, LogOutIcon, RouteIcon, ServerIcon } from "lucide-react"
+import { BoxesIcon, KeyRoundIcon, LogsIcon, LogOutIcon, RouteIcon, ServerIcon, SettingsIcon } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useRouter } from "next/navigation"
@@ -14,6 +14,8 @@ const navigation = [
   { title: "Endpoint & Key", icon: KeyRoundIcon, href: "/dashboard" },
   { title: "Providers", icon: ServerIcon, href: "/dashboard/providers" },
   { title: "Models", icon: BoxesIcon, href: "/dashboard/models" },
+  { title: "Console Log", icon: LogsIcon, href: "/dashboard/logs" },
+  { title: "Settings", icon: SettingsIcon, href: "/dashboard/settings" },
 ]
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
