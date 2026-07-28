@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
-import { applicationDefault, getApp, getApps, initializeApp } from "firebase-admin/app"
+import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore } from "firebase-admin/firestore"
 
 import type { AppData } from "@/lib/types"
@@ -10,6 +10,16 @@ let memoryData: AppData | undefined
 
 const documentedAdminPassword = "change-me-now"
 const documentedProxyKey = "sk-local-change-me"
+
+export function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.filter((item) => item !== undefined).map((item) => stripUndefined(item)) as T
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, stripUndefined(item)])) as T
+  }
+  return value
+}
 
 export function assertProductionBootstrap(environment: Record<string, string | undefined>) {
   const adminPassword = environment.DEFAULT_ADMIN_PASSWORD
@@ -62,8 +72,14 @@ function initialData(): AppData {
 }
 
 function stateDocument() {
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
-  const app = getApps().length ? getApp() : initializeApp({ credential: applicationDefault(), projectId })
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replaceAll("\\n", "\n")
+  const configuredServiceAccount = projectId && clientEmail && privateKey
+  const app = getApps().length ? getApp() : initializeApp({
+    credential: configuredServiceAccount ? cert({ projectId, clientEmail, privateKey }) : applicationDefault(),
+    projectId,
+  })
   const firestore = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)")
   const prefix = (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
   return firestore.collection(`${prefix}_system`).doc("state")
@@ -97,7 +113,7 @@ export async function writeData(data: AppData) {
   if (isMemoryBackend()) {
     memoryData = structuredClone(data)
   } else {
-    await stateDocument().set(data)
+    await stateDocument().set(stripUndefined(data))
   }
   cache = { data: structuredClone(data), expiresAt: Date.now() + cacheTtlMs }
 }
@@ -115,7 +131,7 @@ export async function updateData(mutator: (data: AppData) => void | Promise<void
     const snapshot = await transaction.get(reference)
     const data = snapshot.exists ? snapshot.data() as AppData : initialData()
     await mutator(data)
-    transaction.set(reference, data)
+    transaction.set(reference, stripUndefined(data))
     return data
   })
   cache = { data: structuredClone(result), expiresAt: Date.now() + cacheTtlMs }

@@ -3,5 +3,5 @@
 import { GatewayDashboard } from "@/components/gateway-dashboard"
 
 export default function Page() {
-  return <GatewayDashboard view="endpoint-key" />
+  return <GatewayDashboard view="models" />
 }

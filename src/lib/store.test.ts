@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { assertProductionBootstrap, hashPassword, readData, updateData, verifyPassword } from "@/lib/store"
+import { assertProductionBootstrap, hashPassword, readData, stripUndefined, updateData, verifyPassword } from "@/lib/store"
 
 describe("admin passwords", () => {
   test("stores a salted hash rather than the password", () => {
@@ -16,6 +16,20 @@ describe("admin passwords", () => {
 })
 
 describe("configuration storage", () => {
+  test("removes undefined optional fields before Firestore writes", () => {
+    const data = stripUndefined({
+      providers: [{ id: "openai", authHeader: undefined, secret: undefined }],
+      models: [{ id: "oa/test", protocol: undefined, upstreamPath: undefined }],
+      nested: { keep: "value", omit: undefined },
+    })
+
+    expect(data).toEqual({
+      providers: [{ id: "openai" }],
+      models: [{ id: "oa/test" }],
+      nested: { keep: "value" },
+    })
+  })
+
   test("persists an update through the test memory adapter", async () => {
     process.env.STORAGE_BACKEND = "memory"
     const before = await readData()

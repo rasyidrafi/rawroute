@@ -43,7 +43,7 @@ bun run lint
 bun run build
 ```
 
-For local Firebase credentials, set `GOOGLE_APPLICATION_CREDENTIALS` to an absolute service-account JSON path. On Cloud Run, do not set this variable; Application Default Credentials use the service's assigned identity.
+For explicit service-account authentication, set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`. Newlines in the private key may be encoded as `\n`. When these variables are absent, Cloud Run uses Application Default Credentials from the assigned service identity.
 
 ## Docker
 

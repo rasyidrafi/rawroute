@@ -23,6 +23,7 @@ export interface Model {
   upstreamModel: string
   protocol?: Protocol
   upstreamPath?: string
+  unprefixed?: boolean
   enabled: boolean
   createdAt: string
 }

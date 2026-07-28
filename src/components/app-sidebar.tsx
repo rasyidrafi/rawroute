@@ -1,19 +1,26 @@
 "use client"
 
 import { BoxesIcon, KeyRoundIcon, LogOutIcon, RouteIcon, ServerIcon } from "lucide-react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { useRouter } from "next/navigation"
+import { useState } from "react"
 
+import { LoadingSpinner } from "@/components/loading-spinner"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
 
 const navigation = [
-  { title: "Overview", icon: RouteIcon, target: "overview" },
-  { title: "Providers", icon: ServerIcon, target: "providers" },
-  { title: "Models", icon: BoxesIcon, target: "models" },
-  { title: "API keys", icon: KeyRoundIcon, target: "keys" },
+  { title: "Endpoint & Key", icon: KeyRoundIcon, href: "/dashboard" },
+  { title: "Providers", icon: ServerIcon, href: "/dashboard/providers" },
+  { title: "Models", icon: BoxesIcon, href: "/dashboard/models" },
 ]
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const router = useRouter()
+  const pathname = usePathname()
+  const [signingOut, setSigningOut] = useState(false)
+  const [logoutOpen, setLogoutOpen] = useState(false)
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -24,10 +31,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup><SidebarGroupLabel>Gateway</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
-          {navigation.map((item) => <SidebarMenuItem key={item.target}><SidebarMenuButton tooltip={item.title} onClick={() => document.getElementById(item.target)?.scrollIntoView({ behavior: "smooth" })}><item.icon /><span>{item.title}</span></SidebarMenuButton></SidebarMenuItem>)}
+          {navigation.map((item) => <SidebarMenuItem key={item.href}><SidebarMenuButton isActive={pathname === item.href} tooltip={item.title} render={<Link href={item.href} />}><item.icon /><span>{item.title}</span></SidebarMenuButton></SidebarMenuItem>)}
         </SidebarMenu></SidebarGroupContent></SidebarGroup>
       </SidebarContent>
-      <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton tooltip="Sign out" onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.push("/login"); router.refresh() }}><LogOutIcon /><span>Sign out</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu></SidebarFooter>
+      <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton aria-busy={signingOut} disabled={signingOut} tooltip="Sign out" onClick={() => setLogoutOpen(true)}>{signingOut ? <LoadingSpinner /> : <LogOutIcon />}<span>{signingOut ? "Signing out..." : "Sign out"}</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu><AlertDialog open={logoutOpen} onOpenChange={setLogoutOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Sign out?</AlertDialogTitle><AlertDialogDescription>Your dashboard session will end on this browser.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={signingOut}>Cancel</AlertDialogCancel><AlertDialogAction disabled={signingOut} onClick={async () => { setSigningOut(true); try { await fetch("/api/auth/logout", { method: "POST" }); router.push("/login"); router.refresh() } finally { setSigningOut(false) } }}>{signingOut && <LoadingSpinner />}Sign out</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></SidebarFooter>
     </Sidebar>
   )
 }

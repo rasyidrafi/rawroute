@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import { KeyRoundIcon, RouteIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -9,26 +9,35 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { LoadingSpinner } from "@/components/loading-spinner"
 
 export function LoginForm() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
 
-  async function submit(formData: FormData) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
     setLoading(true)
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(Object.fromEntries(formData)),
-    })
-    const result = await response.json()
-    setLoading(false)
-    if (!response.ok) {
-      toast.error(result.error?.message || "Login failed")
-      return
+    try {
+      const formData = new FormData(event.currentTarget)
+      const minimumSpinnerTime = new Promise((resolve) => setTimeout(resolve, 350))
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(formData)),
+      })
+      const result = await response.json()
+      await minimumSpinnerTime
+      if (!response.ok) {
+        toast.error(result.error?.message || "Login failed")
+        setLoading(false)
+        return
+      }
+      router.push("/dashboard")
+    } catch {
+      toast.error("Unable to reach the gateway")
+      setLoading(false)
     }
-    router.push("/dashboard")
-    router.refresh()
   }
 
   return (
@@ -43,7 +52,7 @@ export function LoginForm() {
         </div>
       </CardHeader>
       <CardContent>
-        <form action={submit}>
+        <form onSubmit={submit}>
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="username">Username</FieldLabel>
@@ -53,8 +62,8 @@ export function LoginForm() {
               <FieldLabel htmlFor="password">Password</FieldLabel>
               <Input id="password" name="password" type="password" placeholder="Default: change-me-now" autoComplete="current-password" required />
             </Field>
-            <Button disabled={loading} type="submit" className="w-full">
-              <KeyRoundIcon /> {loading ? "Signing in..." : "Sign in"}
+            <Button aria-busy={loading} disabled={loading} type="submit" className="w-full">
+              {loading ? <LoadingSpinner /> : <KeyRoundIcon />} {loading ? "Signing in..." : "Sign in"}
             </Button>
           </FieldGroup>
         </form>
