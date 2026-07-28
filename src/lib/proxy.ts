@@ -2,6 +2,7 @@ import { validateProxyKey } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
+import { extractReasoningEffort } from "@/lib/reasoning-effort"
 import { mergeRequestOverrides } from "@/lib/request-overrides"
 import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
 import { readData } from "@/lib/store"
@@ -81,6 +82,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   try {
     payload = mergeRequestOverrides(payload, model.requestOverrides || {})
     payload.model = model.upstreamModel
+    const reasoningEffort = extractReasoningEffort(payload)
     const headers = new Headers()
     request.headers.forEach((value, key) => {
       if (!blockedRequestHeaders.has(key.toLowerCase())) headers.set(key, value)
@@ -107,7 +109,13 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     })
     responseHeaders.set("x-rawroute-provider", provider.id)
     responseHeaders.set("x-rawroute-model", model.id)
-    writeLog(upstream.ok ? "info" : "warn", "gateway", "Upstream response opened", { provider: provider.id, model: model.id, protocol: modelProtocol, status: upstream.status })
+    writeLog(upstream.ok ? "info" : "warn", "gateway", "Upstream response opened", {
+      provider: provider.id,
+      model: model.id,
+      protocol: modelProtocol,
+      status: upstream.status,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    })
     return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
     writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: model.id, error: error instanceof Error ? error.message : "Unknown error" })

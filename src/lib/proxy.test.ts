@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 
 import { proxyRequest } from "@/lib/proxy"
+import { clearLogs, readLogs } from "@/lib/logger"
 import { updateData } from "@/lib/store"
 
 const originalFetch = globalThis.fetch
@@ -62,6 +63,7 @@ describe("proxy request", () => {
   })
 
   test("deep merges configured model request overrides before proxying", async () => {
+    clearLogs()
     await updateData((data) => {
       const model = data.models.find((entry) => entry.id === "cx/codex")
       if (model) model.requestOverrides = { reasoning: { effort: "none" }, temperature: 0 }
@@ -79,6 +81,7 @@ describe("proxy request", () => {
     }), "openai-responses")
 
     expect(capturedBody).toEqual({ model: "gpt-upstream", input: "hello", reasoning: { effort: "none", summary: "auto" }, temperature: 0 })
+    expect(readLogs()[0]?.details?.reasoningEffort).toBe("none")
     await updateData((data) => {
       const model = data.models.find((entry) => entry.id === "cx/codex")
       if (model) delete model.requestOverrides
