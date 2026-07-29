@@ -59,7 +59,7 @@ function DialogContent({
         )}
         {...props}
       >
-        <ScrollArea className="min-h-0 flex-1" viewportClassName="grid gap-4 p-4">
+        <ScrollArea className="min-h-0 flex-auto" viewportClassName="max-h-[calc(100svh-2rem)]" contentClassName="grid gap-4 p-4">
           {children}
         </ScrollArea>
         {showCloseButton && (

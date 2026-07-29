@@ -375,7 +375,7 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
         "min-h-0 flex-1 group-data-[collapsible=icon]:overflow-hidden",
         className
       )}
-      viewportClassName="flex flex-col gap-0"
+      contentClassName="flex flex-col gap-0"
       {...props}
     />
   )

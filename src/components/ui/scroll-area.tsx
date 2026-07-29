@@ -8,11 +8,13 @@ import { cn } from "@/lib/utils"
 function ScrollArea({
   className,
   viewportClassName,
+  contentClassName,
   orientation = "vertical",
   children,
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
   viewportClassName?: string
+  contentClassName?: string
   orientation?: "vertical" | "horizontal" | "both"
 }) {
   return (
@@ -25,7 +27,12 @@ function ScrollArea({
         data-slot="scroll-area-viewport"
         className={cn("size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1", viewportClassName)}
       >
-        {children}
+        <ScrollAreaPrimitive.Content
+          data-slot="scroll-area-content"
+          className={cn("min-w-full", contentClassName)}
+        >
+          {children}
+        </ScrollAreaPrimitive.Content>
       </ScrollAreaPrimitive.Viewport>
       {orientation !== "horizontal" && <ScrollBar />}
       {orientation !== "vertical" && <ScrollBar orientation="horizontal" />}
