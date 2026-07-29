@@ -294,7 +294,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       model: model.id,
       protocol: modelProtocol,
       status: upstream.status,
-      ...(providerApiKey ? { providerApiKey: providerApiKey.id } : {}),
+      ...(providerApiKey ? { providerApiKey: providerApiKey.name } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
     })
     return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })

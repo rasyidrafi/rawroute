@@ -85,6 +85,7 @@ describe("proxy request", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream")
     expect(response.headers.get("x-rawroute-provider-key")).toBe("provider-key")
     expect(await response.text()).toBe("event: done\ndata: ok\n\n")
+    expect(readLogs()[0]?.details?.providerApiKey).toBe("Primary")
   })
 
   test("returns 503 without contacting upstream when an authenticated provider has no enabled API keys", async () => {
