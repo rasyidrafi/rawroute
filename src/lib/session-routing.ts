@@ -32,6 +32,18 @@ function canonicalize(value: unknown): string {
   return JSON.stringify(value)
 }
 
+function textContent(value: unknown): string {
+  if (typeof value === "string") return value
+  if (Array.isArray(value)) return value.map(textContent).join("")
+  const item = record(value)
+  return item ? textContent(item.text ?? item.content) : ""
+}
+
+function isUserRoleSystemBootstrap(message: unknown) {
+  const content = record(message)?.content
+  return textContent(content).trimStart().startsWith("<system-reminder>")
+}
+
 function hashed(value: string, source: string, context: SessionContext, hard = false, responseId?: string): SessionIdentity {
   const scoped = `${context.gatewayKeyId}\n${context.providerId}\n${context.modelId}\n${value}`
   return {
@@ -53,7 +65,7 @@ function promptPrefix(payload: Record<string, unknown>, protocol: Protocol) {
       if (role === "system") stableMessages.push(message)
       if (role === "user") {
         stableMessages.push(message)
-        break
+        if (!isUserRoleSystemBootstrap(message)) break
       }
     }
     if (tools || system || stableMessages.length) return canonicalize({ tools, system, messages: stableMessages })

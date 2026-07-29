@@ -66,4 +66,26 @@ describe("session identity extraction", () => {
     expect(continuation?.key).toBe(first?.key)
     expect(first?.source).toBe("prompt-prefix")
   })
+
+  test("distinguishes Droid subagents that share a user-role system bootstrap", () => {
+    const request = new Request("https://gateway.test/v1/chat/completions")
+    const bootstrap = { role: "user", content: [{ type: "text", text: "<system-reminder>Shared Droid bootstrap</system-reminder>" }] }
+    const backend = extractSessionIdentity(request, {
+      messages: [bootstrap, { role: "user", content: "Explore backend graduation domain" }],
+    }, "openai-chat", context)
+    const portal = extractSessionIdentity(request, {
+      messages: [bootstrap, { role: "user", content: "Explore portal graduation UI" }],
+    }, "openai-chat", context)
+    const backendContinuation = extractSessionIdentity(request, {
+      messages: [
+        bootstrap,
+        { role: "user", content: "Explore backend graduation domain" },
+        { role: "assistant", content: "I will inspect it." },
+        { role: "user", content: "Continue" },
+      ],
+    }, "openai-chat", context)
+
+    expect(backend?.key).not.toBe(portal?.key)
+    expect(backendContinuation?.key).toBe(backend?.key)
+  })
 })
