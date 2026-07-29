@@ -4,7 +4,7 @@ import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
 import { validateRequestOverrides } from "@/lib/request-overrides"
 import { hashPassword, readData, updateData, validatePasswordUpdate } from "@/lib/store"
-import type { ApiKey, Model, Protocol, Provider } from "@/lib/types"
+import type { ApiKey, Model, Protocol, Provider, ProviderApiKey } from "@/lib/types"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -23,9 +23,10 @@ export async function GET() {
   const data = await readData()
   return Response.json({
     admin: { username: data.admin.username, mustChangePassword: data.admin.mustChangePassword },
-    providers: data.providers.map((provider) => ({
-      ...provider,
-      secret: provider.secret ? "__unchanged__" : "",
+    providers: data.providers,
+    providerApiKeys: data.providerApiKeys.map((apiKey) => ({
+      ...apiKey,
+      key: apiKey.key ? "__unchanged__" : "",
     })),
     models: data.models,
     apiKeys: data.apiKeys,
@@ -76,7 +77,6 @@ export async function POST(request: Request) {
           if (migratedIds.has(model.id)) throw new Error(`Provider prefix would conflict with model ID ${model.id}.`)
           migratedIds.add(model.id)
         }
-        const secret = input.secret === "__unchanged__" ? existing?.secret : input.secret?.trim()
         const provider: Provider = {
           id,
           name: input.name.trim(),
@@ -85,19 +85,49 @@ export async function POST(request: Request) {
           protocol: input.protocol as Protocol,
           authType: input.authType || "bearer",
           ...(input.authHeader?.trim() ? { authHeader: input.authHeader.trim() } : {}),
-          ...(secret ? { secret } : {}),
           headers: validateProviderHeaders(input.headers || {}),
           enabled: input.enabled !== false,
           createdAt: existing?.createdAt || new Date().toISOString(),
         }
         data.providers = [...data.providers.filter((item) => item.id !== originalId), provider]
+        if (originalId && originalId !== id) {
+          data.providerApiKeys = data.providerApiKeys.map((apiKey) => apiKey.providerId === originalId ? { ...apiKey, providerId: id } : apiKey)
+        }
         data.models = migratedModels
+        return
+      }
+
+      if (body.action === "save-provider-api-key") {
+        const input = body.providerApiKey as Partial<ProviderApiKey> & { originalId?: string }
+        const providerId = String(input.providerId || "")
+        if (!data.providers.some((provider) => provider.id === providerId)) throw new Error("Provider is missing.")
+        const name = String(input.name || "").trim()
+        if (!name) throw new Error("API key name is required.")
+        if (name.length > 80) throw new Error("API key name must be 80 characters or fewer.")
+        const existing = input.originalId ? data.providerApiKeys.find((apiKey) => apiKey.id === input.originalId) : undefined
+        const key = input.key === "__unchanged__" ? existing?.key : String(input.key || "").trim()
+        if (!key) throw new Error("API key value is required.")
+        const providerApiKey: ProviderApiKey = {
+          id: existing?.id || crypto.randomUUID(),
+          providerId,
+          name,
+          key,
+          enabled: input.enabled !== false,
+          createdAt: existing?.createdAt || new Date().toISOString(),
+        }
+        data.providerApiKeys = [...data.providerApiKeys.filter((apiKey) => apiKey.id !== input.originalId), providerApiKey]
+        return
+      }
+
+      if (body.action === "delete-provider-api-key") {
+        data.providerApiKeys = data.providerApiKeys.filter((apiKey) => apiKey.id !== String(body.id))
         return
       }
 
       if (body.action === "delete-provider") {
         const id = String(body.id)
         data.providers = data.providers.filter((item) => item.id !== id)
+        data.providerApiKeys = data.providerApiKeys.filter((item) => item.providerId !== id)
         data.models = data.models.filter((item) => item.providerId !== id)
         return
       }

@@ -2,7 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore } from "firebase-admin/firestore"
 
-import type { AppData } from "@/lib/types"
+import type { AppData, Provider } from "@/lib/types"
 
 const cacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 10_000)
 let cache: { data: AppData; expiresAt: number } | undefined
@@ -60,7 +60,7 @@ export function validatePasswordUpdate(currentPassword: string, newPassword: str
 function initialData(): AppData {
   if (process.env.NODE_ENV === "production") assertProductionBootstrap(process.env)
   return {
-    version: 1,
+    version: 2,
     admin: {
       username: process.env.DEFAULT_ADMIN_USERNAME || "admin",
       passwordHash: hashPassword(process.env.DEFAULT_ADMIN_PASSWORD || documentedAdminPassword),
@@ -68,6 +68,7 @@ function initialData(): AppData {
     },
     sessionSecret: process.env.SESSION_SECRET || randomBytes(32).toString("hex"),
     providers: [],
+    providerApiKeys: [],
     models: [],
     apiKeys: [{
       id: crypto.randomUUID(),
@@ -76,6 +77,31 @@ function initialData(): AppData {
       createdAt: new Date().toISOString(),
     }],
   }
+}
+
+type LegacyProvider = Provider & { secret?: string }
+type StoredAppData = Omit<AppData, "version" | "providers" | "providerApiKeys"> & {
+  version?: 1 | 2
+  providers?: LegacyProvider[]
+  providerApiKeys?: AppData["providerApiKeys"]
+}
+
+export function migrateData(stored: StoredAppData): AppData {
+  const providerApiKeys = [...(stored.providerApiKeys || [])]
+  const providers = (stored.providers || []).map(({ secret, ...provider }) => {
+    if (secret && !providerApiKeys.some((entry) => entry.providerId === provider.id)) {
+      providerApiKeys.push({
+        id: crypto.randomUUID(),
+        providerId: provider.id,
+        name: "Migrated provider key",
+        key: secret,
+        enabled: true,
+        createdAt: provider.createdAt || new Date().toISOString(),
+      })
+    }
+    return provider
+  })
+  return { ...stored, version: 2, providers, providerApiKeys } as AppData
 }
 
 function stateDocument() {
@@ -107,7 +133,12 @@ export async function readData(): Promise<AppData> {
   const reference = stateDocument()
   const data = await reference.firestore.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference)
-    if (snapshot.exists) return snapshot.data() as AppData
+    if (snapshot.exists) {
+      const stored = snapshot.data() as StoredAppData
+      const migrated = migrateData(stored)
+      if (stored.version !== 2) transaction.set(reference, stripUndefined(migrated))
+      return migrated
+    }
     const created = initialData()
     transaction.create(reference, created)
     return created
@@ -136,7 +167,7 @@ export async function updateData(mutator: (data: AppData) => void | Promise<void
   const reference = stateDocument()
   const result = await reference.firestore.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(reference)
-    const data = snapshot.exists ? snapshot.data() as AppData : initialData()
+    const data = snapshot.exists ? migrateData(snapshot.data() as StoredAppData) : initialData()
     await mutator(data)
     transaction.set(reference, stripUndefined(data))
     return data

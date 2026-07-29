@@ -10,6 +10,7 @@ test("dashboard loading state preserves the dashboard navigation shell", () => {
 
   expect(markup).toContain('data-slot="dashboard-content-skeleton"')
   expect(markup).not.toContain("min-h-svh")
+  expect(markup).not.toContain("h-9 w-28")
   expect(layout).toContain('<AppSidebar variant="inset" />')
   expect(layout).toContain("<SiteHeader />")
 })

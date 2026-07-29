@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { assertProductionBootstrap, hashPassword, readData, stripUndefined, updateData, validatePasswordUpdate, verifyPassword } from "@/lib/store"
+import { assertProductionBootstrap, hashPassword, migrateData, readData, stripUndefined, updateData, validatePasswordUpdate, verifyPassword } from "@/lib/store"
 
 describe("admin passwords", () => {
   test("stores a salted hash rather than the password", () => {
@@ -23,6 +23,26 @@ describe("admin passwords", () => {
 })
 
 describe("configuration storage", () => {
+  test("migrates a legacy provider secret into a linked provider API key", () => {
+    const migrated = migrateData({
+      version: 1,
+      admin: { username: "admin", passwordHash: "hash", mustChangePassword: false },
+      sessionSecret: "session-secret",
+      providers: [{
+        id: "openai", name: "OpenAI", prefix: "oa", baseUrl: "https://api.example.com/v1",
+        protocol: "openai-chat", authType: "bearer", secret: "legacy-secret", headers: {}, enabled: true,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }],
+      models: [],
+      apiKeys: [],
+    })
+
+    expect(migrated.version).toBe(2)
+    expect(migrated.providers[0]).not.toHaveProperty("secret")
+    expect(migrated.providerApiKeys).toHaveLength(1)
+    expect(migrated.providerApiKeys[0]).toMatchObject({ providerId: "openai", key: "legacy-secret", enabled: true })
+  })
+
   test("removes undefined optional fields before Firestore writes", () => {
     const data = stripUndefined({
       providers: [{ id: "openai", authHeader: undefined, secret: undefined }],

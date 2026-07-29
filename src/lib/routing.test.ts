@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
-import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
-import type { Model, Provider } from "@/lib/types"
+import { buildUpstreamUrl, resolveRoute, selectProviderApiKey } from "@/lib/routing"
+import type { Model, Provider, ProviderApiKey } from "@/lib/types"
 
 const provider: Provider = {
   id: "codex",
@@ -54,5 +54,27 @@ describe("protocol-preserving routing", () => {
   test("honors provider base paths and custom model paths", () => {
     expect(buildUpstreamUrl("https://proxy.example.com/tenant/acme", "/custom/infer").toString())
       .toBe("https://proxy.example.com/tenant/acme/custom/infer")
+  })
+})
+
+describe("provider API key selection", () => {
+  test("round-robins enabled keys belonging to the requested provider", () => {
+    const keys: ProviderApiKey[] = [
+      { id: "a", providerId: "round-robin-test", name: "A", key: "secret-a", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "disabled", providerId: "round-robin-test", name: "Disabled", key: "secret-disabled", enabled: false, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "other", providerId: "other", name: "Other", key: "secret-other", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "b", providerId: "round-robin-test", name: "B", key: "secret-b", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" },
+    ]
+
+    expect(selectProviderApiKey("round-robin-test", keys)?.id).toBe("a")
+    expect(selectProviderApiKey("round-robin-test", keys)?.id).toBe("b")
+    expect(selectProviderApiKey("round-robin-test", keys)?.id).toBe("a")
+  })
+
+  test("returns no key when a provider has no enabled credentials", () => {
+    const keys: ProviderApiKey[] = [
+      { id: "disabled", providerId: "empty-test", name: "Disabled", key: "secret", enabled: false, createdAt: "2026-01-01T00:00:00.000Z" },
+    ]
+    expect(selectProviderApiKey("empty-test", keys)).toBeUndefined()
   })
 })

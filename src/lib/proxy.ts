@@ -4,7 +4,7 @@ import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
 import { extractReasoningEffort } from "@/lib/reasoning-effort"
 import { mergeRequestOverrides } from "@/lib/request-overrides"
-import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
+import { buildUpstreamUrl, resolveRoute, selectProviderApiKey } from "@/lib/routing"
 import { readData } from "@/lib/store"
 import { protocolPaths, type Protocol } from "@/lib/types"
 
@@ -78,6 +78,11 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     return jsonError(route.message, route.status)
   }
   const { model, provider, protocol: modelProtocol } = route
+  const providerApiKey = selectProviderApiKey(provider.id, data.providerApiKeys)
+  if (provider.authType !== "none" && !providerApiKey) {
+    writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.id, model: model.id })
+    return jsonError("The model provider has no enabled API keys.", 503)
+  }
 
   try {
     payload = mergeRequestOverrides(payload, model.requestOverrides || {})
@@ -90,10 +95,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     headers.set("content-type", "application/json")
     Object.entries(validateProviderHeaders(provider.headers)).forEach(([key, value]) => headers.set(key, value))
 
-    if (provider.authType === "bearer" && provider.secret) headers.set("authorization", `Bearer ${provider.secret}`)
-    if (provider.authType === "x-api-key" && provider.secret) headers.set("x-api-key", provider.secret)
-    if (provider.authType === "custom-header" && provider.authHeader && provider.secret) {
-      headers.set(provider.authHeader, provider.secret)
+    if (provider.authType === "bearer" && providerApiKey) headers.set("authorization", `Bearer ${providerApiKey.key}`)
+    if (provider.authType === "x-api-key" && providerApiKey) headers.set("x-api-key", providerApiKey.key)
+    if (provider.authType === "custom-header" && provider.authHeader && providerApiKey) {
+      headers.set(provider.authHeader, providerApiKey.key)
     }
 
     const upstream = await fetch(buildUpstreamUrl(provider.baseUrl, model.upstreamPath || protocolPaths[modelProtocol]), {
@@ -109,11 +114,13 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     })
     responseHeaders.set("x-rawroute-provider", provider.id)
     responseHeaders.set("x-rawroute-model", model.id)
+    if (providerApiKey) responseHeaders.set("x-rawroute-provider-key", providerApiKey.id)
     writeLog(upstream.ok ? "info" : "warn", "gateway", "Upstream response opened", {
       provider: provider.id,
       model: model.id,
       protocol: modelProtocol,
       status: upstream.status,
+      ...(providerApiKey ? { providerApiKey: providerApiKey.id } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
     })
     return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })

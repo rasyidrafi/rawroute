@@ -4,6 +4,8 @@ RawRoute is a small, protocol-preserving AI provider gateway. It aggregates user
 
 RawRoute changes only the request's `model` value, injects upstream authentication and configured headers, then streams the upstream response back without parsing or rebuilding it.
 
+Providers, upstream API keys, and models are configured independently. A provider can own multiple enabled API keys; requests currently rotate across them with process-local round-robin selection.
+
 ## Native endpoints
 
 | Protocol | Endpoint |
@@ -73,9 +75,11 @@ Proxy request bodies are limited by `MAX_PROXY_BODY_BYTES` (10 MiB by default), 
 
 Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the persistent configuration source and supports multiple Cloud Run instances safely.
 
-## Provider secrets
+## Provider API keys
 
-Provider credentials entered in the dashboard are stored in Firestore and are never returned to the browser after saving. Firestore encrypts stored data at rest, but access is controlled by the Cloud Run service identity, so keep its IAM permissions narrow. A future Secret Manager-backed credential adapter can remove these values from the configuration document entirely.
+Provider credentials are stored as records linked to their provider and are never returned to the browser after saving. Existing single-secret providers are migrated automatically into a linked API-key record. Firestore encrypts stored data at rest, but access is controlled by the Cloud Run service identity, so keep its IAM permissions narrow. A future Secret Manager-backed credential adapter can remove the credential values from the configuration document entirely.
+
+Round-robin state is local to each application instance in this first phase. It does not yet provide session affinity, distributed counters, rate-limit cooldowns, or RPM/TPM-aware selection.
 
 ## Documentation sources
 

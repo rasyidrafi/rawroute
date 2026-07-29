@@ -10,8 +10,16 @@ export interface Provider {
   protocol: Protocol
   authType: AuthType
   authHeader?: string
-  secret?: string
   headers: Record<string, string>
+  enabled: boolean
+  createdAt: string
+}
+
+export interface ProviderApiKey {
+  id: string
+  providerId: string
+  name: string
+  key: string
   enabled: boolean
   createdAt: string
 }
@@ -37,7 +45,7 @@ export interface ApiKey {
 }
 
 export interface AppData {
-  version: 1
+  version: 2
   admin: {
     username: string
     passwordHash: string
@@ -45,6 +53,7 @@ export interface AppData {
   }
   sessionSecret: string
   providers: Provider[]
+  providerApiKeys: ProviderApiKey[]
   models: Model[]
   apiKeys: ApiKey[]
 }

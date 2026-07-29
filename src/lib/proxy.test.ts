@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 
 import { proxyRequest } from "@/lib/proxy"
 import { clearLogs, readLogs } from "@/lib/logger"
@@ -8,22 +8,28 @@ const originalFetch = globalThis.fetch
 
 afterEach(() => { globalThis.fetch = originalFetch })
 
+beforeEach(async () => {
+  process.env.STORAGE_BACKEND = "memory"
+  await updateData((data) => {
+    data.apiKeys = [{ id: "key", name: "Test", key: "sk-test", createdAt: new Date().toISOString() }]
+    data.providers = [{
+      id: "cx", name: "Codex", prefix: "cx", baseUrl: "https://upstream.example/v1",
+      protocol: "openai-responses", authType: "bearer",
+      headers: { "x-static": "yes" }, enabled: true, createdAt: new Date().toISOString(),
+    }]
+    data.providerApiKeys = [{
+      id: "provider-key", providerId: "cx", name: "Primary", key: "provider-secret",
+      enabled: true, createdAt: new Date().toISOString(),
+    }]
+    data.models = [{
+      id: "cx/codex", providerId: "cx", name: "codex", upstreamModel: "gpt-upstream",
+      enabled: true, createdAt: new Date().toISOString(),
+    }]
+  })
+})
+
 describe("proxy request", () => {
   test("rewrites only the model field and pipes the upstream response", async () => {
-    process.env.STORAGE_BACKEND = "memory"
-    await updateData((data) => {
-      data.apiKeys = [{ id: "key", name: "Test", key: "sk-test", createdAt: new Date().toISOString() }]
-      data.providers = [{
-        id: "cx", name: "Codex", prefix: "cx", baseUrl: "https://upstream.example/v1",
-        protocol: "openai-responses", authType: "bearer", secret: "provider-secret",
-        headers: { "x-static": "yes" }, enabled: true, createdAt: new Date().toISOString(),
-      }]
-      data.models = [{
-        id: "cx/codex", providerId: "cx", name: "codex", upstreamModel: "gpt-upstream",
-        enabled: true, createdAt: new Date().toISOString(),
-      }]
-    })
-
     let captured: { url?: string; body?: Record<string, unknown>; headers?: Headers } = {}
     globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       captured = {
@@ -47,7 +53,23 @@ describe("proxy request", () => {
     expect(captured.headers?.get("cookie")).toBeNull()
     expect(response.headers.get("set-cookie")).toBeNull()
     expect(response.headers.get("content-type")).toContain("text/event-stream")
+    expect(response.headers.get("x-rawroute-provider-key")).toBe("provider-key")
     expect(await response.text()).toBe("event: done\ndata: ok\n\n")
+  })
+
+  test("returns 503 without contacting upstream when an authenticated provider has no enabled API keys", async () => {
+    await updateData((data) => { data.providerApiKeys = [] })
+    const upstream = mock(() => Promise.resolve(new Response()))
+    globalThis.fetch = upstream as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello" }),
+    }), "openai-responses")
+
+    expect(response.status).toBe(503)
+    expect(upstream).not.toHaveBeenCalled()
   })
 
   test("rejects the wrong native endpoint before calling upstream", async () => {
