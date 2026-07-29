@@ -1,17 +1,19 @@
-import { validateProxyKey } from "@/lib/auth"
+import { authenticateProxyKey } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
 import { extractReasoningEffort } from "@/lib/reasoning-effort"
 import { mergeRequestOverrides } from "@/lib/request-overrides"
-import { buildUpstreamUrl, resolveRoute, selectProviderApiKey } from "@/lib/routing"
+import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
+import { getRoutingStateStore } from "@/lib/routing-state"
+import { extractSessionIdentity } from "@/lib/session-routing"
 import { readData } from "@/lib/store"
-import { protocolPaths, type Protocol } from "@/lib/types"
+import { protocolPaths, type Protocol, type ProviderApiKey } from "@/lib/types"
 
 const blockedRequestHeaders = new Set([
   "authorization", "x-api-key", "cookie", "host", "content-length", "connection",
   "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
-  "transfer-encoding", "upgrade",
+  "transfer-encoding", "upgrade", "x-rawroute-session-id", "x-session-id", "session_id",
 ])
 
 const blockedResponseHeaders = new Set([
@@ -51,8 +53,108 @@ async function readBoundedBody(request: Request, maximum: number) {
   return { ok: true as const, value: new TextDecoder().decode(body) }
 }
 
+function retryAfterSeconds(headers: Headers) {
+  const value = headers.get("retry-after")
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.max(1, Math.ceil(seconds))
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(1, Math.ceil((date - Date.now()) / 1000)) : undefined
+}
+
+function responseIdsFromSse(buffer: string) {
+  const ids: string[] = []
+  for (const line of buffer.split("\n")) {
+    if (!line.startsWith("data:")) continue
+    try {
+      const data = JSON.parse(line.slice(5).trim()) as Record<string, unknown>
+      const response = data.response && typeof data.response === "object" ? data.response as Record<string, unknown> : data
+      if (typeof response.id === "string") ids.push(response.id)
+    } catch { /* Partial and non-JSON SSE data is passed through unchanged. */ }
+  }
+  return ids
+}
+
+function trackedUpstreamBody(
+  upstream: Response,
+  onResponseId: (id: string) => Promise<void>,
+  onFinished: () => Promise<void>,
+) {
+  if (!upstream.body) {
+    void onFinished()
+    return null
+  }
+  const reader = upstream.body.getReader()
+  const contentType = upstream.headers.get("content-type") || ""
+  const decoder = new TextDecoder()
+  let buffered = ""
+  let finished = false
+  const mappedResponseIds = new Set<string>()
+  const mapResponseId = async (id: string) => {
+    if (mappedResponseIds.has(id)) return
+    mappedResponseIds.add(id)
+    try {
+      await onResponseId(id)
+    } catch (error) {
+      writeLog("warn", "gateway", "Unable to persist response affinity", { error: error instanceof Error ? error.message : "Unknown error" })
+    }
+  }
+  const finish = async () => {
+    if (finished) return
+    finished = true
+    if (contentType.includes("application/json") && buffered) {
+      try {
+        const parsed = JSON.parse(buffered) as Record<string, unknown>
+        if (typeof parsed.id === "string") await mapResponseId(parsed.id)
+      } catch { /* The upstream body remains untouched when it is not valid JSON. */ }
+    }
+    if (contentType.includes("text/event-stream") && buffered) {
+      for (const id of responseIdsFromSse(buffered)) await mapResponseId(id)
+    }
+    try {
+      await onFinished()
+    } catch (error) {
+      writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
+    }
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          buffered += decoder.decode()
+          await finish()
+          controller.close()
+          return
+        }
+        if (contentType.includes("text/event-stream")) {
+          const text = decoder.decode(value, { stream: true })
+          buffered += text
+          const boundary = buffered.lastIndexOf("\n\n")
+          if (boundary >= 0) {
+            const complete = buffered.slice(0, boundary + 2)
+            buffered = buffered.slice(boundary + 2)
+            for (const id of responseIdsFromSse(complete)) await mapResponseId(id)
+          }
+        } else if (contentType.includes("application/json") && buffered.length < 2 * 1024 * 1024) {
+          buffered += decoder.decode(value, { stream: true })
+        }
+        controller.enqueue(value)
+      } catch (error) {
+        await finish()
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason)
+      await finish()
+    },
+  })
+}
+
 export async function proxyRequest(request: Request, requestedProtocol: Protocol) {
-  if (!(await validateProxyKey(request))) {
+  const gatewayApiKey = await authenticateProxyKey(request)
+  if (!gatewayApiKey) {
     writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: requestedProtocol })
     return jsonError("Invalid gateway API key.", 401)
   }
@@ -78,10 +180,55 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     return jsonError(route.message, route.status)
   }
   const { model, provider, protocol: modelProtocol } = route
-  const providerApiKey = selectProviderApiKey(provider.id, data.providerApiKeys)
-  if (provider.authType !== "none" && !providerApiKey) {
+  const providerApiKeys = data.providerApiKeys.filter((apiKey) => apiKey.providerId === provider.id && apiKey.enabled)
+  if (provider.authType !== "none" && !providerApiKeys.length) {
     writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.id, model: model.id })
     return jsonError("The model provider has no enabled API keys.", 503)
+  }
+
+  let providerApiKey: ProviderApiKey | undefined = providerApiKeys[0]
+  let routingStore: ReturnType<typeof getRoutingStateStore> | undefined
+  let routingLeaseId: string | undefined
+  const session = extractSessionIdentity(request, payload, modelProtocol, {
+    gatewayKeyId: gatewayApiKey.id,
+    providerId: provider.id,
+    modelId: model.id,
+    secret: data.sessionSecret,
+  })
+  const routingSessionKey = session?.key || `anonymous:${crypto.randomUUID()}`
+  if (provider.authType !== "none") {
+    try {
+      routingStore = getRoutingStateStore()
+      const requiredCredentialId = session?.responseId
+        ? await routingStore.credentialForResponse(provider.id, session.responseId) || undefined
+        : undefined
+      if (session?.hard && !requiredCredentialId) {
+        return jsonError("The previous response session is unavailable or expired.", 409)
+      }
+      const reservation = await routingStore.reserve({
+        providerId: provider.id,
+        modelId: model.id,
+        credentials: providerApiKeys,
+        sessionKey: routingSessionKey,
+        hardAffinity: session?.hard || false,
+        requiredCredentialId,
+      })
+      if (!reservation.ok) {
+        const status = reservation.reason === "capacity" ? 429 : 503
+        return Response.json({ error: { message: reservation.reason === "capacity"
+          ? "All provider API keys are currently at capacity."
+          : "The API key bound to this response session is currently unavailable." } }, {
+          status,
+          headers: { "retry-after": String(reservation.retryAfterSeconds) },
+        })
+      }
+      providerApiKey = providerApiKeys.find((apiKey) => apiKey.id === reservation.credentialId)
+      if (!providerApiKey) return jsonError("The selected provider API key is unavailable.", 503)
+      routingLeaseId = reservation.leaseId
+    } catch (error) {
+      writeLog("error", "gateway", "Shared routing state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+      return jsonError("Shared routing state is unavailable.", 503)
+    }
   }
 
   try {
@@ -101,6 +248,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       headers.set(provider.authHeader, providerApiKey.key)
     }
 
+    const startedAt = Date.now()
     const upstream = await fetch(buildUpstreamUrl(provider.baseUrl, model.upstreamPath || protocolPaths[modelProtocol]), {
       method: "POST",
       headers,
@@ -115,6 +263,32 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     responseHeaders.set("x-rawroute-provider", provider.id)
     responseHeaders.set("x-rawroute-model", model.id)
     if (providerApiKey) responseHeaders.set("x-rawroute-provider-key", providerApiKey.id)
+    const release = () => routingStore && providerApiKey && routingLeaseId
+      ? routingStore.release({
+        providerId: provider.id,
+        modelId: model.id,
+        credentialId: providerApiKey.id,
+        leaseId: routingLeaseId,
+        status: upstream.status,
+        retryAfterSeconds: retryAfterSeconds(upstream.headers),
+        latencyMs: Date.now() - startedAt,
+      })
+      : Promise.resolve()
+    const safeRelease = async () => {
+      try {
+        await release()
+      } catch (error) {
+        writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
+      }
+    }
+    if (!upstream.ok) await safeRelease()
+    const responseBody = trackedUpstreamBody(
+      upstream,
+      async (responseId) => {
+        if (routingStore && providerApiKey) await routingStore.mapResponse(provider.id, responseId, providerApiKey.id)
+      },
+      upstream.ok ? safeRelease : async () => {},
+    )
     writeLog(upstream.ok ? "info" : "warn", "gateway", "Upstream response opened", {
       provider: provider.id,
       model: model.id,
@@ -123,8 +297,11 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       ...(providerApiKey ? { providerApiKey: providerApiKey.id } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
     })
-    return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
+    return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
+    if (routingStore && providerApiKey && routingLeaseId) {
+      await routingStore.release({ providerId: provider.id, modelId: model.id, credentialId: providerApiKey.id, leaseId: routingLeaseId, status: 502, latencyMs: 0 }).catch(() => undefined)
+    }
     writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: model.id, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError("Upstream request failed.", 502, error instanceof Error ? error.message : undefined)
   }

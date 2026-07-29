@@ -107,12 +107,21 @@ export async function POST(request: Request) {
         const existing = input.originalId ? data.providerApiKeys.find((apiKey) => apiKey.id === input.originalId) : undefined
         const key = input.key === "__unchanged__" ? existing?.key : String(input.key || "").trim()
         if (!key) throw new Error("API key value is required.")
+        const rpmLimit = input.rpmLimit == null ? undefined : Number(input.rpmLimit)
+        const maxConcurrency = input.maxConcurrency == null ? undefined : Number(input.maxConcurrency)
+        const priority = input.priority == null ? undefined : Number(input.priority)
+        if (rpmLimit !== undefined && (!Number.isSafeInteger(rpmLimit) || rpmLimit <= 0)) throw new Error("RPM limit must be a positive whole number.")
+        if (maxConcurrency !== undefined && (!Number.isSafeInteger(maxConcurrency) || maxConcurrency <= 0)) throw new Error("Maximum concurrency must be a positive whole number.")
+        if (priority !== undefined && (!Number.isSafeInteger(priority) || priority < 0 || priority > 100)) throw new Error("Priority must be a whole number from 0 to 100.")
         const providerApiKey: ProviderApiKey = {
           id: existing?.id || crypto.randomUUID(),
           providerId,
           name,
           key,
           enabled: input.enabled !== false,
+          ...(rpmLimit !== undefined ? { rpmLimit } : {}),
+          ...(maxConcurrency !== undefined ? { maxConcurrency } : {}),
+          ...(priority !== undefined ? { priority } : {}),
           createdAt: existing?.createdAt || new Date().toISOString(),
         }
         data.providerApiKeys = [...data.providerApiKeys.filter((apiKey) => apiKey.id !== input.originalId), providerApiKey]

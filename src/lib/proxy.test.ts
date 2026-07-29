@@ -2,13 +2,42 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 
 import { proxyRequest } from "@/lib/proxy"
 import { clearLogs, readLogs } from "@/lib/logger"
+import { RedisRoutingStateStore, setRoutingStateStoreForTests, type RoutingRedis } from "@/lib/routing-state"
 import { updateData } from "@/lib/store"
 
 const originalFetch = globalThis.fetch
 
-afterEach(() => { globalThis.fetch = originalFetch })
+class ProxyTestRedis implements RoutingRedis {
+  affinity = new Map<string, string>()
+  responseMappings = new Map<string, string>()
+  failBookkeeping = false
+
+  async eval(script: string, keys: string[]) {
+    if (script.includes("local affinity")) {
+      const pinned = this.affinity.get(keys[0])
+      const selected = pinned || "provider-key"
+      this.affinity.set(keys[0], selected)
+      return ["ok", selected, pinned ? "sticky" : "new"]
+    }
+    if (this.failBookkeeping) throw new Error("Redis unavailable")
+    return ["ok"]
+  }
+
+  async get<T = string>(key: string) { return (this.responseMappings.get(key) as T | undefined) || null }
+  async set(key: string, value: string) {
+    if (this.failBookkeeping) throw new Error("Redis unavailable")
+    this.responseMappings.set(key, value)
+    return "OK"
+  }
+}
+
+let testRedis: ProxyTestRedis
+
+afterEach(() => { globalThis.fetch = originalFetch; setRoutingStateStoreForTests(undefined) })
 
 beforeEach(async () => {
+  testRedis = new ProxyTestRedis()
+  setRoutingStateStoreForTests(new RedisRoutingStateStore(testRedis, { prefix: "proxy-test" }))
   process.env.STORAGE_BACKEND = "memory"
   await updateData((data) => {
     data.apiKeys = [{ id: "key", name: "Test", key: "sk-test", createdAt: new Date().toISOString() }]
@@ -51,6 +80,7 @@ describe("proxy request", () => {
     expect(captured.headers?.get("authorization")).toBe("Bearer provider-secret")
     expect(captured.headers?.get("x-static")).toBe("yes")
     expect(captured.headers?.get("cookie")).toBeNull()
+    expect(captured.headers?.get("x-rawroute-session-id")).toBeNull()
     expect(response.headers.get("set-cookie")).toBeNull()
     expect(response.headers.get("content-type")).toContain("text/event-stream")
     expect(response.headers.get("x-rawroute-provider-key")).toBe("provider-key")
@@ -123,6 +153,68 @@ describe("proxy request", () => {
       body: JSON.stringify({ model: "cx/codex", input: "hello" }),
     }), "openai-responses")
     expect(response.status).toBe(502)
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  test("keeps requests with the same explicit session on the same provider key", async () => {
+    await updateData((data) => {
+      data.providerApiKeys.push({
+        id: "provider-key-b", providerId: "cx", name: "Secondary", key: "provider-secret-b",
+        enabled: true, createdAt: new Date().toISOString(),
+      })
+    })
+    const selected: string[] = []
+    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+      selected.push(new Headers(init?.headers).get("authorization") || "")
+      return Response.json({ id: `resp_${selected.length}` })
+    }) as typeof fetch
+    const makeRequest = () => new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json", "x-rawroute-session-id": "subagent-1" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello" }),
+    })
+
+    await (await proxyRequest(makeRequest(), "openai-responses")).text()
+    await (await proxyRequest(makeRequest(), "openai-responses")).text()
+
+    expect(selected).toEqual(["Bearer provider-secret", "Bearer provider-secret"])
+  })
+
+  test("maps response IDs back to their credential for hard-affinity continuations", async () => {
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_parent", output: [] })) as typeof fetch
+    const first = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello" }),
+    }), "openai-responses")
+    await first.text()
+
+    expect([...testRedis.responseMappings.entries()].some(([key, value]) => key.endsWith(":resp_parent") && value === "provider-key")).toBe(true)
+  })
+
+  test("does not corrupt a successful response when Redis bookkeeping fails", async () => {
+    testRedis.failBookkeeping = true
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_success", output: [{ text: "delivered" }] })) as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello" }),
+    }), "openai-responses")
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ id: "resp_success", output: [{ text: "delivered" }] })
+  })
+
+  test("rejects an unknown previous_response_id instead of failing over", async () => {
+    const upstream = mock(() => Promise.resolve(Response.json({})))
+    globalThis.fetch = upstream as typeof fetch
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", previous_response_id: "resp_missing", input: "continue" }),
+    }), "openai-responses")
+    expect(response.status).toBe(409)
     expect(upstream).not.toHaveBeenCalled()
   })
 

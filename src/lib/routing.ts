@@ -1,14 +1,4 @@
-import { protocolPaths, type Model, type Protocol, type Provider, type ProviderApiKey } from "@/lib/types"
-
-const providerKeyCursor = new Map<string, number>()
-
-export function selectProviderApiKey(providerId: string, apiKeys: ProviderApiKey[]) {
-  const eligible = apiKeys.filter((apiKey) => apiKey.providerId === providerId && apiKey.enabled)
-  if (!eligible.length) return undefined
-  const cursor = providerKeyCursor.get(providerId) || 0
-  providerKeyCursor.set(providerId, (cursor + 1) % eligible.length)
-  return eligible[cursor % eligible.length]
-}
+import { protocolPaths, type Model, type Protocol, type Provider } from "@/lib/types"
 
 export function buildUpstreamUrl(baseUrl: string, routePath: string) {
   const url = new URL(baseUrl)

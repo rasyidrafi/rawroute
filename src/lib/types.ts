@@ -21,6 +21,9 @@ export interface ProviderApiKey {
   name: string
   key: string
   enabled: boolean
+  rpmLimit?: number
+  maxConcurrency?: number
+  priority?: number
   createdAt: string
 }
 

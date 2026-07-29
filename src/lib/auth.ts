@@ -45,12 +45,16 @@ export async function requireAdmin() {
   if (!(await isAuthenticated())) throw new Error("UNAUTHORIZED")
 }
 
-export async function validateProxyKey(request: Request) {
+export async function authenticateProxyKey(request: Request) {
   const authorization = request.headers.get("authorization")
   const supplied = authorization?.toLowerCase().startsWith("bearer ")
     ? authorization.slice(7)
     : request.headers.get("x-api-key")
-  if (!supplied) return false
+  if (!supplied) return undefined
   const data = await readData()
-  return data.apiKeys.some((entry) => entry.key === supplied)
+  return data.apiKeys.find((entry) => entry.key === supplied)
+}
+
+export async function validateProxyKey(request: Request) {
+  return Boolean(await authenticateProxyKey(request))
 }

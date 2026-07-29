@@ -4,7 +4,7 @@ RawRoute is a small, protocol-preserving AI provider gateway. It aggregates user
 
 RawRoute changes only the request's `model` value, injects upstream authentication and configured headers, then streams the upstream response back without parsing or rebuilding it.
 
-Providers, upstream API keys, and models are configured independently. A provider can own multiple enabled API keys; requests currently rotate across them with process-local round-robin selection.
+Providers, upstream API keys, and models are configured independently. A provider can own multiple enabled API keys; shared Redis routing keeps sessions sticky while distributing new work by RPM and concurrency capacity.
 
 ## Native endpoints
 
@@ -19,7 +19,7 @@ A request sent to the wrong protocol endpoint is rejected. RawRoute never attemp
 
 ## Development
 
-Requirements: Bun 1.3 or newer and access to Firestore or the Firestore emulator.
+Requirements: Bun 1.3 or newer, access to Firestore or the Firestore emulator, and an Upstash Redis database.
 
 ```bash
 bun install
@@ -71,6 +71,8 @@ gcloud run deploy rawroute \
 
 Grant the Cloud Run service account Firestore access. `roles/datastore.user` is the usual starting point; use a narrower custom role when practical. The proxy caches its routing snapshot in each instance for `ROUTING_CACHE_TTL_MS` (10 seconds by default), avoiding a Firestore read for every inference request.
 
+Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on every Cloud Run instance. Redis stores session affinity, rolling RPM reservations, expiring concurrency leases, credential cooldowns, and Responses API ID mappings. Requests fail with `503` when shared routing state is unavailable instead of falling back to inconsistent per-instance state.
+
 Proxy request bodies are limited by `MAX_PROXY_BODY_BYTES` (10 MiB by default), including streamed requests without a `Content-Length` header.
 
 Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the persistent configuration source and supports multiple Cloud Run instances safely.
@@ -79,7 +81,7 @@ Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the pe
 
 Provider credentials are stored as records linked to their provider and are never returned to the browser after saving. Existing single-secret providers are migrated automatically into a linked API-key record. Firestore encrypts stored data at rest, but access is controlled by the Cloud Run service identity, so keep its IAM permissions narrow. A future Secret Manager-backed credential adapter can remove the credential values from the configuration document entirely.
 
-Round-robin state is local to each application instance in this first phase. It does not yet provide session affinity, distributed counters, rate-limit cooldowns, or RPM/TPM-aware selection.
+New sessions use sticky least-loaded routing based on each key's rolling RPM and concurrency limits. Continuations reuse their pinned key when possible, while `previous_response_id` uses hard credential affinity and never silently fails over. Upstream `429` responses cool down only the affected credential.
 
 ## Documentation sources
 
