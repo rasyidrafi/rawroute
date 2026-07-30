@@ -85,7 +85,8 @@ describe("proxy request", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream")
     expect(response.headers.get("x-rawroute-provider-key")).toBe("provider-key")
     expect(await response.text()).toBe("event: done\ndata: ok\n\n")
-    expect(readLogs()[0]?.details?.providerApiKey).toBe("Primary")
+    expect(readLogs().find((entry) => entry.message.startsWith("POST "))?.message).toBe("POST PROVIDER:cx MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary MSG:1")
+    expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms$/)
   })
 
   test("returns 503 without contacting upstream when an authenticated provider has no enabled API keys", async () => {
@@ -115,6 +116,46 @@ describe("proxy request", () => {
     expect(upstream).not.toHaveBeenCalled()
   })
 
+  test("requests usage in streamed OpenAI-compatible chat responses", async () => {
+    await updateData((data) => {
+      const provider = data.providers.find((entry) => entry.id === "cx")
+      if (provider) provider.protocol = "openai-chat"
+    })
+    let capturedBody: Record<string, unknown> | undefined
+    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+    }) as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", messages: [], stream: true, stream_options: { continuous_usage_stats: true } }),
+    }), "openai-chat")
+
+    expect(capturedBody?.stream_options).toEqual({ continuous_usage_stats: true, include_usage: true })
+  })
+
+  test("does not inject stream options into providers that may not support them", async () => {
+    await updateData((data) => {
+      const provider = data.providers.find((entry) => entry.id === "cx")
+      if (provider) provider.protocol = "openai-chat"
+    })
+    let capturedBody: Record<string, unknown> | undefined
+    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+    }) as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", messages: [], stream: true }),
+    }), "openai-chat")
+
+    expect(capturedBody?.stream_options).toBeUndefined()
+  })
+
   test("deep merges configured model request overrides before proxying", async () => {
     clearLogs()
     await updateData((data) => {
@@ -134,11 +175,48 @@ describe("proxy request", () => {
     }), "openai-responses")
 
     expect(capturedBody).toEqual({ model: "gpt-upstream", input: "hello", reasoning: { effort: "none", summary: "auto" }, temperature: 0 })
-    expect(readLogs()[0]?.details?.reasoningEffort).toBe("none")
+    expect(readLogs()[0]?.message).toContain("THINK:none")
     await updateData((data) => {
       const model = data.models.find((entry) => entry.id === "cx/codex")
       if (model) delete model.requestOverrides
     })
+  })
+
+  test("logs message and tool totals in the compact request summary", async () => {
+    clearLogs()
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_summary" })) as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "cx/codex",
+        input: [{ role: "user", content: "one" }, { role: "assistant", content: "two" }],
+        tools: [{ type: "function", name: "first" }, { type: "function", name: "second" }],
+        reasoning: { effort: "low" },
+        stream: true,
+      }),
+    }), "openai-responses")
+
+    expect(readLogs()[0]?.message).toBe("POST PROVIDER:cx MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary THINK:low MSG:2 TOOL:2")
+  })
+
+  test("logs completion timing and token usage after a streamed response finishes", async () => {
+    clearLogs()
+    globalThis.fetch = mock(async () => new Response([
+      'data: {"type":"response.created","response":{"id":"resp_usage"}}',
+      'data: {"type":"response.completed","response":{"id":"resp_usage","usage":{"input_tokens":139054,"input_tokens_details":{"cached_tokens":137728},"output_tokens":2719}}}',
+      "",
+    ].join("\n\n"), { headers: { "content-type": "text/event-stream" } })) as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", stream: true }),
+    }), "openai-responses")
+    await response.text()
+
+    expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms IN:139054 \(CACHE ↻137728\) OUT:2719$/)
   })
 
   test("returns a controlled error for a legacy malformed provider header", async () => {

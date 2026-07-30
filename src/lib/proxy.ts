@@ -62,26 +62,146 @@ function retryAfterSeconds(headers: Headers) {
   return Number.isFinite(date) ? Math.max(1, Math.ceil((date - Date.now()) / 1000)) : undefined
 }
 
-function responseIdsFromSse(buffer: string) {
+function requestItemCount(payload: Record<string, unknown>) {
+  if (Array.isArray(payload.messages)) return payload.messages.length
+  if (Array.isArray(payload.input)) return payload.input.length
+  return payload.input === undefined ? 0 : 1
+}
+
+function requestToolCount(payload: Record<string, unknown>) {
+  if (Array.isArray(payload.tools)) return payload.tools.length
+  if (Array.isArray(payload.functions)) return payload.functions.length
+  return 0
+}
+
+function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, protocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {
+  const parts = [
+    `POST PROVIDER:${provider}`,
+    `MODEL:${gatewayModel} -> ${upstreamModel}`,
+    `FMT:${protocol}`,
+    `ACC:${account}`,
+  ]
+  if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
+  parts.push(`MSG:${requestItemCount(payload)}`)
+  const toolCount = requestToolCount(payload)
+  if (toolCount) parts.push(`TOOL:${toolCount}`)
+  return parts.join(" ")
+}
+
+function completionSummary(durationMs: number, ttftMs: number | undefined, usage: UsageMetrics | undefined) {
+  const parts = [`DONE ${durationMs}ms`]
+  if (ttftMs !== undefined) parts.push(`TTFT:${ttftMs}ms`)
+  if (usage) {
+    if (usage.input !== undefined) parts.push(`IN:${usage.input}`)
+    if (usage.cached !== undefined) parts.push(`(CACHE ↻${usage.cached})`)
+    if (usage.output !== undefined) parts.push(`OUT:${usage.output}`)
+  }
+  return parts.join(" ")
+}
+
+type UsageMetrics = { input?: number; output?: number; cached?: number }
+
+function objectValue(value: unknown) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function numericValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function firstNumber(record: Record<string, unknown> | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = numericValue(record?.[key])
+    if (value !== undefined) return value
+  }
+  return undefined
+}
+
+function mergeUsage(current: UsageMetrics | undefined, next: UsageMetrics | undefined) {
+  if (!next) return current
+  return {
+    ...(current || {}),
+    ...(next.input !== undefined ? { input: next.input } : {}),
+    ...(next.output !== undefined ? { output: next.output } : {}),
+    ...(next.cached !== undefined ? { cached: next.cached } : {}),
+  }
+}
+
+export function extractUsageMetrics(payload: Record<string, unknown>): UsageMetrics | undefined {
+  const response = objectValue(payload.response) || payload
+  const message = objectValue(payload.message)
+  const meta = objectValue(payload.meta)
+  const metadata = objectValue(payload.metadata)
+  const sources = [
+    objectValue(response.usage),
+    objectValue(message?.usage),
+    objectValue(meta?.billed_units),
+    objectValue(response.usageMetadata),
+    objectValue(response.usage_metadata),
+    objectValue(payload.metrics),
+    objectValue(metadata?.usage),
+    objectValue(payload["amazon-bedrock-invocationMetrics"]),
+  ].filter((source): source is Record<string, unknown> => Boolean(source))
+
+  let result: UsageMetrics | undefined
+  for (const source of sources) {
+    let input = firstNumber(source, [
+      "input_tokens", "prompt_tokens", "inputTokens", "promptTokenCount", "inputTokenCount",
+      "input_token_count", "inputTokenCount",
+    ])
+    const output = firstNumber(source, [
+      "output_tokens", "completion_tokens", "outputTokens", "candidatesTokenCount",
+      "outputTokenCount", "output_token_count",
+    ])
+    const inputDetails = objectValue(source.input_tokens_details) || objectValue(source.prompt_tokens_details)
+    const cached = firstNumber(inputDetails, ["cached_tokens", "cachedTokens", "cache_read_tokens", "cacheReadTokens"])
+      ?? firstNumber(source, [
+        "cache_read_input_tokens", "cacheReadInputTokens", "cacheReadInputTokenCount",
+        "cached_content_token_count", "cachedContentTokenCount", "prompt_cache_hit_tokens",
+        "cache_read_tokens", "cached_tokens", "cachedTokens", "input_cached_tokens",
+      ])
+
+    // Anthropic exposes uncached, cache-read, and cache-created input as separate buckets.
+    const anthropicCacheRead = firstNumber(source, ["cache_read_input_tokens", "cacheReadInputTokens"])
+    const anthropicCacheCreation = firstNumber(source, ["cache_creation_input_tokens", "cacheCreationInputTokens"])
+    if (input !== undefined && (anthropicCacheRead !== undefined || anthropicCacheCreation !== undefined)) {
+      input += (anthropicCacheRead || 0) + (anthropicCacheCreation || 0)
+    }
+
+    const extracted = {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(cached !== undefined ? { cached } : {}),
+    }
+    if (input !== undefined || output !== undefined || cached !== undefined) {
+      result = mergeUsage(result, extracted)
+    }
+  }
+  return result
+}
+
+function responseMetadataFromSse(buffer: string) {
   const ids: string[] = []
+  let usage: UsageMetrics | undefined
   for (const line of buffer.split("\n")) {
     if (!line.startsWith("data:")) continue
     try {
       const data = JSON.parse(line.slice(5).trim()) as Record<string, unknown>
-      const response = data.response && typeof data.response === "object" ? data.response as Record<string, unknown> : data
+      const response = objectValue(data.response) || data
       if (typeof response.id === "string") ids.push(response.id)
+      usage = mergeUsage(usage, extractUsageMetrics(data))
     } catch { /* Partial and non-JSON SSE data is passed through unchanged. */ }
   }
-  return ids
+  return { ids, usage }
 }
 
 function trackedUpstreamBody(
   upstream: Response,
   onResponseId: (id: string) => Promise<void>,
-  onFinished: () => Promise<void>,
+  onFinished: (metrics: { ttftMs?: number; usage?: UsageMetrics }) => Promise<void>,
 ) {
   if (!upstream.body) {
-    void onFinished()
+    void onFinished({})
     return null
   }
   const reader = upstream.body.getReader()
@@ -89,6 +209,8 @@ function trackedUpstreamBody(
   const decoder = new TextDecoder()
   let buffered = ""
   let finished = false
+  let firstByteAt: number | undefined
+  let latestUsage: UsageMetrics | undefined
   const mappedResponseIds = new Set<string>()
   const mapResponseId = async (id: string) => {
     if (mappedResponseIds.has(id)) return
@@ -106,13 +228,19 @@ function trackedUpstreamBody(
       try {
         const parsed = JSON.parse(buffered) as Record<string, unknown>
         if (typeof parsed.id === "string") await mapResponseId(parsed.id)
+        latestUsage = mergeUsage(latestUsage, extractUsageMetrics(parsed))
       } catch { /* The upstream body remains untouched when it is not valid JSON. */ }
     }
     if (contentType.includes("text/event-stream") && buffered) {
-      for (const id of responseIdsFromSse(buffered)) await mapResponseId(id)
+      const metadata = responseMetadataFromSse(buffered)
+      for (const id of metadata.ids) await mapResponseId(id)
+      latestUsage = mergeUsage(latestUsage, metadata.usage)
     }
     try {
-      await onFinished()
+      await onFinished({
+        ...(firstByteAt !== undefined ? { ttftMs: firstByteAt } : {}),
+        ...(latestUsage ? { usage: latestUsage } : {}),
+      })
     } catch (error) {
       writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
     }
@@ -127,6 +255,7 @@ function trackedUpstreamBody(
           controller.close()
           return
         }
+        firstByteAt ??= Date.now()
         if (contentType.includes("text/event-stream")) {
           const text = decoder.decode(value, { stream: true })
           buffered += text
@@ -134,7 +263,9 @@ function trackedUpstreamBody(
           if (boundary >= 0) {
             const complete = buffered.slice(0, boundary + 2)
             buffered = buffered.slice(boundary + 2)
-            for (const id of responseIdsFromSse(complete)) await mapResponseId(id)
+            const metadata = responseMetadataFromSse(complete)
+            for (const id of metadata.ids) await mapResponseId(id)
+            latestUsage = mergeUsage(latestUsage, metadata.usage)
           }
         } else if (contentType.includes("application/json") && buffered.length < 2 * 1024 * 1024) {
           buffered += decoder.decode(value, { stream: true })
@@ -234,6 +365,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   try {
     payload = mergeRequestOverrides(payload, model.requestOverrides || {})
     payload.model = model.upstreamModel
+    const streamOptions = objectValue(payload.stream_options)
+    if (modelProtocol === "openai-chat" && payload.stream === true && streamOptions) {
+      payload.stream_options = { ...streamOptions, include_usage: true }
+    }
     const reasoningEffort = extractReasoningEffort(payload)
     const headers = new Headers()
     request.headers.forEach((value, key) => {
@@ -248,7 +383,9 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       headers.set(provider.authHeader, providerApiKey.key)
     }
 
+    const account = providerApiKey?.name || provider.name
     const startedAt = Date.now()
+    writeLog("info", "gateway", requestSummary(provider.id, model.id, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
     const upstream = await fetch(buildUpstreamUrl(provider.baseUrl, model.upstreamPath || protocolPaths[modelProtocol]), {
       method: "POST",
       headers,
@@ -287,16 +424,13 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       async (responseId) => {
         if (routingStore && providerApiKey) await routingStore.mapResponse(provider.id, responseId, providerApiKey.id)
       },
-      upstream.ok ? safeRelease : async () => {},
+      async ({ ttftMs, usage }) => {
+        if (!upstream.ok) return
+        await safeRelease()
+        writeLog("info", "gateway", completionSummary(Date.now() - startedAt, ttftMs === undefined ? undefined : ttftMs - startedAt, usage))
+      },
     )
-    writeLog(upstream.ok ? "info" : "warn", "gateway", "Upstream response opened", {
-      provider: provider.id,
-      model: model.id,
-      protocol: modelProtocol,
-      status: upstream.status,
-      ...(providerApiKey ? { providerApiKey: providerApiKey.name } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-    })
+    if (!upstream.ok) writeLog("warn", "gateway", `FAILED ${upstream.status} ${Date.now() - startedAt}ms`)
     return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
     if (routingStore && providerApiKey && routingLeaseId) {
