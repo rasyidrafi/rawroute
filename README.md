@@ -14,6 +14,7 @@ Providers, upstream API keys, and models are configured independently. A provide
 | OpenAI Responses | `POST /v1/responses` |
 | Anthropic Messages | `POST /v1/messages` |
 | Model catalog | `GET /v1/models` |
+| LiteLLM model discovery | `GET /v1/model/info`, `GET /model/info` |
 
 A request sent to the wrong protocol endpoint is rejected. RawRoute never attempts format conversion.
 
