@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import { proxyRequest } from "@/lib/proxy"
 import { clearLogs, readLogs } from "@/lib/logger"
 import { RedisRoutingStateStore, setRoutingStateStoreForTests, type RoutingRedis } from "@/lib/routing-state"
-import { updateData } from "@/lib/store"
+import { _resetMemoryBackend, readData, updateData } from "@/lib/store"
 
 const originalFetch = globalThis.fetch
 
@@ -12,10 +12,10 @@ class ProxyTestRedis implements RoutingRedis {
   responseMappings = new Map<string, string>()
   failBookkeeping = false
 
-  async eval(script: string, keys: string[]) {
+  async eval(script: string, keys: string[], args: Array<string | number>) {
     if (script.includes("local affinity")) {
       const pinned = this.affinity.get(keys[0])
-      const selected = pinned || "provider-key"
+      const selected = pinned || testProviderKeyId || String(args[7] || "provider-key")
       this.affinity.set(keys[0], selected)
       return ["ok", selected, pinned ? "sticky" : "new"]
     }
@@ -32,6 +32,7 @@ class ProxyTestRedis implements RoutingRedis {
 }
 
 let testRedis: ProxyTestRedis
+let testProviderKeyId = "provider-key"
 
 afterEach(() => { globalThis.fetch = originalFetch; setRoutingStateStoreForTests(undefined) })
 
@@ -39,22 +40,25 @@ beforeEach(async () => {
   testRedis = new ProxyTestRedis()
   setRoutingStateStoreForTests(new RedisRoutingStateStore(testRedis, { prefix: "proxy-test" }))
   process.env.STORAGE_BACKEND = "memory"
+  _resetMemoryBackend()
   await updateData((data) => {
     data.apiKeys = [{ id: "key", name: "Test", key: "sk-test", createdAt: new Date().toISOString() }]
     data.providers = [{
       id: "cx", name: "Codex", prefix: "cx", baseUrl: "https://upstream.example/v1",
       protocol: "openai-responses", authType: "bearer",
       headers: { "x-static": "yes" }, enabled: true, createdAt: new Date().toISOString(),
+      apiKeyCount: 0, enabledApiKeyCount: 0, modelCount: 0, enabledModelCount: 0,
     }]
     data.providerApiKeys = [{
       id: "provider-key", providerId: "cx", name: "Primary", key: "provider-secret",
       enabled: true, createdAt: new Date().toISOString(),
     }]
     data.models = [{
-      id: "cx/codex", providerId: "cx", name: "codex", upstreamModel: "gpt-upstream",
+      id: "cx/codex", providerId: "cx", gatewayModelId: "cx/codex", name: "codex", upstreamModel: "gpt-upstream",
       enabled: true, createdAt: new Date().toISOString(),
     }]
   })
+  testProviderKeyId = (await readData()).providerApiKeys[0]?.id || "provider-key"
 })
 
 describe("proxy request", () => {
@@ -67,7 +71,7 @@ describe("proxy request", () => {
         headers: new Headers(init?.headers),
       }
       return new Response("event: done\ndata: ok\n\n", { status: 200, headers: { "content-type": "text/event-stream", "set-cookie": "evil=true" } })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -83,16 +87,16 @@ describe("proxy request", () => {
     expect(captured.headers?.get("x-rawroute-session-id")).toBeNull()
     expect(response.headers.get("set-cookie")).toBeNull()
     expect(response.headers.get("content-type")).toContain("text/event-stream")
-    expect(response.headers.get("x-rawroute-provider-key")).toBe("provider-key")
+    expect(response.headers.get("x-rawroute-provider-key")).toBe(testProviderKeyId)
     expect(await response.text()).toBe("event: done\ndata: ok\n\n")
-    expect(readLogs().find((entry) => entry.message.startsWith("POST "))?.message).toBe("POST PROVIDER:cx MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary MSG:1")
+    expect(readLogs().find((entry) => entry.message.startsWith("POST "))?.message).toMatch(/^POST PROVIDER:[^ ]+ MODEL:cx\/codex -> gpt-upstream FMT:openai-responses ACC:Primary MSG:1$/)
     expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms$/)
   })
 
   test("returns 503 without contacting upstream when an authenticated provider has no enabled API keys", async () => {
     await updateData((data) => { data.providerApiKeys = [] })
     const upstream = mock(() => Promise.resolve(new Response()))
-    globalThis.fetch = upstream as typeof fetch
+    globalThis.fetch = upstream as unknown as typeof fetch
 
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -106,7 +110,7 @@ describe("proxy request", () => {
 
   test("rejects the wrong native endpoint before calling upstream", async () => {
     const upstream = mock(() => Promise.resolve(new Response()))
-    globalThis.fetch = upstream as typeof fetch
+    globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/chat/completions", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
@@ -118,14 +122,14 @@ describe("proxy request", () => {
 
   test("requests usage in streamed OpenAI-compatible chat responses", async () => {
     await updateData((data) => {
-      const provider = data.providers.find((entry) => entry.id === "cx")
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.protocol = "openai-chat"
     })
     let capturedBody: Record<string, unknown> | undefined
     globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/chat/completions", {
       method: "POST",
@@ -138,14 +142,14 @@ describe("proxy request", () => {
 
   test("does not inject stream options into providers that may not support them", async () => {
     await updateData((data) => {
-      const provider = data.providers.find((entry) => entry.id === "cx")
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.protocol = "openai-chat"
     })
     let capturedBody: Record<string, unknown> | undefined
     globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/chat/completions", {
       method: "POST",
@@ -159,14 +163,14 @@ describe("proxy request", () => {
   test("deep merges configured model request overrides before proxying", async () => {
     clearLogs()
     await updateData((data) => {
-      const model = data.models.find((entry) => entry.id === "cx/codex")
+      const model = data.models.find((entry) => (entry.gatewayModelId || entry.id) === "cx/codex")
       if (model) model.requestOverrides = { reasoning: { effort: "none" }, temperature: 0 }
     })
     let capturedBody: Record<string, unknown> | undefined
     globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -177,14 +181,14 @@ describe("proxy request", () => {
     expect(capturedBody).toEqual({ model: "gpt-upstream", input: "hello", reasoning: { effort: "none", summary: "auto" }, temperature: 0 })
     expect(readLogs()[0]?.message).toContain("THINK:none")
     await updateData((data) => {
-      const model = data.models.find((entry) => entry.id === "cx/codex")
+      const model = data.models.find((entry) => (entry.gatewayModelId || entry.id) === "cx/codex")
       if (model) delete model.requestOverrides
     })
   })
 
   test("logs message and tool totals in the compact request summary", async () => {
     clearLogs()
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_summary" })) as typeof fetch
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_summary" })) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -198,7 +202,7 @@ describe("proxy request", () => {
       }),
     }), "openai-responses")
 
-    expect(readLogs()[0]?.message).toBe("POST PROVIDER:cx MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary THINK:low MSG:2 TOOL:2")
+    expect(readLogs()[0]?.message).toMatch(/^POST PROVIDER:[^ ]+ MODEL:cx\/codex -> gpt-upstream FMT:openai-responses ACC:Primary THINK:low MSG:2 TOOL:2$/)
   })
 
   test("logs completion timing and token usage after a streamed response finishes", async () => {
@@ -207,7 +211,7 @@ describe("proxy request", () => {
       'data: {"type":"response.created","response":{"id":"resp_usage"}}',
       'data: {"type":"response.completed","response":{"id":"resp_usage","usage":{"input_tokens":139054,"input_tokens_details":{"cached_tokens":137728},"output_tokens":2719}}}',
       "",
-    ].join("\n\n"), { headers: { "content-type": "text/event-stream" } })) as typeof fetch
+    ].join("\n\n"), { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch
 
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -221,11 +225,11 @@ describe("proxy request", () => {
 
   test("returns a controlled error for a legacy malformed provider header", async () => {
     await updateData((data) => {
-      const provider = data.providers.find((entry) => entry.id === "cx")
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.headers = { "bad header": "value" }
     })
     const upstream = mock(() => Promise.resolve(new Response()))
-    globalThis.fetch = upstream as typeof fetch
+    globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
@@ -237,8 +241,9 @@ describe("proxy request", () => {
 
   test("keeps requests with the same explicit session on the same provider key", async () => {
     await updateData((data) => {
-      data.providerApiKeys.push({
-        id: "provider-key-b", providerId: "cx", name: "Secondary", key: "provider-secret-b",
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
+      if (provider) data.providerApiKeys.push({
+        id: "provider-key-b", providerId: provider.id, name: "Secondary", key: "provider-secret-b",
         enabled: true, createdAt: new Date().toISOString(),
       })
     })
@@ -246,7 +251,7 @@ describe("proxy request", () => {
     globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
       selected.push(new Headers(init?.headers).get("authorization") || "")
       return Response.json({ id: `resp_${selected.length}` })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
     const makeRequest = () => new Request("http://gateway/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json", "x-rawroute-session-id": "subagent-1" },
@@ -260,7 +265,7 @@ describe("proxy request", () => {
   })
 
   test("maps response IDs back to their credential for hard-affinity continuations", async () => {
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_parent", output: [] })) as typeof fetch
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_parent", output: [] })) as unknown as typeof fetch
     const first = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
@@ -268,12 +273,12 @@ describe("proxy request", () => {
     }), "openai-responses")
     await first.text()
 
-    expect([...testRedis.responseMappings.entries()].some(([key, value]) => key.endsWith(":resp_parent") && value === "provider-key")).toBe(true)
+    expect([...testRedis.responseMappings.entries()].some(([key, value]) => key.endsWith(":resp_parent") && value === testProviderKeyId)).toBe(true)
   })
 
   test("does not corrupt a successful response when Redis bookkeeping fails", async () => {
     testRedis.failBookkeeping = true
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_success", output: [{ text: "delivered" }] })) as typeof fetch
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_success", output: [{ text: "delivered" }] })) as unknown as typeof fetch
 
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -287,7 +292,7 @@ describe("proxy request", () => {
 
   test("rejects an unknown previous_response_id instead of failing over", async () => {
     const upstream = mock(() => Promise.resolve(Response.json({})))
-    globalThis.fetch = upstream as typeof fetch
+    globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
@@ -300,7 +305,7 @@ describe("proxy request", () => {
   test("rejects a declared body larger than the configured maximum", async () => {
     process.env.MAX_PROXY_BODY_BYTES = "32"
     const upstream = mock(() => Promise.resolve(new Response()))
-    globalThis.fetch = upstream as typeof fetch
+    globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json", "content-length": "33" },

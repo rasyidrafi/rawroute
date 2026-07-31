@@ -13,7 +13,13 @@ export interface Provider {
   headers: Record<string, string>
   enabled: boolean
   createdAt: string
+  apiKeyCount: number
+  enabledApiKeyCount: number
+  modelCount: number
+  enabledModelCount: number
 }
+
+export type ProviderSummary = Provider
 
 export interface ProviderApiKey {
   id: string
@@ -30,6 +36,8 @@ export interface ProviderApiKey {
 export interface Model {
   id: string
   providerId: string
+  // The user-facing model name used by gateway requests; `id` is Firestore's document ID.
+  gatewayModelId: string
   name: string
   upstreamModel: string
   protocol?: Protocol
@@ -47,7 +55,7 @@ export interface ApiKey {
 }
 
 export interface AppData {
-  version: 2
+  version: 4
   admin: {
     username: string
     passwordHash: string

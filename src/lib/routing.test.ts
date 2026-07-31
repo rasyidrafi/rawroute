@@ -13,11 +13,16 @@ const provider: Provider = {
   headers: {},
   enabled: true,
   createdAt: "2026-01-01T00:00:00.000Z",
+  apiKeyCount: 0,
+  enabledApiKeyCount: 0,
+  modelCount: 0,
+  enabledModelCount: 0,
 }
 
 const model: Model = {
   id: "cx/gpt-codex",
   providerId: "codex",
+  gatewayModelId: "cx/gpt-codex",
   name: "gpt-codex",
   upstreamModel: "gpt-5.3-codex",
   enabled: true,

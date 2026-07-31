@@ -311,9 +311,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     return jsonError(route.message, route.status)
   }
   const { model, provider, protocol: modelProtocol } = route
+  const gatewayModelId = model.gatewayModelId || model.id
   const providerApiKeys = data.providerApiKeys.filter((apiKey) => apiKey.providerId === provider.id && apiKey.enabled)
   if (provider.authType !== "none" && !providerApiKeys.length) {
-    writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.id, model: model.id })
+    writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.id, model: gatewayModelId })
     return jsonError("The model provider has no enabled API keys.", 503)
   }
 
@@ -323,7 +324,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   const session = extractSessionIdentity(request, payload, modelProtocol, {
     gatewayKeyId: gatewayApiKey.id,
     providerId: provider.id,
-    modelId: model.id,
+    modelId: gatewayModelId,
     secret: data.sessionSecret,
   })
   const routingSessionKey = session?.key || `anonymous:${crypto.randomUUID()}`
@@ -338,7 +339,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       }
       const reservation = await routingStore.reserve({
         providerId: provider.id,
-        modelId: model.id,
+        modelId: gatewayModelId,
         credentials: providerApiKeys,
         sessionKey: routingSessionKey,
         hardAffinity: session?.hard || false,
@@ -385,7 +386,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
 
     const account = providerApiKey?.name || provider.name
     const startedAt = Date.now()
-    writeLog("info", "gateway", requestSummary(provider.id, model.id, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
+    writeLog("info", "gateway", requestSummary(provider.id, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
     const upstream = await fetch(buildUpstreamUrl(provider.baseUrl, model.upstreamPath || protocolPaths[modelProtocol]), {
       method: "POST",
       headers,
@@ -398,12 +399,12 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       if (!blockedResponseHeaders.has(key.toLowerCase())) responseHeaders.set(key, value)
     })
     responseHeaders.set("x-rawroute-provider", provider.id)
-    responseHeaders.set("x-rawroute-model", model.id)
+    responseHeaders.set("x-rawroute-model", gatewayModelId)
     if (providerApiKey) responseHeaders.set("x-rawroute-provider-key", providerApiKey.id)
     const release = () => routingStore && providerApiKey && routingLeaseId
       ? routingStore.release({
         providerId: provider.id,
-        modelId: model.id,
+        modelId: gatewayModelId,
         credentialId: providerApiKey.id,
         leaseId: routingLeaseId,
         status: upstream.status,
@@ -434,9 +435,9 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
     if (routingStore && providerApiKey && routingLeaseId) {
-      await routingStore.release({ providerId: provider.id, modelId: model.id, credentialId: providerApiKey.id, leaseId: routingLeaseId, status: 502, latencyMs: 0 }).catch(() => undefined)
+      await routingStore.release({ providerId: provider.id, modelId: gatewayModelId, credentialId: providerApiKey.id, leaseId: routingLeaseId, status: 502, latencyMs: 0 }).catch(() => undefined)
     }
-    writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: model.id, error: error instanceof Error ? error.message : "Unknown error" })
+    writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: gatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError("Upstream request failed.", 502, error instanceof Error ? error.message : undefined)
   }
 }

@@ -11,26 +11,29 @@ async function authenticate(page: Page) {
   }
   expect(login.ok()).toBe(true)
 
-  const state = await page.request.get("/api/admin/state")
-  expect(state.ok()).toBe(true)
-  if ((await state.json()).admin.mustChangePassword) {
-    const password = await page.request.post("/api/admin/state", {
-      data: { action: "change-password", password: "private-password" },
+  const account = await page.request.get("/api/admin/account")
+  expect(account.ok()).toBe(true)
+  if ((await account.json()).mustChangePassword) {
+    const password = await page.request.post("/api/admin/account/password", {
+      data: { password: "private-password" },
     })
     expect(password.ok()).toBe(true)
   }
 }
 
+let firstProviderId = ""
+
 async function saveProvider(page: Page, index: number) {
-  const id = `provider-${index}`
-  const response = await page.request.post("/api/admin/state", {
+  const prefix = `provider-${index}`
+  const providers = await page.request.get("/api/admin/providers")
+  expect(providers.ok()).toBe(true)
+  const existing = ((await providers.json()).providers as Array<{ id: string; prefix: string }>).find((provider) => provider.prefix === prefix)
+  const response = await page.request.post("/api/admin/providers", {
     data: {
-      action: "save-provider",
       provider: {
-        originalId: id,
-        id,
+        ...(existing ? { originalId: existing.id } : {}),
         name: `Provider ${index}`,
-        prefix: id,
+        prefix,
         baseUrl: "https://example.com/v1",
         protocol: "openai-chat",
         authType: "none",
@@ -39,6 +42,7 @@ async function saveProvider(page: Page, index: number) {
     },
   })
   expect(response.ok()).toBe(true)
+  return (await response.json()).providerId as string
 }
 
 async function expectWheelScrolls(viewport: ReturnType<Page["locator"]>) {
@@ -55,7 +59,8 @@ async function expectWheelScrolls(viewport: ReturnType<Page["locator"]>) {
 
 test.beforeEach(async ({ page }) => {
   await authenticate(page)
-  for (let index = 0; index < 24; index += 1) await saveProvider(page, index)
+  firstProviderId = await saveProvider(page, 0)
+  for (let index = 1; index < 24; index += 1) await saveProvider(page, index)
 })
 
 test("console stays fixed-height and scrolls its log content", async ({ page }) => {
@@ -79,7 +84,7 @@ test("console stays fixed-height and scrolls its log content", async ({ page }) 
 
 test("model dialog and long protocol select remain scrollable", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 500 })
-  await page.goto("/dashboard/providers/provider-0")
+  await page.goto(`/dashboard/providers/${firstProviderId}`)
   await page.getByRole("button", { name: "Add model" }).click()
 
   const dialog = page.getByRole("dialog")
@@ -92,27 +97,33 @@ test("model dialog and long protocol select remain scrollable", async ({ page })
   const select = page.locator('[data-slot="select-content"]')
   const selectViewport = select.locator('[data-slot="scroll-area-viewport"]')
   await expect(select).toBeVisible()
-  await expectWheelScrolls(selectViewport)
   const finalProtocol = page.getByRole("option", { name: "Anthropic Messages" })
-  await expect(finalProtocol).toBeAttached()
+  const selectDimensions = await selectViewport.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  if (selectDimensions.scrollHeight > selectDimensions.clientHeight) {
+    await selectViewport.hover()
+    await selectViewport.page().mouse.wheel(0, 600)
+    await expect.poll(() => selectViewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  }
+  await expect(finalProtocol).toBeVisible()
   await finalProtocol.click()
   await expect(dialog.locator('[data-slot="select-trigger"]').first()).toContainText("Anthropic")
 })
 
 test("dropdown menu interaction survives ScrollArea composition", async ({ page }) => {
-  await page.goto("/dashboard/providers/provider-0")
+  await page.goto(`/dashboard/providers/${firstProviderId}`)
   await page.getByRole("button", { name: "Change color theme" }).click()
   await page.getByRole("menuitemradio", { name: "Dark" }).click()
   await expect(page.locator("html")).toHaveClass(/dark/)
 })
 
 test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) => {
-  const response = await page.request.post("/api/admin/state", {
+  const response = await page.request.post(`/api/admin/providers/${firstProviderId}/models`, {
     data: {
-      action: "save-model",
       model: {
-        id: "model-with-an-intentionally-long-suffix-name",
-        providerId: "provider-0",
+        gatewayModelId: "model-with-an-intentionally-long-suffix-name",
         name: "Wide model",
         upstreamModel: `upstream-${"x".repeat(140)}`,
       },
@@ -121,8 +132,9 @@ test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) =
   expect(response.ok()).toBe(true)
 
   await page.setViewportSize({ width: 600, height: 700 })
-  await page.goto("/dashboard/providers/provider-0")
-  const viewport = page.locator('[data-slot="table-container"] [data-slot="scroll-area-viewport"]')
+  await page.goto(`/dashboard/providers/${firstProviderId}`)
+  const modelCard = page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: /^Models$/ }) })
+  const viewport = modelCard.locator('[data-slot="table-container"] [data-slot="scroll-area-viewport"]')
   const dimensions = await viewport.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,

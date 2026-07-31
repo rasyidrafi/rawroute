@@ -8,7 +8,7 @@ import { LoadingSpinner } from "@/components/loading-spinner"
 export default function Home() {
   const router = useRouter()
   useEffect(() => {
-    void fetch("/api/admin/state", { cache: "no-store" })
+    void fetch("/api/admin/account", { cache: "no-store" })
       .then((response) => router.replace(response.ok ? "/dashboard" : "/login"))
       .catch(() => router.replace("/login"))
   }, [router])

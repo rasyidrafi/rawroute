@@ -3,18 +3,15 @@ import * as React from "react"
 const MOBILE_BREAKPOINT = 768
 
 export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(() =>
-    typeof window === "undefined" ? undefined : window.innerWidth < MOBILE_BREAKPOINT
-  )
-
-  React.useEffect(() => {
+  // useSyncExternalStore uses the server snapshot during hydration, then
+  // reads the browser snapshot once hydration is complete.
+  const subscribe = React.useCallback((onStoreChange: () => void) => {
     const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    }
-    mql.addEventListener("change", onChange)
-    return () => mql.removeEventListener("change", onChange)
+    mql.addEventListener("change", onStoreChange)
+    return () => mql.removeEventListener("change", onStoreChange)
   }, [])
+  const getSnapshot = React.useCallback(() => window.innerWidth < MOBILE_BREAKPOINT, [])
+  const getServerSnapshot = React.useCallback(() => false, [])
 
-  return !!isMobile
+  return React.useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 }
