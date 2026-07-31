@@ -26,6 +26,11 @@ function maximumBodyBytes() {
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 10 * 1024 * 1024
 }
 
+function maximumRoutingRequestMs() {
+  const configured = Number(process.env.ROUTING_MAX_REQUEST_DURATION_SECONDS || 1800)
+  return Number.isSafeInteger(configured) && configured > 0 ? configured * 1000 : 1800 * 1000
+}
+
 async function readBoundedBody(request: Request, maximum: number) {
   const declared = request.headers.get("content-length")
   if (declared && Number(declared) > maximum) return { ok: false as const }
@@ -197,7 +202,7 @@ function responseMetadataFromSse(buffer: string) {
 
 function trackedUpstreamBody(
   upstream: Response,
-  onResponseId: (id: string) => Promise<void>,
+  onResponseIds: (ids: string[]) => Promise<void>,
   onFinished: (metrics: { ttftMs?: number; usage?: UsageMetrics }) => Promise<void>,
 ) {
   if (!upstream.body) {
@@ -212,11 +217,15 @@ function trackedUpstreamBody(
   let firstByteAt: number | undefined
   let latestUsage: UsageMetrics | undefined
   const mappedResponseIds = new Set<string>()
-  const mapResponseId = async (id: string) => {
-    if (mappedResponseIds.has(id)) return
-    mappedResponseIds.add(id)
+  const mapResponseIds = async (ids: string[]) => {
+    const newIds = ids.filter((id) => {
+      if (mappedResponseIds.has(id)) return false
+      mappedResponseIds.add(id)
+      return true
+    })
+    if (!newIds.length) return
     try {
-      await onResponseId(id)
+      await onResponseIds(newIds)
     } catch (error) {
       writeLog("warn", "gateway", "Unable to persist response affinity", { error: error instanceof Error ? error.message : "Unknown error" })
     }
@@ -227,13 +236,13 @@ function trackedUpstreamBody(
     if (contentType.includes("application/json") && buffered) {
       try {
         const parsed = JSON.parse(buffered) as Record<string, unknown>
-        if (typeof parsed.id === "string") await mapResponseId(parsed.id)
+        if (typeof parsed.id === "string") await mapResponseIds([parsed.id])
         latestUsage = mergeUsage(latestUsage, extractUsageMetrics(parsed))
       } catch { /* The upstream body remains untouched when it is not valid JSON. */ }
     }
     if (contentType.includes("text/event-stream") && buffered) {
       const metadata = responseMetadataFromSse(buffered)
-      for (const id of metadata.ids) await mapResponseId(id)
+      await mapResponseIds(metadata.ids)
       latestUsage = mergeUsage(latestUsage, metadata.usage)
     }
     try {
@@ -264,7 +273,7 @@ function trackedUpstreamBody(
             const complete = buffered.slice(0, boundary + 2)
             buffered = buffered.slice(boundary + 2)
             const metadata = responseMetadataFromSse(complete)
-            for (const id of metadata.ids) await mapResponseId(id)
+            await mapResponseIds(metadata.ids)
             latestUsage = mergeUsage(latestUsage, metadata.usage)
           }
         } else if (contentType.includes("application/json") && buffered.length < 2 * 1024 * 1024) {
@@ -327,25 +336,28 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     modelId: gatewayModelId,
     secret: data.sessionSecret,
   })
-  const routingSessionKey = session?.key || `anonymous:${crypto.randomUUID()}`
+  const routingSessionKey = session?.key
   if (provider.authType !== "none") {
     try {
       routingStore = getRoutingStateStore()
-      const requiredCredentialId = session?.responseId
-        ? await routingStore.credentialForResponse(provider.id, session.responseId) || undefined
-        : undefined
-      if (session?.hard && !requiredCredentialId) {
-        return jsonError("The previous response session is unavailable or expired.", 409)
-      }
       const reservation = await routingStore.reserve({
         providerId: provider.id,
         modelId: gatewayModelId,
         credentials: providerApiKeys,
         sessionKey: routingSessionKey,
         hardAffinity: session?.hard || false,
-        requiredCredentialId,
+        responseId: session?.responseId,
       })
       if (!reservation.ok) {
+        writeLog("warn", "gateway", "Provider routing reservation unavailable", {
+          provider: provider.id,
+          model: gatewayModelId,
+          reason: reservation.reason,
+          retryAfterSeconds: reservation.retryAfterSeconds,
+        })
+        if (reservation.reason === "hard-response-missing") {
+          return jsonError("The previous response session is unavailable or expired.", 409)
+        }
         const status = reservation.reason === "capacity" ? 429 : 503
         return Response.json({ error: { message: reservation.reason === "capacity"
           ? "All provider API keys are currently at capacity."
@@ -355,11 +367,60 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
         })
       }
       providerApiKey = providerApiKeys.find((apiKey) => apiKey.id === reservation.credentialId)
-      if (!providerApiKey) return jsonError("The selected provider API key is unavailable.", 503)
+      if (!providerApiKey) {
+        await routingStore.release({
+          providerId: provider.id,
+          modelId: gatewayModelId,
+          credentialId: reservation.credentialId,
+          leaseId: reservation.leaseId,
+          status: 502,
+        }).catch(() => undefined)
+        return jsonError("The selected provider API key is unavailable.", 503)
+      }
       routingLeaseId = reservation.leaseId
     } catch (error) {
       writeLog("error", "gateway", "Shared routing state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
       return jsonError("Shared routing state is unavailable.", 503)
+    }
+  }
+
+  let leaseRenewalTimer: ReturnType<typeof setInterval> | undefined
+  let requestTimeout: ReturnType<typeof setTimeout> | undefined
+  let releasePromise: Promise<void> | undefined
+  let clientAbortListener: (() => void) | undefined
+  const cleanupLease = () => {
+    if (leaseRenewalTimer) clearInterval(leaseRenewalTimer)
+    if (requestTimeout) clearTimeout(requestTimeout)
+    if (clientAbortListener) request.signal.removeEventListener("abort", clientAbortListener)
+    leaseRenewalTimer = undefined
+    requestTimeout = undefined
+    clientAbortListener = undefined
+  }
+  const releaseLease = (status: number, retryAfterSeconds?: number) => {
+    if (!routingStore || !providerApiKey || !routingLeaseId) {
+      cleanupLease()
+      return Promise.resolve()
+    }
+    return routingStore.release({
+      providerId: provider.id,
+      modelId: gatewayModelId,
+      credentialId: providerApiKey.id,
+      leaseId: routingLeaseId,
+      status,
+      retryAfterSeconds,
+    })
+  }
+  const releaseOnce = (status: number, retryAfterSeconds?: number) => {
+    if (!releasePromise) {
+      releasePromise = releaseLease(status, retryAfterSeconds).finally(cleanupLease)
+    }
+    return releasePromise
+  }
+  const safeRelease = async (status: number, retryAfterSeconds?: number) => {
+    try {
+      await releaseOnce(status, retryAfterSeconds)
+    } catch (error) {
+      writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
     }
   }
 
@@ -386,12 +447,47 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
 
     const account = providerApiKey?.name || provider.name
     const startedAt = Date.now()
+    const upstreamController = new AbortController()
+    clientAbortListener = () => {
+      upstreamController.abort(request.signal.reason)
+      void safeRelease(499)
+    }
+    request.signal.addEventListener("abort", clientAbortListener, { once: true })
+    if (request.signal.aborted) clientAbortListener()
+    if (request.signal.aborted) throw new Error("Request aborted")
+    requestTimeout = setTimeout(() => {
+      upstreamController.abort(new Error("Maximum routing request duration exceeded"))
+      void safeRelease(502)
+    }, maximumRoutingRequestMs())
+    if (requestTimeout && typeof requestTimeout === "object" && "unref" in requestTimeout) requestTimeout.unref()
+    if (routingStore && providerApiKey && routingLeaseId) {
+      let renewing = false
+      leaseRenewalTimer = setInterval(() => {
+        if (renewing) return
+        renewing = true
+        void routingStore?.renew({
+          providerId: provider.id,
+          modelId: gatewayModelId,
+          credentialId: providerApiKey!.id,
+          leaseId: routingLeaseId!,
+        }).then((renewed) => {
+          if (!renewed) {
+            writeLog("warn", "gateway", "Routing lease disappeared before completion", { provider: provider.id, model: gatewayModelId })
+            upstreamController.abort(new Error("Routing lease expired"))
+            void safeRelease(502)
+          }
+        }).catch((error) => {
+          writeLog("warn", "gateway", "Unable to renew routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
+        }).finally(() => { renewing = false })
+      }, routingStore.leaseRenewalIntervalMs())
+      if (leaseRenewalTimer && typeof leaseRenewalTimer === "object" && "unref" in leaseRenewalTimer) leaseRenewalTimer.unref()
+    }
     writeLog("info", "gateway", requestSummary(provider.id, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
     const upstream = await fetch(buildUpstreamUrl(provider.baseUrl, model.upstreamPath || protocolPaths[modelProtocol]), {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-      signal: request.signal,
+      signal: upstreamController.signal,
       redirect: "manual",
     })
     const responseHeaders = new Headers()
@@ -401,33 +497,15 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     responseHeaders.set("x-rawroute-provider", provider.id)
     responseHeaders.set("x-rawroute-model", gatewayModelId)
     if (providerApiKey) responseHeaders.set("x-rawroute-provider-key", providerApiKey.id)
-    const release = () => routingStore && providerApiKey && routingLeaseId
-      ? routingStore.release({
-        providerId: provider.id,
-        modelId: gatewayModelId,
-        credentialId: providerApiKey.id,
-        leaseId: routingLeaseId,
-        status: upstream.status,
-        retryAfterSeconds: retryAfterSeconds(upstream.headers),
-        latencyMs: Date.now() - startedAt,
-      })
-      : Promise.resolve()
-    const safeRelease = async () => {
-      try {
-        await release()
-      } catch (error) {
-        writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
-      }
-    }
-    if (!upstream.ok) await safeRelease()
+    if (!upstream.ok) await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
     const responseBody = trackedUpstreamBody(
       upstream,
-      async (responseId) => {
-        if (routingStore && providerApiKey) await routingStore.mapResponse(provider.id, responseId, providerApiKey.id)
+      async (responseIds) => {
+        if (routingStore && providerApiKey) await routingStore.mapResponses(responseIds, provider.id, providerApiKey.id)
       },
       async ({ ttftMs, usage }) => {
         if (!upstream.ok) return
-        await safeRelease()
+        await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
         writeLog("info", "gateway", completionSummary(Date.now() - startedAt, ttftMs === undefined ? undefined : ttftMs - startedAt, usage))
       },
     )
@@ -435,8 +513,9 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
     if (routingStore && providerApiKey && routingLeaseId) {
-      await routingStore.release({ providerId: provider.id, modelId: gatewayModelId, credentialId: providerApiKey.id, leaseId: routingLeaseId, status: 502, latencyMs: 0 }).catch(() => undefined)
+      await safeRelease(502).catch(() => undefined)
     }
+    cleanupLease()
     writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: gatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError("Upstream request failed.", 502, error instanceof Error ? error.message : undefined)
   }

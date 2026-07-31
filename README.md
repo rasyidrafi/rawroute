@@ -70,11 +70,13 @@ gcloud run deploy rawroute \
   --set-secrets DEFAULT_ADMIN_PASSWORD=rawroute-admin-password:latest,DEFAULT_PROXY_API_KEY=rawroute-proxy-key:latest,SESSION_SECRET=rawroute-session-secret:latest
 ```
 
-Grant the Cloud Run service account Firestore access. `roles/datastore.user` is the usual starting point; use a narrower custom role when practical. The proxy caches its routing snapshot in each instance for `ROUTING_CACHE_TTL_MS` (10 seconds by default), avoiding a Firestore read for every inference request.
+Grant the Cloud Run service account Firestore access. `roles/datastore.user` is the usual starting point; use a narrower custom role when practical. The proxy caches its routing snapshot in each instance for `ROUTING_CACHE_TTL_MS` (2 seconds by default), avoiding a Firestore read for every inference request while limiting cross-instance configuration staleness.
 
 Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on every Cloud Run instance. Redis stores session affinity, rolling RPM reservations, expiring concurrency leases, credential cooldowns, and Responses API ID mappings. Requests fail with `503` when shared routing state is unavailable instead of falling back to inconsistent per-instance state.
 
 Proxy request bodies are limited by `MAX_PROXY_BODY_BYTES` (10 MiB by default), including streamed requests without a `Content-Length` header.
+
+Routing leases renew during long requests and are forcibly aborted after `ROUTING_MAX_REQUEST_DURATION_SECONDS` (30 minutes by default) to prevent abandoned streams from consuming concurrency indefinitely.
 
 Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the persistent configuration source and supports multiple Cloud Run instances safely.
 
@@ -82,7 +84,7 @@ Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the pe
 
 Provider credentials are stored as records linked to their provider and are never returned to the browser after saving. Existing single-secret providers are migrated automatically into a linked API-key record. Firestore encrypts stored data at rest, but access is controlled by the Cloud Run service identity, so keep its IAM permissions narrow. A future Secret Manager-backed credential adapter can remove the credential values from the configuration document entirely.
 
-New sessions use sticky least-loaded routing based on each key's rolling RPM and concurrency limits. Continuations reuse their pinned key when possible, while `previous_response_id` uses hard credential affinity and never silently fails over. Upstream `429` responses cool down only the affected credential.
+New sessions use sticky least-loaded routing based on each key's rolling RPM and concurrency limits. Continuations reuse their pinned key when possible, while `previous_response_id` uses hard credential affinity and never silently fails over. Upstream `429` responses cool down only the affected credential. Prompt-prefix affinity is disabled by default; use an explicit `prompt_cache_key` or session identifier when stickiness is desired.
 
 ## Documentation sources
 

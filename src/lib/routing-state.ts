@@ -6,6 +6,11 @@ export interface RoutingRedis {
   eval(script: string, keys: string[], args: Array<string | number>): Promise<unknown>
   get<T = string>(key: string): Promise<T | null>
   set(key: string, value: string, options?: { ex?: number }): Promise<unknown>
+  createScript?: (script: string) => RoutingRedisScript
+}
+
+interface RoutingRedisScript {
+  exec(keys: string[], args: string[]): Promise<unknown>
 }
 
 interface StoreOptions {
@@ -22,6 +27,7 @@ interface ReserveInput {
   sessionKey?: string
   hardAffinity: boolean
   requiredCredentialId?: string
+  responseId?: string
 }
 
 interface ReleaseInput {
@@ -31,68 +37,88 @@ interface ReleaseInput {
   leaseId: string
   status: number
   retryAfterSeconds?: number
-  latencyMs: number
 }
 
 const reserveScript = `
 local affinity = KEYS[1]
+local responseAffinity = KEYS[2]
 local ttl = tonumber(ARGV[1])
 local count = tonumber(ARGV[2])
 local hard = ARGV[3] == "1"
 local required = ARGV[4]
-local now = tonumber(ARGV[5])
-local leaseId = ARGV[6]
-local leaseTtlMs = tonumber(ARGV[7])
-local pinned = required ~= "" and required or redis.call("GET", affinity)
+local leaseId = ARGV[5]
+local leaseTtlMs = tonumber(ARGV[6])
+local responseCredential = responseAffinity ~= "" and redis.call("GET", responseAffinity) or false
+if hard and responseAffinity ~= "" and required == "" and not responseCredential then
+  return {"hard-missing"}
+end
+local sessionCredential = affinity ~= "" and redis.call("GET", affinity) or false
+local pinned = required ~= "" and required or (responseCredential or sessionCredential)
 local bestIndex = nil
 local bestScore = nil
+local bestPriority = nil
 local pinnedIndex = nil
-local retryAfter = 1
+local retryAfter = nil
+local pinnedRetryAfter = nil
+
+local redisTime = redis.call("TIME")
+local now = tonumber(redisTime[1]) * 1000 + math.floor(tonumber(redisTime[2]) / 1000)
 
 for index = 1, count do
-  local offset = 7 + ((index - 1) * 4)
+  local offset = 6 + ((index - 1) * 4)
   local id = ARGV[offset + 1]
   local rpmLimit = tonumber(ARGV[offset + 2])
   local concurrencyLimit = tonumber(ARGV[offset + 3])
   local priority = tonumber(ARGV[offset + 4])
-  local keyOffset = 2 + ((index - 1) * 3)
+  local keyOffset = 3 + ((index - 1) * 3)
   redis.call("ZREMRANGEBYSCORE", KEYS[keyOffset], 0, now - 60000)
   redis.call("ZREMRANGEBYSCORE", KEYS[keyOffset + 1], 0, now)
   local rpm = tonumber(redis.call("ZCARD", KEYS[keyOffset]) or "0")
   local inflight = tonumber(redis.call("ZCARD", KEYS[keyOffset + 1]) or "0")
   local cooldown = tonumber(redis.call("TTL", KEYS[keyOffset + 2]))
-  if cooldown > retryAfter then retryAfter = cooldown end
+  local blocked = false
+  local candidateRetry = 1
+  if cooldown > 0 then
+    blocked = true
+    if cooldown > candidateRetry then candidateRetry = cooldown end
+  end
   if rpm >= rpmLimit then
+    blocked = true
     local oldest = redis.call("ZRANGE", KEYS[keyOffset], 0, 0, "WITHSCORES")
     if oldest[2] ~= nil then
       local rpmRetry = math.ceil((tonumber(oldest[2]) + 60000 - now) / 1000)
-      if rpmRetry > retryAfter then retryAfter = rpmRetry end
+      if rpmRetry > candidateRetry then candidateRetry = rpmRetry end
     end
   end
   if inflight >= concurrencyLimit then
+    blocked = true
     local oldestLease = redis.call("ZRANGE", KEYS[keyOffset + 1], 0, 0, "WITHSCORES")
     if oldestLease[2] ~= nil then
       local leaseRetry = math.ceil((tonumber(oldestLease[2]) - now) / 1000)
-      if leaseRetry > retryAfter then retryAfter = leaseRetry end
+      if leaseRetry > candidateRetry then candidateRetry = leaseRetry end
     end
   end
   local usable = cooldown <= 0 and rpm < rpmLimit and inflight < concurrencyLimit
+  if blocked and (retryAfter == nil or candidateRetry < retryAfter) then retryAfter = candidateRetry end
+  if blocked and id == pinned then pinnedRetryAfter = candidateRetry end
   if id == pinned and usable then pinnedIndex = index end
   if usable then
-    local score = math.max(rpm / rpmLimit, inflight / concurrencyLimit) - (priority * 0.01)
-    if bestScore == nil or score < bestScore then bestScore = score; bestIndex = index end
+    local load = math.max(rpm / rpmLimit, inflight / concurrencyLimit)
+    if bestScore == nil or load < bestScore or (load == bestScore and (bestPriority == nil or priority > bestPriority)) then
+      bestScore = load; bestPriority = priority; bestIndex = index
+    end
   end
 end
 
 local selected = pinnedIndex or bestIndex
 if pinned ~= false and pinned ~= nil and pinned ~= "" and pinnedIndex == nil and hard then
-  return {"hard-unavailable", pinned, tostring(retryAfter)}
+  return {"hard-unavailable", pinned, tostring(pinnedRetryAfter or 1)}
 end
-if selected == nil then return {"capacity", tostring(retryAfter)} end
+if selected == nil then return {"capacity", tostring(retryAfter or 1)} end
 
-local offset = 7 + ((selected - 1) * 4)
+local offset = 6 + ((selected - 1) * 4)
 local id = ARGV[offset + 1]
-local keyOffset = 2 + ((selected - 1) * 3)
+local keyOffset = 3 + ((selected - 1) * 3)
 redis.call("ZADD", KEYS[keyOffset], now, leaseId)
 redis.call("EXPIRE", KEYS[keyOffset], 60)
 redis.call("ZADD", KEYS[keyOffset + 1], now + leaseTtlMs, leaseId)
@@ -108,7 +134,28 @@ if status == 429 then
   redis.call("ZREM", KEYS[2], ARGV[4])
   redis.call("SET", KEYS[3], "429", "EX", tonumber(ARGV[2]))
 elseif status >= 500 then
-  redis.call("SET", KEYS[3], tostring(status), "EX", tonumber(ARGV[3]))
+  redis.call("SET", KEYS[3], tostring(status), "EX", tonumber(ARGV[2]))
+end
+return {"ok"}
+`
+
+const renewScript = `
+local leaseId = ARGV[1]
+local leaseTtlMs = tonumber(ARGV[2])
+local existing = redis.call("ZSCORE", KEYS[1], leaseId)
+if not existing then return 0 end
+local redisTime = redis.call("TIME")
+local now = tonumber(redisTime[1]) * 1000 + math.floor(tonumber(redisTime[2]) / 1000)
+redis.call("ZADD", KEYS[1], now + leaseTtlMs, leaseId)
+redis.call("EXPIRE", KEYS[1], math.ceil(leaseTtlMs / 1000) + 1)
+return 1
+`
+
+const mapResponsesScript = `
+local ttl = tonumber(ARGV[1])
+local credentialId = ARGV[2]
+for index = 1, #KEYS do
+  redis.call("SET", KEYS[index], credentialId, "EX", ttl)
 end
 return {"ok"}
 `
@@ -122,25 +169,54 @@ export class RedisRoutingStateStore {
   private readonly affinityTtlSeconds: number
   private readonly responseTtlSeconds: number
   private readonly inflightLeaseTtlSeconds: number
+  private readonly reserveRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
+  private readonly releaseRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
+  private readonly renewRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
+  private readonly mapResponsesRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
 
   constructor(private readonly redis: RoutingRedis, options: StoreOptions = {}) {
     this.prefix = options.prefix || "rawroute:routing:v1"
     this.affinityTtlSeconds = options.affinityTtlSeconds || positiveInteger(Number(process.env.ROUTING_AFFINITY_TTL_SECONDS), 3600)
     this.responseTtlSeconds = options.responseTtlSeconds || positiveInteger(Number(process.env.ROUTING_RESPONSE_TTL_SECONDS), 86400)
     this.inflightLeaseTtlSeconds = options.inflightLeaseTtlSeconds || positiveInteger(Number(process.env.ROUTING_INFLIGHT_LEASE_TTL_SECONDS), 900)
+    const reserveScriptRunner = redis.createScript?.(reserveScript)
+    const releaseScriptRunner = redis.createScript?.(releaseScript)
+    const renewScriptRunner = redis.createScript?.(renewScript)
+    const mapResponsesScriptRunner = redis.createScript?.(mapResponsesScript)
+    this.reserveRunner = reserveScriptRunner
+      ? (keys, args) => reserveScriptRunner.exec(keys, args.map(String))
+      : (keys, args) => redis.eval(reserveScript, keys, args)
+    this.releaseRunner = releaseScriptRunner
+      ? (keys, args) => releaseScriptRunner.exec(keys, args.map(String))
+      : (keys, args) => redis.eval(releaseScript, keys, args)
+    this.renewRunner = renewScriptRunner
+      ? (keys, args) => renewScriptRunner.exec(keys, args.map(String))
+      : (keys, args) => redis.eval(renewScript, keys, args)
+    this.mapResponsesRunner = mapResponsesScriptRunner
+      ? (keys, args) => mapResponsesScriptRunner.exec(keys, args.map(String))
+      : (keys, args) => redis.eval(mapResponsesScript, keys, args)
   }
 
   private scope(providerId: string, modelId: string) {
     return `${providerId}:${modelId}`
   }
 
+  private responseKey(providerId: string, responseId: string) {
+    return `${this.prefix}:response:${providerId}:${responseId}`
+  }
+
+  leaseRenewalIntervalMs() {
+    return Math.max(1000, Math.floor((this.inflightLeaseTtlSeconds * 1000) / 3))
+  }
+
   async reserve(input: ReserveInput) {
     const credentials = input.credentials.filter((credential) => credential.enabled)
     const scope = this.scope(input.providerId, input.modelId)
     const affinityKey = input.sessionKey ? `${this.prefix}:affinity:${scope}:${input.sessionKey}` : ""
-    const keys = [affinityKey]
+    const responseAffinityKey = input.responseId ? this.responseKey(input.providerId, input.responseId) : ""
+    const keys = [affinityKey, responseAffinityKey]
     const leaseId = crypto.randomUUID()
-    const args: Array<string | number> = [this.affinityTtlSeconds, credentials.length, input.hardAffinity ? 1 : 0, input.requiredCredentialId || "", Date.now(), leaseId, this.inflightLeaseTtlSeconds * 1000]
+    const args: Array<string | number> = [this.affinityTtlSeconds, credentials.length, input.hardAffinity ? 1 : 0, input.requiredCredentialId || "", leaseId, this.inflightLeaseTtlSeconds * 1000]
     for (const credential of credentials) {
       const credentialScope = `${scope}:${credential.id}`
       keys.push(`${this.prefix}:rpm:${credentialScope}`, `${this.prefix}:inflight:${credentialScope}`, `${this.prefix}:cooldown:${credentialScope}`)
@@ -151,8 +227,11 @@ export class RedisRoutingStateStore {
         Number.isFinite(credential.priority) ? Number(credential.priority) : 0,
       )
     }
-    const response = await this.redis.eval(reserveScript, keys, args) as Array<string | number>
+    const response = await this.reserveRunner(keys, args) as Array<string | number>
     if (response?.[0] === "ok") return { ok: true as const, credentialId: String(response[1]), affinity: String(response[2]), leaseId }
+    if (response?.[0] === "hard-missing") {
+      return { ok: false as const, reason: "hard-response-missing" as const, retryAfterSeconds: 1 }
+    }
     if (response?.[0] === "hard-unavailable") {
       return { ok: false as const, reason: "hard-affinity-unavailable" as const, credentialId: String(response[1]), retryAfterSeconds: Number(response[2]) || 1 }
     }
@@ -161,19 +240,40 @@ export class RedisRoutingStateStore {
 
   async release(input: ReleaseInput) {
     const scope = `${this.scope(input.providerId, input.modelId)}:${input.credentialId}`
-    await this.redis.eval(releaseScript, [
+    await this.releaseRunner([
       `${this.prefix}:inflight:${scope}`,
       `${this.prefix}:rpm:${scope}`,
       `${this.prefix}:cooldown:${scope}`,
-    ], [input.status, positiveInteger(input.retryAfterSeconds, 5), 5, input.leaseId, Math.max(0, Math.round(input.latencyMs))])
+    ], [input.status, positiveInteger(input.retryAfterSeconds, 5), 0, input.leaseId])
+  }
+
+  async renew(input: { providerId: string; modelId: string; credentialId: string; leaseId: string }) {
+    const scope = `${this.scope(input.providerId, input.modelId)}:${input.credentialId}`
+    const response = await this.renewRunner([
+      `${this.prefix}:inflight:${scope}`,
+    ], [input.leaseId, this.inflightLeaseTtlSeconds * 1000])
+    return Number(response) === 1
   }
 
   async credentialForResponse(providerId: string, responseId: string) {
-    return this.redis.get<string>(`${this.prefix}:response:${providerId}:${responseId}`)
+    return this.redis.get<string>(this.responseKey(providerId, responseId))
   }
 
   async mapResponse(providerId: string, responseId: string, credentialId: string) {
-    await this.redis.set(`${this.prefix}:response:${providerId}:${responseId}`, credentialId, { ex: this.responseTtlSeconds })
+    await this.mapResponses([responseId], providerId, credentialId)
+  }
+
+  async mapResponses(responseIds: string[], providerId: string, credentialId: string) {
+    const uniqueResponseIds = [...new Set(responseIds.filter(Boolean))]
+    if (!uniqueResponseIds.length) return
+    if (uniqueResponseIds.length === 1) {
+      await this.redis.set(this.responseKey(providerId, uniqueResponseIds[0]), credentialId, { ex: this.responseTtlSeconds })
+      return
+    }
+    await this.mapResponsesRunner(
+      uniqueResponseIds.map((responseId) => this.responseKey(providerId, responseId)),
+      [this.responseTtlSeconds, credentialId],
+    )
   }
 }
 

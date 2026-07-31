@@ -5,7 +5,8 @@ import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, g
 import { gatewayModelId } from "@/lib/http"
 import type { ApiKey, AppData, Model, Provider, ProviderApiKey } from "@/lib/types"
 
-const cacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 10_000)
+const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 2_000)
+const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 2_000
 let compatibilityCache: CompatibilityCache | undefined
 
 const documentedAdminPassword = "change-me-now"

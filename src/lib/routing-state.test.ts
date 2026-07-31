@@ -35,6 +35,23 @@ describe("Redis routing state", () => {
     expect(redis.calls[0]?.args.join(" ")).toContain("10")
   })
 
+  test("looks up response affinity inside the reservation script", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["hard-missing"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+
+    expect(await store.reserve({
+      providerId: "provider",
+      modelId: "model",
+      credentials: keys,
+      sessionKey: "response-session",
+      responseId: "resp-1",
+      hardAffinity: true,
+    })).toEqual({ ok: false, reason: "hard-response-missing", retryAfterSeconds: 1 })
+    expect(redis.calls[0]?.keys[1]).toBe("test:response:provider:resp-1")
+    expect(redis.calls[0]?.script).toContain('redis.call("TIME")')
+  })
+
   test("tracks concurrency as independently expiring leases", async () => {
     const redis = new FakeRedis()
     redis.responses.push(["ok", "a", "new"])
@@ -67,9 +84,28 @@ describe("Redis routing state", () => {
     const redis = new FakeRedis()
     redis.responses.push(["ok"])
     const store = new RedisRoutingStateStore(redis)
-    await store.release({ providerId: "provider", modelId: "model", credentialId: "a", leaseId: "lease-a", status: 429, retryAfterSeconds: 30, latencyMs: 100 })
+    await store.release({ providerId: "provider", modelId: "model", credentialId: "a", leaseId: "lease-a", status: 429, retryAfterSeconds: 30 })
     expect(redis.calls[0]?.keys.join(" ")).toContain("provider:model:a")
     expect(redis.calls[0]?.args).toContain(30)
     expect(redis.calls[0]?.script).toContain('ZREM", KEYS[1], ARGV[4]')
+  })
+
+  test("uses upstream retry timing for server failures too", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok"])
+    const store = new RedisRoutingStateStore(redis)
+    await store.release({ providerId: "provider", modelId: "model", credentialId: "a", leaseId: "lease-a", status: 503, retryAfterSeconds: 27 })
+    expect(redis.calls[0]?.args).toContain(27)
+    expect(redis.calls[0]?.script).toContain('tostring(status), "EX", tonumber(ARGV[2])')
+  })
+
+  test("maps multiple response IDs in one Redis script", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test", responseTtlSeconds: 120 })
+    await store.mapResponses(["resp-1", "resp-2", "resp-1"], "provider", "a")
+    expect(redis.calls[0]?.keys).toEqual(["test:response:provider:resp-1", "test:response:provider:resp-2"])
+    expect(redis.calls[0]?.args).toEqual([120, "a"])
+    expect(redis.calls[0]?.script).toContain('for index = 1, #KEYS do')
   })
 })

@@ -104,6 +104,9 @@ export function extractSessionIdentity(
     if (value) return withHardAffinity(hashed(`${field}:${value}`, field, context))
   }
 
-  const prefix = promptPrefix(payload, protocol)
-  return prefix ? withHardAffinity(hashed(`prefix:${prefix}`, "prompt-prefix", context)) : undefined
+  if (process.env.ROUTING_PROMPT_PREFIX_AFFINITY === "true") {
+    const prefix = promptPrefix(payload, protocol)
+    return prefix ? withHardAffinity(hashed(`prefix:${prefix}`, "prompt-prefix", context)) : undefined
+  }
+  return undefined
 }

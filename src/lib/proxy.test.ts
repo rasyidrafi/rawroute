@@ -14,10 +14,13 @@ class ProxyTestRedis implements RoutingRedis {
 
   async eval(script: string, keys: string[], args: Array<string | number>) {
     if (script.includes("local affinity")) {
+      const hard = String(args[2]) === "1"
+      const responseCredential = keys[1] ? this.responseMappings.get(keys[1]) : undefined
+      if (hard && keys[1] && !responseCredential) return ["hard-missing"]
       const pinned = this.affinity.get(keys[0])
-      const selected = pinned || testProviderKeyId || String(args[7] || "provider-key")
+      const selected = responseCredential || pinned || testProviderKeyId || String(args[6] || "provider-key")
       this.affinity.set(keys[0], selected)
-      return ["ok", selected, pinned ? "sticky" : "new"]
+      return ["ok", selected, responseCredential || pinned ? "sticky" : "new"]
     }
     if (this.failBookkeeping) throw new Error("Redis unavailable")
     return ["ok"]

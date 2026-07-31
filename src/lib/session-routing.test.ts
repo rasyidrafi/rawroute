@@ -50,7 +50,7 @@ describe("session identity extraction", () => {
     expect(identity).toMatchObject({ source: "x-rawroute-session-id", hard: true, responseId: "resp_456" })
   })
 
-  test("uses only the stable prompt prefix for fallback affinity", () => {
+  test("does not infer affinity from prompt content by default", () => {
     const request = new Request("https://gateway.test/v1/chat/completions")
     const first = extractSessionIdentity(request, {
       messages: [{ role: "system", content: "Be concise" }, { role: "user", content: "Hello" }],
@@ -63,11 +63,29 @@ describe("session identity extraction", () => {
         { role: "user", content: "Continue" },
       ],
     }, "openai-chat", context)
-    expect(continuation?.key).toBe(first?.key)
-    expect(first?.source).toBe("prompt-prefix")
+    expect(first).toBeUndefined()
+    expect(continuation).toBeUndefined()
+  })
+
+  test("supports prompt-prefix affinity when explicitly enabled", () => {
+    const previous = process.env.ROUTING_PROMPT_PREFIX_AFFINITY
+    process.env.ROUTING_PROMPT_PREFIX_AFFINITY = "true"
+    try {
+      const request = new Request("https://gateway.test/v1/chat/completions")
+      const first = extractSessionIdentity(request, {
+        messages: [{ role: "system", content: "Be concise" }, { role: "user", content: "Hello" }],
+      }, "openai-chat", context)
+      expect(first?.source).toBe("prompt-prefix")
+    } finally {
+      if (previous === undefined) delete process.env.ROUTING_PROMPT_PREFIX_AFFINITY
+      else process.env.ROUTING_PROMPT_PREFIX_AFFINITY = previous
+    }
   })
 
   test("distinguishes Droid subagents that share a user-role system bootstrap", () => {
+    const previous = process.env.ROUTING_PROMPT_PREFIX_AFFINITY
+    process.env.ROUTING_PROMPT_PREFIX_AFFINITY = "true"
+    try {
     const request = new Request("https://gateway.test/v1/chat/completions")
     const bootstrap = { role: "user", content: [{ type: "text", text: "<system-reminder>Shared Droid bootstrap</system-reminder>" }] }
     const backend = extractSessionIdentity(request, {
@@ -87,5 +105,9 @@ describe("session identity extraction", () => {
 
     expect(backend?.key).not.toBe(portal?.key)
     expect(backendContinuation?.key).toBe(backend?.key)
+    } finally {
+      if (previous === undefined) delete process.env.ROUTING_PROMPT_PREFIX_AFFINITY
+      else process.env.ROUTING_PROMPT_PREFIX_AFFINITY = previous
+    }
   })
 })
