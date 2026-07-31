@@ -1,6 +1,6 @@
 {
   "name": "rawroute",
-  "version": "0.2.9",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",

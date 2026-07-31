@@ -114,6 +114,7 @@ test("model dialog and long protocol select remain scrollable", async ({ page })
 
 test("dropdown menu interaction survives ScrollArea composition", async ({ page }) => {
   await page.goto(`/dashboard/providers/${firstProviderId}`)
+  await expect(page.getByText("Provider details")).toBeVisible()
   await page.getByRole("button", { name: "Change color theme" }).click()
   await page.getByRole("menuitemradio", { name: "Dark" }).click()
   await expect(page.locator("html")).toHaveClass(/dark/)

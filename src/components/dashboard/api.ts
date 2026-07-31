@@ -29,6 +29,12 @@ export async function apiPost<T = { ok: true }>(url: string, body: unknown): Pro
   return response.json() as Promise<T>
 }
 
+export async function apiPatch<T = { ok: true }>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, { method: "PATCH", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  if (!response.ok) await parseError(response)
+  return response.json() as Promise<T>
+}
+
 export async function apiDelete<T = { ok: true }>(url: string): Promise<T> {
   const response = await fetch(url, { method: "DELETE", cache: "no-store" })
   if (!response.ok) await parseError(response)

@@ -1,4 +1,6 @@
 import { authenticateProxyKey } from "@/lib/auth"
+import { refreshCodexAccount } from "@/lib/codex"
+import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
@@ -378,6 +380,18 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
         return jsonError("The selected provider API key is unavailable.", 503)
       }
       routingLeaseId = reservation.leaseId
+      try {
+        providerApiKey = await refreshCodexAccount(providerApiKey)
+      } catch (error) {
+        await routingStore.release({
+          providerId: provider.id,
+          modelId: gatewayModelId,
+          credentialId: providerApiKey.id,
+          leaseId: routingLeaseId,
+          status: 503,
+        }).catch(() => undefined)
+        return jsonError(error instanceof Error ? error.message : "Codex account refresh failed.", 503)
+      }
     } catch (error) {
       writeLog("error", "gateway", "Shared routing state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
       return jsonError("Shared routing state is unavailable.", 503)
@@ -426,23 +440,26 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
 
   try {
     payload = mergeRequestOverrides(payload, model.requestOverrides || {})
-    payload.model = model.upstreamModel
+    const isCodexOAuth = providerApiKey?.credentialKind === "codex-oauth"
+    payload = isCodexOAuth ? normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey) : { ...payload, model: model.upstreamModel }
     const streamOptions = objectValue(payload.stream_options)
     if (modelProtocol === "openai-chat" && payload.stream === true && streamOptions) {
       payload.stream_options = { ...streamOptions, include_usage: true }
     }
     const reasoningEffort = extractReasoningEffort(payload)
-    const headers = new Headers()
-    request.headers.forEach((value, key) => {
-      if (!blockedRequestHeaders.has(key.toLowerCase())) headers.set(key, value)
-    })
-    headers.set("content-type", "application/json")
-    Object.entries(validateProviderHeaders(provider.headers)).forEach(([key, value]) => headers.set(key, value))
-
-    if (provider.authType === "bearer" && providerApiKey) headers.set("authorization", `Bearer ${providerApiKey.key}`)
-    if (provider.authType === "x-api-key" && providerApiKey) headers.set("x-api-key", providerApiKey.key)
-    if (provider.authType === "custom-header" && provider.authHeader && providerApiKey) {
-      headers.set(provider.authHeader, providerApiKey.key)
+    const validatedProviderHeaders = validateProviderHeaders(provider.headers)
+    let headers = isCodexOAuth
+      ? buildCodexHeaders(request.headers, { ...provider, headers: validatedProviderHeaders }, providerApiKey?.key || "", providerApiKey?.accountId, routingSessionKey)
+      : new Headers()
+    if (!isCodexOAuth) {
+      request.headers.forEach((value, key) => {
+        if (!blockedRequestHeaders.has(key.toLowerCase())) headers.set(key, value)
+      })
+      headers.set("content-type", "application/json")
+      Object.entries(validatedProviderHeaders).forEach(([key, value]) => headers.set(key, value))
+      if (provider.authType === "bearer" && providerApiKey) headers.set("authorization", `Bearer ${providerApiKey.key}`)
+      if (provider.authType === "x-api-key" && providerApiKey) headers.set("x-api-key", providerApiKey.key)
+      if (provider.authType === "custom-header" && provider.authHeader && providerApiKey) headers.set(provider.authHeader, providerApiKey.key)
     }
 
     const account = providerApiKey?.name || provider.name
@@ -483,13 +500,31 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       if (leaseRenewalTimer && typeof leaseRenewalTimer === "object" && "unref" in leaseRenewalTimer) leaseRenewalTimer.unref()
     }
     writeLog("info", "gateway", requestSummary(provider.id, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
-    const upstream = await fetch(buildUpstreamUrl(provider.baseUrl, model.upstreamPath || protocolPaths[modelProtocol]), {
+    const upstreamPath = isCodexOAuth ? (model.upstreamPath || "/responses") : (model.upstreamPath || protocolPaths[modelProtocol])
+    const upstreamUrl = buildUpstreamUrl(provider.baseUrl, upstreamPath)
+    let upstream = await fetch(upstreamUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
       signal: upstreamController.signal,
       redirect: "manual",
     })
+    if (isCodexOAuth && upstream.status === 401 && providerApiKey?.refreshToken) {
+      await upstream.body?.cancel().catch(() => undefined)
+      try {
+        providerApiKey = await refreshCodexAccount(providerApiKey, true)
+        headers = buildCodexHeaders(request.headers, { ...provider, headers: validatedProviderHeaders }, providerApiKey.key, providerApiKey.accountId, routingSessionKey)
+        upstream = await fetch(upstreamUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+          signal: upstreamController.signal,
+          redirect: "manual",
+        })
+      } catch (error) {
+        writeLog("warn", "gateway", "Codex token refresh after unauthorized response failed", { provider: provider.id, account: providerApiKey.name, error: error instanceof Error ? error.message : "Unknown error" })
+      }
+    }
     const responseHeaders = new Headers()
     upstream.headers.forEach((value, key) => {
       if (!blockedResponseHeaders.has(key.toLowerCase())) responseHeaders.set(key, value)

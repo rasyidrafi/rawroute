@@ -3,6 +3,7 @@ import { applicationDefault, cert, getApp, getApps, initializeApp } from "fireba
 import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore"
 
 import { gatewayModelId } from "@/lib/http"
+import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import type { ApiKey, AppData, Model, Provider, ProviderApiKey } from "@/lib/types"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 2_000)
@@ -199,7 +200,13 @@ function providerFromSnapshot(snapshot: DocumentSnapshot): Provider {
 }
 
 function providerApiKeyFromSnapshot(snapshot: DocumentSnapshot, providerId: string): ProviderApiKey {
-  return { ...snapshot.data(), id: snapshot.id, providerId } as ProviderApiKey
+  const value = { ...snapshot.data(), id: snapshot.id, providerId } as ProviderApiKey
+  if (value.credentialKind === "codex-oauth") {
+    value.key = decryptCredentialSecret(value.key) || ""
+    value.refreshToken = decryptCredentialSecret(value.refreshToken)
+    value.idToken = decryptCredentialSecret(value.idToken)
+  }
+  return value
 }
 
 function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Model {
@@ -221,6 +228,11 @@ function storedProviderApiKey(apiKey: ProviderApiKey) {
   const { id, providerId, ...data } = apiKey
   void id
   void providerId
+  if (apiKey.credentialKind === "codex-oauth") {
+    data.key = encryptCredentialSecret(apiKey.key) || ""
+    data.refreshToken = encryptCredentialSecret(apiKey.refreshToken)
+    data.idToken = encryptCredentialSecret(apiKey.idToken)
+  }
   return stripUndefined(data)
 }
 
@@ -457,6 +469,12 @@ export async function listProviderApiKeys(providerId: string): Promise<ProviderA
     return [...map.values()].sort(compareProviderApiKeys)
   }
   return firestoreListProviderApiKeys(providerId)
+}
+
+export async function getProviderApiKey(providerId: string, apiKeyId: string): Promise<ProviderApiKey | undefined> {
+  if (isMemoryBackend()) return ensureMemorySeeded().providerApiKeys.get(providerId)?.get(apiKeyId)
+  const snapshot = await providerApiKeyRef(providerId, apiKeyId).get()
+  return snapshot.exists ? providerApiKeyFromSnapshot(snapshot, providerId) : undefined
 }
 
 function compareProviderApiKeys(left: ProviderApiKey, right: ProviderApiKey) {
@@ -1113,8 +1131,12 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
   const existing = input.originalId ? slot.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Provider API key not found.")
   const apiKeyId = existing ? input.originalId! : crypto.randomUUID()
+  const inputWithoutIds = { ...input }
+  delete inputWithoutIds.id
+  delete inputWithoutIds.originalId
   const apiKey: ProviderApiKey = {
     ...(existing || {}),
+    ...inputWithoutIds,
     id: apiKeyId,
     providerId,
     name: input.name || existing?.name || "",

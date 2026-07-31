@@ -96,6 +96,76 @@ describe("proxy request", () => {
     expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms$/)
   })
 
+  test("forwards Codex OAuth requests as native Responses with account headers", async () => {
+    await updateData((data) => {
+      const provider = data.providers[0]
+      if (!provider) throw new Error("provider missing")
+      provider.baseUrl = "https://chatgpt.com/backend-api/codex"
+      const providerApiKey = data.providerApiKeys[0]
+      if (!providerApiKey) throw new Error("credential missing")
+      Object.assign(providerApiKey, {
+        credentialKind: "codex-oauth",
+        key: "codex-access",
+        refreshToken: "codex-refresh",
+        accountId: "acct-1",
+        email: "one@example.com",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      })
+      data.models[0]!.upstreamModel = "gpt-5.4-codex"
+    })
+    let captured: { body?: Record<string, unknown>; headers?: Headers; url?: string } = {}
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      captured = { url: input.toString(), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) }
+      return new Response("data: {\"type\":\"response.completed\"}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })
+    }) as unknown as typeof fetch
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json", "x-rawroute-session-id": "session-a" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", stream: false, temperature: 0.4 }),
+    }), "openai-responses")
+    expect(response.status).toBe(200)
+    expect(captured.url).toBe("https://chatgpt.com/backend-api/codex/responses")
+    expect(captured.body).toMatchObject({ model: "gpt-5.4-codex", stream: true, store: false, include: ["reasoning.encrypted_content"], instructions: "" })
+    expect(captured.body?.temperature).toBeUndefined()
+    expect(captured.headers?.get("authorization")).toBe("Bearer codex-access")
+    expect(captured.headers?.get("chatgpt-account-id")).toBe("acct-1")
+    expect(captured.headers?.get("originator")).toBe("codex_cli_rs")
+  })
+
+  test("refreshes a Codex account once and retries the same request after 401", async () => {
+    await updateData((data) => {
+      const provider = data.providers[0]!
+      provider.baseUrl = "https://chatgpt.com/backend-api/codex"
+      const account = data.providerApiKeys[0]!
+      Object.assign(account, {
+        credentialKind: "codex-oauth",
+        key: "expired-access",
+        refreshToken: "codex-refresh",
+        accountId: "acct-1",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      })
+    })
+    let upstreamCalls = 0
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input.toString()
+      if (url.endsWith("/oauth/token")) {
+        expect(String(init?.body)).toContain("refresh_token=codex-refresh")
+        return new Response(JSON.stringify({ access_token: "fresh-access", refresh_token: "fresh-refresh", expires_in: 3600 }), { status: 200 })
+      }
+      upstreamCalls += 1
+      if (upstreamCalls === 1) return new Response(JSON.stringify({ error: "expired" }), { status: 401, headers: { "content-type": "application/json" } })
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fresh-access")
+      return new Response("data: {\"type\":\"response.completed\"}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })
+    }) as unknown as typeof fetch
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", stream: true }),
+    }), "openai-responses")
+    expect(response.status).toBe(200)
+    expect(upstreamCalls).toBe(2)
+  })
+
   test("returns 503 without contacting upstream when an authenticated provider has no enabled API keys", async () => {
     await updateData((data) => { data.providerApiKeys = [] })
     const upstream = mock(() => Promise.resolve(new Response()))

@@ -2,6 +2,8 @@ export type Protocol = "openai-chat" | "openai-responses" | "anthropic-messages"
 
 export type AuthType = "bearer" | "x-api-key" | "custom-header" | "none"
 
+export type ProviderCredentialKind = "api-key" | "codex-oauth"
+
 export interface Provider {
   id: string
   name: string
@@ -26,6 +28,14 @@ export interface ProviderApiKey {
   providerId: string
   name: string
   key: string
+  credentialKind?: ProviderCredentialKind
+  refreshToken?: string
+  idToken?: string
+  accountId?: string
+  email?: string
+  planType?: string
+  expiresAt?: string
+  lastRefresh?: string
   enabled: boolean
   rpmLimit?: number
   maxConcurrency?: number
