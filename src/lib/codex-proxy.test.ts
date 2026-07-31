@@ -3,9 +3,21 @@ import { describe, expect, test } from "bun:test"
 import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
 import type { Provider } from "@/lib/types"
 
-const provider = {
+const provider: Provider = {
+  id: "provider-1",
+  name: "Codex",
+  prefix: "codex",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+  protocol: "openai-responses",
+  authType: "none",
   headers: { "x-static": "yes" },
-} as Provider
+  enabled: true,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  apiKeyCount: 0,
+  enabledApiKeyCount: 0,
+  modelCount: 0,
+  enabledModelCount: 0,
+}
 
 describe("Codex native request adapter", () => {
   test("keeps Responses structure while applying only Codex compatibility rules", () => {

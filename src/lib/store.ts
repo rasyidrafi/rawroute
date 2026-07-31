@@ -868,15 +868,14 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
 async function firestoreDeleteProvider(providerId: string): Promise<void> {
   const firestore = getFirestoreInstance()
   await firestore.runTransaction(async (transaction) => {
-    await deleteSubcollection(transaction, providerApiKeysRef(providerId))
-    await deleteSubcollection(transaction, modelsRef(providerId))
+    const [apiKeys, models] = await Promise.all([
+      transaction.get(providerApiKeysRef(providerId)),
+      transaction.get(modelsRef(providerId)),
+    ])
+    apiKeys.docs.forEach((doc) => transaction.delete(doc.ref))
+    models.docs.forEach((doc) => transaction.delete(doc.ref))
     transaction.delete(providerRef(providerId))
   })
-}
-
-async function deleteSubcollection(transaction: Transaction, ref: FirebaseFirestore.CollectionReference<DocumentData> | ReturnType<typeof modelsRef>) {
-  const snapshot = await transaction.get(ref as FirebaseFirestore.CollectionReference<DocumentData>)
-  snapshot.docs.forEach((doc) => transaction.delete(doc.ref))
 }
 
 async function firestoreListProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
