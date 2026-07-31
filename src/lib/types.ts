@@ -58,6 +58,16 @@ export interface Model {
   createdAt: string
 }
 
+export interface ModelAlias {
+  id: string
+  // The user-facing gateway model ID; globally unique across all aliases.
+  alias: string
+  name: string
+  // gatewayModelId of the model this alias forwards to.
+  targetModelId: string
+  createdAt: string
+}
+
 export interface ApiKey {
   id: string
   name: string
@@ -76,6 +86,7 @@ export interface AppData {
   providers: Provider[]
   providerApiKeys: ProviderApiKey[]
   models: Model[]
+  aliases: ModelAlias[]
   apiKeys: ApiKey[]
 }
 

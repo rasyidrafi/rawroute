@@ -1,4 +1,5 @@
-import { protocolPaths, type Model, type Protocol, type Provider } from "@/lib/types"
+import { cleanId } from "@/lib/http"
+import { protocolPaths, type Model, type ModelAlias, type Protocol, type Provider } from "@/lib/types"
 
 export function buildUpstreamUrl(baseUrl: string, routePath: string) {
   const url = new URL(baseUrl)
@@ -14,10 +15,18 @@ export function buildUpstreamUrl(baseUrl: string, routePath: string) {
 export function resolveRoute(
   providers: Provider[],
   models: Model[],
+  aliases: ModelAlias[],
   requestedModel: string,
   requestedProtocol: Protocol,
 ) {
   const model = models.find((entry) => (entry.gatewayModelId || entry.id) === requestedModel && entry.enabled)
+  if (!model) {
+    const requested = cleanId(requestedModel)
+    const alias = aliases.find((entry) => cleanId(entry.alias) === requested)
+    if (alias) {
+      return resolveRoute(providers, models, aliases, alias.targetModelId, requestedProtocol)
+    }
+  }
   if (!model) return { ok: false as const, status: 404, message: `Unknown or disabled model: ${requestedModel}` }
   const provider = providers.find((entry) => entry.id === model.providerId && entry.enabled)
   if (!provider) return { ok: false as const, status: 503, message: "The model provider is disabled or missing." }

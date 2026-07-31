@@ -11,6 +11,6 @@ export async function GET(request: Request) {
   const data = await readData()
   return Response.json({
     object: "list",
-    data: catalogModels(data.providers, data.models),
+    data: catalogModels(data.providers, data.models, data.aliases),
   })
 }

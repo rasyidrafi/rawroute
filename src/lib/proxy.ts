@@ -316,7 +316,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
 
   if (typeof payload.model !== "string") return jsonError("A model ID is required.", 400)
   const data = await readData()
-  const route = resolveRoute(data.providers, data.models, payload.model, requestedProtocol)
+  const route = resolveRoute(data.providers, data.models, data.aliases, payload.model, requestedProtocol)
   if (!route.ok) {
     writeLog("warn", "gateway", "Request could not be routed", { model: payload.model, protocol: requestedProtocol, status: route.status })
     return jsonError(route.message, route.status)

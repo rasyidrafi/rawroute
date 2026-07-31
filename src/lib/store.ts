@@ -2,9 +2,9 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore"
 
-import { gatewayModelId } from "@/lib/http"
+import { gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
-import type { ApiKey, AppData, Model, Provider, ProviderApiKey } from "@/lib/types"
+import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey } from "@/lib/types"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 2_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 2_000
@@ -185,6 +185,7 @@ export function migrateData(legacy: LegacyAppData): AppData {
       providerId: providerIds.get(providerId) || providerId,
       gatewayModelId: model.gatewayModelId || model.id,
     }))),
+    aliases: [],
     apiKeys: [...migrated.apiKeys.values()].map((apiKey) => ({ ...apiKey, id: crypto.randomUUID() })),
   }
 }
@@ -216,6 +217,10 @@ function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Mode
 
 function apiKeyFromSnapshot(snapshot: DocumentSnapshot): ApiKey {
   return { ...snapshot.data(), id: snapshot.id } as ApiKey
+}
+
+function aliasFromSnapshot(snapshot: DocumentSnapshot): ModelAlias {
+  return { ...snapshot.data(), id: snapshot.id } as ModelAlias
 }
 
 function storedProvider(provider: Provider) {
@@ -261,6 +266,12 @@ function storedApiKey(apiKey: ApiKey) {
   return stripUndefined(data)
 }
 
+function storedAlias(alias: ModelAlias) {
+  const { id, ...data } = alias
+  void id
+  return stripUndefined(data)
+}
+
 function isMemoryBackend() {
   return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test"
 }
@@ -296,6 +307,21 @@ function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { original
   }
 }
 
+function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }) {
+  if (!input.originalId && (typeof input.name !== "string" || !input.name.trim())) {
+    throw new Error("Alias name is required.")
+  }
+  if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) {
+    throw new Error("Alias name must be between 1 and 80 characters.")
+  }
+  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanId(input.alias))) {
+    throw new Error("Alias is required.")
+  }
+  if (input.targetModelId !== undefined && (typeof input.targetModelId !== "string" || !input.targetModelId.trim())) {
+    throw new Error("Alias target model is required.")
+  }
+}
+
 // -------------------------------------------------------------------------------------------------
 // Memory backend
 // -------------------------------------------------------------------------------------------------
@@ -305,6 +331,7 @@ interface MemoryState {
   providers: Map<string, Provider>
   providerApiKeys: Map<string, Map<string, ProviderApiKey>>
   models: Map<string, Map<string, Model>>
+  aliases: Map<string, ModelAlias>
   apiKeys: Map<string, ApiKey>
   initialized: boolean
 }
@@ -314,6 +341,7 @@ const memory: MemoryState = {
   providers: new Map(),
   providerApiKeys: new Map(),
   models: new Map(),
+  aliases: new Map(),
   apiKeys: new Map(),
   initialized: false,
 }
@@ -334,6 +362,7 @@ function memorySnapshot(state: MemoryState) {
     providers: new Map(state.providers),
     providerApiKeys: new Map(state.providerApiKeys),
     models: new Map(state.models),
+    aliases: new Map(state.aliases),
     apiKeys: new Map(state.apiKeys),
   }
 }
@@ -392,6 +421,14 @@ function modelsRef(providerId: string) {
 
 function modelRef(providerId: string, modelId: string) {
   return modelsRef(providerId).doc(modelId)
+}
+
+function aliasesRef() {
+  return getFirestoreInstance().collection(collectionPrefix()).doc("aliases").collection("aliases")
+}
+
+function aliasRef(aliasId: string) {
+  return aliasesRef().doc(aliasId)
 }
 
 function apiKeysRef() {
@@ -546,6 +583,26 @@ export async function deleteModel(providerId: string, modelId: string): Promise<
   invalidateCompatibilityCache()
 }
 
+export async function listAliases(): Promise<ModelAlias[]> {
+  if (isMemoryBackend()) {
+    return [...ensureMemorySeeded().aliases.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }
+  return firestoreListAliases()
+}
+
+export async function upsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
+  validateAliasInput(input)
+  const alias = isMemoryBackend() ? memoryUpsertAlias(input) : await firestoreUpsertAlias(input)
+  invalidateCompatibilityCache()
+  return alias
+}
+
+export async function deleteAlias(aliasId: string): Promise<void> {
+  if (isMemoryBackend()) memoryDeleteAlias(aliasId)
+  else await firestoreDeleteAlias(aliasId)
+  invalidateCompatibilityCache()
+}
+
 export async function listApiKeys(): Promise<ApiKey[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().apiKeys.values()]
@@ -587,10 +644,11 @@ async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
 
 export async function readData(): Promise<AppData> {
   if (compatibilityCache && compatibilityCache.expiresAt > Date.now()) return structuredClone(compatibilityCache.data)
-  const [providers, providerApiKeys, models, apiKeys, meta] = await Promise.all([
+  const [providers, providerApiKeys, models, aliases, apiKeys, meta] = await Promise.all([
     listProviders(),
     listAllProviderApiKeys(),
     listModels(),
+    listAliases(),
     listApiKeys(),
     readMeta(),
   ])
@@ -601,6 +659,7 @@ export async function readData(): Promise<AppData> {
     providers,
     providerApiKeys,
     models,
+    aliases,
     apiKeys,
   }
   compatibilityCache = { data: structuredClone(data), expiresAt: Date.now() + cacheTtlMs }
@@ -1034,6 +1093,54 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
   })
 }
 
+async function firestoreListAliases(): Promise<ModelAlias[]> {
+  const snapshot = await aliasesRef().get()
+  return snapshot.docs.map(aliasFromSnapshot).sort((a, b) => a.name.localeCompare(b.name))
+}
+
+async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
+  const firestore = getFirestoreInstance()
+  return firestore.runTransaction(async (transaction) => {
+    const allAliases = await transaction.get(aliasesRef())
+    const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
+    const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
+    if (input.originalId && !existing) throw new Error("Alias not found.")
+    const normalizedAlias = cleanId(input.alias || existing?.alias || "")
+    if (!normalizedAlias) throw new Error("Alias is required.")
+    for (const doc of allAliases.docs) {
+      const data = doc.data() as Partial<ModelAlias>
+      if ((data.alias || doc.id) === normalizedAlias && doc.id !== input.originalId) {
+        throw new Error("Alias is already in use.")
+      }
+    }
+    const aliasId = existing ? input.originalId! : aliasesRef().doc().id
+    const inputWithoutIds = { ...input }
+    delete inputWithoutIds.id
+    delete inputWithoutIds.originalId
+    const alias: ModelAlias = {
+      ...(existing || {}),
+      ...inputWithoutIds,
+      id: aliasId,
+      alias: normalizedAlias,
+      name: input.name?.trim() || existing?.name || "",
+      targetModelId: input.targetModelId?.trim() || existing?.targetModelId || "",
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    }
+    transaction.set(aliasRef(aliasId), storedAlias(alias))
+    return alias
+  })
+}
+
+async function firestoreDeleteAlias(aliasId: string): Promise<void> {
+  const firestore = getFirestoreInstance()
+  await firestore.runTransaction(async (transaction) => {
+    const ref = aliasRef(aliasId)
+    const snapshot = await transaction.get(ref)
+    if (!snapshot.exists) return
+    transaction.delete(ref)
+  })
+}
+
 async function firestoreListApiKeys(): Promise<ApiKey[]> {
   const snapshot = await apiKeysRef().get()
   return snapshot.docs.map(apiKeyFromSnapshot)
@@ -1249,6 +1356,39 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
   compatibilityCache = undefined
 }
 
+function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): ModelAlias {
+  const state = ensureMemorySeeded()
+  const existing = input.originalId ? state.aliases.get(input.originalId) : undefined
+  if (input.originalId && !existing) throw new Error("Alias not found.")
+  const normalizedAlias = cleanId(input.alias || existing?.alias || "")
+  if (!normalizedAlias) throw new Error("Alias is required.")
+  for (const alias of state.aliases.values()) {
+    if (alias.id !== input.originalId && (alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")
+  }
+  const aliasId = existing ? input.originalId! : crypto.randomUUID()
+  const inputWithoutIds = { ...input }
+  delete inputWithoutIds.id
+  delete inputWithoutIds.originalId
+  const alias: ModelAlias = {
+    ...(existing || {}),
+    ...inputWithoutIds,
+    id: aliasId,
+    alias: normalizedAlias,
+    name: input.name?.trim() || existing?.name || "",
+    targetModelId: input.targetModelId?.trim() || existing?.targetModelId || "",
+    createdAt: existing?.createdAt || new Date().toISOString(),
+  }
+  state.aliases.set(aliasId, alias)
+  compatibilityCache = undefined
+  return alias
+}
+
+function memoryDeleteAlias(aliasId: string): void {
+  const state = ensureMemorySeeded()
+  state.aliases.delete(aliasId)
+  compatibilityCache = undefined
+}
+
 function memoryCreateApiKey(name: string): ApiKey {
   const state = ensureMemorySeeded()
   const apiKey: ApiKey = {
@@ -1280,6 +1420,7 @@ export function _resetMemoryBackend() {
   memory.providers = new Map()
   memory.providerApiKeys = new Map()
   memory.models = new Map()
+  memory.aliases = new Map()
   memory.apiKeys = new Map()
   memory.initialized = false
   compatibilityCache = undefined

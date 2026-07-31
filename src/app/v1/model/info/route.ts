@@ -10,6 +10,6 @@ export async function GET(request: Request) {
   if (!(await validateProxyKey(request))) return jsonError("Invalid gateway API key.", 401)
   const data = await readData()
   return Response.json({
-    data: catalogLiteLlmModelInfo(data.providers, data.models),
+    data: catalogLiteLlmModelInfo(data.providers, data.models, data.aliases),
   })
 }
