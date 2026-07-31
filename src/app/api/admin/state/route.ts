@@ -9,6 +9,14 @@ import type { ApiKey, Model, Protocol, Provider, ProviderApiKey } from "@/lib/ty
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
+function stripUnprefixed(models: Model[]): Model[] {
+  return models.map((model) => {
+    const { unprefixed, ...rest } = model as Model & { unprefixed?: unknown }
+    void unprefixed
+    return rest
+  })
+}
+
 async function authorize() {
   try {
     await requireAdmin()
@@ -23,12 +31,12 @@ export async function GET() {
   const data = await readData()
   return Response.json({
     admin: { username: data.admin.username, mustChangePassword: data.admin.mustChangePassword },
-    providers: data.providers,
+    providers: [...data.providers].sort((a, b) => a.name.localeCompare(b.name)),
     providerApiKeys: data.providerApiKeys.map((apiKey) => ({
       ...apiKey,
       key: apiKey.key ? "__unchanged__" : "",
     })),
-    models: data.models,
+    models: stripUnprefixed([...data.models].sort((a, b) => a.name.localeCompare(b.name))),
     apiKeys: data.apiKeys,
   })
 }
@@ -70,7 +78,7 @@ export async function POST(request: Request) {
         if (data.providers.some((item) => item.id === id && item.id !== originalId)) throw new Error("Provider ID is already in use.")
         const migratedModels = data.models.map((model) => {
           if (!originalId || model.providerId !== originalId) return model
-          return { ...model, providerId: id, id: model.unprefixed ? model.id : gatewayModelId(prefix, model.id) }
+          return { ...model, providerId: id, id: gatewayModelId(prefix, model.id) }
         })
         const migratedIds = new Set<string>()
         for (const model of migratedModels) {
@@ -146,7 +154,7 @@ export async function POST(request: Request) {
         const provider = data.providers.find((item) => item.id === input.providerId)
         if (!provider || !input.id || !input.name || !input.upstreamModel) throw new Error("Model fields are incomplete.")
         const originalId = input.originalId
-        const id = gatewayModelId(provider.prefix, input.id, input.unprefixed === true)
+        const id = gatewayModelId(provider.prefix, input.id)
         if (data.models.some((item) => item.id === id && item.id !== originalId)) throw new Error("Gateway model ID is already in use.")
         const existing = originalId ? data.models.find((item) => item.id === originalId) : undefined
         const model: Model = {
@@ -156,7 +164,6 @@ export async function POST(request: Request) {
           upstreamModel: input.upstreamModel.trim(),
           ...(input.protocol ? { protocol: input.protocol } : {}),
           ...(input.upstreamPath?.trim() ? { upstreamPath: input.upstreamPath.trim() } : {}),
-          ...(input.unprefixed ? { unprefixed: true } : {}),
           ...(input.requestOverrides && Object.keys(input.requestOverrides).length ? { requestOverrides: validateRequestOverrides(input.requestOverrides) } : {}),
           enabled: input.enabled !== false,
           createdAt: existing?.createdAt || new Date().toISOString(),

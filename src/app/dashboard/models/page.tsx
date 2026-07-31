@@ -1,7 +1,5 @@
-"use client"
-
-import { GatewayDashboard } from "@/components/gateway-dashboard"
+import { redirect } from "next/navigation"
 
 export default function Page() {
-  return <GatewayDashboard view="models" />
+  redirect("/dashboard/providers")
 }

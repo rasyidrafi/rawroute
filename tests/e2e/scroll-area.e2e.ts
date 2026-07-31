@@ -77,9 +77,9 @@ test("console stays fixed-height and scrolls its log content", async ({ page }) 
   await expectWheelScrolls(viewport)
 })
 
-test("model dialog and long provider select remain scrollable", async ({ page }) => {
+test("model dialog and long protocol select remain scrollable", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 500 })
-  await page.goto("/dashboard/models")
+  await page.goto("/dashboard/providers/provider-0")
   await page.getByRole("button", { name: "Add model" }).click()
 
   const dialog = page.getByRole("dialog")
@@ -93,14 +93,14 @@ test("model dialog and long provider select remain scrollable", async ({ page })
   const selectViewport = select.locator('[data-slot="scroll-area-viewport"]')
   await expect(select).toBeVisible()
   await expectWheelScrolls(selectViewport)
-  const finalProvider = page.getByRole("option", { name: "Provider 23 (provider-23/)" })
-  await expect(finalProvider).toBeAttached()
-  await finalProvider.click()
-  await expect(dialog.locator('[data-slot="select-trigger"]').first()).toContainText("provider-23")
+  const finalProtocol = page.getByRole("option", { name: "Anthropic Messages" })
+  await expect(finalProtocol).toBeAttached()
+  await finalProtocol.click()
+  await expect(dialog.locator('[data-slot="select-trigger"]').first()).toContainText("Anthropic")
 })
 
 test("dropdown menu interaction survives ScrollArea composition", async ({ page }) => {
-  await page.goto("/dashboard/models")
+  await page.goto("/dashboard/providers/provider-0")
   await page.getByRole("button", { name: "Change color theme" }).click()
   await page.getByRole("menuitemradio", { name: "Dark" }).click()
   await expect(page.locator("html")).toHaveClass(/dark/)
@@ -111,7 +111,7 @@ test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) =
     data: {
       action: "save-model",
       model: {
-        id: "model-with-an-intentionally-long-gateway-id",
+        id: "model-with-an-intentionally-long-suffix-name",
         providerId: "provider-0",
         name: "Wide model",
         upstreamModel: `upstream-${"x".repeat(140)}`,
@@ -121,7 +121,7 @@ test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) =
   expect(response.ok()).toBe(true)
 
   await page.setViewportSize({ width: 600, height: 700 })
-  await page.goto("/dashboard/models")
+  await page.goto("/dashboard/providers/provider-0")
   const viewport = page.locator('[data-slot="table-container"] [data-slot="scroll-area-viewport"]')
   const dimensions = await viewport.evaluate((element) => ({
     clientWidth: element.clientWidth,

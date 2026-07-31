@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(bun:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

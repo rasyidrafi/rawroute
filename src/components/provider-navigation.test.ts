@@ -9,6 +9,8 @@ test("providers use a list page and a dynamic detail page", () => {
   expect(dashboard).toContain('buttonLabel="Delete provider"')
   expect(dashboard).toContain("onDeleteProviderList")
   expect(dashboard).toContain("API keys and")
+  expect(dashboard).toContain("Expose upstream models behind your provider prefix.")
+  expect(dashboard).toContain("onDeleteModel")
   expect(dashboard.match(/nativeButton=\{false\}/g)).toHaveLength(3)
   expect(detailPage).toContain('view="provider-detail"')
   expect(detailPage).toContain("providerId={providerId}")
