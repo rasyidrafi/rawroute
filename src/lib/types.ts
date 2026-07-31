@@ -29,6 +29,7 @@ export interface ProviderApiKey {
   enabled: boolean
   rpmLimit?: number
   maxConcurrency?: number
+  /** Internal routing weight derived from the key's position in the provider list. */
   priority?: number
   createdAt: string
 }

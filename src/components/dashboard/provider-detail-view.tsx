@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ArrowLeftIcon, BoxesIcon, CopyIcon, KeyRoundIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR, { mutate as globalMutate } from "swr"
@@ -35,7 +35,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
   if (error) return <NotFoundState onBack={() => router.push("/dashboard/providers")} />
-  if (isLoading || !data) return <DashboardContentSkeleton />
+  if (isLoading || !data) return <DashboardContentSkeleton variant="provider-detail" />
 
   const isPending = (key: string) => pending.has(key)
 
@@ -102,6 +102,23 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed")
       return false
+    } finally {
+      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
+    }
+  }
+
+  async function moveProviderApiKey(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction
+    if (nextIndex < 0 || nextIndex >= apiKeys.length) return
+    const orderedIds = apiKeys.map((apiKey) => apiKey.id)
+    ;[orderedIds[index], orderedIds[nextIndex]] = [orderedIds[nextIndex], orderedIds[index]]
+    const pendingKey = `move-provider-api-key:${apiKeys[index].id}`
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      await apiPost(`/api/admin/providers/${providerId}/api-keys/reorder`, { orderedIds })
+      await mutate()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Request failed")
     } finally {
       setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
     }
@@ -194,6 +211,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-20" />
                 <TableHead>Name</TableHead>
                 <TableHead>Limits</TableHead>
                 <TableHead>Status</TableHead>
@@ -202,17 +220,24 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {apiKeys.map((apiKey) => {
+              {apiKeys.map((apiKey, index) => {
                 const pendingKey = `delete-provider-api-key:${apiKey.id}`
-                return <TableRow key={apiKey.id}>
+                const movePending = isPending(`move-provider-api-key:${apiKey.id}`)
+                return <TableRow key={apiKey.id} className={apiKey.enabled ? undefined : "opacity-60"}>
+                  <TableCell>
+                    <div className="flex items-center gap-0.5">
+                      <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
+                      <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
+                    </div>
+                  </TableCell>
                   <TableCell className="font-medium">{apiKey.name}</TableCell>
-                  <TableCell><div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">{apiKey.rpmLimit && <Badge variant="outline">{apiKey.rpmLimit} rpm</Badge>}{apiKey.maxConcurrency && <Badge variant="outline">{apiKey.maxConcurrency} conc</Badge>}{apiKey.priority ? <Badge variant="outline">prio {apiKey.priority}</Badge> : <Badge variant="outline">prio 0</Badge>}</div></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</TableCell>
                   <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
-                  <TableCell><div className="flex justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                  <TableCell className="px-0"><div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div></TableCell>
                 </TableRow>
               })}
-              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : "No API keys yet."} colSpan={5} />}
+              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : "No API keys yet."} colSpan={6} />}
             </TableBody>
           </Table>
         </CardContent>

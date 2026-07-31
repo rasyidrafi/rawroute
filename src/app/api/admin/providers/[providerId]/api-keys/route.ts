@@ -38,7 +38,6 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     if (!key) throw new Error("API key value is required.")
     const rpmLimit = parseInteger(input.rpmLimit, "RPM limit", 1)
     const maxConcurrency = parseInteger(input.maxConcurrency, "Maximum concurrency", 1)
-    const priority = parseInteger(input.priority, "Priority", 0, 100)
     if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("Enabled value must be a boolean.")
     await upsertProviderApiKey(providerId, {
       originalId: input.originalId,
@@ -47,7 +46,6 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       enabled: input.enabled,
       rpmLimit,
       maxConcurrency,
-      priority,
     })
     writeLog("info", "admin", "Provider API key saved", { providerId })
     return Response.json({ ok: true })

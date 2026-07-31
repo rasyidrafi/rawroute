@@ -453,9 +453,25 @@ export async function deleteProvider(providerId: string): Promise<void> {
 export async function listProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
   if (isMemoryBackend()) {
     const map = ensureMemorySeeded().providerApiKeys.get(providerId) || new Map<string, ProviderApiKey>()
-    return [...map.values()]
+    return [...map.values()].sort(compareProviderApiKeys)
   }
   return firestoreListProviderApiKeys(providerId)
+}
+
+function compareProviderApiKeys(left: ProviderApiKey, right: ProviderApiKey) {
+  return (right.priority ?? 0) - (left.priority ?? 0) || left.createdAt.localeCompare(right.createdAt)
+}
+
+export async function reorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
+  if (isMemoryBackend()) {
+    const state = ensureMemorySeeded()
+    const slot = state.providerApiKeys.get(providerId)
+    if (!slot || slot.size !== orderedIds.length || orderedIds.some((id) => !slot.has(id))) throw new Error("API key order is out of date.")
+    orderedIds.forEach((id, index) => slot.set(id, { ...slot.get(id)!, priority: orderedIds.length - index - 1 }))
+  } else {
+    await firestoreReorderProviderApiKeys(providerId, orderedIds)
+  }
+  invalidateCompatibilityCache()
 }
 
 export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
@@ -846,7 +862,17 @@ async function deleteSubcollection(transaction: Transaction, ref: FirebaseFirest
 
 async function firestoreListProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
   const snapshot = await providerApiKeysRef(providerId).get()
-  return snapshot.docs.map((doc) => providerApiKeyFromSnapshot(doc, providerId))
+  return snapshot.docs.map((doc) => providerApiKeyFromSnapshot(doc, providerId)).sort(compareProviderApiKeys)
+}
+
+async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
+  const firestore = getFirestoreInstance()
+  await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(providerApiKeysRef(providerId))
+    const ids = snapshot.docs.map((doc) => doc.id)
+    if (ids.length !== orderedIds.length || ids.some((id) => !orderedIds.includes(id))) throw new Error("API key order is out of date.")
+    orderedIds.forEach((id, index) => transaction.update(providerApiKeyRef(providerId, id), { priority: orderedIds.length - index - 1 }))
+  })
 }
 
 async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {

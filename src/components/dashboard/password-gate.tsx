@@ -1,6 +1,7 @@
 "use client"
 
 import type { ReactNode } from "react"
+import { usePathname } from "next/navigation"
 import useSWR from "swr"
 import { toast } from "sonner"
 
@@ -11,6 +12,7 @@ import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 type AccountResponse = { username: string; mustChangePassword: boolean }
 
 export function DashboardPasswordGate({ children }: { children: ReactNode }) {
+  const pathname = usePathname()
   const { data, error, mutate } = useSWR<AccountResponse>("/api/admin/account")
 
   async function savePassword(password: string) {
@@ -25,7 +27,16 @@ export function DashboardPasswordGate({ children }: { children: ReactNode }) {
     }
   }
 
-  if (!data && !error) return <DashboardContentSkeleton />
+  if (!data && !error) {
+    const variant = pathname === "/dashboard/providers"
+      ? "providers"
+      : pathname.startsWith("/dashboard/providers/")
+        ? "provider-detail"
+        : pathname === "/dashboard/settings"
+          ? "settings"
+          : "endpoint-key"
+    return <DashboardContentSkeleton variant={variant} />
+  }
 
   return <>
     {children}
