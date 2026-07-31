@@ -176,8 +176,8 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
           <CardDescription><span className="font-mono">{provider.baseUrl}</span></CardDescription>
           <CardAction>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => { setEditingProvider(provider); setProviderOpen(true) }}><PencilIcon />Edit</Button>
-              <ConfirmAction buttonLabel="Delete provider" title={`Delete ${provider.name}?`} description={`This permanently deletes ${apiKeyCounts.configured} API keys and ${models.length} models attached to this provider.`} pending={isPending(`delete-provider:${provider.id}`)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>
+              {provider.prefix !== "codex" && <Button size="sm" variant="outline" onClick={() => { setEditingProvider(provider); setProviderOpen(true) }}><PencilIcon />Edit</Button>}
+              {provider.prefix !== "codex" && <ConfirmAction buttonLabel="Delete provider" title={`Delete ${provider.name}?`} description={`This permanently deletes ${apiKeyCounts.configured} API keys and ${models.length} models attached to this provider.`} pending={isPending(`delete-provider:${provider.id}`)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>}
             </div>
           </CardAction>
         </CardHeader>
@@ -200,7 +200,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />API keys</CardTitle>
           <CardDescription>Sticky least-loaded routing keeps sessions warm while distributing new work by capacity.</CardDescription>
-          <CardAction><Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button></CardAction>
+          <CardAction>{provider.prefix !== "codex" && <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
           <DialogContent>
@@ -225,16 +225,16 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                 const movePending = isPending(`move-provider-api-key:${apiKey.id}`)
                 return <TableRow key={apiKey.id} className={apiKey.enabled ? undefined : "opacity-60"}>
                   <TableCell>
-                    <div className="flex items-center gap-0.5">
+                    {apiKey.credentialKind === "codex-oauth" ? null : <div className="flex items-center gap-0.5">
                       <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
                       <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
-                    </div>
+                    </div>}
                   </TableCell>
                   <TableCell className="font-medium">{apiKey.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</TableCell>
                   <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                   <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
-                  <TableCell className="px-0"><div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                  <TableCell className="px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                 </TableRow>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : "No API keys yet."} colSpan={6} />}

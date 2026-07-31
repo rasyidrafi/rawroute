@@ -152,10 +152,10 @@ export function OAuthProvidersView() {
             <TableBody>
               {data.accounts.map((account) => {
                 const updateKey = `update:${account.id}`
-                return <TableRow key={account.id}>
+                return <TableRow key={account.id} className={account.enabled ? undefined : "opacity-60"}>
                   <TableCell><div className="font-medium">{account.name}</div><div className="text-xs text-muted-foreground">{account.email || account.accountId || "Codex account"}</div></TableCell>
-                  <TableCell><Badge variant="secondary">{account.planType || "Codex"}</Badge></TableCell>
-                  <TableCell><Badge variant={account.enabled ? "default" : "outline"}>{account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
+                  <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
+                  <TableCell><Badge variant={account.enabled ? "secondary" : "outline"}>{account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                   <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
                   <TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <RefreshCwIcon className="animate-spin" /> : account.enabled ? "Disable" : "Enable"}</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                 </TableRow>

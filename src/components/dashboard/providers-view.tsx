@@ -102,7 +102,7 @@ export function ProvidersView() {
                   <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.modelCount}</span><span className="text-xs text-muted-foreground">configured</span>{provider.enabledModelCount !== provider.modelCount && <Badge variant="outline">{provider.enabledModelCount} enabled</Badge>}</div></TableCell>
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
-                      <ConfirmAction title={`Delete ${provider.name}?`} description={`This permanently deletes ${provider.apiKeyCount} API keys and ${provider.modelCount} models attached to this provider.`} pending={isPending(pendingKey)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>
+                      {provider.prefix !== "codex" && <ConfirmAction title={`Delete ${provider.name}?`} description={`This permanently deletes ${provider.apiKeyCount} API keys and ${provider.modelCount} models attached to this provider.`} pending={isPending(pendingKey)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>}
                       <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link href={`/dashboard/providers/${provider.id}`} />}><ChevronRightIcon /></Button>
                     </div>
                   </TableCell>
