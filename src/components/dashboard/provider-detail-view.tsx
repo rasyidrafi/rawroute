@@ -263,7 +263,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     </div>
                   </TableCell>
                   <TableCell className="font-medium">{apiKey.name}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{isOAuthProvider ? (apiKey.planType || "Codex") : <>{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</>}</TableCell>
+                  <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                   <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                   {isOAuthProvider && <TableCell className="text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
                   <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>

@@ -23,13 +23,13 @@ export function AliasForm({ alias, providers, models, onSave }: { alias: ModelAl
   const selectedModelExists = !!targetModelId && providerModels.some((model) => (model.gatewayModelId || model.id) === targetModelId)
   const modelSelectValue = selectedModelExists ? targetModelId : null
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!providerId || !selectedModelExists) return
     const formData = new FormData(event.currentTarget)
     setPending(true)
     try {
-      void onSave({
+      await onSave({
         originalId: alias?.id,
         alias: String(formData.get("alias")),
         name: String(formData.get("name")),
