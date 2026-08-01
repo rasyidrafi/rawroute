@@ -77,52 +77,90 @@ function retryAfterSeconds(headers: Headers) {
   return Number.isFinite(date) ? Math.max(1, Math.ceil((date - Date.now()) / 1000)) : undefined
 }
 
-function requestItemCount(payload: Record<string, unknown>) {
-  if (Array.isArray(payload.messages)) return payload.messages.length
-  if (Array.isArray(payload.input)) return payload.input.length
-  return payload.input === undefined ? 0 : 1
+function requestItemCount(payload: Record<string, unknown>, protocol?: Protocol) {
+  // 9router-style message counting: fall back through the conversation-history
+  // arrays used by each supported protocol — `messages` for OpenAI chat and
+  // Anthropic, `input` for OpenAI Responses, `contents` for Gemini. Only fall
+  // back to a single-entry assumption when a string-shaped input was sent
+  // (Responses accepts a bare string as a one-message prompt).
+  const keys = protocol === "openai-responses" ? ["input", "messages"] : ["messages", "input", "contents"]
+  for (const key of keys) {
+    const value = payload[key]
+    if (Array.isArray(value)) return value.length
+  }
+  if (protocol === "openai-responses" && typeof payload.input === "string") return 1
+  return 0
 }
 
-function requestToolCount(payload: Record<string, unknown>) {
-  const countTools = (value: unknown) => {
-    if (Array.isArray(value)) return value.length
-    return value !== null && typeof value === "object" ? 1 : 0
-  }
-  const directCount = Math.max(countTools(payload.tools), countTools(payload.functions))
-  if (directCount) return directCount
+function requestToolCount(payload: Record<string, unknown>, protocol?: Protocol) {
+  // 9router-style tool counting: count declared tool definitions on the
+  // request side. Different protocols name the array differently:
+  //   - openai-chat: `tools` (modern) or `functions` (legacy)
+  //   - openai-responses: `tools`
+  //   - anthropic-messages: `tools`
+  const direct = Math.max(
+    arrayLength(payload.tools),
+    arrayLength(payload.functions),
+  )
+  if (direct) return direct
 
   // Some OpenAI-compatible clients wrap the actual request in `request` or
   // `extra_body`; support those forms without counting unrelated nested data.
   for (const key of ["request", "extra_body"]) {
     const nested = objectValue(payload[key])
     if (!nested) continue
-    const nestedCount = Math.max(countTools(nested.tools), countTools(nested.functions))
+    const nestedCount = Math.max(arrayLength(nested.tools), arrayLength(nested.functions))
     if (nestedCount) return nestedCount
   }
 
-  // Responses continuations carry function calls and their outputs in input.
-  // Anthropic continuations carry tool_use/tool_result blocks in messages.
-  // Count only tool-specific items, not ordinary messages or content blocks.
-  const toolItemTypes = new Set([
-    "tool_use", "tool_result", "function_call", "function_call_output",
-    "custom_tool_call", "custom_tool_call_output", "computer_call", "computer_call_output",
-    "file_search_call", "web_search_call", "computer_use_tool_result",
-  ])
-  for (const key of ["input", "messages"]) {
-    if (!Array.isArray(payload[key])) continue
-    const toolItems = payload[key].reduce((count, item) => {
-      const record = objectValue(item)
-      if (record && typeof record.type === "string" && toolItemTypes.has(record.type)) return count + 1
-      const content = record?.content
-      if (!Array.isArray(content)) return count
-      return count + content.filter((block) => {
-        const blockRecord = objectValue(block)
-        return typeof blockRecord?.type === "string" && toolItemTypes.has(blockRecord.type)
-      }).length
-    }, 0)
-    if (toolItems) return toolItems
+  // For Anthropic and Responses continuations, the conversation may not
+  // declare any tools but the in-flight items already represent tool calls
+  // and their results. Walk the conversation array and tally tool-bearing
+  // items / content blocks the same way 9router counts `tool_use` and
+  // `tool_result` blocks in assistant messages.
+  if (protocol === "anthropic-messages") {
+    const count = countToolItemsInArray(payload.messages, anthropicToolItemTypes)
+    if (count) return count
+  }
+  if (protocol === "openai-responses") {
+    const count = countToolItemsInArray(payload.input, responsesToolItemTypes)
+    if (count) return count
   }
   return 0
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0
+}
+
+const anthropicToolItemTypes = new Set(["tool_use", "tool_result"])
+const responsesToolItemTypes = new Set([
+  "function_call", "function_call_output",
+  "custom_tool_call", "custom_tool_call_output",
+  "computer_call", "computer_call_output",
+  "file_search_call", "web_search_call", "computer_use_tool_result",
+])
+
+function countToolItemsInArray(value: unknown, toolItemTypes: Set<string>): number {
+  if (!Array.isArray(value)) return 0
+  let count = 0
+  for (const item of value) {
+    const record = objectValue(item)
+    if (!record) continue
+    if (typeof record.type === "string" && toolItemTypes.has(record.type)) {
+      count += 1
+      continue
+    }
+    const content = record.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      const blockRecord = objectValue(block)
+      if (blockRecord && typeof blockRecord.type === "string" && toolItemTypes.has(blockRecord.type)) {
+        count += 1
+      }
+    }
+  }
+  return count
 }
 
 function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, protocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {
@@ -133,8 +171,8 @@ function requestSummary(provider: string, gatewayModel: string, upstreamModel: s
     `ACC:${account}`,
   ]
   if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
-  parts.push(`MSG:${requestItemCount(payload)}`)
-  const toolCount = requestToolCount(payload)
+  parts.push(`MSG:${requestItemCount(payload, protocol)}`)
+  const toolCount = requestToolCount(payload, protocol)
   if (toolCount) parts.push(`TOOL:${toolCount}`)
   return parts.join(" ")
 }
