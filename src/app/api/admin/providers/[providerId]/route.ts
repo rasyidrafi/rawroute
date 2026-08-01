@@ -1,7 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteProvider, getProvider, listProviderApiKeys, listProviderModels } from "@/lib/store"
+import { deleteProvider, getProvider, listProviderApiKeys, listProviderModels, listProviders } from "@/lib/store"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -23,10 +23,11 @@ export async function GET(_request: Request, context: { params: Promise<{ provid
     return jsonError("Unauthorized", 401)
   }
   const { providerId } = await context.params
-  const [provider, apiKeys, models] = await Promise.all([
-    getProvider(providerId),
-    listProviderApiKeys(providerId),
-    listProviderModels(providerId),
+  const provider = providerId === "codex" ? (await listProviders()).find((entry) => entry.prefix === "codex") : await getProvider(providerId)
+  const resolvedId = provider?.id || providerId
+  const [apiKeys, models] = await Promise.all([
+    listProviderApiKeys(resolvedId),
+    listProviderModels(resolvedId),
   ])
   if (!provider) return jsonError("Provider not found.", 404)
   return Response.json({

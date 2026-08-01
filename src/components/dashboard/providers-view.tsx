@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ChevronRightIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { ChevronRightIcon, LinkIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR from "swr"
@@ -31,6 +31,8 @@ export function ProvidersView() {
   if (isLoading || !data) return <DashboardContentSkeleton variant="providers" />
 
   const isPending = (key: string) => pending.has(key)
+  const regularProviders = data.providers.filter((provider) => provider.prefix !== "codex")
+  const codexProvider = data.providers.find((provider) => provider.prefix === "codex")
 
   async function saveProvider(provider: Partial<Provider> & { originalId?: string }) {
     setPending((current) => new Set(current).add("save-provider"))
@@ -91,7 +93,7 @@ export function ProvidersView() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.providers.map((provider) => {
+              {regularProviders.map((provider) => {
                 const pendingKey = `delete-provider:${provider.id}`
                 return <TableRow key={provider.id} className="cursor-pointer" onClick={() => router.push(`/dashboard/providers/${provider.id}`)}>
                   <TableCell><Link href={`/dashboard/providers/${provider.id}`} prefetch={false} className="font-medium hover:underline" onClick={(event) => event.stopPropagation()}>{provider.name}</Link></TableCell>
@@ -108,9 +110,29 @@ export function ProvidersView() {
                   </TableCell>
                 </TableRow>
               })}
-              {!data.providers.length && <EmptyRow label="No providers yet." colSpan={7} />}
+              {!regularProviders.length && <EmptyRow label="No providers yet." colSpan={7} />}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />OAuth Providers</CardTitle>
+          <CardDescription>Manage OAuth accounts separately from ordinary provider API keys.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader><TableRow><TableHead>Provider</TableHead><TableHead>Prefix</TableHead><TableHead>Protocol</TableHead><TableHead>Accounts</TableHead><TableHead>Models</TableHead><TableHead /></TableRow></TableHeader>
+            <TableBody>
+              {codexProvider && <TableRow className="cursor-pointer" onClick={() => router.push("/dashboard/providers/codex")}>
+                <TableCell className="font-medium">Codex OAuth</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
+                <TableCell><span className="font-medium tabular-nums">{codexProvider.apiKeyCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell><TableCell><span className="font-medium tabular-nums">{codexProvider.modelCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell>
+                <TableCell><Button nativeButton={false} aria-label="Open Codex OAuth" size="icon-sm" variant="ghost" render={<Link href="/dashboard/providers/codex" prefetch={false} />}><ChevronRightIcon /></Button></TableCell>
+              </TableRow>}
+              {!codexProvider && <EmptyRow label="Codex OAuth is not configured yet." colSpan={6} />}
+            </TableBody>
+          </Table>
+          <p className="mt-4 text-sm text-muted-foreground">Open the Codex provider page to add an account.</p>
         </CardContent>
       </Card>
     </div>

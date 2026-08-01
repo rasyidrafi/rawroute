@@ -1,6 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton"
 
-type DashboardSkeletonVariant = "default" | "endpoint-key" | "providers" | "provider-detail" | "settings"
+type DashboardSkeletonVariant = "default" | "endpoint-key" | "providers" | "aliases" | "provider-detail" | "settings"
 type DashboardSkeletonProps = { variant?: DashboardSkeletonVariant }
 
 function SkeletonTable({ columns, rows = 3 }: { columns: number; rows?: number }) {
@@ -16,7 +16,7 @@ function CardHeading({ titleWidth = "w-40", descriptionWidth = "w-96", actionWid
 }
 
 function ProvidersSkeleton() {
-  return <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-32" descriptionWidth="w-[28rem]" actionWidth="w-32" /><SkeletonTable columns={7} rows={3} /></section>
+  return <><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-32" descriptionWidth="w-[28rem]" actionWidth="w-32" /><SkeletonTable columns={7} rows={3} /></section><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-80" /><SkeletonTable columns={6} rows={1} /><Skeleton className="mt-4 h-4 w-72 max-w-full" /></section></>
 }
 
 function EndpointKeySkeleton() {
@@ -24,6 +24,10 @@ function EndpointKeySkeleton() {
     <section className="rounded-xl border bg-card p-6"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Skeleton className="size-5 rounded" /><Skeleton className="h-6 w-36" /></div><Skeleton className="mt-2 h-4 w-[30rem] max-w-full" /></div></div><div className="mt-6 flex h-10 items-center gap-3 rounded-lg border p-3"><Skeleton className="h-6 w-16 shrink-0 rounded-md" /><Skeleton className="h-4 flex-1" /><Skeleton className="size-7 shrink-0" /></div></section>
     <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-80" actionWidth="w-28" /><div className="mt-6 space-y-3">{Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex h-12 items-center gap-3 rounded-lg border p-3"><div className="min-w-0 flex-1 space-y-2"><Skeleton className="h-4 w-40 max-w-full" /><Skeleton className="h-3 w-56 max-w-full" /></div><Skeleton className="size-7" /><Skeleton className="size-7" /></div>)}</div></section>
   </>
+}
+
+function AliasesSkeleton() {
+  return <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-[28rem]" actionWidth="w-28" /><SkeletonTable columns={4} rows={4} /></section>
 }
 
 function ProviderDetailSkeleton() {
@@ -45,6 +49,7 @@ export function DashboardSkeleton({ variant }: DashboardSkeletonProps = {}) {
 
 export function DashboardContentSkeleton({ variant = "default" }: DashboardSkeletonProps = {}) {
   if (variant === "providers") return <DashboardShell><ProvidersSkeleton /></DashboardShell>
+  if (variant === "aliases") return <DashboardShell><AliasesSkeleton /></DashboardShell>
   if (variant === "endpoint-key") return <DashboardShell><EndpointKeySkeleton /></DashboardShell>
   if (variant === "provider-detail") return <DashboardShell><ProviderDetailSkeleton /></DashboardShell>
   if (variant === "settings") return <DashboardShell><SettingsSkeleton /></DashboardShell>

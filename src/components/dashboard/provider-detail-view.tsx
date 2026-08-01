@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { useEffect, useState } from "react"
+import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR, { mutate as globalMutate } from "swr"
@@ -12,11 +12,12 @@ import { ModelForm } from "@/components/dashboard/model-form"
 import { ProviderApiKeyForm } from "@/components/dashboard/provider-api-key-form"
 import { ProviderForm } from "@/components/dashboard/provider-form"
 import { apiDelete, apiPost } from "@/components/dashboard/api"
+import { Input } from "@/components/ui/input"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "@/lib/types"
 
@@ -33,11 +34,38 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const [editingProviderApiKey, setEditingProviderApiKey] = useState<ProviderApiKey | null>(null)
   const [editingModel, setEditingModel] = useState<Model | null>(null)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
+  const [device, setDevice] = useState<{ deviceAuthId: string; userCode: string; intervalSeconds: number; verificationUrl: string } | null>(null)
+  const [accountName, setAccountName] = useState("")
+  const [polling, setPolling] = useState(false)
+  const [starting, setStarting] = useState(false)
+
+  useEffect(() => {
+    if (!device || !polling) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      try {
+        const result = await apiPost<{ status: "pending" | "authorized" }>("/api/admin/oauth-providers/codex/device/poll", { deviceAuthId: device.deviceAuthId, userCode: device.userCode, name: accountName.trim() || undefined })
+        if (stopped) return
+        if (result.status === "authorized") { setPolling(false); setDevice(null); setAccountName(""); await mutate(); await globalMutate("/api/admin/providers"); toast.success("Codex account connected"); return }
+        timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
+      } catch (pollError) { if (!stopped) { setPolling(false); toast.error(pollError instanceof Error ? pollError.message : "Codex login failed") } }
+    }
+    timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
+    return () => { stopped = true; if (timer) clearTimeout(timer) }
+  }, [accountName, device, mutate, polling])
 
   if (error) return <NotFoundState onBack={() => router.push("/dashboard/providers")} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="provider-detail" />
 
   const isPending = (key: string) => pending.has(key)
+
+  async function addCodexAccount() {
+    setStarting(true)
+    try { setDevice(await apiPost("/api/admin/oauth-providers/codex/device/start", {})); setPolling(true) }
+    catch (startError) { toast.error(startError instanceof Error ? startError.message : "Unable to start Codex login") }
+    finally { setStarting(false) }
+  }
 
   async function saveProvider(provider: Partial<Provider> & { originalId?: string }) {
     setPending((current) => new Set(current).add("save-provider"))
@@ -76,7 +104,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   async function saveProviderApiKey(apiKey: Partial<ProviderApiKey> & { originalId?: string }) {
     setPending((current) => new Set(current).add("save-provider-api-key"))
     try {
-      await apiPost(`/api/admin/providers/${providerId}/api-keys`, { providerApiKey: apiKey })
+      await apiPost(`/api/admin/providers/${provider.id}/api-keys`, { providerApiKey: apiKey })
       toast.success(editingProviderApiKey ? "Provider API key updated" : "Provider API key added")
       await mutate()
       await globalMutate("/api/admin/providers")
@@ -115,7 +143,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     const pendingKey = `move-provider-api-key:${apiKeys[index].id}`
     setPending((current) => new Set(current).add(pendingKey))
     try {
-      await apiPost(`/api/admin/providers/${providerId}/api-keys/reorder`, { orderedIds })
+      await apiPost(`/api/admin/providers/${provider.id}/api-keys/reorder`, { orderedIds })
       await mutate()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed")
@@ -127,7 +155,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   async function saveModel(model: Partial<Model> & { originalId?: string }) {
     setPending((current) => new Set(current).add("save-model"))
     try {
-      await apiPost(`/api/admin/providers/${providerId}/models`, { model })
+      await apiPost(`/api/admin/providers/${provider.id}/models`, { model })
       toast.success(editingModel ? "Model updated" : "Model saved")
       await mutate()
       await globalMutate("/api/admin/providers")
@@ -145,7 +173,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     const pendingKey = `delete-model:${model.id}`
     setPending((current) => new Set(current).add(pendingKey))
     try {
-      await apiDelete(`/api/admin/providers/${providerId}/models/${encodeURIComponent(model.id)}`)
+      await apiDelete(`/api/admin/providers/${provider.id}/models/${encodeURIComponent(model.id)}`)
       toast.success("Model deleted")
       await mutate()
       await globalMutate("/api/admin/providers")
@@ -202,21 +230,23 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
           <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal.</CardDescription>
-          <CardAction>{provider.prefix !== "codex" && <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
+          <CardAction>{provider.prefix === "codex" ? <Button onClick={() => void addCodexAccount()} disabled={starting || Boolean(device)}>{starting ? <RefreshCwIcon className="animate-spin" /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
           <DialogContent>
             <ProviderApiKeyForm key={editingProviderApiKey?.id || "new"} providers={[provider]} apiKey={editingProviderApiKey} onSave={saveProviderApiKey} />
           </DialogContent>
         </Dialog>
+        {provider.prefix === "codex" && <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) { setPolling(false); setDevice(null) } }}><DialogContent><DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>Open the verification page, enter this one-time code, then leave this window open while RawRoute waits for approval.</DialogDescription></DialogHeader>{device && <div className="grid gap-4 py-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label (optional)</label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /><div className="rounded-lg border bg-muted/20 p-4 text-center"><p className="text-xs uppercase tracking-wide text-muted-foreground">One-time code</p><p className="my-2 font-mono text-2xl font-semibold tracking-widest">{device.userCode}</p><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.verificationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open verification page</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization..." : "Login paused."}</p></div></div>}<DialogFooter><Button variant="outline" onClick={() => { setPolling(false); setDevice(null) }}>Cancel</Button></DialogFooter></DialogContent></Dialog>}
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-20" />
                 <TableHead>Name</TableHead>
-                <TableHead>Limits</TableHead>
+                <TableHead>{isOAuthProvider ? "Plan" : "Limits"}</TableHead>
                 <TableHead>Status</TableHead>
+                {isOAuthProvider && <TableHead>Token expiry</TableHead>}
                 <TableHead>Created</TableHead>
                 <TableHead />
               </TableRow>
@@ -233,13 +263,14 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     </div>
                   </TableCell>
                   <TableCell className="font-medium">{apiKey.name}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{isOAuthProvider ? (apiKey.planType || "Codex") : <>{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</>}</TableCell>
                   <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
+                  {isOAuthProvider && <TableCell className="text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
                   <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
                   <TableCell className="px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                 </TableRow>
               })}
-              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={6} />}
+              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 7 : 6} />}
             </TableBody>
           </Table>
         </CardContent>

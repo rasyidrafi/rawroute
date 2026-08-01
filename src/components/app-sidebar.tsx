@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowLeftRightIcon, KeyRoundIcon, LinkIcon, LogsIcon, LogOutIcon, RouteIcon, ServerIcon, SettingsIcon } from "lucide-react"
+import { ArrowLeftRightIcon, KeyRoundIcon, LogsIcon, LogOutIcon, RouteIcon, ServerIcon, SettingsIcon } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useRouter } from "next/navigation"
@@ -13,7 +13,6 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupConte
 const navigation = [
   { title: "Endpoint & Key", icon: KeyRoundIcon, href: "/dashboard" },
   { title: "Providers", icon: ServerIcon, href: "/dashboard/providers" },
-  { title: "OAuth Providers", icon: LinkIcon, href: "/dashboard/oauth-providers" },
   { title: "Alias", icon: ArrowLeftRightIcon, href: "/dashboard/aliases" },
   { title: "Console Log", icon: LogsIcon, href: "/dashboard/logs" },
   { title: "Settings", icon: SettingsIcon, href: "/dashboard/settings" },
