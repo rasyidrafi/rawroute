@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { CopyIcon, LinkIcon, LogInIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
@@ -31,6 +31,24 @@ type OAuthResponse = {
   accounts: Account[]
 }
 
+type QuotaWindow = {
+  usedPercent: number
+  remainingPercent: number
+  resetAt?: string
+}
+
+type AccountUsage = {
+  fiveHour: QuotaWindow | null
+  weekly: QuotaWindow | null
+  fetchedAt: string | null
+  stale: boolean
+  error?: string
+}
+
+type UsageResponse = {
+  accounts: Record<string, AccountUsage>
+}
+
 type DeviceCode = {
   deviceAuthId: string
   userCode: string
@@ -45,8 +63,52 @@ function expiryLabel(value?: string) {
   return date.toLocaleString()
 }
 
+function resetCountdown(value?: string) {
+  if (!value) return undefined
+  const remainingMs = new Date(value).getTime() - Date.now()
+  if (!Number.isFinite(remainingMs)) return undefined
+  if (remainingMs <= 0) return "now"
+  const minutes = Math.ceil(remainingMs / 60000)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (hours < 24) return `${hours}h ${remainingMinutes}m`
+  const days = Math.floor(hours / 24)
+  return `${days}d ${hours % 24}h`
+}
+
+function QuotaRow({ label, quota, loading, stale }: { label: string; quota?: QuotaWindow | null; loading: boolean; stale: boolean }) {
+  const [, setClock] = useState(0)
+  const remaining = quota ? Math.round(quota.remainingPercent) : undefined
+  const used = quota ? Math.round(quota.usedPercent) : undefined
+  const countdown = resetCountdown(quota?.resetAt)
+  useEffect(() => {
+    const timer = setInterval(() => setClock(Date.now()), 60000)
+    return () => clearInterval(timer)
+  }, [])
+  return <div className="grid gap-1.5">
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      {loading ? <span className="h-4 w-10 animate-pulse rounded bg-muted" /> : <span className="font-medium text-muted-foreground">{remaining === undefined ? "N/A" : `${remaining}%`}</span>}
+    </div>
+    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+      <div className="h-full rounded-full bg-foreground transition-[width] duration-300" style={{ width: `${remaining ?? 0}%` }} />
+    </div>
+    <div className="flex min-h-4 items-center justify-between gap-3 text-xs text-muted-foreground">
+      {loading ? <span className="h-3 w-32 animate-pulse rounded bg-muted" /> : <span>{used === undefined ? "Not currently applied" : `Used ${used}%`}</span>}
+      {!loading && countdown && <span>resets in {countdown}</span>}
+    </div>
+    {!loading && stale && <p className="text-xs text-amber-600 dark:text-amber-400">Data may be stale</p>}
+  </div>
+}
+
 export function OAuthProvidersView() {
   const { data, error, isLoading, mutate } = useSWR<OAuthResponse>("/api/admin/oauth-providers", fetcher)
+  const { data: usageData, error: usageError, isLoading: usageLoading, mutate: mutateUsage } = useSWR<UsageResponse>("/api/admin/oauth-providers/usage", fetcher, {
+    refreshInterval: 300000,
+    dedupingInterval: 300000,
+    revalidateOnFocus: false,
+  })
   const [device, setDevice] = useState<DeviceCode | null>(null)
   const [accountName, setAccountName] = useState("")
   const [polling, setPolling] = useState(false)
@@ -69,7 +131,7 @@ export function OAuthProvidersView() {
           setPolling(false)
           setDevice(null)
           setAccountName("")
-          await mutate()
+          await Promise.all([mutate(), mutateUsage()])
           toast.success("Codex account connected")
           return
         }
@@ -86,7 +148,7 @@ export function OAuthProvidersView() {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [accountName, device, mutate, polling])
+  }, [accountName, device, mutate, mutateUsage, polling])
 
   if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">OAuth providers unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" onClick={() => void mutate()}>Try again</Button></div></main>
   if (isLoading || !data) return <DashboardContentSkeleton variant="providers" />
@@ -139,7 +201,7 @@ export function OAuthProvidersView() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />OAuth Providers</CardTitle>
-          <CardDescription>Connect multiple Codex accounts once and route native Responses requests through this gateway.</CardDescription>
+          <CardDescription>Connect multiple Codex accounts once and route native Responses requests through this gateway. Usage limits update every five minutes.</CardDescription>
           <CardAction><Button onClick={() => void connectCodex()} disabled={starting || Boolean(device)}>{starting ? <RefreshCwIcon className="animate-spin" /> : <LogInIcon />}Add Codex account</Button></CardAction>
         </CardHeader>
         <CardContent>
@@ -152,13 +214,26 @@ export function OAuthProvidersView() {
             <TableBody>
               {data.accounts.map((account) => {
                 const updateKey = `update:${account.id}`
-                return <TableRow key={account.id} className={account.enabled ? undefined : "opacity-60"}>
-                  <TableCell><div className="font-medium">{account.name}</div><div className="text-xs text-muted-foreground">{account.email || account.accountId || "Codex account"}</div></TableCell>
-                  <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
-                  <TableCell><Badge variant={account.enabled ? "secondary" : "outline"}>{account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
-                  <TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <RefreshCwIcon className="animate-spin" /> : account.enabled ? "Disable" : "Enable"}</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
-                </TableRow>
+                const usage = usageData?.accounts[account.id]
+                return <Fragment key={account.id}>
+                  <TableRow className={account.enabled ? undefined : "opacity-60"}>
+                    <TableCell><div className="font-medium">{account.name}</div><div className="text-xs text-muted-foreground">{account.email || account.accountId || "Codex account"}</div></TableCell>
+                    <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
+                    <TableCell><Badge variant={account.enabled ? "secondary" : "outline"}>{account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
+                    <TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <RefreshCwIcon className="animate-spin" /> : account.enabled ? "Disable" : "Enable"}</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                  </TableRow>
+                  <TableRow className={account.enabled ? undefined : "opacity-60"}>
+                    <TableCell colSpan={5} className="bg-muted/20 px-4 py-3">
+                      {usageError && <p className="mb-3 text-xs text-destructive">Usage unavailable: {usageError.message}</p>}
+                      {usage?.error && !usage.stale && <p className="mb-3 text-xs text-destructive">Usage unavailable: {usage.error}</p>}
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <QuotaRow label="5 hour" quota={usage?.fiveHour} loading={usageLoading && !usageData} stale={Boolean(usage?.stale)} />
+                        <QuotaRow label="Weekly" quota={usage?.weekly} loading={usageLoading && !usageData} stale={Boolean(usage?.stale)} />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                </Fragment>
               })}
               {!data.accounts.length && <EmptyRow label="No Codex accounts connected yet." colSpan={5} />}
             </TableBody>
