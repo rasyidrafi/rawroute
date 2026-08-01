@@ -524,8 +524,11 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
 
   try {
     payload = mergeRequestOverrides(payload, model.requestOverrides || {})
+    // Apply the Codex Responses Lite contract by provider, not only by the
+    // credential kind. Codex can also be configured with a regular bearer key.
+    const isCodexProvider = provider.prefix === "codex" || providerApiKey?.credentialKind === "codex-oauth"
     const isCodexOAuth = providerApiKey?.credentialKind === "codex-oauth"
-    payload = isCodexOAuth ? normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey) : { ...payload, model: model.upstreamModel }
+    payload = isCodexProvider ? normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey) : { ...payload, model: model.upstreamModel }
     const streamOptions = objectValue(payload.stream_options)
     if (modelProtocol === "openai-chat" && payload.stream === true && streamOptions) {
       payload.stream_options = { ...streamOptions, include_usage: true }
