@@ -113,54 +113,13 @@ function requestToolCount(payload: Record<string, unknown>, protocol?: Protocol)
     if (nestedCount) return nestedCount
   }
 
-  // For Anthropic and Responses continuations, the conversation may not
-  // declare any tools but the in-flight items already represent tool calls
-  // and their results. Walk the conversation array and tally tool-bearing
-  // items / content blocks the same way 9router counts `tool_use` and
-  // `tool_result` blocks in assistant messages.
-  if (protocol === "anthropic-messages") {
-    const count = countToolItemsInArray(payload.messages, anthropicToolItemTypes)
-    if (count) return count
-  }
-  if (protocol === "openai-responses") {
-    const count = countToolItemsInArray(payload.input, responsesToolItemTypes)
-    if (count) return count
-  }
+  // Conversation history and tool results are not declarations. Do not count
+  // them, or the value grows on every Responses continuation.
   return 0
 }
 
 function arrayLength(value: unknown): number {
   return Array.isArray(value) ? value.length : 0
-}
-
-const anthropicToolItemTypes = new Set(["tool_use", "tool_result"])
-const responsesToolItemTypes = new Set([
-  "function_call", "function_call_output",
-  "custom_tool_call", "custom_tool_call_output",
-  "computer_call", "computer_call_output",
-  "file_search_call", "web_search_call", "computer_use_tool_result",
-])
-
-function countToolItemsInArray(value: unknown, toolItemTypes: Set<string>): number {
-  if (!Array.isArray(value)) return 0
-  let count = 0
-  for (const item of value) {
-    const record = objectValue(item)
-    if (!record) continue
-    if (typeof record.type === "string" && toolItemTypes.has(record.type)) {
-      count += 1
-      continue
-    }
-    const content = record.content
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      const blockRecord = objectValue(block)
-      if (blockRecord && typeof blockRecord.type === "string" && toolItemTypes.has(blockRecord.type)) {
-        count += 1
-      }
-    }
-  }
-  return count
 }
 
 function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, protocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {

@@ -299,7 +299,7 @@ describe("proxy request", () => {
     expect(readLogs()[0]?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:anthropic-messages ACC:Primary MSG:1 TOOL:1")
   })
 
-  test("counts Responses function calls and outputs carried in input", async () => {
+  test("does not count historical Responses tool items", async () => {
     clearLogs()
     globalThis.fetch = mock(async () => Response.json({ id: "resp_tool_items" })) as unknown as typeof fetch
 
@@ -315,10 +315,10 @@ describe("proxy request", () => {
       }),
     }), "openai-responses")
 
-    expect(readLogs()[0]?.message).toContain("MSG:2 TOOL:2")
+    expect(readLogs()[0]?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary MSG:2")
   })
 
-  test("counts Anthropic tool blocks inside message content", async () => {
+  test("does not count historical Anthropic tool blocks", async () => {
     clearLogs()
     await updateData((data) => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")
@@ -341,7 +341,7 @@ describe("proxy request", () => {
       }),
     }), "anthropic-messages")
 
-    expect(readLogs()[0]?.message).toContain("MSG:1 TOOL:2")
+    expect(readLogs()[0]?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:anthropic-messages ACC:Primary MSG:1")
   })
 
   test("logs completion timing and token usage after a streamed response finishes", async () => {
