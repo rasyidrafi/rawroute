@@ -39,8 +39,9 @@ export function normalizeCodexRequest(payload: Record<string, unknown>, upstream
   normalized.instructions ??= ""
   normalized.input = normalizeInput(normalized.input)
   for (const field of removedFields) delete normalized[field]
-  const tools = Array.isArray(normalized.tools) ? normalized.tools : []
-  if (!tools.length) delete normalized.parallel_tool_calls
+  // Responses Lite requires this flag to be present and false, including
+  // requests that do not contain tools.
+  normalized.parallel_tool_calls = false
   if (sessionKey && typeof normalized.prompt_cache_key !== "string") normalized.prompt_cache_key = sessionKey
   return normalized
 }

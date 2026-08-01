@@ -37,6 +37,7 @@ describe("Codex native request adapter", () => {
       instructions: "",
       prompt_cache_key: "session-1",
       tools: [],
+      parallel_tool_calls: false,
     })
   })
 
