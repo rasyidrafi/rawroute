@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -8,10 +8,11 @@ import useSWR, { mutate as globalMutate } from "swr"
 import { toast } from "sonner"
 
 import { ConfirmAction, DetailValue, EmptyRow, NotFoundState } from "@/components/dashboard/shared"
+import { apiDelete, apiPost, fetcher } from "@/components/dashboard/api"
+import { CodexQuotaTableRow, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ModelForm } from "@/components/dashboard/model-form"
 import { ProviderApiKeyForm } from "@/components/dashboard/provider-api-key-form"
 import { ProviderForm } from "@/components/dashboard/provider-form"
-import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { Input } from "@/components/ui/input"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { Badge } from "@/components/ui/badge"
@@ -27,6 +28,11 @@ const providerKey = (providerId: string) => `/api/admin/providers/${encodeURICom
 export function ProviderDetailView({ providerId }: { providerId: string }) {
   const router = useRouter()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId))
+  const { data: usageData, error: usageError, isLoading: usageLoading } = useSWR<UsageResponse>("/api/admin/oauth-providers/usage", fetcher, {
+    refreshInterval: 300000,
+    dedupingInterval: 300000,
+    revalidateOnFocus: false,
+  })
   const [providerOpen, setProviderOpen] = useState(false)
   const [providerKeyOpen, setProviderKeyOpen] = useState(false)
   const [modelOpen, setModelOpen] = useState(false)
@@ -229,7 +235,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
-          <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal.</CardDescription>
+          <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal. Codex limits update every five minutes.</CardDescription>
           <CardAction>{provider.prefix === "codex" ? <Button onClick={() => void addCodexAccount()} disabled={starting || Boolean(device)}>{starting ? <RefreshCwIcon className="animate-spin" /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
@@ -255,20 +261,23 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
               {apiKeys.map((apiKey, index) => {
                 const pendingKey = `delete-provider-api-key:${apiKey.id}`
                 const movePending = isPending(`move-provider-api-key:${apiKey.id}`)
-                return <TableRow key={apiKey.id} className={apiKey.enabled ? undefined : "opacity-60"}>
-                  <TableCell>
-                    <div className="flex items-center gap-0.5">
-                      <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
-                      <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
-                    </div>
-                  </TableCell>
-                  <TableCell className="font-medium">{apiKey.name}</TableCell>
-                  <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
-                  <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
-                  {isOAuthProvider && <TableCell className="text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
-                  <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
-                  <TableCell className="px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
-                </TableRow>
+                return <Fragment key={apiKey.id}>
+                  <TableRow className={apiKey.enabled ? undefined : "opacity-60"}>
+                    <TableCell>
+                      <div className="flex items-center gap-0.5">
+                        <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
+                        <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-medium">{apiKey.name}</TableCell>
+                    <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
+                    <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
+                    {isOAuthProvider && <TableCell className="text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
+                    <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
+                    <TableCell className="px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                  </TableRow>
+                  {isOAuthProvider && apiKey.credentialKind === "codex-oauth" && <CodexQuotaTableRow accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} colSpan={7} className={apiKey.enabled ? undefined : "opacity-60"} />}
+                </Fragment>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 7 : 6} />}
             </TableBody>
