@@ -14,14 +14,7 @@ export async function GET() {
     return jsonError("Unauthorized", 401)
   }
   const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
-  const providerNameById = new Map(providers.map((provider) => [provider.id, provider.name]))
-  const enabledModels = models
-    .filter((model) => model.enabled)
-    .map((model) => ({
-      id: model.gatewayModelId || model.id,
-      providerName: providerNameById.get(model.providerId) || model.providerId,
-    }))
-  return Response.json({ aliases, models: enabledModels })
+  return Response.json({ aliases, models, providers })
 }
 
 export async function POST(request: Request) {

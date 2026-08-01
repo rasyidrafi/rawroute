@@ -84,8 +84,32 @@ function requestItemCount(payload: Record<string, unknown>) {
 }
 
 function requestToolCount(payload: Record<string, unknown>) {
-  if (Array.isArray(payload.tools)) return payload.tools.length
-  if (Array.isArray(payload.functions)) return payload.functions.length
+  const countTools = (value: unknown) => {
+    if (Array.isArray(value)) return value.length
+    return value !== null && typeof value === "object" ? 1 : 0
+  }
+  const directCount = Math.max(countTools(payload.tools), countTools(payload.functions))
+  if (directCount) return directCount
+
+  // Some OpenAI-compatible clients wrap the actual request in `request` or
+  // `extra_body`; support those forms without counting unrelated nested data.
+  for (const key of ["request", "extra_body"]) {
+    const nested = objectValue(payload[key])
+    if (!nested) continue
+    const nestedCount = Math.max(countTools(nested.tools), countTools(nested.functions))
+    if (nestedCount) return nestedCount
+  }
+
+  // Tool calls may also be present in a continued Responses/Anthropic input.
+  // Count only tool-specific items, not ordinary messages or content blocks.
+  for (const key of ["input", "messages"]) {
+    if (!Array.isArray(payload[key])) continue
+    const toolItems = payload[key].filter((item) => {
+      const record = objectValue(item)
+      return record?.type === "tool_use" || record?.type === "function_call" || record?.type === "tool_result" || record?.type === "function_call_output"
+    }).length
+    if (toolItems) return toolItems
+  }
   return 0
 }
 
@@ -335,7 +359,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   const gatewayModelId = model.gatewayModelId || model.id
   const providerApiKeys = data.providerApiKeys.filter((apiKey) => apiKey.providerId === provider.id && apiKey.enabled)
   if (provider.authType !== "none" && !providerApiKeys.length) {
-    writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.id, model: gatewayModelId })
+    writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.name, model: gatewayModelId })
     return jsonError("The model provider has no enabled API keys.", 503)
   }
 
@@ -362,7 +386,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       })
       if (!reservation.ok) {
         writeLog("warn", "gateway", "Provider routing reservation unavailable", {
-          provider: provider.id,
+          provider: provider.name,
           model: gatewayModelId,
           reason: reservation.reason,
           retryAfterSeconds: reservation.retryAfterSeconds,
@@ -499,7 +523,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           leaseId: routingLeaseId!,
         }).then((renewed) => {
           if (!renewed) {
-            writeLog("warn", "gateway", "Routing lease disappeared before completion", { provider: provider.id, model: gatewayModelId })
+            writeLog("warn", "gateway", "Routing lease disappeared before completion", { provider: provider.name, model: gatewayModelId })
             upstreamController.abort(new Error("Routing lease expired"))
             void safeRelease(502)
           }
@@ -509,7 +533,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       }, routingStore.leaseRenewalIntervalMs())
       if (leaseRenewalTimer && typeof leaseRenewalTimer === "object" && "unref" in leaseRenewalTimer) leaseRenewalTimer.unref()
     }
-    writeLog("info", "gateway", requestSummary(provider.id, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
+    writeLog("info", "gateway", requestSummary(provider.name, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
     const upstreamPath = isCodexOAuth ? (model.upstreamPath || "/responses") : (model.upstreamPath || protocolPaths[modelProtocol])
     const upstreamUrl = buildUpstreamUrl(provider.baseUrl, upstreamPath)
     let upstream = await fetch(upstreamUrl, {
@@ -532,7 +556,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           redirect: "manual",
         })
       } catch (error) {
-        writeLog("warn", "gateway", "Codex token refresh after unauthorized response failed", { provider: provider.id, account: providerApiKey.name, error: error instanceof Error ? error.message : "Unknown error" })
+        writeLog("warn", "gateway", "Codex token refresh after unauthorized response failed", { provider: provider.name, account: providerApiKey.name, error: error instanceof Error ? error.message : "Unknown error" })
       }
     }
     const responseHeaders = new Headers()
@@ -565,7 +589,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       await safeRelease(502).catch(() => undefined)
     }
     cleanupLease()
-    writeLog("error", "gateway", "Upstream request failed", { provider: provider.id, model: gatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
+    writeLog("error", "gateway", "Upstream request failed", { provider: provider.name, model: gatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError("Upstream request failed.", 502, error instanceof Error ? error.message : undefined)
   }
 }

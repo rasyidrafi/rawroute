@@ -9,4 +9,16 @@ test("aliases expose copyable gateway IDs", () => {
   expect(view).toContain('toast.success("Gateway ID copied")')
   expect(view).toContain('variant="outline"')
   expect(view).toContain("<TableCell>{alias.targetModelId}</TableCell>")
+  expect(view).toContain("setEditingAlias(alias)")
+})
+
+test("alias form pairs gateway ID and name, then provider and model", () => {
+  const form = readFileSync(new URL("./dashboard/alias-form.tsx", import.meta.url), "utf8")
+
+  expect(form).toContain('label="Gateway ID"')
+  expect(form).toContain('label="Name"')
+  expect(form).toContain('label="Provider"')
+  expect(form).toContain('label="Model"')
+  expect(form).toContain("disabled={!providerId")
+  expect(form).toContain("onValueChange={setProviderId}")
 })

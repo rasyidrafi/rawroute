@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Shell(bun:*)"
+      "Shell(bun:*)",
+      "Shell(bunx tsc --noEmit 2 >& 1)",
+      "Shell(gcloud:*)",
+      "Shell(awk:*)"
     ],
     "deny": [],
     "defaultMode": "default"

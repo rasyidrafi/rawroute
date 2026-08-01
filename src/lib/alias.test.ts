@@ -13,6 +13,7 @@ function aliasInput(overrides: Partial<ModelAlias> = {}): Partial<ModelAlias> & 
     alias: "my-cool-model",
     name: "My Cool Model",
     targetModelId: "openai/gpt-4o",
+    originalId: undefined,
     ...overrides,
   }
 }
@@ -45,7 +46,7 @@ describe("model aliases", () => {
 
   test("updates an existing alias without duplicating it", async () => {
     const saved = await upsertAlias(aliasInput())
-    const updated = await upsertAlias(aliasInput({ originalId: saved.id, name: "Renamed" }))
+    const updated = await upsertAlias({ ...aliasInput(), originalId: saved.id, name: "Renamed" })
     expect(updated.name).toBe("Renamed")
     expect(await listAliases()).toHaveLength(1)
   })

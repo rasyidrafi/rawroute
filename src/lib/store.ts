@@ -91,11 +91,12 @@ type LegacyProvider = Omit<Provider, "apiKeyCount" | "enabledApiKeyCount" | "mod
   Partial<Pick<Provider, "apiKeyCount" | "enabledApiKeyCount" | "modelCount" | "enabledModelCount">> &
   { secret?: string }
 type LegacyModel = Omit<Model, "gatewayModelId"> & { gatewayModelId?: string }
-type LegacyAppData = Omit<AppData, "version" | "providers" | "providerApiKeys" | "models"> & {
+type LegacyAppData = Omit<AppData, "version" | "providers" | "providerApiKeys" | "models" | "aliases"> & {
   version?: 1 | 2
   providers?: LegacyProvider[]
   providerApiKeys?: AppData["providerApiKeys"]
   models?: LegacyModel[]
+  aliases?: ModelAlias[]
 }
 
 function migrateLegacy(legacy: LegacyAppData): { meta: Meta; providers: Map<string, Provider>; providerApiKeys: Map<string, Map<string, ProviderApiKey>>; models: Map<string, Map<string, Model>>; apiKeys: Map<string, ApiKey> } {
@@ -185,7 +186,7 @@ export function migrateData(legacy: LegacyAppData): AppData {
       providerId: providerIds.get(providerId) || providerId,
       gatewayModelId: model.gatewayModelId || model.id,
     }))),
-    aliases: [],
+    aliases: legacy.aliases || [],
     apiKeys: [...migrated.apiKeys.values()].map((apiKey) => ({ ...apiKey, id: crypto.randomUUID() })),
   }
 }

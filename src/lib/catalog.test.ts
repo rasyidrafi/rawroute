@@ -79,12 +79,12 @@ test("LiteLLM catalog includes chat-protocol aliases with the target's upstream 
 })
 
 test("LiteLLM catalog excludes aliases whose target is not chat protocol", () => {
-  const responsesModel = { ...model, protocol: "openai-responses", upstreamModel: "responses-model" }
+  const responsesModel = { ...model, protocol: "openai-responses" as const, upstreamModel: "responses-model" }
   expect(catalogLiteLlmModelInfo([provider], [responsesModel], [alias])).toEqual([])
 })
 
 test("LiteLLM catalog excludes models Junie cannot call through Chat Completions", () => {
-  const incompatibleModels = ["openai-responses", "anthropic-messages"].map((protocol) => ({
+  const incompatibleModels = (["openai-responses", "anthropic-messages"] as const).map((protocol) => ({
     ...model,
     upstreamModel: `${protocol}-model`,
     protocol,

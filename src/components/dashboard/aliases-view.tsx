@@ -1,11 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import { ArrowLeftRightIcon, CopyIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftRightIcon, CopyIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
-import { AliasForm, type AliasTargetOption } from "@/components/dashboard/alias-form"
+import { AliasForm } from "@/components/dashboard/alias-form"
 import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
@@ -13,9 +13,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import type { ModelAlias } from "@/lib/types"
+import type { Model, ModelAlias, Provider } from "@/lib/types"
 
-type AliasesResponse = { aliases: ModelAlias[]; models: AliasTargetOption[] }
+type AliasesResponse = { aliases: ModelAlias[]; models: Model[]; providers: Provider[] }
 
 export function AliasesView() {
   const { data, error, isLoading, mutate } = useSWR<AliasesResponse>("/api/admin/aliases")
@@ -70,7 +70,7 @@ export function AliasesView() {
         </CardHeader>
         <Dialog open={aliasOpen} onOpenChange={(open) => { setAliasOpen(open); if (!open) setEditingAlias(null) }}>
           <DialogContent>
-            <AliasForm key={editingAlias?.id || "new"} alias={editingAlias} targets={data.models} onSave={saveAlias} />
+            <AliasForm key={editingAlias?.id || "new"} alias={editingAlias} providers={data.providers} models={data.models} onSave={saveAlias} />
           </DialogContent>
         </Dialog>
         <CardContent>
@@ -90,7 +90,7 @@ export function AliasesView() {
                   <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{alias.alias}</span></div><Button aria-label={`Copy gateway ID ${alias.alias}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void navigator.clipboard.writeText(alias.alias); toast.success("Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
                   <TableCell>{alias.name}</TableCell>
                   <TableCell>{alias.targetModelId}</TableCell>
-                  <TableCell><div className="flex justify-end gap-1"><ConfirmAction title={`Delete ${alias.name || alias.alias}?`} description={`Requests using "${alias.alias}" will stop resolving. The target model is not affected.`} pending={isPending(pendingKey)} onConfirm={() => deleteAlias(alias)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                  <TableCell><div className="flex justify-end gap-1"><Button aria-label={`Edit ${alias.name || alias.alias}`} size="icon-sm" variant="ghost" onClick={() => { setEditingAlias(alias); setAliasOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${alias.name || alias.alias}?`} description={`Requests using "${alias.alias}" will stop resolving. The target model is not affected.`} pending={isPending(pendingKey)} onConfirm={() => deleteAlias(alias)}><Trash2Icon /></ConfirmAction></div></TableCell>
                 </TableRow>
               })}
               {!data.aliases.length && <EmptyRow label="No aliases yet." colSpan={4} />}

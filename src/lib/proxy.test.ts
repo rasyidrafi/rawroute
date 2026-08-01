@@ -92,7 +92,7 @@ describe("proxy request", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream")
     expect(response.headers.get("x-rawroute-provider-key")).toBe(testProviderKeyId)
     expect(await response.text()).toBe("event: done\ndata: ok\n\n")
-    expect(readLogs().find((entry) => entry.message.startsWith("POST "))?.message).toMatch(/^POST PROVIDER:[^ ]+ MODEL:cx\/codex -> gpt-upstream FMT:openai-responses ACC:Primary MSG:1$/)
+    expect(readLogs().find((entry) => entry.message.startsWith("POST "))?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary MSG:1")
     expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms$/)
   })
 
@@ -275,7 +275,28 @@ describe("proxy request", () => {
       }),
     }), "openai-responses")
 
-    expect(readLogs()[0]?.message).toMatch(/^POST PROVIDER:[^ ]+ MODEL:cx\/codex -> gpt-upstream FMT:openai-responses ACC:Primary THINK:low MSG:2 TOOL:2$/)
+    expect(readLogs()[0]?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:openai-responses ACC:Primary THINK:low MSG:2 TOOL:2")
+  })
+
+  test("logs tools in Anthropic messages requests", async () => {
+    clearLogs()
+    await updateData((data) => {
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
+      if (provider) provider.protocol = "anthropic-messages"
+    })
+    globalThis.fetch = mock(async () => Response.json({ id: "msg_summary" })) as unknown as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/messages", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "cx/codex",
+        messages: [{ role: "user", content: "look this up" }],
+        tools: [{ name: "lookup", input_schema: { type: "object" } }],
+      }),
+    }), "anthropic-messages")
+
+    expect(readLogs()[0]?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:anthropic-messages ACC:Primary MSG:1 TOOL:1")
   })
 
   test("logs completion timing and token usage after a streamed response finishes", async () => {
