@@ -163,12 +163,14 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     configured: apiKeys.length,
     enabled: apiKeys.filter((apiKey) => apiKey.enabled).length,
   }
+  const isOAuthProvider = provider.prefix === "codex" || (apiKeys.length > 0 && apiKeys.every((apiKey) => apiKey.credentialKind === "codex-oauth"))
+  const credentialLabel = isOAuthProvider ? (apiKeyCounts.configured === 1 ? "account" : "accounts") : `API ${apiKeyCounts.configured === 1 ? "key" : "keys"}`
 
   return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <div>
-        <Button nativeButton={false} variant="ghost" className="-ml-3 mb-3" render={<Link href="/dashboard/providers" />}><ArrowLeftIcon />Providers</Button>
-        <div><h2 className="text-2xl font-semibold tracking-tight">{provider.name}</h2><p className="mt-1 text-sm text-muted-foreground">{apiKeyCounts.configured} API {apiKeyCounts.configured === 1 ? "key" : "keys"} configured</p></div>
+        <Button nativeButton={false} variant="ghost" className="-ml-3 mb-3" render={<Link href="/dashboard/providers" prefetch={false} />}><ArrowLeftIcon />Providers</Button>
+        <div><h2 className="text-2xl font-semibold tracking-tight">{provider.name}</h2><p className="mt-1 text-sm text-muted-foreground">{apiKeyCounts.configured} {credentialLabel} configured</p></div>
       </div>
       <Card>
         <CardHeader>
@@ -191,15 +193,15 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
             <DetailValue label="Gateway prefix" value={`${provider.prefix}/`} mono />
             <DetailValue label="Authentication" value={provider.authType === "none" ? "None" : provider.authType} />
             <DetailValue label="Protocol" value={protocolLabels[provider.protocol]} />
-            <DetailValue label="Configured keys" value={String(apiKeyCounts.configured)} />
+            <DetailValue label={isOAuthProvider ? "Configured accounts" : "Configured keys"} value={String(apiKeyCounts.configured)} />
             <DetailValue label="Configured models" value={String(models.length)} />
           </div>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />API keys</CardTitle>
-          <CardDescription>Sticky least-loaded routing keeps sessions warm while distributing new work by capacity.</CardDescription>
+          <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
+          <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal.</CardDescription>
           <CardAction>{provider.prefix !== "codex" && <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
@@ -225,10 +227,10 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                 const movePending = isPending(`move-provider-api-key:${apiKey.id}`)
                 return <TableRow key={apiKey.id} className={apiKey.enabled ? undefined : "opacity-60"}>
                   <TableCell>
-                    {apiKey.credentialKind === "codex-oauth" ? null : <div className="flex items-center gap-0.5">
+                    <div className="flex items-center gap-0.5">
                       <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
                       <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
-                    </div>}
+                    </div>
                   </TableCell>
                   <TableCell className="font-medium">{apiKey.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</TableCell>
@@ -237,7 +239,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                   <TableCell className="px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                 </TableRow>
               })}
-              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : "No API keys yet."} colSpan={6} />}
+              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={6} />}
             </TableBody>
           </Table>
         </CardContent>

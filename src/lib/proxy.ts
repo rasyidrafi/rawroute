@@ -28,9 +28,17 @@ function maximumBodyBytes() {
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 10 * 1024 * 1024
 }
 
-function maximumRoutingRequestMs() {
-  const configured = Number(process.env.ROUTING_MAX_REQUEST_DURATION_SECONDS || 1800)
-  return Number.isSafeInteger(configured) && configured > 0 ? configured * 1000 : 1800 * 1000
+function configuredDurationMs(value: string | undefined, fallbackSeconds: number) {
+  const configured = Number(value || fallbackSeconds)
+  return Number.isSafeInteger(configured) && configured > 0 ? configured * 1000 : fallbackSeconds * 1000
+}
+
+function maximumRoutingRequestMs(streaming: boolean) {
+  if (!streaming) return configuredDurationMs(process.env.ROUTING_MAX_NON_STREAM_DURATION_SECONDS, 60)
+  return configuredDurationMs(
+    process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || process.env.ROUTING_MAX_REQUEST_DURATION_SECONDS,
+    290,
+  )
 }
 
 async function readBoundedBody(request: Request, maximum: number) {
@@ -206,6 +214,7 @@ function trackedUpstreamBody(
   upstream: Response,
   onResponseIds: (ids: string[]) => Promise<void>,
   onFinished: (metrics: { ttftMs?: number; usage?: UsageMetrics }) => Promise<void>,
+  onCancelled: () => Promise<void>,
 ) {
   if (!upstream.body) {
     void onFinished({})
@@ -288,6 +297,7 @@ function trackedUpstreamBody(
       }
     },
     async cancel(reason) {
+      await onCancelled()
       await reader.cancel(reason)
       await finish()
     },
@@ -475,7 +485,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     requestTimeout = setTimeout(() => {
       upstreamController.abort(new Error("Maximum routing request duration exceeded"))
       void safeRelease(502)
-    }, maximumRoutingRequestMs())
+    }, maximumRoutingRequestMs(payload.stream === true))
     if (requestTimeout && typeof requestTimeout === "object" && "unref" in requestTimeout) requestTimeout.unref()
     if (routingStore && providerApiKey && routingLeaseId) {
       let renewing = false
@@ -542,6 +552,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
         if (!upstream.ok) return
         await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
         writeLog("info", "gateway", completionSummary(Date.now() - startedAt, ttftMs === undefined ? undefined : ttftMs - startedAt, usage))
+      },
+      async () => {
+        upstreamController.abort(new Error("Downstream response was cancelled"))
+        await safeRelease(499)
       },
     )
     if (!upstream.ok) writeLog("warn", "gateway", `FAILED ${upstream.status} ${Date.now() - startedAt}ms`)

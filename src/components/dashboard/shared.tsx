@@ -51,7 +51,7 @@ export function NotFoundState({ label = "Provider not found", description = "Thi
           <CardDescription>{description}</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button nativeButton={false} variant="outline" render={<Link href={backHref} />}><ArrowLeftIcon />{backLabel}</Button>
+          <Button nativeButton={false} variant="outline" render={<Link href={backHref} prefetch={false} />}><ArrowLeftIcon />{backLabel}</Button>
         </CardContent>
       </Card>
     </div>

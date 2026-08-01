@@ -585,9 +585,13 @@ export async function deleteModel(providerId: string, modelId: string): Promise<
 
 export async function listAliases(): Promise<ModelAlias[]> {
   if (isMemoryBackend()) {
-    return [...ensureMemorySeeded().aliases.values()].sort((a, b) => a.name.localeCompare(b.name))
+    return [...ensureMemorySeeded().aliases.values()].sort(compareAliases)
   }
   return firestoreListAliases()
+}
+
+function compareAliases(left: ModelAlias, right: ModelAlias) {
+  return left.alias.localeCompare(right.alias, undefined, { sensitivity: "base", numeric: true })
 }
 
 export async function upsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
@@ -1095,7 +1099,7 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
 
 async function firestoreListAliases(): Promise<ModelAlias[]> {
   const snapshot = await aliasesRef().get()
-  return snapshot.docs.map(aliasFromSnapshot).sort((a, b) => a.name.localeCompare(b.name))
+  return snapshot.docs.map(aliasFromSnapshot).sort(compareAliases)
 }
 
 async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {

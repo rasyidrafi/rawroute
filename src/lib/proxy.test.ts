@@ -296,6 +296,27 @@ describe("proxy request", () => {
     expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms IN:139054 \(CACHE ↻137728\) OUT:2719$/)
   })
 
+  test("aborts the upstream request when the downstream stream is cancelled", async () => {
+    let upstreamSignal: AbortSignal | undefined
+    let upstreamCancelled = false
+    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+      upstreamSignal = init?.signal || undefined
+      return new Response(new ReadableStream({
+        cancel() { upstreamCancelled = true },
+      }), { headers: { "content-type": "text/event-stream" } })
+    }) as unknown as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", stream: true }),
+    }), "openai-responses")
+    await response.body?.cancel("client disconnected")
+
+    expect(upstreamSignal?.aborted).toBe(true)
+    expect(upstreamCancelled).toBe(true)
+  })
+
   test("returns a controlled error for a legacy malformed provider header", async () => {
     await updateData((data) => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")

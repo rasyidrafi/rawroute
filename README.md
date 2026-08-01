@@ -76,7 +76,7 @@ Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on every Cloud
 
 Proxy request bodies are limited by `MAX_PROXY_BODY_BYTES` (10 MiB by default), including streamed requests without a `Content-Length` header.
 
-Routing leases renew during long requests and are forcibly aborted after `ROUTING_MAX_REQUEST_DURATION_SECONDS` (30 minutes by default) to prevent abandoned streams from consuming concurrency indefinitely.
+Routing leases renew during long requests. Streaming requests are aborted after `ROUTING_MAX_STREAM_DURATION_SECONDS` (290 seconds by default), and non-streaming requests after `ROUTING_MAX_NON_STREAM_DURATION_SECONDS` (60 seconds by default). Keep the streaming deadline below the Cloud Run request timeout so abandoned upstream work is cancelled and its lease is released before the platform terminates the request.
 
 Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the persistent configuration source and supports multiple Cloud Run instances safely.
 

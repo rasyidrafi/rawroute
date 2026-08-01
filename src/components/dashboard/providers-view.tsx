@@ -94,7 +94,7 @@ export function ProvidersView() {
               {data.providers.map((provider) => {
                 const pendingKey = `delete-provider:${provider.id}`
                 return <TableRow key={provider.id} className="cursor-pointer" onClick={() => router.push(`/dashboard/providers/${provider.id}`)}>
-                  <TableCell><Link href={`/dashboard/providers/${provider.id}`} className="font-medium hover:underline" onClick={(event) => event.stopPropagation()}>{provider.name}</Link></TableCell>
+                  <TableCell><Link href={`/dashboard/providers/${provider.id}`} prefetch={false} className="font-medium hover:underline" onClick={(event) => event.stopPropagation()}>{provider.name}</Link></TableCell>
                   <TableCell><Badge variant="secondary">{provider.prefix}/</Badge></TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
                   <TableCell className="max-w-64 truncate font-mono text-xs">{provider.baseUrl}</TableCell>
@@ -103,7 +103,7 @@ export function ProvidersView() {
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
                       {provider.prefix !== "codex" && <ConfirmAction title={`Delete ${provider.name}?`} description={`This permanently deletes ${provider.apiKeyCount} API keys and ${provider.modelCount} models attached to this provider.`} pending={isPending(pendingKey)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>}
-                      <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link href={`/dashboard/providers/${provider.id}`} />}><ChevronRightIcon /></Button>
+                      <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link href={`/dashboard/providers/${provider.id}`} prefetch={false} />}><ChevronRightIcon /></Button>
                     </div>
                   </TableCell>
                 </TableRow>

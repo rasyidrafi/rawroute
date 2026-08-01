@@ -18,15 +18,15 @@ function aliasInput(overrides: Partial<ModelAlias> = {}): Partial<ModelAlias> & 
 }
 
 describe("model aliases", () => {
-  test("persists an alias and lists it sorted by name", async () => {
+  test("persists an alias and lists it by alias ascending", async () => {
     const saved = await upsertAlias(aliasInput())
     expect(saved.id).toBeTruthy()
     expect(saved.alias).toBe("my-cool-model")
     expect(saved.createdAt).toBeTruthy()
 
-    await upsertAlias(aliasInput({ alias: "aaa-first", name: "AAA First" }))
+    await upsertAlias(aliasInput({ alias: "aaa-first", name: "ZZZ Display Name" }))
     const aliases = await listAliases()
-    expect(aliases.map((entry) => entry.name)).toEqual(["AAA First", "My Cool Model"])
+    expect(aliases.map((entry) => entry.alias)).toEqual(["aaa-first", "my-cool-model"])
     expect((await readData()).aliases).toHaveLength(2)
   })
 
