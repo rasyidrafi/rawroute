@@ -14,6 +14,7 @@ test("Codex OAuth accounts expose cached five-hour and weekly usage rows", () =>
 
   const detail = readFileSync(new URL("./dashboard/provider-detail-view.tsx", import.meta.url), "utf8")
   expect(detail).toContain('"/api/admin/oauth-providers/usage"')
-  expect(detail).toContain("colSpan={7}")
+  expect(detail).toContain("colSpan={3}")
+  expect(detail).toContain("rowSpan={showQuota ? 2 : undefined}")
   expect(detail).toContain("CodexQuotaTableRow")
 })

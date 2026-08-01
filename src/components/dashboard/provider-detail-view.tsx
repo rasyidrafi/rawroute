@@ -261,9 +261,10 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
               {apiKeys.map((apiKey, index) => {
                 const pendingKey = `delete-provider-api-key:${apiKey.id}`
                 const movePending = isPending(`move-provider-api-key:${apiKey.id}`)
+                const showQuota = isOAuthProvider && apiKey.credentialKind === "codex-oauth"
                 return <Fragment key={apiKey.id}>
                   <TableRow className={apiKey.enabled ? undefined : "opacity-60"}>
-                    <TableCell>
+                    <TableCell rowSpan={showQuota ? 2 : undefined} className="align-middle">
                       <div className="flex items-center gap-0.5">
                         <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
                         <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
@@ -272,11 +273,11 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     <TableCell className="font-medium">{apiKey.name}</TableCell>
                     <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
-                    {isOAuthProvider && <TableCell className="text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
-                    <TableCell className="text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell className="px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    {isOAuthProvider && <TableCell rowSpan={showQuota ? 2 : undefined} className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
+                    <TableCell rowSpan={showQuota ? 2 : undefined} className="align-middle text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
+                    <TableCell rowSpan={showQuota ? 2 : undefined} className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
-                  {isOAuthProvider && apiKey.credentialKind === "codex-oauth" && <CodexQuotaTableRow accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} colSpan={7} className={apiKey.enabled ? undefined : "opacity-60"} />}
+                  {showQuota && <CodexQuotaTableRow accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} colSpan={3} className={apiKey.enabled ? undefined : "opacity-60"} />}
                 </Fragment>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 7 : 6} />}
