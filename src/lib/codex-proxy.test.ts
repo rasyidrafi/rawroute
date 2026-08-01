@@ -47,7 +47,7 @@ describe("Codex native request adapter", () => {
       tools: [{ type: "function", name: "lookup" }],
     }, "gpt-5.4")
     expect(result.input).toMatchObject([{ role: "developer" }])
-    expect(result.parallel_tool_calls).toBe(true)
+    expect(result.parallel_tool_calls).toBe(false)
   })
 
   test("injects account authentication without forwarding gateway secrets", () => {

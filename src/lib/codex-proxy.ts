@@ -32,7 +32,9 @@ export function normalizeCodexRequest(payload: Record<string, unknown>, upstream
   normalized.model = upstreamModel
   normalized.stream = true
   normalized.store = false
-  normalized.parallel_tool_calls = true
+  // Codex Responses Lite rejects parallel tool calls. Keep the field explicit
+  // when tools are present so clients cannot accidentally enable them upstream.
+  normalized.parallel_tool_calls = false
   normalized.include = ["reasoning.encrypted_content"]
   normalized.instructions ??= ""
   normalized.input = normalizeInput(normalized.input)
