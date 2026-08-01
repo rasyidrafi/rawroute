@@ -1,12 +1,12 @@
 "use client"
 
-import { Fragment, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { CopyIcon, LinkIcon, LogInIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
-import { CodexQuotaTableRow, type UsageResponse } from "@/components/dashboard/codex-quota"
+import { CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { Badge } from "@/components/ui/badge"
@@ -154,23 +154,21 @@ export function OAuthProvidersView() {
             <p className="mt-1 text-muted-foreground">RawRoute forwards the Responses payload to Codex with the OAuth account header. Access and refresh tokens are encrypted when stored in Firestore.</p>
           </div>
           <Table>
-            <TableHeader><TableRow><TableHead>Account</TableHead><TableHead>Plan</TableHead><TableHead>Status</TableHead><TableHead>Token expiry</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Account</TableHead><TableHead>Plan</TableHead><TableHead>Status</TableHead><TableHead>Usage Limits</TableHead><TableHead>Token expiry</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
             <TableBody>
               {data.accounts.map((account) => {
                 const updateKey = `update:${account.id}`
                 const usage = usageData?.accounts[account.id]
-                return <Fragment key={account.id}>
-                  <TableRow className={account.enabled ? undefined : "opacity-60"}>
+                return <TableRow key={account.id} className={account.enabled ? undefined : "opacity-60"}>
                     <TableCell><div className="font-medium">{account.name}</div><div className="text-xs text-muted-foreground">{account.email || account.accountId || "Codex account"}</div></TableCell>
                     <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
                     <TableCell><Badge variant={account.enabled ? "secondary" : "outline"}>{account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
+                    <CodexQuotaTableCell accountUsage={usage} loading={usageLoading && !usageData} error={usageError?.message} />
                     <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
                     <TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <RefreshCwIcon className="animate-spin" /> : account.enabled ? "Disable" : "Enable"}</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                   </TableRow>
-                  <CodexQuotaTableRow accountUsage={usage} loading={usageLoading && !usageData} error={usageError?.message} colSpan={5} className={account.enabled ? undefined : "opacity-60"} />
-                </Fragment>
               })}
-              {!data.accounts.length && <EmptyRow label="No Codex accounts connected yet." colSpan={5} />}
+              {!data.accounts.length && <EmptyRow label="No Codex accounts connected yet." colSpan={6} />}
             </TableBody>
           </Table>
         </CardContent>

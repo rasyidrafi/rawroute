@@ -53,6 +53,30 @@ describe("Codex usage", () => {
     expect(parseCodexUsagePayload({ rate_limit: { primary_window: null, secondary_window: {} } })).toEqual({ fiveHour: null, weekly: null })
   })
 
+  test("shows the available weekly window when OpenAI omits the five-hour window", () => {
+    expect(parseCodexUsagePayload({
+      rate_limit: {
+        primary_window: { used_percent: null },
+        secondary_window: { used_percent: 8, limit_window_seconds: 604800 },
+      },
+    })).toEqual({
+      fiveHour: null,
+      weekly: { usedPercent: 8, remainingPercent: 92 },
+    })
+  })
+
+  test("uses the reported duration when OpenAI moves a window between fields", () => {
+    expect(parseCodexUsagePayload({
+      rate_limit: {
+        primary_window: { used_percent: 8, limit_window_seconds: 604800 },
+        secondary_window: null,
+      },
+    })).toEqual({
+      fiveHour: null,
+      weekly: { usedPercent: 8, remainingPercent: 92 },
+    })
+  })
+
   test("serves a cached result for five minutes and retains stale data on failure", async () => {
     const redis = new FakeRedis()
     let current = 1_000_000

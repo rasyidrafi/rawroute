@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 
-import { TableCell, TableRow } from "@/components/ui/table"
+import { TableCell } from "@/components/ui/table"
 
 export type QuotaWindow = {
   usedPercent: number
@@ -36,10 +36,16 @@ function resetCountdown(value?: string) {
   return `${days}d ${hours % 24}h`
 }
 
-function QuotaLine({ label, quota, loading, stale }: { label: string; quota?: QuotaWindow | null; loading: boolean; stale: boolean }) {
+export function getAvailableQuotaWindows(accountUsage?: Pick<AccountUsage, "fiveHour" | "weekly">) {
+  return [
+    { label: "5 hour", quota: accountUsage?.fiveHour },
+    { label: "Weekly", quota: accountUsage?.weekly },
+  ].filter((entry): entry is { label: string; quota: QuotaWindow } => Boolean(entry.quota))
+}
+
+function QuotaLine({ label, quota, loading }: { label: string; quota?: QuotaWindow; loading: boolean }) {
   const [, setClock] = useState(0)
   const remaining = quota ? Math.round(quota.remainingPercent) : undefined
-  const used = quota ? Math.round(quota.usedPercent) : undefined
   const countdown = resetCountdown(quota?.resetAt)
 
   useEffect(() => {
@@ -47,31 +53,22 @@ function QuotaLine({ label, quota, loading, stale }: { label: string; quota?: Qu
     return () => clearInterval(timer)
   }, [])
 
-  return <div className="grid gap-1.5">
-    <div className="flex items-center justify-between gap-3 text-sm">
+  return <div className="flex items-center justify-between gap-3 text-sm">
       <span className="text-muted-foreground">{label}</span>
       {loading ? <span className="h-4 w-10 animate-pulse rounded bg-muted" /> : <span className="font-medium text-muted-foreground">{remaining === undefined ? "N/A" : `${remaining}%`}</span>}
-    </div>
-    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-      <div className="h-full rounded-full bg-foreground transition-[width] duration-300" style={{ width: `${remaining ?? 0}%` }} />
-    </div>
-    <div className="flex min-h-4 items-center justify-between gap-3 text-xs text-muted-foreground">
-      {loading ? <span className="h-3 w-32 animate-pulse rounded bg-muted" /> : <span>{used === undefined ? "Not currently applied" : `Used ${used}%`}</span>}
       {!loading && countdown && <span>resets in {countdown}</span>}
-    </div>
-    {!loading && stale && <p className="text-xs text-amber-600 dark:text-amber-400">Data may be stale</p>}
   </div>
 }
 
-export function CodexQuotaTableRow({ accountUsage, loading, error, colSpan, className }: { accountUsage?: AccountUsage; loading: boolean; error?: string; colSpan: number; className?: string }) {
-  return <TableRow className={className}>
-    <TableCell colSpan={colSpan} className="bg-muted/20 px-4 py-3">
-      {error && <p className="mb-3 text-xs text-destructive">Usage unavailable: {error}</p>}
-      {accountUsage?.error && !accountUsage.stale && <p className="mb-3 text-xs text-destructive">Usage unavailable: {accountUsage.error}</p>}
-      <div className="grid gap-4 md:grid-cols-2">
-        <QuotaLine label="5 hour" quota={accountUsage?.fiveHour} loading={loading} stale={Boolean(accountUsage?.stale)} />
-        <QuotaLine label="Weekly" quota={accountUsage?.weekly} loading={loading} stale={Boolean(accountUsage?.stale)} />
-      </div>
-    </TableCell>
-  </TableRow>
+export function CodexQuotaTableCell({ accountUsage, loading, error }: { accountUsage?: AccountUsage; loading: boolean; error?: string }) {
+  const windows = getAvailableQuotaWindows(accountUsage)
+  const message = error || (accountUsage?.error && !accountUsage.stale ? accountUsage.error : undefined)
+
+  return <TableCell className="min-w-40 bg-muted/20 px-3 py-2">
+    {message && <p className="mb-1 text-xs text-destructive">Usage unavailable: {message}</p>}
+    {loading ? <span className="inline-block h-4 w-20 animate-pulse rounded bg-muted" /> : windows.length ? <div className="grid gap-1.5">
+      {windows.map(({ label, quota }) => <QuotaLine key={label} label={label} quota={quota} loading={false} />)}
+      {accountUsage?.stale && <p className="text-xs text-amber-600 dark:text-amber-400">Data may be stale</p>}
+    </div> : <span className="text-sm text-muted-foreground">N/A</span>}
+  </TableCell>
 }

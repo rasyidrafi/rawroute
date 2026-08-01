@@ -70,6 +70,7 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 }
 
 function numberValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return undefined
   const parsed = typeof value === "number" ? value : Number(value)
   return Number.isFinite(parsed) ? parsed : undefined
 }
@@ -100,28 +101,56 @@ function getWindow(rateLimit: Record<string, unknown> | undefined, names: string
   return undefined
 }
 
-function parseWindow(value: unknown): CodexQuotaWindow | null {
+type ParsedCodexWindow = {
+  quota: CodexQuotaWindow
+  windowSeconds?: number
+}
+
+function parseWindow(value: unknown): ParsedCodexWindow | null {
   const window = objectValue(value)
   if (!window) return null
-  const used = numberValue(window.used_percent ?? window.percent_used)
+  const usedValue = numberValue(window.used_percent ?? window.percent_used)
+  const remainingValue = numberValue(window.remaining_percent ?? window.percent_remaining)
+  const used = usedValue ?? (remainingValue === undefined ? undefined : 100 - remainingValue)
   if (used === undefined) return null
   const usedPercent = Math.max(0, Math.min(100, used))
   const resetAt = parseResetAt(window.reset_at ?? window.resets_at ?? window.resetAt)
+  const windowSeconds = numberValue(window.limit_window_seconds ?? window.window_seconds)
   return {
-    usedPercent,
-    remainingPercent: 100 - usedPercent,
-    ...(resetAt ? { resetAt } : {}),
+    quota: {
+      usedPercent,
+      remainingPercent: 100 - usedPercent,
+      ...(resetAt ? { resetAt } : {}),
+    },
+    ...(windowSeconds !== undefined && windowSeconds > 0 ? { windowSeconds } : {}),
   }
+}
+
+function classifyWindow(windowSeconds: number | undefined, fallback: "fiveHour" | "weekly") {
+  if (windowSeconds === undefined) return fallback
+  if (windowSeconds >= 4 * 60 * 60 && windowSeconds <= 6 * 60 * 60) return "fiveHour" as const
+  if (windowSeconds >= 6 * 24 * 60 * 60 && windowSeconds <= 8 * 24 * 60 * 60) return "weekly" as const
+  return undefined
 }
 
 export function parseCodexUsagePayload(payload: unknown): CodexUsageSnapshot {
   const data = objectValue(payload)
   const rateLimits = objectValue(data?.rate_limits_by_limit_id)
   const normal = unwrapRateLimit(data?.rate_limit ?? data?.rate_limits ?? rateLimits?.codex ?? data)
-  return {
-    fiveHour: parseWindow(getWindow(normal, ["primary_window", "primary"])),
-    weekly: parseWindow(getWindow(normal, ["secondary_window", "secondary"])),
+  const snapshot: CodexUsageSnapshot = { fiveHour: null, weekly: null }
+  const windows: Array<["fiveHour" | "weekly", unknown]> = [
+    ["fiveHour", getWindow(normal, ["primary_window", "primary"])],
+    ["weekly", getWindow(normal, ["secondary_window", "secondary"])],
+  ]
+
+  for (const [fallback, value] of windows) {
+    const parsed = parseWindow(value)
+    if (!parsed) continue
+    const kind = classifyWindow(parsed.windowSeconds, fallback)
+    if (kind && !snapshot[kind]) snapshot[kind] = parsed.quota
   }
+
+  return snapshot
 }
 
 async function fetchCodexUsage(account: ProviderApiKey, fetchImpl: typeof fetch): Promise<CodexUsageSnapshot> {
