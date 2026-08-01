@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ArrowLeftRightIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftRightIcon, CopyIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
@@ -9,7 +9,6 @@ import { AliasForm, type AliasTargetOption } from "@/components/dashboard/alias-
 import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
@@ -78,7 +77,7 @@ export function AliasesView() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Alias</TableHead>
+                <TableHead>Gateway ID</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Target model</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -88,9 +87,9 @@ export function AliasesView() {
               {data.aliases.map((alias) => {
                 const pendingKey = `delete-alias:${alias.id}`
                 return <TableRow key={alias.id}>
-                  <TableCell><Badge variant="secondary" className="font-mono">{alias.alias}</Badge></TableCell>
+                  <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{alias.alias}</span></div><Button aria-label={`Copy gateway ID ${alias.alias}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void navigator.clipboard.writeText(alias.alias); toast.success("Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
                   <TableCell>{alias.name}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{alias.targetModelId}</TableCell>
+                  <TableCell>{alias.targetModelId}</TableCell>
                   <TableCell><div className="flex justify-end gap-1"><ConfirmAction title={`Delete ${alias.name || alias.alias}?`} description={`Requests using "${alias.alias}" will stop resolving. The target model is not affected.`} pending={isPending(pendingKey)} onConfirm={() => deleteAlias(alias)}><Trash2Icon /></ConfirmAction></div></TableCell>
                 </TableRow>
               })}
