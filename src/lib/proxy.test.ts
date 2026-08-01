@@ -299,6 +299,51 @@ describe("proxy request", () => {
     expect(readLogs()[0]?.message).toBe("POST PROVIDER:Codex MODEL:cx/codex -> gpt-upstream FMT:anthropic-messages ACC:Primary MSG:1 TOOL:1")
   })
 
+  test("counts Responses function calls and outputs carried in input", async () => {
+    clearLogs()
+    globalThis.fetch = mock(async () => Response.json({ id: "resp_tool_items" })) as unknown as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "cx/codex",
+        input: [
+          { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+          { type: "function_call_output", call_id: "call_1", output: "done" },
+        ],
+      }),
+    }), "openai-responses")
+
+    expect(readLogs()[0]?.message).toContain("MSG:2 TOOL:2")
+  })
+
+  test("counts Anthropic tool blocks inside message content", async () => {
+    clearLogs()
+    await updateData((data) => {
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
+      if (provider) provider.protocol = "anthropic-messages"
+    })
+    globalThis.fetch = mock(async () => Response.json({ id: "msg_tool_blocks" })) as unknown as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/messages", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "cx/codex",
+        messages: [{
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_1", name: "lookup", input: {} },
+            { type: "tool_result", tool_use_id: "toolu_1", content: "done" },
+          ],
+        }],
+      }),
+    }), "anthropic-messages")
+
+    expect(readLogs()[0]?.message).toContain("MSG:1 TOOL:2")
+  })
+
   test("logs completion timing and token usage after a streamed response finishes", async () => {
     clearLogs()
     globalThis.fetch = mock(async () => new Response([

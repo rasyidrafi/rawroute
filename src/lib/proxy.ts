@@ -100,14 +100,26 @@ function requestToolCount(payload: Record<string, unknown>) {
     if (nestedCount) return nestedCount
   }
 
-  // Tool calls may also be present in a continued Responses/Anthropic input.
+  // Responses continuations carry function calls and their outputs in input.
+  // Anthropic continuations carry tool_use/tool_result blocks in messages.
   // Count only tool-specific items, not ordinary messages or content blocks.
+  const toolItemTypes = new Set([
+    "tool_use", "tool_result", "function_call", "function_call_output",
+    "custom_tool_call", "custom_tool_call_output", "computer_call", "computer_call_output",
+    "file_search_call", "web_search_call", "computer_use_tool_result",
+  ])
   for (const key of ["input", "messages"]) {
     if (!Array.isArray(payload[key])) continue
-    const toolItems = payload[key].filter((item) => {
+    const toolItems = payload[key].reduce((count, item) => {
       const record = objectValue(item)
-      return record?.type === "tool_use" || record?.type === "function_call" || record?.type === "tool_result" || record?.type === "function_call_output"
-    }).length
+      if (record && typeof record.type === "string" && toolItemTypes.has(record.type)) return count + 1
+      const content = record?.content
+      if (!Array.isArray(content)) return count
+      return count + content.filter((block) => {
+        const blockRecord = objectValue(block)
+        return typeof blockRecord?.type === "string" && toolItemTypes.has(blockRecord.type)
+      }).length
+    }, 0)
     if (toolItems) return toolItems
   }
   return 0
