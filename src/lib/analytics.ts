@@ -263,13 +263,14 @@ async function budgetSpent(apiKeyId: string, start: string, end: string) {
   return events.filter((event) => event.gatewayKeyId === apiKeyId && event.status >= 200 && event.status < 300).reduce((sum, event) => sum + event.costMicros, 0)
 }
 export async function getBudgetRows() {
-  const [budgets, window, keys, events] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys(), listUsageEvents()])
+  const [budgets, window, keys, events, bypassSessions] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys(), listUsageEvents(), listBudgetBypassSessions()])
+  const usageStart = window.bypassLimits ? bypassSessions.find((session) => session.id === window.bypassSessionId)?.startedAt || window.start : window.start
   const lastUsedByKey = new Map<string, string>()
   for (const event of events) {
     const current = lastUsedByKey.get(event.gatewayKeyId)
     if (!current || current < event.completedAt) lastUsedByKey.set(event.gatewayKeyId, event.completedAt)
   }
-  return Promise.all(budgets.map(async (budget) => ({ ...budget, spentMicros: await budgetSpent(budget.apiKeyId, window.start, window.end), windowStart: window.start, windowEnd: window.end, name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown", lastUsedAt: lastUsedByKey.get(budget.apiKeyId) || null })))
+  return Promise.all(budgets.map(async (budget) => ({ ...budget, spentMicros: await budgetSpent(budget.apiKeyId, usageStart, window.end), windowStart: window.start, windowEnd: window.end, usageStartAt: usageStart, name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown", lastUsedAt: lastUsedByKey.get(budget.apiKeyId) || null })))
 }
 export async function checkBudget(apiKeyId: string, gatewayModelId: string, providerModelId?: string) {
   let budgets: GatewayKeyBudget[]
@@ -309,11 +310,21 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
   const granularity = query.granularity && query.granularity !== "auto" ? query.granularity : (span <= 2 * 86400000 ? "hourly" : span <= 45 * 86400000 ? "daily" : "monthly")
   let events: UsageEvent[] = []
   let keys: Awaited<ReturnType<typeof listApiKeys>> = []
+  let budgets: GatewayKeyBudget[] = []
+  let budgetWindow: BudgetWindow | undefined
+  let bypassSessions: BudgetBypassSession[] = []
   try {
-    ;[events, keys] = await Promise.all([listUsageEvents(range.from.toISOString(), range.to.toISOString()), listApiKeys()])
+    ;[events, keys, budgets, budgetWindow, bypassSessions] = await Promise.all([listUsageEvents(range.from.toISOString(), range.to.toISOString()), listApiKeys(), listBudgets(), getBudgetWindow(), listBudgetBypassSessions()])
   } catch {
     // Public analytics remains readable while optional Firestore is unavailable.
   }
+  const usageStart = budgetWindow?.bypassLimits ? bypassSessions.find((session) => session.id === budgetWindow?.bypassSessionId)?.startedAt || budgetWindow.start : budgetWindow?.start
+  const budgetEvents = usageStart && budgetWindow ? await listUsageEvents(usageStart, budgetWindow.end) : events
+  const budgetSpentByKey = new Map<string, number>()
+  for (const event of budgetEvents) {
+    if (event.status >= 200 && event.status < 300) budgetSpentByKey.set(event.gatewayKeyId, (budgetSpentByKey.get(event.gatewayKeyId) || 0) + event.costMicros)
+  }
+  const budgetMap = new Map(budgets.map((budget) => [budget.apiKeyId, budget]))
   const keyMap = new Map(keys.map((key) => [key.id, key]))
   const keyRows = new Map<string, DashboardPayload["keys"][number]>()
   const modelRows = new Map<string, { model: string; requests: number; tokens: number; costMicros: number }>()
@@ -326,6 +337,14 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
     row.requests += 1; row.tokens += event.totalTokens; row.costMicros += event.costMicros; row.lastUsed = !row.lastUsed || row.lastUsed < event.completedAt ? event.completedAt : row.lastUsed; if (!row.models.includes(event.gatewayModelId)) row.models.push(event.gatewayModelId); keyRows.set(event.gatewayKeyId, row)
     const model = modelRows.get(event.gatewayModelId) || { model: event.gatewayModelId, requests: 0, tokens: 0, costMicros: 0 }; model.requests += 1; model.tokens += event.totalTokens; model.costMicros += event.costMicros; modelRows.set(event.gatewayModelId, model)
     const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString(); const point = trend.get(bucket) || { bucketStart: bucket, label: formatAppTrendBucket(bucket, granularity), requests: 0, tokens: 0, costMicros: 0 }; point.requests += 1; point.tokens += event.totalTokens; point.costMicros += event.costMicros; trend.set(bucket, point)
+  }
+  if (budgetWindow && usageStart) {
+    for (const [keyId, row] of keyRows) {
+      const budget = budgetMap.get(keyId)
+      if (!budget) continue
+      const spentMicros = budgetSpentByKey.get(keyId) || 0
+      row.budget = { weeklyLimitMicros: budget.weeklyLimitMicros, spentMicros, remainingMicros: Math.max(0, budget.weeklyLimitMicros - spentMicros), percentUsed: budget.weeklyLimitMicros > 0 ? spentMicros / budget.weeklyLimitMicros * 100 : 0, bypassLimits: budgetWindow.bypassLimits, usageStartAt: usageStart, windowStart: budgetWindow.start, windowEnd: budgetWindow.end }
+    }
   }
   const payload: DashboardPayload = { generatedAt: new Date().toISOString(), range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity }, summary: { requests: events.length, tokens: events.reduce((sum, event) => sum + event.totalTokens, 0), costMicros: events.reduce((sum, event) => sum + event.costMicros, 0), activeKeys: keyRows.size, pricedRequests, unpricedRequests: events.length - pricedRequests }, trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)), keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests), models: [...modelRows.values()].sort((a, b) => b.requests - a.requests), freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt: events.at(-1)?.completedAt || null }, pricingConfidence: { pricedRequests, unpricedRequests: events.length - pricedRequests } }
   return payload

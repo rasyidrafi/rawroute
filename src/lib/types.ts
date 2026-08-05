@@ -232,12 +232,23 @@ export interface DashboardQuery {
   granularity?: "auto" | "hourly" | "daily" | "weekly" | "monthly"
 }
 
+export interface DashboardKeyBudget {
+  weeklyLimitMicros: number
+  spentMicros: number
+  remainingMicros: number
+  percentUsed: number
+  bypassLimits: boolean
+  usageStartAt: string
+  windowStart: string
+  windowEnd: string
+}
+
 export interface DashboardPayload {
   generatedAt: string
   range: { label: string; from: string; to: string; granularity: string }
   summary: { requests: number; tokens: number; costMicros: number; activeKeys: number; pricedRequests: number; unpricedRequests: number }
   trend: Array<{ bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>
-  keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null }>
+  keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null; budget?: DashboardKeyBudget }>
   models: Array<{ model: string; requests: number; tokens: number; costMicros: number }>
   freshness: { source: "firestore" | "memory"; lastEventAt: string | null }
   pricingConfidence: { pricedRequests: number; unpricedRequests: number }

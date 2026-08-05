@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
-import { checkBudget, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
+import { checkBudget, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { createApiKey, _resetMemoryBackend } from "@/lib/store"
 
 beforeEach(() => {
@@ -46,6 +46,21 @@ describe("usage analytics", () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.every((session) => session.startedAt && session.endedAt)).toBe(true)
     expect((await getBudgetWindow()).bypassLimits).toBe(false)
+  })
+
+  test("tracks Unlimited Mode usage from the active session in budgets and usage payloads", async () => {
+    const key = await createApiKey("Unlimited usage")
+    await upsertModelPricing({ modelId: "unlimited-model", provider: "test", gatewayModelId: "test/unlimited", upstreamModel: "unlimited", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 100, enabled: true })
+    const activation = await setBudgetBypassEnabled(true)
+    await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: "unlimited-model", gatewayModelId: "test/unlimited", protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 20 } })
+
+    const budget = (await getBudgetRows()).find((row) => row.apiKeyId === key.id)
+    expect(budget?.usageStartAt).toBe(activation.session?.startedAt)
+    expect(budget?.spentMicros).toBe(20)
+
+    const payload = await getDashboardPayload({ preset: "all" })
+    expect(payload.keys[0].budget).toMatchObject({ bypassLimits: true, spentMicros: 20, usageStartAt: activation.session?.startedAt })
   })
 
   test("persists a custom shared budget window", async () => {
