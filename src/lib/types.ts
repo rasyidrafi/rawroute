@@ -97,6 +97,9 @@ export interface UsageEvent {
   costMicros: number
   pricingConfidence: PricingConfidence
   usageAvailable: boolean
+  pricingGroupId?: string
+  pricingVersionId?: string
+  pricingContextTier?: string
 }
 
 export interface UsageRollup {
@@ -124,6 +127,73 @@ export interface ModelPricing {
   cacheReadMicrosPerMillion: number
   cacheCreationMicrosPerMillion: number
   enabled: boolean
+  updatedAt: string
+}
+
+export interface PricingRates {
+  inputMicrosPerMillion: number
+  outputMicrosPerMillion: number
+  cacheReadMicrosPerMillion: number
+  cacheCreationMicrosPerMillion: number
+}
+
+export interface PricingContextTier extends PricingRates {
+  id: string
+  thresholdTokens: number
+}
+
+export type PricingCanonicalSource = "models.dev" | "custom"
+
+export interface CanonicalModelSummary {
+  id: string
+  name: string
+  provider: string
+  family: string | null
+  pricing: PricingRates
+  contextLimit: number | null
+  source: PricingCanonicalSource
+}
+
+export type PricingGroupKind = "fixed" | "custom"
+
+export interface ModelPricingGroup {
+  id: string
+  name: string
+  kind: PricingGroupKind
+  groupKey?: string
+  memberModelIds: string[]
+  excludedModelIds: string[]
+  addedModelIds?: string[]
+  canonicalModelId?: string
+  canonicalSource?: PricingCanonicalSource
+  canonicalModelName?: string
+  canonicalProvider?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ModelPricingVersion extends PricingRates {
+  id: string
+  groupId: string
+  version: number
+  effectiveAt: string
+  createdAt: string
+  updatedAt: string
+  contextTiers: PricingContextTier[]
+}
+
+export type PricingJobStatus = "queued" | "running" | "completed" | "failed"
+
+export interface PricingJob {
+  id: string
+  groupId: string
+  versionId: string
+  status: PricingJobStatus
+  totalEvents: number
+  processedEvents: number
+  startedAt?: string
+  completedAt?: string
+  error?: string
   updatedAt: string
 }
 
@@ -156,10 +226,10 @@ export interface BudgetBypassSession {
 }
 
 export interface DashboardQuery {
-  preset: "today" | "yesterday" | "week" | "month" | "year" | "all" | "custom"
+  preset: "today" | "yesterday" | "week" | "lastWeek" | "month" | "lastMonth" | "year" | "all" | "custom" | "budget"
   from?: string
   to?: string
-  granularity?: "hourly" | "daily" | "weekly" | "monthly"
+  granularity?: "auto" | "hourly" | "daily" | "weekly" | "monthly"
 }
 
 export interface DashboardPayload {

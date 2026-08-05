@@ -23,6 +23,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "@/lib/types"
+import { formatAppDate, formatAppDateTime } from "@/lib/timezone"
 
 type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[] }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
@@ -297,8 +298,8 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     {showQuota && <CodexQuotaTableCell accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} />}
                     {isOAuthProvider && <TableCell>{usageLoading && !usageData ? "…" : usageData?.accounts[apiKey.id]?.unusedResetCredits ?? "N/A"}</TableCell>}
-                    {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
-                    <TableCell className="align-middle text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
+                    {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? formatAppDateTime(apiKey.expiresAt) : "Unknown"}</TableCell>}
+                    <TableCell className="align-middle text-xs text-muted-foreground">{formatAppDate(apiKey.createdAt)}</TableCell>
                     <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}

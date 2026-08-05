@@ -1,3 +1,5 @@
+import type { PricingContextTier } from "@/lib/types"
+
 export interface UsageMetrics {
   input?: number
   output?: number
@@ -101,14 +103,17 @@ export function calculateCostMicros(usage: ReturnType<typeof normalizeUsageMetri
   outputMicrosPerMillion: number
   cacheReadMicrosPerMillion: number
   cacheCreationMicrosPerMillion: number
+  contextTiers?: PricingContextTier[]
 } | undefined) {
   if (!pricing || !usage.usageAvailable) return { costMicros: 0, pricingConfidence: "unpriced" as const }
+  const selectedTier = pricing.contextTiers?.filter((tier) => usage.inputTokens >= tier.thresholdTokens).sort((a, b) => a.thresholdTokens - b.thresholdTokens).at(-1)
+  const rates = selectedTier || pricing
   const billableInput = Math.max(usage.inputTokens - usage.cacheReadTokens - usage.cacheCreationTokens, 0)
   const costMicros = Math.round(
-    (billableInput * pricing.inputMicrosPerMillion +
-      usage.cacheReadTokens * pricing.cacheReadMicrosPerMillion +
-      usage.cacheCreationTokens * pricing.cacheCreationMicrosPerMillion +
-      usage.outputTokens * pricing.outputMicrosPerMillion) / 1_000_000,
+    (billableInput * rates.inputMicrosPerMillion +
+      usage.cacheReadTokens * rates.cacheReadMicrosPerMillion +
+      usage.cacheCreationTokens * rates.cacheCreationMicrosPerMillion +
+      usage.outputTokens * rates.outputMicrosPerMillion) / 1_000_000,
   )
-  return { costMicros, pricingConfidence: "exact" as const }
+  return { costMicros, pricingConfidence: "exact" as const, pricingContextTier: selectedTier ? `context-${selectedTier.thresholdTokens}` : "standard" }
 }

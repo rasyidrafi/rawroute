@@ -17,6 +17,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { formatAppDateTime } from "@/lib/timezone"
 
 type Account = {
   id: string
@@ -45,7 +46,7 @@ function expiryLabel(value?: string) {
   if (!value) return "Unknown"
   const date = new Date(value)
   if (Number.isNaN(date.valueOf())) return "Unknown"
-  return date.toLocaleString()
+  return formatAppDateTime(date)
 }
 
 export function OAuthProvidersView() {

@@ -1,16 +1,65 @@
 import { requireAdmin } from "@/lib/auth"
 import { listModelPricing, upsertModelPricing } from "@/lib/analytics"
+import { searchModelsDevCanonicalModels } from "@/lib/models-dev"
+import { createPricingGroup, deletePricingGroup, getPricingAdminData, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
+import type { PricingCanonicalSource } from "@/lib/types"
 
 
-export async function GET() {
+export async function GET(request: Request) {
   try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
-  return Response.json({ pricing: await listModelPricing() })
+  try {
+    const url = new URL(request.url)
+    const query = url.searchParams.get("q")?.trim() || ""
+    const modelId = url.searchParams.get("modelId")?.trim() || ""
+    if (url.searchParams.get("catalog") === "models.dev" || query || modelId) {
+      const models = modelId
+        ? (await searchModelsDevCanonicalModels(modelId, 100)).filter((model) => model.id === modelId)
+        : await searchModelsDevCanonicalModels(query, Number(url.searchParams.get("limit") || 50))
+      return Response.json({ models })
+    }
+    return Response.json({ ...(await getPricingAdminData()), pricing: await listModelPricing() })
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Unable to load model pricing.", 500)
+  }
 }
 
 export async function POST(request: Request) {
   try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
+  const action = typeof body?.action === "string" ? body.action : "legacy"
+  const canonical = body?.canonicalModelId && typeof body.canonicalModelId === "string"
+    ? {
+        id: body.canonicalModelId,
+        source: body.canonicalSource === "custom" ? "custom" as PricingCanonicalSource : "models.dev" as PricingCanonicalSource,
+        name: typeof body.canonicalModelName === "string" ? body.canonicalModelName : undefined,
+        provider: typeof body.canonicalProvider === "string" ? body.canonicalProvider : undefined,
+      }
+    : body?.canonicalModelId === null
+      ? null
+      : undefined
+  try {
+    if (action === "sync") return Response.json({ groups: await syncModelPricingGroups() })
+    if (action === "create-group") return Response.json({ group: await createPricingGroup(String(body?.name || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical) })
+    if (action === "update-group") return Response.json({ group: await updatePricingGroup(String(body?.groupId || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical, typeof body?.name === "string" ? body.name : undefined) })
+    if (action === "delete-group") { await deletePricingGroup(String(body?.groupId || "")); return Response.json({ ok: true }) }
+    if (action === "save-version") {
+      const rates = {
+        inputMicrosPerMillion: Number(body?.inputMicrosPerMillion),
+        outputMicrosPerMillion: Number(body?.outputMicrosPerMillion),
+        cacheReadMicrosPerMillion: Number(body?.cacheReadMicrosPerMillion),
+        cacheCreationMicrosPerMillion: Number(body?.cacheCreationMicrosPerMillion),
+      }
+      const contextTiers = Array.isArray(body?.contextTiers) ? body.contextTiers.map((tier) => {
+        const value = tier as Record<string, unknown>
+        return { id: typeof value.id === "string" ? value.id : crypto.randomUUID(), thresholdTokens: Number(value.thresholdTokens), inputMicrosPerMillion: Number(value.inputMicrosPerMillion), outputMicrosPerMillion: Number(value.outputMicrosPerMillion), cacheReadMicrosPerMillion: Number(value.cacheReadMicrosPerMillion), cacheCreationMicrosPerMillion: Number(value.cacheCreationMicrosPerMillion) }
+      }) : []
+      const result = await savePricingVersion({ groupId: String(body?.groupId || ""), rates, contextTiers, mode: body?.mode === "replace" ? "replace" : "new" })
+      return Response.json(result)
+    }
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Unable to update model pricing.", 400)
+  }
   const text = (key: string) => typeof body?.[key] === "string" ? String(body[key]).trim() : ""
   const number = (key: string) => Number(body?.[key])
   const modelId = text("modelId")

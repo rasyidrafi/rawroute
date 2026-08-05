@@ -54,6 +54,14 @@ describe("usage analytics", () => {
     expect((await getBudgetWindow()).anchor).toBe("custom")
   })
 
+  test("uses the budget window as an analytics range and preserves custom hours", async () => {
+    await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:30:00.000Z", end: "2026-08-13T17:45:00.000Z" })
+    const payload = await getDashboardPayload({ preset: "budget" })
+    expect(payload.range.label).toBe("Budget window")
+    expect(payload.range.from).toBe("2026-08-06T09:30:00.000Z")
+    expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
+  })
+
   test("rejects an invalid shared budget window", async () => {
     await expect(updateBudgetWindow({ anchor: "custom", start: "2026-08-13T00:00:00.000Z", end: "2026-08-06T00:00:00.000Z" })).rejects.toThrow("Invalid budget window")
   })

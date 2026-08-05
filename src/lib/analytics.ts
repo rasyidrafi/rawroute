@@ -2,11 +2,13 @@ import { createHash } from "node:crypto"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore"
 
-import { listApiKeys } from "@/lib/store"
+import { listApiKeys, listModels } from "@/lib/store"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
+import { getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
-import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, UsageEvent, UsageRollup } from "@/lib/types"
+import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
+import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, PricingContextTier, UsageEvent, UsageRollup } from "@/lib/types"
 
 let firestore: Firestore | undefined
 const memoryEvents = new Map<string, UsageEvent>()
@@ -34,8 +36,7 @@ function budgetsRef() { return db().collection(`${prefix()}_budgets`) }
 function bypassSessionsRef() { return db().collection(`${prefix()}_budget_bypass_sessions`) }
 function windowRef() { return db().collection(`${prefix()}_budget_windows`).doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
-function monday(date = new Date()) { const value = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())); const day = value.getUTCDay(); value.setUTCDate(value.getUTCDate() - (day === 0 ? 6 : day - 1)); return value }
-function defaultWindow(): BudgetWindow { const start = monday(); const end = new Date(start); end.setUTCDate(end.getUTCDate() + 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
+function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
 
 export class BudgetDeniedError extends Error { status = 429; retryAfterSeconds: number; constructor(message: string, retryAfterSeconds: number) { super(message); this.name = "BudgetDeniedError"; this.retryAfterSeconds = retryAfterSeconds } }
 
@@ -89,7 +90,7 @@ export async function recordGatewayUsage(input: {
   metrics?: UsageMetrics
 }) {
   const normalized = normalizeUsageMetrics(input.metrics)
-  let pricing: ModelPricing | undefined
+  let pricing: (ModelPricing | { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cacheReadMicrosPerMillion: number; cacheCreationMicrosPerMillion: number; contextTiers?: PricingContextTier[]; pricingGroupId?: string; pricingVersionId?: string }) | undefined
   try { pricing = await getPricingForModel(input.gatewayModelId, input.providerModelId) }
   catch { pricing = undefined }
   const calculated = calculateCostMicros(normalized, pricing || undefined)
@@ -108,6 +109,9 @@ export async function recordGatewayUsage(input: {
     ...normalized,
     costMicros: calculated.costMicros,
     pricingConfidence: calculated.pricingConfidence,
+    ...(pricing && "pricingGroupId" in pricing && pricing.pricingGroupId ? { pricingGroupId: pricing.pricingGroupId } : {}),
+    ...(pricing && "pricingVersionId" in pricing && pricing.pricingVersionId ? { pricingVersionId: pricing.pricingVersionId } : {}),
+    ...(calculated.pricingContextTier ? { pricingContextTier: calculated.pricingContextTier } : {}),
   }
   return recordUsageEvent(event)
 }
@@ -127,6 +131,12 @@ export async function listModelPricing() {
   return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as ModelPricing))
 }
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {
+  try {
+    const modern = await getModernPricingForModelAt({ gatewayModelId, providerModelId })
+    if (modern) return modern
+  } catch {
+    // Legacy pricing remains available while the advanced catalog is unavailable.
+  }
   const entries = await listModelPricing()
   return entries.find((entry) => entry.enabled && (entry.modelId === providerModelId || entry.gatewayModelId === gatewayModelId))
 }
@@ -167,8 +177,7 @@ async function resolveCodexBudgetWindow(accountId: string | null | undefined) {
   if (!resetAt) throw new Error("The selected Codex account has no weekly reset time available.")
   const end = new Date(resetAt)
   if (!Number.isFinite(end.getTime())) throw new Error("The selected Codex account returned an invalid weekly reset time.")
-  const start = new Date(end)
-  start.setUTCDate(start.getUTCDate() - 7)
+  const start = addZonedDays(end, -7)
   return { start: start.toISOString(), end: end.toISOString(), anchor: "codex" as const, codexAccountId: account.id }
 }
 
@@ -254,8 +263,13 @@ async function budgetSpent(apiKeyId: string, start: string, end: string) {
   return events.filter((event) => event.gatewayKeyId === apiKeyId && event.status >= 200 && event.status < 300).reduce((sum, event) => sum + event.costMicros, 0)
 }
 export async function getBudgetRows() {
-  const [budgets, window, keys] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys()])
-  return Promise.all(budgets.map(async (budget) => ({ ...budget, spentMicros: await budgetSpent(budget.apiKeyId, window.start, window.end), windowStart: window.start, windowEnd: window.end, name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown" })))
+  const [budgets, window, keys, events] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys(), listUsageEvents()])
+  const lastUsedByKey = new Map<string, string>()
+  for (const event of events) {
+    const current = lastUsedByKey.get(event.gatewayKeyId)
+    if (!current || current < event.completedAt) lastUsedByKey.set(event.gatewayKeyId, event.completedAt)
+  }
+  return Promise.all(budgets.map(async (budget) => ({ ...budget, spentMicros: await budgetSpent(budget.apiKeyId, window.start, window.end), windowStart: window.start, windowEnd: window.end, name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown", lastUsedAt: lastUsedByKey.get(budget.apiKeyId) || null })))
 }
 export async function checkBudget(apiKeyId: string, gatewayModelId: string, providerModelId?: string) {
   let budgets: GatewayKeyBudget[]
@@ -268,25 +282,31 @@ export async function checkBudget(apiKeyId: string, gatewayModelId: string, prov
   if (spent >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", Math.max(1, Math.ceil((Date.parse(window.end) - Date.now()) / 1000)))
 }
 
-function resolveRange(query: DashboardQuery) {
+async function resolveRange(query: DashboardQuery) {
   const now = new Date()
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const today = startOfZonedDay(now)
+  if (query.preset === "budget") {
+    const window = await getBudgetWindow()
+    return { label: "Budget window", from: new Date(window.start), to: new Date(window.end) }
+  }
   if (query.preset === "today") return { label: "Today", from: today, to: now }
-  if (query.preset === "yesterday") { const from = new Date(today); from.setUTCDate(from.getUTCDate() - 1); return { label: "Yesterday", from, to: new Date(today.getTime() - 1) } }
-  if (query.preset === "week") { const from = monday(today); return { label: "This week", from, to: now } }
-  if (query.preset === "month") return { label: "This month", from: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)), to: now }
-  if (query.preset === "year") return { label: "This year", from: new Date(Date.UTC(today.getUTCFullYear(), 0, 1)), to: now }
-  if (query.preset === "custom" && query.from && query.to) return { label: "Custom range", from: new Date(query.from), to: new Date(`${query.to}T23:59:59.999Z`) }
+  if (query.preset === "yesterday") { const to = today; const from = addZonedDays(to, -1); return { label: "Yesterday", from, to: new Date(to.getTime() - 1) } }
+  if (query.preset === "week") return { label: "This week", from: mondayInAppTimeZone(now), to: now }
+  if (query.preset === "lastWeek") { const to = mondayInAppTimeZone(now); const from = addZonedDays(to, -7); return { label: "Last week", from, to: new Date(to.getTime() - 1) } }
+  if (query.preset === "month") return { label: "This month", from: startOfZonedMonth(now), to: now }
+  if (query.preset === "lastMonth") { const to = startOfZonedMonth(now); return { label: "Last month", from: addZonedMonths(to, -1), to: new Date(to.getTime() - 1) } }
+  if (query.preset === "year") return { label: "This year", from: startOfZonedYear(now), to: now }
+  if (query.preset === "custom" && query.from && query.to) return { label: "Custom range", from: zonedDateStringToDate(query.from, "00:00"), to: new Date(zonedDateStringToDate(query.to, "00:00").getTime() + 86400000 - 1) }
   return { label: "All time", from: new Date("2000-01-01T00:00:00.000Z"), to: now }
 }
-function bucketStart(date: Date, granularity: string) { const value = new Date(date); if (granularity === "hourly") value.setUTCMinutes(0, 0, 0); else if (granularity === "monthly") { value.setUTCDate(1); value.setUTCHours(0, 0, 0, 0) } else value.setUTCHours(0, 0, 0, 0); return value }
+function bucketStart(date: Date, granularity: string) { if (granularity === "hourly") return startOfZonedHour(date); if (granularity === "monthly") return startOfZonedMonth(date); return startOfZonedDay(date) }
 function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•".repeat(Math.max(4, key.length - 4))}` : `${key.slice(0, 7)}${"•".repeat(12)}${key.slice(-4)}` }
 function publicKeyLabel(id: string) { return `Key ${hash(id).slice(0, 6).toUpperCase()}` }
 
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
-  const range = resolveRange(query)
+  const range = await resolveRange(query)
   const span = range.to.getTime() - range.from.getTime()
-  const granularity = query.granularity || (span <= 2 * 86400000 ? "hourly" : span <= 45 * 86400000 ? "daily" : "monthly")
+  const granularity = query.granularity && query.granularity !== "auto" ? query.granularity : (span <= 2 * 86400000 ? "hourly" : span <= 45 * 86400000 ? "daily" : "monthly")
   let events: UsageEvent[] = []
   let keys: Awaited<ReturnType<typeof listApiKeys>> = []
   try {
@@ -305,7 +325,7 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
     const row = keyRows.get(event.gatewayKeyId) || { id: event.gatewayKeyId, label: publicView ? publicKeyLabel(event.gatewayKeyId) : (key?.name || publicKeyLabel(event.gatewayKeyId)), maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
     row.requests += 1; row.tokens += event.totalTokens; row.costMicros += event.costMicros; row.lastUsed = !row.lastUsed || row.lastUsed < event.completedAt ? event.completedAt : row.lastUsed; if (!row.models.includes(event.gatewayModelId)) row.models.push(event.gatewayModelId); keyRows.set(event.gatewayKeyId, row)
     const model = modelRows.get(event.gatewayModelId) || { model: event.gatewayModelId, requests: 0, tokens: 0, costMicros: 0 }; model.requests += 1; model.tokens += event.totalTokens; model.costMicros += event.costMicros; modelRows.set(event.gatewayModelId, model)
-    const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString(); const point = trend.get(bucket) || { bucketStart: bucket, label: new Date(bucket).toLocaleString(undefined, { month: "short", day: "numeric", ...(granularity === "hourly" ? { hour: "numeric" } : {}) }), requests: 0, tokens: 0, costMicros: 0 }; point.requests += 1; point.tokens += event.totalTokens; point.costMicros += event.costMicros; trend.set(bucket, point)
+    const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString(); const point = trend.get(bucket) || { bucketStart: bucket, label: formatAppTrendBucket(bucket, granularity), requests: 0, tokens: 0, costMicros: 0 }; point.requests += 1; point.tokens += event.totalTokens; point.costMicros += event.costMicros; trend.set(bucket, point)
   }
   const payload: DashboardPayload = { generatedAt: new Date().toISOString(), range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity }, summary: { requests: events.length, tokens: events.reduce((sum, event) => sum + event.totalTokens, 0), costMicros: events.reduce((sum, event) => sum + event.costMicros, 0), activeKeys: keyRows.size, pricedRequests, unpricedRequests: events.length - pricedRequests }, trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)), keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests), models: [...modelRows.values()].sort((a, b) => b.requests - a.requests), freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt: events.at(-1)?.completedAt || null }, pricingConfidence: { pricedRequests, unpricedRequests: events.length - pricedRequests } }
   return payload
@@ -315,4 +335,87 @@ export function redactPublicDashboard(payload: DashboardPayload): DashboardPaylo
   return { ...payload, keys: payload.keys.map((key) => ({ ...key, id: publicKeyLabel(key.id), label: publicKeyLabel(key.id), maskedKey: "hidden" })) }
 }
 
-export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined }
+async function replaceUsageEvent(event: UsageEvent) {
+  if (isMemory()) {
+    memoryEvents.set(event.id, event)
+    return
+  }
+  await eventsRef().doc(event.id).set(event)
+}
+
+async function rebuildUsageRollups(events: UsageEvent[]) {
+  if (isMemory()) {
+    memoryRollups.clear()
+    for (const event of events) {
+      for (const granularity of ["hourly", "daily", "monthly"] as const) {
+        const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
+        const id = `${granularity}:${bucket}`
+        const current = memoryRollups.get(id) || { id, granularity, bucketStart: bucket, requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, updatedAt: new Date().toISOString() }
+        memoryRollups.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, updatedAt: new Date().toISOString() })
+      }
+    }
+    return
+  }
+  const existing = await rollupsRef().get()
+  for (let index = 0; index < existing.docs.length; index += 400) {
+    const batch = db().batch()
+    for (const document of existing.docs.slice(index, index + 400)) batch.delete(document.ref)
+    await batch.commit()
+  }
+  const aggregates = new Map<string, UsageRollup>()
+  for (const event of events) {
+    for (const granularity of ["hourly", "daily", "monthly"] as const) {
+      const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
+      const id = `${granularity}:${bucket}`
+      const current = aggregates.get(id) || { id, granularity, bucketStart: bucket, requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, updatedAt: new Date().toISOString() }
+      aggregates.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros })
+    }
+  }
+  const entries = [...aggregates.values()]
+  for (let index = 0; index < entries.length; index += 400) {
+    const batch = db().batch()
+    for (const entry of entries.slice(index, index + 400)) batch.set(rollupsRef().doc(entry.id), entry)
+    await batch.commit()
+  }
+}
+
+export async function repriceUsageForGroup(jobId: string) {
+  const job = await getPricingJob(jobId)
+  if (!job) return
+  const group = (await listPricingGroups()).find((entry) => entry.id === job.groupId)
+  if (!group) throw new Error("Pricing group not found for repricing job.")
+  const modelIds = new Set(group.memberModelIds)
+  const groupModels = await listModels()
+  const gatewayModelIds = new Set(groupModels.filter((model) => modelIds.has(model.id)).map((model) => model.gatewayModelId))
+  const allEvents = await listUsageEvents()
+  const events = allEvents.filter((event) => (event.providerModelId && modelIds.has(event.providerModelId)) || gatewayModelIds.has(event.gatewayModelId))
+  await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() })
+  for (let index = 0; index < events.length; index += 100) {
+    const chunk = events.slice(index, index + 100)
+    for (const event of chunk) {
+      const pricing = await getModernPricingForModelAt({ gatewayModelId: event.gatewayModelId, providerModelId: event.providerModelId }, new Date(event.completedAt))
+      const normalized = normalizeUsageMetrics({ input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens })
+      const calculated = calculateCostMicros(normalized, pricing)
+      const updatedEvent: UsageEvent = {
+        ...event,
+        ...normalized,
+        costMicros: calculated.costMicros,
+        pricingConfidence: calculated.pricingConfidence,
+        ...(calculated.pricingContextTier ? { pricingContextTier: calculated.pricingContextTier } : {}),
+      }
+      if (pricing) {
+        updatedEvent.pricingGroupId = pricing.pricingGroupId
+        updatedEvent.pricingVersionId = pricing.pricingVersionId
+      } else {
+        delete updatedEvent.pricingGroupId
+        delete updatedEvent.pricingVersionId
+      }
+      await replaceUsageEvent(updatedEvent)
+    }
+    await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) })
+  }
+  await rebuildUsageRollups(allEvents.map((event) => events.find((updated) => updated.id === event.id) || event))
+  return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() })
+}
+
+export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined; resetModelPricingForTests() }
