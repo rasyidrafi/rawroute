@@ -26,7 +26,7 @@ function OAuthProvidersSkeleton() {
 function EndpointKeySkeleton() {
   return <>
     <section className="rounded-xl border bg-card p-6"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Skeleton className="size-5 rounded" /><Skeleton className="h-6 w-36" /></div><Skeleton className="mt-2 h-4 w-[30rem] max-w-full" /></div></div><div className="mt-6 flex h-10 items-center gap-3 rounded-lg border p-3"><Skeleton className="h-6 w-16 shrink-0 rounded-md" /><Skeleton className="h-4 flex-1" /><Skeleton className="size-7 shrink-0" /></div></section>
-    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-80" actionWidth="w-28" /><div className="mt-6 space-y-3">{Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex h-12 items-center gap-3 rounded-lg border p-3"><div className="min-w-0 flex-1 space-y-2"><Skeleton className="h-4 w-40 max-w-full" /><Skeleton className="h-3 w-56 max-w-full" /></div><Skeleton className="size-7" /><Skeleton className="size-7" /></div>)}</div></section>
+    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-80" actionWidth="w-28" /><div className="mt-6 space-y-3">{Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex min-h-12 items-center gap-3 rounded-lg border p-3"><div className="min-w-0 flex-1 space-y-2"><Skeleton className="h-4 w-40 max-w-full" /><Skeleton className="h-3 w-56 max-w-full" /></div><div className="flex shrink-0 gap-2"><Skeleton className="size-7" /><Skeleton className="size-7" /><Skeleton className="size-7" /></div></div>)}</div></section>
   </>
 }
 
