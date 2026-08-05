@@ -19,6 +19,10 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "RawRoute",
   description: "A protocol-preserving multi-provider AI gateway",
+  icons: {
+    icon: [{ url: "/icon.png", type: "image/png", sizes: "64x64" }],
+    apple: "/icon.png",
+  },
 };
 
 export default function RootLayout({
