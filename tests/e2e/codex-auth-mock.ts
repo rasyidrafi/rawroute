@@ -1,3 +1,5 @@
+import { createServer } from "node:http"
+
 type State = {
   pollCount: number
   upstreamBody?: Record<string, unknown>
@@ -15,10 +17,7 @@ function json(value: unknown, status = 200) {
   return Response.json(value, { status })
 }
 
-const server = Bun.serve({
-  hostname: "127.0.0.1",
-  port: 3211,
-  async fetch(request) {
+async function handleRequest(request: Request) {
     const url = new URL(request.url)
     if (url.pathname === "/health") return new Response("ok")
     if (url.pathname === "/reset" && request.method === "POST") {
@@ -51,7 +50,22 @@ const server = Bun.serve({
       })
     }
     return json({ error: "Not found" }, 404)
-  },
+}
+
+const server = createServer(async (incoming, outgoing) => {
+  const chunks: Buffer[] = []
+  for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
+  const body = Buffer.concat(chunks)
+  const request = new Request(`http://127.0.0.1:3211${incoming.url}`, {
+    method: incoming.method,
+    headers: incoming.headers as HeadersInit,
+    body: body.length ? body : undefined,
+  })
+  const response = await handleRequest(request)
+  outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()))
+  outgoing.end(Buffer.from(await response.arrayBuffer()))
 })
 
-console.log(`Codex auth mock listening on ${server.hostname}:${server.port}`)
+server.listen(3211, "127.0.0.1", () => {
+  console.log("Codex auth mock listening on 127.0.0.1:3211")
+})

@@ -11,6 +11,8 @@ const memoryGroups = new Map<string, ModelPricingGroup>()
 const memoryVersions = new Map<string, ModelPricingVersion>()
 const memoryJobs = new Map<string, PricingJob>()
 const runningJobs = new Set<string>()
+let pricingCatalogCache: { groups: ModelPricingGroup[]; versions: ModelPricingVersion[]; models: Model[]; providers: Awaited<ReturnType<typeof listProviders>>; expiresAt: number } | undefined
+let pricingCatalogPromise: Promise<{ groups: ModelPricingGroup[]; versions: ModelPricingVersion[]; models: Model[]; providers: Awaited<ReturnType<typeof listProviders>> }> | undefined
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
@@ -28,6 +30,7 @@ function versionsRef() { return db().collection(`${prefix()}_model_pricing_versi
 function jobsRef() { return db().collection(`${prefix()}_model_pricing_jobs`) }
 function legacyPricingRef() { return db().collection(`${prefix()}_model_pricing`) }
 function stableGroupId(key: string) { return `fixed-${createHash("sha1").update(key).digest("hex").slice(0, 20)}` }
+function invalidatePricingCatalog() { pricingCatalogCache = undefined }
 
 function modelGroupKey(model: Model, providerPrefixes: Map<string, string>) {
   const prefix = providerPrefixes.get(model.providerId)?.trim()
@@ -89,11 +92,13 @@ async function readVersions() {
 async function writeGroup(group: ModelPricingGroup) {
   if (isMemory()) memoryGroups.set(group.id, group)
   else await groupsRef().doc(group.id).set(group)
+  invalidatePricingCatalog()
 }
 
 async function writeVersion(version: ModelPricingVersion) {
   if (isMemory()) memoryVersions.set(version.id, version)
   else await versionsRef().doc(version.id).set(version)
+  invalidatePricingCatalog()
 }
 
 export async function syncModelPricingGroups() {
@@ -258,6 +263,7 @@ export async function deletePricingGroup(groupId: string) {
   if (group.kind === "fixed") throw new Error("Fixed pricing groups cannot be deleted.")
   if (isMemory()) memoryGroups.delete(groupId)
   else await groupsRef().doc(groupId).delete()
+  invalidatePricingCatalog()
   const released = new Set(group.memberModelIds)
   for (const fixed of groups.filter((entry) => entry.kind === "fixed")) {
     const excludedModelIds = fixed.excludedModelIds.filter((modelId) => released.has(modelId) ? false : true)
@@ -286,16 +292,30 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
 }
 
 export async function getPricingForModelAt(model: { gatewayModelId: string; providerModelId?: string }, at = new Date()) {
-  await ensurePricingGroups()
-  const groups = await listPricingGroups()
-  const models = await listModels()
-  const target = models.find((entry) => entry.id === model.providerModelId || entry.gatewayModelId === model.gatewayModelId)
+  const catalog = await loadPricingCatalog()
+  const target = catalog.models.find((entry) => entry.id === model.providerModelId || entry.gatewayModelId === model.gatewayModelId)
   if (!target) return undefined
-  const group = groups.find((entry) => entry.memberModelIds.includes(target.id))
+  const group = catalog.groups.find((entry) => entry.memberModelIds.includes(target.id))
   if (!group) return undefined
-  const version = activePricingVersion(await listPricingVersions(group.id), at)
+  const version = activePricingVersion(catalog.versions.filter((entry) => entry.groupId === group.id), at)
   if (!version) return undefined
   return { ...version, groupId: group.id, pricingGroupId: group.id, pricingVersionId: version.id }
+}
+
+async function loadPricingCatalog() {
+  if (pricingCatalogCache && pricingCatalogCache.expiresAt > Date.now()) return pricingCatalogCache
+  if (!pricingCatalogPromise) {
+    pricingCatalogPromise = (async () => {
+      let groups = await readGroups()
+      if (!groups.length) groups = await syncModelPricingGroups()
+      const [versions, models, providers] = await Promise.all([readVersions(), listModels(), listProviders()])
+      return { groups, versions, models, providers }
+    })().then((catalog) => {
+      pricingCatalogCache = { ...catalog, expiresAt: Date.now() + 2_000 }
+      return catalog
+    }).finally(() => { pricingCatalogPromise = undefined })
+  }
+  return pricingCatalogPromise
 }
 
 async function listPricingJobs() {
@@ -345,4 +365,5 @@ export function resetModelPricingForTests() {
   memoryVersions.clear()
   memoryJobs.clear()
   runningJobs.clear()
+  invalidatePricingCatalog()
 }

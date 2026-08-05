@@ -60,13 +60,15 @@ function buildCatalogModels(catalog: RawCatalog) {
   return [...unique.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
 
-async function loadCatalog(fetchFn: typeof fetch) {
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+
+async function loadCatalog(fetchFn: FetchLike) {
   const response = await fetchFn(MODELS_DEV_URL, { cache: "no-store" })
   if (!response.ok) throw new Error(`models.dev request failed: ${response.status} ${response.statusText}`)
   return buildCatalogModels(await response.json() as RawCatalog)
 }
 
-export function createModelsDevCatalogClient(args?: { ttlMs?: number; fetchFn?: typeof fetch }) {
+export function createModelsDevCatalogClient(args?: { ttlMs?: number; fetchFn?: FetchLike }) {
   const ttlMs = args?.ttlMs ?? MODELS_DEV_TTL_MS
   const fetchFn = args?.fetchFn ?? fetch
   let cachedModels: { expiresAt: number; models: CatalogModel[] } | undefined

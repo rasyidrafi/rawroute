@@ -28,6 +28,13 @@ interface ReserveInput {
   hardAffinity: boolean
   requiredCredentialId?: string
   responseId?: string
+  budget?: {
+    key: string
+    limitMicros: number
+    spentMicros: number
+    reservationMicros: number
+    ttlSeconds: number
+  }
 }
 
 interface ReleaseInput {
@@ -37,6 +44,19 @@ interface ReleaseInput {
   leaseId: string
   status: number
   retryAfterSeconds?: number
+  budget?: {
+    key: string
+    reservationMicros: number
+    actualMicros: number
+  }
+}
+
+interface BudgetReservationInput {
+  key: string
+  limitMicros: number
+  spentMicros: number
+  reservationMicros: number
+  ttlSeconds: number
 }
 
 const reserveScript = `
@@ -116,6 +136,19 @@ if pinned ~= false and pinned ~= nil and pinned ~= "" and pinnedIndex == nil and
 end
 if selected == nil then return {"capacity", tostring(retryAfter or 1)} end
 
+local budgetOffset = 6 + (count * 4)
+local budgetKey = KEYS[3 + (count * 3)]
+if ARGV[budgetOffset + 1] == "1" then
+  local limit = tonumber(ARGV[budgetOffset + 2])
+  local reservation = tonumber(ARGV[budgetOffset + 3])
+  local initialSpent = tonumber(ARGV[budgetOffset + 4]) or 0
+  local budgetTtl = tonumber(ARGV[budgetOffset + 5])
+  local current = tonumber(redis.call("GET", budgetKey)) or initialSpent
+  if current + reservation > limit then return {"budget", tostring(budgetTtl)} end
+  redis.call("SET", budgetKey, tostring(current + reservation), "EX", budgetTtl)
+  redis.call("SET", budgetKey .. ":lease:" .. leaseId, tostring(reservation), "EX", budgetTtl)
+end
+
 local offset = 6 + ((selected - 1) * 4)
 local id = ARGV[offset + 1]
 local keyOffset = 3 + ((selected - 1) * 3)
@@ -136,6 +169,34 @@ if status == 429 then
 elseif status >= 500 then
   redis.call("SET", KEYS[3], tostring(status), "EX", tonumber(ARGV[2]))
 end
+if #KEYS >= 5 then
+  local reserved = tonumber(redis.call("GET", KEYS[5])) or 0
+  local current = tonumber(redis.call("GET", KEYS[4])) or 0
+  local actual = tonumber(ARGV[5]) or 0
+  redis.call("SET", KEYS[4], tostring(math.max(0, current - reserved + actual)), "EX", tonumber(ARGV[6]) or 60)
+  redis.call("DEL", KEYS[5])
+end
+return {"ok"}
+`
+
+const budgetReserveScript = `
+local current = tonumber(redis.call("GET", KEYS[1])) or tonumber(ARGV[2]) or 0
+local limit = tonumber(ARGV[1])
+local reservation = tonumber(ARGV[3])
+if current + reservation > limit then return {"budget", tostring(ARGV[4])} end
+local lease = ARGV[5]
+local ttl = tonumber(ARGV[4])
+redis.call("SET", KEYS[1], tostring(current + reservation), "EX", ttl)
+redis.call("SET", KEYS[2] .. lease, tostring(reservation), "EX", ttl)
+return {"ok", lease}
+`
+
+const budgetSettleScript = `
+local reserved = tonumber(redis.call("GET", KEYS[2])) or 0
+local current = tonumber(redis.call("GET", KEYS[1])) or 0
+local actual = tonumber(ARGV[1]) or 0
+redis.call("SET", KEYS[1], tostring(math.max(0, current - reserved + actual)), "EX", tonumber(ARGV[2]) or 60)
+redis.call("DEL", KEYS[2])
 return {"ok"}
 `
 
@@ -173,6 +234,8 @@ export class RedisRoutingStateStore {
   private readonly releaseRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
   private readonly renewRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
   private readonly mapResponsesRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
+  private readonly budgetReserveRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
+  private readonly budgetSettleRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
 
   constructor(private readonly redis: RoutingRedis, options: StoreOptions = {}) {
     this.prefix = options.prefix || "rawroute:routing:v1"
@@ -183,6 +246,8 @@ export class RedisRoutingStateStore {
     const releaseScriptRunner = redis.createScript?.(releaseScript)
     const renewScriptRunner = redis.createScript?.(renewScript)
     const mapResponsesScriptRunner = redis.createScript?.(mapResponsesScript)
+    const budgetReserveScriptRunner = redis.createScript?.(budgetReserveScript)
+    const budgetSettleScriptRunner = redis.createScript?.(budgetSettleScript)
     this.reserveRunner = reserveScriptRunner
       ? (keys, args) => reserveScriptRunner.exec(keys, args.map(String))
       : (keys, args) => redis.eval(reserveScript, keys, args)
@@ -195,6 +260,12 @@ export class RedisRoutingStateStore {
     this.mapResponsesRunner = mapResponsesScriptRunner
       ? (keys, args) => mapResponsesScriptRunner.exec(keys, args.map(String))
       : (keys, args) => redis.eval(mapResponsesScript, keys, args)
+    this.budgetReserveRunner = budgetReserveScriptRunner
+      ? (keys, args) => budgetReserveScriptRunner.exec(keys, args.map(String))
+      : (keys, args) => redis.eval(budgetReserveScript, keys, args)
+    this.budgetSettleRunner = budgetSettleScriptRunner
+      ? (keys, args) => budgetSettleScriptRunner.exec(keys, args.map(String))
+      : (keys, args) => redis.eval(budgetSettleScript, keys, args)
   }
 
   private scope(providerId: string, modelId: string) {
@@ -227,24 +298,45 @@ export class RedisRoutingStateStore {
         Number.isFinite(credential.priority) ? Number(credential.priority) : 0,
       )
     }
+    keys.push(input.budget?.key || "")
+    if (input.budget) args.push(1, input.budget.limitMicros, input.budget.reservationMicros, input.budget.spentMicros, input.budget.ttlSeconds)
+    else args.push(0, 0, 0, 0, 0)
     const response = await this.reserveRunner(keys, args) as Array<string | number>
-    if (response?.[0] === "ok") return { ok: true as const, credentialId: String(response[1]), affinity: String(response[2]), leaseId }
+    if (response?.[0] === "ok") return { ok: true as const, credentialId: String(response[1]), affinity: String(response[2]), leaseId, budget: input.budget }
     if (response?.[0] === "hard-missing") {
       return { ok: false as const, reason: "hard-response-missing" as const, retryAfterSeconds: 1 }
     }
     if (response?.[0] === "hard-unavailable") {
       return { ok: false as const, reason: "hard-affinity-unavailable" as const, credentialId: String(response[1]), retryAfterSeconds: Number(response[2]) || 1 }
     }
+    if (response?.[0] === "budget") return { ok: false as const, reason: "budget" as const, retryAfterSeconds: Number(response[1]) || 1 }
     return { ok: false as const, reason: "capacity" as const, retryAfterSeconds: Number(response?.[1]) || 1 }
   }
 
   async release(input: ReleaseInput) {
     const scope = `${this.scope(input.providerId, input.modelId)}:${input.credentialId}`
-    await this.releaseRunner([
+    const keys = [
       `${this.prefix}:inflight:${scope}`,
       `${this.prefix}:rpm:${scope}`,
       `${this.prefix}:cooldown:${scope}`,
-    ], [input.status, positiveInteger(input.retryAfterSeconds, 5), 0, input.leaseId])
+    ]
+    const args: Array<string | number> = [input.status, positiveInteger(input.retryAfterSeconds, 5), 0, input.leaseId]
+    if (input.budget) {
+      keys.push(input.budget.key, `${input.budget.key}:lease:${input.leaseId}`)
+      args.push(input.budget.actualMicros, input.budget.reservationMicros > 0 ? Math.ceil(input.budget.reservationMicros / 1_000_000) + 60 : 60)
+    }
+    await this.releaseRunner(keys, args)
+  }
+
+  async reserveBudget(input: BudgetReservationInput) {
+    const leaseId = crypto.randomUUID()
+    const response = await this.budgetReserveRunner([input.key, `${input.key}:lease:`], [input.limitMicros, input.spentMicros, input.reservationMicros, input.ttlSeconds, leaseId]) as Array<string | number>
+    if (response?.[0] === "ok") return { ok: true as const, leaseId, reservationMicros: input.reservationMicros }
+    return { ok: false as const, reason: "budget" as const, retryAfterSeconds: Number(response?.[1]) || input.ttlSeconds }
+  }
+
+  async settleBudget(input: { key: string; leaseId: string; actualMicros: number; ttlSeconds: number }) {
+    await this.budgetSettleRunner([input.key, `${input.key}:lease:${input.leaseId}`], [input.actualMicros, input.ttlSeconds])
   }
 
   async renew(input: { providerId: string; modelId: string; credentialId: string; leaseId: string }) {

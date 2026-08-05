@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "vitest"
 
-import { checkBudget, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { createApiKey, _resetMemoryBackend } from "@/lib/store"
 
 beforeEach(() => {
@@ -79,5 +79,20 @@ describe("usage analytics", () => {
 
   test("rejects an invalid shared budget window", async () => {
     await expect(updateBudgetWindow({ anchor: "custom", start: "2026-08-13T00:00:00.000Z", end: "2026-08-06T00:00:00.000Z" })).rejects.toThrow("Invalid budget window")
+  })
+
+  test("advances an expired budget window before it is used", async () => {
+    await updateBudgetWindow({ anchor: "custom", start: "2026-07-01T09:30:00.000Z", end: "2026-07-08T17:45:00.000Z" })
+    const window = await getBudgetWindow()
+    expect(Date.parse(window.end)).toBeGreaterThan(Date.now())
+    expect(window.start).not.toBe("2026-07-01T09:30:00.000Z")
+  })
+
+  test("uses a bounded request reservation when output is capped", async () => {
+    const key = await createApiKey("Admission")
+    await upsertModelPricing({ modelId: "model-doc", provider: "test", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+    const admission = await getBudgetAdmission(key.id, "test/model", "model-doc", { model: "test/model", input: "hello", max_output_tokens: 2 })
+    expect(admission?.reservationMicros).toBeLessThan(10_000)
   })
 })

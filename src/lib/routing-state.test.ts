@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import { RedisRoutingStateStore, type RoutingRedis } from "@/lib/routing-state"
 import type { ProviderApiKey } from "@/lib/types"
@@ -30,7 +30,7 @@ describe("Redis routing state", () => {
     const result = await store.reserve({ providerId: "provider", modelId: "model", credentials: keys, sessionKey: "session", hardAffinity: false })
 
     expect(result).toMatchObject({ ok: true, credentialId: "b", affinity: "new" })
-    if (result.ok) expect(result.leaseId).toBeString()
+    if (result.ok) expect(typeof result.leaseId).toBe("string")
     expect(redis.calls[0]?.keys).toContain("test:affinity:provider:model:session")
     expect(redis.calls[0]?.args.join(" ")).toContain("10")
   })
@@ -80,6 +80,19 @@ describe("Redis routing state", () => {
       .toEqual({ ok: false, reason: "hard-affinity-unavailable", credentialId: "a", retryAfterSeconds: 8 })
   })
 
+  test("includes budget admission in the atomic routing script", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok", "a", "new"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    const result = await store.reserve({
+      providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false,
+      budget: { key: "test:budget:key", limitMicros: 100, spentMicros: 10, reservationMicros: 20, ttlSeconds: 60 },
+    })
+    expect(result).toMatchObject({ ok: true, budget: { reservationMicros: 20 } })
+    expect(redis.calls[0]?.keys).toContain("test:budget:key")
+    expect(redis.calls[0]?.script).toContain("current + reservation > limit")
+  })
+
   test("releases concurrency and cools down only the rate-limited credential", async () => {
     const redis = new FakeRedis()
     redis.responses.push(["ok"])
@@ -97,6 +110,15 @@ describe("Redis routing state", () => {
     await store.release({ providerId: "provider", modelId: "model", credentialId: "a", leaseId: "lease-a", status: 503, retryAfterSeconds: 27 })
     expect(redis.calls[0]?.args).toContain(27)
     expect(redis.calls[0]?.script).toContain('tostring(status), "EX", tonumber(ARGV[2])')
+  })
+
+  test("settles an atomic budget reservation with exact cost", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    await store.settleBudget({ key: "test:budget:key", leaseId: "lease-a", actualMicros: 7, ttlSeconds: 60 })
+    expect(redis.calls[0]?.keys).toEqual(["test:budget:key", "test:budget:key:lease:lease-a"])
+    expect(redis.calls[0]?.args).toEqual([7, 60])
   })
 
   test("maps multiple response IDs in one Redis script", async () => {

@@ -20,12 +20,13 @@ A request sent to the wrong protocol endpoint is rejected. RawRoute never attemp
 
 ## Development
 
-Requirements: Bun 1.3 or newer, access to Firestore or the Firestore emulator, and an Upstash Redis database.
+Requirements: Node.js 22.16.0 (managed with nvm), npm 10.9.2, access to Firestore or the Firestore emulator, and an Upstash Redis database.
 
 ```bash
-bun install
+nvm use
+npm install
 cp .env.example .env.local
-bun dev
+npm run dev
 ```
 
 The initial credentials are:
@@ -41,9 +42,9 @@ Production initialization refuses to create Firestore state when the documented 
 Run checks with:
 
 ```bash
-bun test
-bun run lint
-bun run build
+npm test
+npm run lint
+npm run build
 ```
 
 For explicit service-account authentication, set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`. Newlines in the private key may be encoded as `\n`. When these variables are absent, Cloud Run uses Application Default Credentials from the assigned service identity.

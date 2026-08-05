@@ -15,8 +15,12 @@ const memoryEvents = new Map<string, UsageEvent>()
 const memoryRollups = new Map<string, UsageRollup>()
 const memoryPricing = new Map<string, ModelPricing>()
 const memoryBudgets = new Map<string, GatewayKeyBudget>()
+const memoryBudgetCounters = new Map<string, { spentMicros: number; lastUsedAt?: string }>()
 const memoryBypassSessions = new Map<string, BudgetBypassSession>()
 let memoryWindow: BudgetWindow | undefined
+const pricingCache = new Map<string, { value: Awaited<ReturnType<typeof getModernPricingForModelAt>> | ModelPricing | undefined; expiresAt: number }>()
+const pricingInflight = new Map<string, Promise<Awaited<ReturnType<typeof getModernPricingForModelAt>> | ModelPricing | undefined>>()
+const pricingCacheTtlMs = 30_000
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
@@ -33,47 +37,138 @@ function eventsRef() { return db().collection(`${prefix()}_usage_events`) }
 function rollupsRef() { return db().collection(`${prefix()}_usage_rollups`) }
 function pricingRef() { return db().collection(`${prefix()}_model_pricing`) }
 function budgetsRef() { return db().collection(`${prefix()}_budgets`) }
+function budgetCountersRef() { return db().collection(`${prefix()}_budget_counters`) }
 function bypassSessionsRef() { return db().collection(`${prefix()}_budget_bypass_sessions`) }
 function windowRef() { return db().collection(`${prefix()}_budget_windows`).doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
 function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
+function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
+function budgetRetryAfter(window: BudgetWindow) { return Math.max(1, Math.ceil((Date.parse(window.end) - Date.now()) / 1000)) }
+function advanceExpiredWindow(window: BudgetWindow, now = Date.now()) {
+  let start = Date.parse(window.start)
+  let end = Date.parse(window.end)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end > now) return window
+  const duration = end - start
+  const steps = Math.floor((now - start) / duration) + 1
+  start += steps * duration
+  end += steps * duration
+  return { ...window, start: new Date(start).toISOString(), end: new Date(end).toISOString(), updatedAt: new Date().toISOString() }
+}
+
+async function budgetUsageStart(window: BudgetWindow) {
+  if (!window.bypassLimits || !window.bypassSessionId) return window.start
+  if (isMemory()) return memoryBypassSessions.get(window.bypassSessionId)?.startedAt || window.start
+  const snapshot = await bypassSessionsRef().doc(window.bypassSessionId).get()
+  return snapshot.exists ? (snapshot.data() as BudgetBypassSession).startedAt : window.start
+}
+
+async function budgetConfig(apiKeyId: string) {
+  if (isMemory()) return memoryBudgets.get(apiKeyId)
+  const snapshot = await budgetsRef().doc(apiKeyId).get()
+  return snapshot.exists ? { ...snapshot.data(), apiKeyId: snapshot.id } as GatewayKeyBudget : undefined
+}
+
+async function budgetCounter(apiKeyId: string, usageStart: string) {
+  const id = budgetCounterId(apiKeyId, usageStart)
+  if (isMemory()) return memoryBudgetCounters.get(id)?.spentMicros || 0
+  const snapshot = await budgetCountersRef().doc(id).get()
+  return Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+}
+
+function rollupId(granularity: UsageRollup["granularity"], bucket: string, event: UsageEvent) {
+  return `${granularity}:${bucket}:${hash(`${event.gatewayKeyId}:${event.gatewayModelId}`).slice(0, 24)}`
+}
+
+function emptyRollup(id: string, granularity: UsageRollup["granularity"], bucketStart: string, event: UsageEvent): UsageRollup {
+  return {
+    id, granularity, bucketStart, gatewayKeyId: event.gatewayKeyId, gatewayModelId: event.gatewayModelId,
+    requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0,
+    costMicros: 0, pricedRequests: 0, unpricedRequests: 0, lastEventAt: event.completedAt, updatedAt: new Date().toISOString(),
+  }
+}
 
 export class BudgetDeniedError extends Error { status = 429; retryAfterSeconds: number; constructor(message: string, retryAfterSeconds: number) { super(message); this.name = "BudgetDeniedError"; this.retryAfterSeconds = retryAfterSeconds } }
 
 export async function recordUsageEvent(event: UsageEvent) {
+  const budget = await budgetConfig(event.gatewayKeyId).catch(() => undefined)
+  const window = budget ? await getBudgetWindow().catch(() => undefined) : undefined
+  const usageStart = window ? await budgetUsageStart(window).catch(() => window.start) : undefined
+  const completedAt = Date.parse(event.completedAt)
+  const countForBudget = Boolean(budget && window && usageStart && event.status >= 200 && event.status < 300 && completedAt >= Date.parse(usageStart) && completedAt < Date.parse(window.end))
+  const counterId = countForBudget && usageStart ? budgetCounterId(event.gatewayKeyId, usageStart) : undefined
   if (isMemory()) {
     if (memoryEvents.has(event.id)) return event
     memoryEvents.set(event.id, event)
     for (const granularity of ["hourly", "daily", "monthly"] as const) {
       const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-      const id = `${granularity}:${bucket}`
-      const current = memoryRollups.get(id) || { id, granularity, bucketStart: bucket, requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, updatedAt: new Date().toISOString() }
-      memoryRollups.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, updatedAt: new Date().toISOString() })
+      const id = rollupId(granularity, bucket, event)
+      const current = memoryRollups.get(id) || emptyRollup(id, granularity, bucket, event)
+      memoryRollups.set(id, {
+        ...current,
+        requests: current.requests + 1,
+        inputTokens: current.inputTokens + event.inputTokens,
+        outputTokens: current.outputTokens + event.outputTokens,
+        cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens,
+        cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens,
+        totalTokens: current.totalTokens + event.totalTokens,
+        costMicros: current.costMicros + event.costMicros,
+        pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0),
+        unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1),
+        lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt,
+        updatedAt: new Date().toISOString(),
+      })
     }
+    if (counterId && budget) memoryBudgetCounters.set(counterId, { spentMicros: (memoryBudgetCounters.get(counterId)?.spentMicros || 0) + event.costMicros, lastUsedAt: event.completedAt })
     return event
   }
   const ref = eventsRef().doc(event.id)
   await db().runTransaction(async (transaction) => {
     const rollupRefs = (["hourly", "daily", "monthly"] as const).map((granularity) => {
       const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-      return { granularity, ref: rollupsRef().doc(`${granularity}:${bucket}`), bucketStart: bucket }
+      return { granularity, ref: rollupsRef().doc(rollupId(granularity, bucket, event)), bucketStart: bucket }
     })
-    const [existing, ...rollupSnapshots] = await Promise.all([transaction.get(ref), ...rollupRefs.map((entry) => transaction.get(entry.ref))])
+    const existing = await transaction.get(ref)
     if (existing.exists) return
     transaction.create(ref, event)
-    rollupRefs.forEach((entry, index) => {
-      const snapshot = rollupSnapshots[index]
-      const base = snapshot.exists ? {} : { id: entry.ref.id, granularity: entry.granularity, bucketStart: entry.bucketStart, requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, updatedAt: new Date().toISOString() }
-      transaction.set(entry.ref, { ...base, requests: FieldValue.increment(1), inputTokens: FieldValue.increment(event.inputTokens), outputTokens: FieldValue.increment(event.outputTokens), cacheReadTokens: FieldValue.increment(event.cacheReadTokens), cacheCreationTokens: FieldValue.increment(event.cacheCreationTokens), totalTokens: FieldValue.increment(event.totalTokens), costMicros: FieldValue.increment(event.costMicros), updatedAt: new Date().toISOString() }, { merge: true })
+    rollupRefs.forEach((entry) => {
+      const base = emptyRollup(entry.ref.id, entry.granularity, entry.bucketStart, event)
+      transaction.set(entry.ref, {
+        ...base,
+        requests: FieldValue.increment(1),
+        inputTokens: FieldValue.increment(event.inputTokens),
+        outputTokens: FieldValue.increment(event.outputTokens),
+        cacheReadTokens: FieldValue.increment(event.cacheReadTokens),
+        cacheCreationTokens: FieldValue.increment(event.cacheCreationTokens),
+        totalTokens: FieldValue.increment(event.totalTokens),
+        costMicros: FieldValue.increment(event.costMicros),
+        pricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 1 : 0),
+        unpricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 0 : 1),
+        lastEventAt: event.completedAt,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true })
     })
+    if (counterId && budget && usageStart && window) {
+      transaction.set(budgetCountersRef().doc(counterId), {
+        apiKeyId: event.gatewayKeyId,
+        usageStartAt: usageStart,
+        windowEnd: window.end,
+        spentMicros: FieldValue.increment(event.costMicros),
+        lastUsedAt: event.completedAt,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true })
+    }
   })
   return event
 }
 
-export async function listUsageRollups(granularity?: UsageRollup["granularity"]) {
-  if (isMemory()) return [...memoryRollups.values()].filter((rollup) => !granularity || rollup.granularity === granularity)
-  const snapshot = await rollupsRef().get()
-  return snapshot.docs.map((document) => document.data() as UsageRollup).filter((rollup) => !granularity || rollup.granularity === granularity)
+export async function listUsageRollups(granularity?: UsageRollup["granularity"], from?: string, to?: string) {
+  const fromTime = from ? Date.parse(from) : -Infinity
+  const toTime = to ? Date.parse(to) : Infinity
+  if (isMemory()) return [...memoryRollups.values()].filter((rollup) => (!granularity || rollup.granularity === granularity) && Date.parse(rollup.bucketStart) >= fromTime && Date.parse(rollup.bucketStart) < toTime)
+  let query = rollupsRef() as FirebaseFirestore.Query
+  if (granularity) query = query.where("granularity", "==", granularity)
+  const snapshot = await query.get()
+  return snapshot.docs.map((document) => document.data() as UsageRollup).filter((rollup) => (!granularity || rollup.granularity === granularity) && Date.parse(rollup.bucketStart) >= fromTime && Date.parse(rollup.bucketStart) < toTime)
 }
 
 export async function recordGatewayUsage(input: {
@@ -119,9 +214,9 @@ export async function recordGatewayUsage(input: {
 export async function listUsageEvents(from?: string, to?: string): Promise<UsageEvent[]> {
   const start = from ? Date.parse(from) : -Infinity
   const end = to ? Date.parse(to) : Infinity
-  if (isMemory()) return [...memoryEvents.values()].filter((event) => Date.parse(event.completedAt) >= start && Date.parse(event.completedAt) <= end)
+  if (isMemory()) return [...memoryEvents.values()].filter((event) => Date.parse(event.completedAt) >= start && Date.parse(event.completedAt) < end)
     .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
-  const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<=", to || new Date().toISOString()).get()
+  const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<", to || new Date().toISOString()).get()
   return snapshot.docs.map((document) => document.data() as UsageEvent).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
 }
 
@@ -131,22 +226,36 @@ export async function listModelPricing() {
   return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as ModelPricing))
 }
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {
-  try {
-    const modern = await getModernPricingForModelAt({ gatewayModelId, providerModelId })
-    if (modern) return modern
-  } catch {
-    // Legacy pricing remains available while the advanced catalog is unavailable.
-  }
-  const entries = await listModelPricing()
-  return entries.find((entry) => entry.enabled && (entry.modelId === providerModelId || entry.gatewayModelId === gatewayModelId))
+  const key = `${gatewayModelId}:${providerModelId || ""}`
+  const cached = pricingCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = pricingInflight.get(key)
+  if (existing) return existing
+  const promise = (async () => {
+    let value: Awaited<ReturnType<typeof getModernPricingForModelAt>> | ModelPricing | undefined
+    try {
+      value = await getModernPricingForModelAt({ gatewayModelId, providerModelId })
+    } catch {
+      // Legacy pricing remains available while the advanced catalog is unavailable.
+    }
+    if (!value) {
+      const entries = await listModelPricing()
+      value = entries.find((entry) => entry.enabled && (entry.modelId === providerModelId || entry.gatewayModelId === gatewayModelId))
+    }
+    pricingCache.set(key, { value, expiresAt: Date.now() + pricingCacheTtlMs })
+    return value
+  })().finally(() => pricingInflight.delete(key))
+  pricingInflight.set(key, promise)
+  return promise
 }
 export async function upsertModelPricing(input: Omit<ModelPricing, "id" | "updatedAt"> & { id?: string }) {
   const pricing: ModelPricing = { ...input, id: input.id || crypto.randomUUID(), updatedAt: new Date().toISOString() }
   if (isMemory()) memoryPricing.set(pricing.id, pricing)
   else await pricingRef().doc(pricing.id).set(pricing)
+  pricingCache.clear()
   return pricing
 }
-export async function deleteModelPricing(id: string) { if (isMemory()) memoryPricing.delete(id); else await pricingRef().doc(id).delete() }
+export async function deleteModelPricing(id: string) { if (isMemory()) memoryPricing.delete(id); else await pricingRef().doc(id).delete(); pricingCache.clear() }
 
 export async function listBudgets(): Promise<GatewayKeyBudget[]> {
   if (isMemory()) return [...memoryBudgets.values()]
@@ -154,8 +263,8 @@ export async function listBudgets(): Promise<GatewayKeyBudget[]> {
   return snapshot.docs.map((document) => ({ ...document.data(), apiKeyId: document.id } as GatewayKeyBudget))
 }
 
-export async function listBudgetBypassSessions(limit = 50): Promise<BudgetBypassSession[]> {
-  const window = await getBudgetWindow()
+export async function listBudgetBypassSessions(limit = 50, currentWindow?: BudgetWindow): Promise<BudgetBypassSession[]> {
+  const window = currentWindow || await getBudgetWindow()
   if (window.bypassLimits && !window.bypassSessionId) await setBudgetBypassEnabled(true)
   if (isMemory()) return [...memoryBypassSessions.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit)
   const snapshot = await bypassSessionsRef().orderBy("startedAt", "desc").limit(limit).get()
@@ -163,9 +272,23 @@ export async function listBudgetBypassSessions(limit = 50): Promise<BudgetBypass
 }
 
 export async function getBudgetWindow() {
-  if (isMemory()) return memoryWindow || defaultWindow()
-  const snapshot = await windowRef().get()
-  return snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
+  if (isMemory()) {
+    const current = memoryWindow || defaultWindow()
+    const next = advanceExpiredWindow(current)
+    if (next !== current) memoryWindow = next
+    return next
+  }
+  let result = defaultWindow()
+  await db().runTransaction(async (transaction) => {
+    const ref = windowRef()
+    const snapshot = await transaction.get(ref)
+    const current = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
+    const next = advanceExpiredWindow(current)
+    if (!snapshot.exists) transaction.create(ref, next)
+    else if (next.updatedAt !== current.updatedAt) transaction.set(ref, next)
+    result = next
+  })
+  return result
 }
 async function resolveCodexBudgetWindow(accountId: string | null | undefined) {
   const { accounts } = await listCodexAccounts()
@@ -258,29 +381,82 @@ export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros:
 }
 export async function deleteBudget(apiKeyId: string) { if (isMemory()) memoryBudgets.delete(apiKeyId); else await budgetsRef().doc(apiKeyId).delete() }
 
-async function budgetSpent(apiKeyId: string, start: string, end: string) {
-  const events = await listUsageEvents(start, end)
-  return events.filter((event) => event.gatewayKeyId === apiKeyId && event.status >= 200 && event.status < 300).reduce((sum, event) => sum + event.costMicros, 0)
+async function listBudgetCounters(usageStart: string) {
+  if (isMemory()) return [...memoryBudgetCounters.entries()].map(([id, value]) => ({ id, ...value }))
+  const snapshot = await budgetCountersRef().where("usageStartAt", "==", usageStart).get()
+  return snapshot.docs.map((document) => ({ id: document.id, ...(document.data() as { spentMicros?: number; lastUsedAt?: string }) }))
 }
-export async function getBudgetRows() {
-  const [budgets, window, keys, events, bypassSessions] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys(), listUsageEvents(), listBudgetBypassSessions()])
-  const usageStart = window.bypassLimits ? bypassSessions.find((session) => session.id === window.bypassSessionId)?.startedAt || window.start : window.start
-  const lastUsedByKey = new Map<string, string>()
-  for (const event of events) {
-    const current = lastUsedByKey.get(event.gatewayKeyId)
-    if (!current || current < event.completedAt) lastUsedByKey.set(event.gatewayKeyId, event.completedAt)
+
+export interface BudgetAdmission {
+  key: string
+  limitMicros: number
+  spentMicros: number
+  reservationMicros: number
+  ttlSeconds: number
+}
+
+function requestOutputLimit(payload: Record<string, unknown> | undefined) {
+  for (const key of ["max_output_tokens", "max_tokens"]) {
+    const value = payload?.[key]
+    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value
   }
-  return Promise.all(budgets.map(async (budget) => ({ ...budget, spentMicros: await budgetSpent(budget.apiKeyId, usageStart, window.end), windowStart: window.start, windowEnd: window.end, usageStartAt: usageStart, name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown", lastUsedAt: lastUsedByKey.get(budget.apiKeyId) || null })))
+  return undefined
 }
-export async function checkBudget(apiKeyId: string, gatewayModelId: string, providerModelId?: string) {
-  let budgets: GatewayKeyBudget[]
-  try { budgets = await listBudgets() } catch { return }
-  const [budget, window] = await Promise.all([budgets.find((entry) => entry.apiKeyId === apiKeyId), getBudgetWindow()])
-  if (!budget || !budget.enabled || window.bypassLimits) return
+
+function estimateReservationMicros(payload: Record<string, unknown> | undefined, pricing: Parameters<typeof calculateCostMicros>[1], limitMicros: number) {
+  const outputLimit = requestOutputLimit(payload)
+  if (outputLimit === undefined) return limitMicros
+  const inputBytes = payload ? new TextEncoder().encode(JSON.stringify(payload)).byteLength : 0
+  const usage = normalizeUsageMetrics({ input: inputBytes, output: outputLimit })
+  return Math.min(limitMicros, Math.max(1, calculateCostMicros(usage, pricing).costMicros))
+}
+
+export async function getBudgetAdmission(apiKeyId: string, gatewayModelId: string, providerModelId?: string, payload?: Record<string, unknown>) {
+  const budget = await budgetConfig(apiKeyId)
+  const window = await getBudgetWindow()
+  if (!budget || !budget.enabled || window.bypassLimits) return undefined
   const pricing = await getPricingForModel(gatewayModelId, providerModelId)
-  if (!pricing) throw new BudgetDeniedError("This API key cannot call a model without configured pricing.", Math.max(1, Math.ceil((Date.parse(window.end) - Date.now()) / 1000)))
-  const spent = await budgetSpent(apiKeyId, window.start, window.end)
-  if (spent >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", Math.max(1, Math.ceil((Date.parse(window.end) - Date.now()) / 1000)))
+  if (!pricing) throw new BudgetDeniedError("This API key cannot call a model without configured pricing.", budgetRetryAfter(window))
+  const usageStart = await budgetUsageStart(window)
+  const spentMicros = await budgetCounter(apiKeyId, usageStart)
+  if (spentMicros >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
+  return {
+    key: `rawroute:budget:${budgetCounterId(apiKeyId, usageStart)}`,
+    limitMicros: budget.weeklyLimitMicros,
+    spentMicros,
+    reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros),
+    ttlSeconds: budgetRetryAfter(window) + 60,
+  } satisfies BudgetAdmission
+}
+
+export async function checkBudget(apiKeyId: string, gatewayModelId: string, providerModelId?: string) {
+  await getBudgetAdmission(apiKeyId, gatewayModelId, providerModelId)
+}
+
+export async function getBudgetAdminData() {
+  const [budgets, window, keys] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys()])
+  const bypassSessions = await listBudgetBypassSessions(50, window)
+  const usageStart = await budgetUsageStart(window)
+  const counters = await listBudgetCounters(usageStart)
+  const countersByKey = new Map<string, { spentMicros: number; lastUsedAt?: string }>()
+  for (const counter of counters) {
+    const budget = budgets.find((entry) => counter.id === budgetCounterId(entry.apiKeyId, usageStart))
+    if (budget) countersByKey.set(budget.apiKeyId, { spentMicros: Number(counter.spentMicros || 0), lastUsedAt: counter.lastUsedAt })
+  }
+  const rows = budgets.map((budget) => ({
+    ...budget,
+    spentMicros: countersByKey.get(budget.apiKeyId)?.spentMicros || 0,
+    windowStart: window.start,
+    windowEnd: window.end,
+    usageStartAt: usageStart,
+    name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown",
+    lastUsedAt: countersByKey.get(budget.apiKeyId)?.lastUsedAt || null,
+  }))
+  return { budgets: rows, bypassSessions, window }
+}
+
+export async function getBudgetRows() {
+  return (await getBudgetAdminData()).budgets
 }
 
 async function resolveRange(query: DashboardQuery) {
@@ -307,47 +483,62 @@ function publicKeyLabel(id: string) { return `Key ${hash(id).slice(0, 6).toUpper
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
   const range = await resolveRange(query)
   const span = range.to.getTime() - range.from.getTime()
-  const granularity = query.granularity && query.granularity !== "auto" ? query.granularity : (span <= 2 * 86400000 ? "hourly" : span <= 45 * 86400000 ? "daily" : "monthly")
-  let events: UsageEvent[] = []
+  const requestedGranularity = query.granularity && query.granularity !== "auto" ? query.granularity : (span <= 2 * 86400000 ? "hourly" : span <= 45 * 86400000 ? "daily" : "monthly")
+  const granularity = requestedGranularity === "weekly" ? "daily" : requestedGranularity
+  const toExclusive = new Date(range.to.getTime() + (query.preset === "custom" ? 1 : 0))
+  let rollups: UsageRollup[] = []
   let keys: Awaited<ReturnType<typeof listApiKeys>> = []
-  let budgets: GatewayKeyBudget[] = []
+  let budgetRows: Awaited<ReturnType<typeof getBudgetRows>> = []
   let budgetWindow: BudgetWindow | undefined
-  let bypassSessions: BudgetBypassSession[] = []
   try {
-    ;[events, keys, budgets, budgetWindow, bypassSessions] = await Promise.all([listUsageEvents(range.from.toISOString(), range.to.toISOString()), listApiKeys(), listBudgets(), getBudgetWindow(), listBudgetBypassSessions()])
+    ;[rollups, keys, budgetRows, budgetWindow] = await Promise.all([
+      listUsageRollups(granularity as UsageRollup["granularity"], range.from.toISOString(), toExclusive.toISOString()),
+      listApiKeys(),
+      getBudgetRows(),
+      getBudgetWindow(),
+    ])
   } catch {
     // Public analytics remains readable while optional Firestore is unavailable.
   }
-  const usageStart = budgetWindow?.bypassLimits ? bypassSessions.find((session) => session.id === budgetWindow?.bypassSessionId)?.startedAt || budgetWindow.start : budgetWindow?.start
-  const budgetEvents = usageStart && budgetWindow ? await listUsageEvents(usageStart, budgetWindow.end) : events
-  const budgetSpentByKey = new Map<string, number>()
-  for (const event of budgetEvents) {
-    if (event.status >= 200 && event.status < 300) budgetSpentByKey.set(event.gatewayKeyId, (budgetSpentByKey.get(event.gatewayKeyId) || 0) + event.costMicros)
-  }
-  const budgetMap = new Map(budgets.map((budget) => [budget.apiKeyId, budget]))
+  const dimensionalRollups = rollups.filter((rollup) => rollup.gatewayKeyId && rollup.gatewayModelId)
+  const legacyRollups = rollups.filter((rollup) => !rollup.gatewayKeyId)
+  const aggregateRollups = legacyRollups.length ? [...legacyRollups, ...dimensionalRollups] : dimensionalRollups
+  const budgetMap = new Map(budgetRows.map((budget) => [budget.apiKeyId, budget]))
   const keyMap = new Map(keys.map((key) => [key.id, key]))
   const keyRows = new Map<string, DashboardPayload["keys"][number]>()
   const modelRows = new Map<string, { model: string; requests: number; tokens: number; costMicros: number }>()
   const trend = new Map<string, { bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>()
+  let requestCount = 0
+  let totalTokens = 0
+  let totalCostMicros = 0
   let pricedRequests = 0
-  for (const event of events) {
-    if (event.pricingConfidence === "exact") pricedRequests += 1
-    const key = keyMap.get(event.gatewayKeyId)
-    const row = keyRows.get(event.gatewayKeyId) || { id: event.gatewayKeyId, label: publicView ? publicKeyLabel(event.gatewayKeyId) : (key?.name || publicKeyLabel(event.gatewayKeyId)), maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
-    row.requests += 1; row.tokens += event.totalTokens; row.costMicros += event.costMicros; row.lastUsed = !row.lastUsed || row.lastUsed < event.completedAt ? event.completedAt : row.lastUsed; if (!row.models.includes(event.gatewayModelId)) row.models.push(event.gatewayModelId); keyRows.set(event.gatewayKeyId, row)
-    const model = modelRows.get(event.gatewayModelId) || { model: event.gatewayModelId, requests: 0, tokens: 0, costMicros: 0 }; model.requests += 1; model.tokens += event.totalTokens; model.costMicros += event.costMicros; modelRows.set(event.gatewayModelId, model)
-    const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString(); const point = trend.get(bucket) || { bucketStart: bucket, label: formatAppTrendBucket(bucket, granularity), requests: 0, tokens: 0, costMicros: 0 }; point.requests += 1; point.tokens += event.totalTokens; point.costMicros += event.costMicros; trend.set(bucket, point)
+  let lastEventAt: string | null = null
+  for (const rollup of aggregateRollups) {
+    requestCount += rollup.requests
+    totalTokens += rollup.totalTokens
+    totalCostMicros += rollup.costMicros
+    pricedRequests += rollup.pricedRequests || 0
+    if (rollup.lastEventAt && (!lastEventAt || lastEventAt < rollup.lastEventAt)) lastEventAt = rollup.lastEventAt
+    const point = trend.get(rollup.bucketStart) || { bucketStart: rollup.bucketStart, label: formatAppTrendBucket(rollup.bucketStart, granularity), requests: 0, tokens: 0, costMicros: 0 }
+    point.requests += rollup.requests; point.tokens += rollup.totalTokens; point.costMicros += rollup.costMicros; trend.set(rollup.bucketStart, point)
+    if (!rollup.gatewayKeyId || !rollup.gatewayModelId) continue
+    const keyId = rollup.gatewayKeyId
+    const modelId = rollup.gatewayModelId
+    const key = keyMap.get(keyId)
+    const row = keyRows.get(keyId) || { id: keyId, label: publicView ? publicKeyLabel(keyId) : (key?.name || publicKeyLabel(keyId)), maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
+    row.requests += rollup.requests; row.tokens += rollup.totalTokens; row.costMicros += rollup.costMicros
+    row.lastUsed = !row.lastUsed || (rollup.lastEventAt && row.lastUsed < rollup.lastEventAt) ? (rollup.lastEventAt || row.lastUsed) : row.lastUsed
+    if (!row.models.includes(modelId)) row.models.push(modelId)
+    keyRows.set(keyId, row)
+    const model = modelRows.get(modelId) || { model: modelId, requests: 0, tokens: 0, costMicros: 0 }
+    model.requests += rollup.requests; model.tokens += rollup.totalTokens; model.costMicros += rollup.costMicros; modelRows.set(modelId, model)
   }
-  if (budgetWindow && usageStart) {
-    for (const [keyId, row] of keyRows) {
-      const budget = budgetMap.get(keyId)
-      if (!budget) continue
-      const spentMicros = budgetSpentByKey.get(keyId) || 0
-      row.budget = { weeklyLimitMicros: budget.weeklyLimitMicros, spentMicros, remainingMicros: Math.max(0, budget.weeklyLimitMicros - spentMicros), percentUsed: budget.weeklyLimitMicros > 0 ? spentMicros / budget.weeklyLimitMicros * 100 : 0, bypassLimits: budgetWindow.bypassLimits, usageStartAt: usageStart, windowStart: budgetWindow.start, windowEnd: budgetWindow.end }
-    }
+  for (const [keyId, row] of keyRows) {
+    const budget = budgetMap.get(keyId)
+    if (!budget || !budgetWindow) continue
+    row.budget = { weeklyLimitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros, remainingMicros: Math.max(0, budget.weeklyLimitMicros - budget.spentMicros), percentUsed: budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0, bypassLimits: budgetWindow.bypassLimits, usageStartAt: budget.usageStartAt, windowStart: budgetWindow.start, windowEnd: budgetWindow.end }
   }
-  const payload: DashboardPayload = { generatedAt: new Date().toISOString(), range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity }, summary: { requests: events.length, tokens: events.reduce((sum, event) => sum + event.totalTokens, 0), costMicros: events.reduce((sum, event) => sum + event.costMicros, 0), activeKeys: keyRows.size, pricedRequests, unpricedRequests: events.length - pricedRequests }, trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)), keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests), models: [...modelRows.values()].sort((a, b) => b.requests - a.requests), freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt: events.at(-1)?.completedAt || null }, pricingConfidence: { pricedRequests, unpricedRequests: events.length - pricedRequests } }
-  return payload
+  return { generatedAt: new Date().toISOString(), range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity }, summary: { requests: requestCount, tokens: totalTokens, costMicros: totalCostMicros, activeKeys: keyRows.size, pricedRequests, unpricedRequests: requestCount - pricedRequests }, trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)), keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests), models: [...modelRows.values()].sort((a, b) => b.requests - a.requests), freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt }, pricingConfidence: { pricedRequests, unpricedRequests: requestCount - pricedRequests } }
 }
 
 export function redactPublicDashboard(payload: DashboardPayload): DashboardPayload {
@@ -368,9 +559,9 @@ async function rebuildUsageRollups(events: UsageEvent[]) {
     for (const event of events) {
       for (const granularity of ["hourly", "daily", "monthly"] as const) {
         const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-        const id = `${granularity}:${bucket}`
-        const current = memoryRollups.get(id) || { id, granularity, bucketStart: bucket, requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, updatedAt: new Date().toISOString() }
-        memoryRollups.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, updatedAt: new Date().toISOString() })
+        const id = rollupId(granularity, bucket, event)
+        const current = memoryRollups.get(id) || emptyRollup(id, granularity, bucket, event)
+        memoryRollups.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0), unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1), lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt, updatedAt: new Date().toISOString() })
       }
     }
     return
@@ -385,15 +576,48 @@ async function rebuildUsageRollups(events: UsageEvent[]) {
   for (const event of events) {
     for (const granularity of ["hourly", "daily", "monthly"] as const) {
       const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-      const id = `${granularity}:${bucket}`
-      const current = aggregates.get(id) || { id, granularity, bucketStart: bucket, requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, updatedAt: new Date().toISOString() }
-      aggregates.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros })
+      const id = rollupId(granularity, bucket, event)
+      const current = aggregates.get(id) || emptyRollup(id, granularity, bucket, event)
+      aggregates.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0), unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1), lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt })
     }
   }
   const entries = [...aggregates.values()]
   for (let index = 0; index < entries.length; index += 400) {
     const batch = db().batch()
     for (const entry of entries.slice(index, index + 400)) batch.set(rollupsRef().doc(entry.id), entry)
+    await batch.commit()
+  }
+}
+
+async function rebuildBudgetCounters(events: UsageEvent[]) {
+  const budgets = await listBudgets()
+  if (!budgets.length) return
+  const window = await getBudgetWindow()
+  const usageStart = await budgetUsageStart(window)
+  const budgetIds = new Set(budgets.map((budget) => budget.apiKeyId))
+  const totals = new Map<string, { spentMicros: number; lastUsedAt: string }>()
+  for (const event of events) {
+    const completedAt = Date.parse(event.completedAt)
+    if (!budgetIds.has(event.gatewayKeyId) || event.status < 200 || event.status >= 300 || completedAt < Date.parse(usageStart) || completedAt >= Date.parse(window.end)) continue
+    const id = budgetCounterId(event.gatewayKeyId, usageStart)
+    const current = totals.get(id)
+    totals.set(id, { spentMicros: (current?.spentMicros || 0) + event.costMicros, lastUsedAt: !current || current.lastUsedAt < event.completedAt ? event.completedAt : current.lastUsedAt })
+  }
+  if (isMemory()) {
+    for (const id of [...memoryBudgetCounters.keys()]) if ([...totals.keys()].some((next) => next === id) || budgets.some((budget) => id === budgetCounterId(budget.apiKeyId, usageStart))) memoryBudgetCounters.delete(id)
+    for (const [id, value] of totals) memoryBudgetCounters.set(id, value)
+    return
+  }
+  const existing = await budgetCountersRef().where("usageStartAt", "==", usageStart).get()
+  for (let index = 0; index < existing.docs.length; index += 400) {
+    const batch = db().batch()
+    for (const document of existing.docs.slice(index, index + 400)) batch.delete(document.ref)
+    await batch.commit()
+  }
+  const entries = [...totals.entries()]
+  for (let index = 0; index < entries.length; index += 400) {
+    const batch = db().batch()
+    for (const [id, value] of entries.slice(index, index + 400)) batch.set(budgetCountersRef().doc(id), { usageStartAt: usageStart, windowEnd: window.end, ...value, updatedAt: new Date().toISOString() })
     await batch.commit()
   }
 }
@@ -434,7 +658,8 @@ export async function repriceUsageForGroup(jobId: string) {
     await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) })
   }
   await rebuildUsageRollups(allEvents.map((event) => events.find((updated) => updated.id === event.id) || event))
+  await rebuildBudgetCounters(allEvents.map((event) => events.find((updated) => updated.id === event.id) || event))
   return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() })
 }
 
-export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined; resetModelPricingForTests() }
+export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgetCounters.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined; pricingCache.clear(); pricingInflight.clear(); resetModelPricingForTests() }

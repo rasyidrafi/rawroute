@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 import { proxyRequest } from "@/lib/proxy"
 import { clearLogs, readLogs } from "@/lib/logger"
@@ -67,7 +67,7 @@ beforeEach(async () => {
 describe("proxy request", () => {
   test("rewrites only the model field and pipes the upstream response", async () => {
     let captured: { url?: string; body?: Record<string, unknown>; headers?: Headers } = {}
-    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       captured = {
         url: input.toString(),
         body: JSON.parse(String(init?.body)),
@@ -114,7 +114,7 @@ describe("proxy request", () => {
       data.models[0]!.upstreamModel = "gpt-5.4-codex"
     })
     let captured: { body?: Record<string, unknown>; headers?: Headers; url?: string } = {}
-    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       captured = { url: input.toString(), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) }
       return new Response("data: {\"type\":\"response.completed\"}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })
     }) as unknown as typeof fetch
@@ -146,7 +146,7 @@ describe("proxy request", () => {
       })
     })
     let upstreamCalls = 0
-    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = input.toString()
       if (url.endsWith("/oauth/token")) {
         expect(String(init?.body)).toContain("refresh_token=codex-refresh")
@@ -168,7 +168,7 @@ describe("proxy request", () => {
 
   test("returns 503 without contacting upstream when an authenticated provider has no enabled API keys", async () => {
     await updateData((data) => { data.providerApiKeys = [] })
-    const upstream = mock(() => Promise.resolve(new Response()))
+    const upstream = vi.fn(() => Promise.resolve(new Response()))
     globalThis.fetch = upstream as unknown as typeof fetch
 
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
@@ -182,7 +182,7 @@ describe("proxy request", () => {
   })
 
   test("rejects the wrong native endpoint before calling upstream", async () => {
-    const upstream = mock(() => Promise.resolve(new Response()))
+    const upstream = vi.fn(() => Promise.resolve(new Response()))
     globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/chat/completions", {
       method: "POST",
@@ -199,7 +199,7 @@ describe("proxy request", () => {
       if (provider) provider.protocol = "openai-chat"
     })
     let capturedBody: Record<string, unknown> | undefined
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
     }) as unknown as typeof fetch
@@ -219,7 +219,7 @@ describe("proxy request", () => {
       if (provider) provider.protocol = "openai-chat"
     })
     let capturedBody: Record<string, unknown> | undefined
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
     }) as unknown as typeof fetch
@@ -240,7 +240,7 @@ describe("proxy request", () => {
       if (model) model.requestOverrides = { reasoning: { effort: "none" }, temperature: 0 }
     })
     let capturedBody: Record<string, unknown> | undefined
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body))
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
     }) as unknown as typeof fetch
@@ -261,7 +261,7 @@ describe("proxy request", () => {
 
   test("logs message and tool totals in the compact request summary", async () => {
     clearLogs()
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_summary" })) as unknown as typeof fetch
+    globalThis.fetch = vi.fn(async () => Response.json({ id: "resp_summary" })) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -284,7 +284,7 @@ describe("proxy request", () => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.protocol = "anthropic-messages"
     })
-    globalThis.fetch = mock(async () => Response.json({ id: "msg_summary" })) as unknown as typeof fetch
+    globalThis.fetch = vi.fn(async () => Response.json({ id: "msg_summary" })) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/messages", {
       method: "POST",
@@ -301,7 +301,7 @@ describe("proxy request", () => {
 
   test("does not count historical Responses tool items", async () => {
     clearLogs()
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_tool_items" })) as unknown as typeof fetch
+    globalThis.fetch = vi.fn(async () => Response.json({ id: "resp_tool_items" })) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -324,7 +324,7 @@ describe("proxy request", () => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.protocol = "anthropic-messages"
     })
-    globalThis.fetch = mock(async () => Response.json({ id: "msg_tool_blocks" })) as unknown as typeof fetch
+    globalThis.fetch = vi.fn(async () => Response.json({ id: "msg_tool_blocks" })) as unknown as typeof fetch
 
     await proxyRequest(new Request("http://gateway/v1/messages", {
       method: "POST",
@@ -346,7 +346,7 @@ describe("proxy request", () => {
 
   test("logs completion timing and token usage after a streamed response finishes", async () => {
     clearLogs()
-    globalThis.fetch = mock(async () => new Response([
+    globalThis.fetch = vi.fn(async () => new Response([
       'data: {"type":"response.created","response":{"id":"resp_usage"}}',
       'data: {"type":"response.completed","response":{"id":"resp_usage","usage":{"input_tokens":139054,"input_tokens_details":{"cached_tokens":137728},"output_tokens":2719}}}',
       "",
@@ -365,7 +365,7 @@ describe("proxy request", () => {
   test("aborts the upstream request when the downstream stream is cancelled", async () => {
     let upstreamSignal: AbortSignal | undefined
     let upstreamCancelled = false
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       upstreamSignal = init?.signal || undefined
       return new Response(new ReadableStream({
         cancel() { upstreamCancelled = true },
@@ -388,7 +388,7 @@ describe("proxy request", () => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.headers = { "bad header": "value" }
     })
-    const upstream = mock(() => Promise.resolve(new Response()))
+    const upstream = vi.fn(() => Promise.resolve(new Response()))
     globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -408,7 +408,7 @@ describe("proxy request", () => {
       })
     })
     const selected: string[] = []
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       selected.push(new Headers(init?.headers).get("authorization") || "")
       return Response.json({ id: `resp_${selected.length}` })
     }) as unknown as typeof fetch
@@ -425,7 +425,7 @@ describe("proxy request", () => {
   })
 
   test("maps response IDs back to their credential for hard-affinity continuations", async () => {
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_parent", output: [] })) as unknown as typeof fetch
+    globalThis.fetch = vi.fn(async () => Response.json({ id: "resp_parent", output: [] })) as unknown as typeof fetch
     const first = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
@@ -438,7 +438,7 @@ describe("proxy request", () => {
 
   test("does not corrupt a successful response when Redis bookkeeping fails", async () => {
     testRedis.failBookkeeping = true
-    globalThis.fetch = mock(async () => Response.json({ id: "resp_success", output: [{ text: "delivered" }] })) as unknown as typeof fetch
+    globalThis.fetch = vi.fn(async () => Response.json({ id: "resp_success", output: [{ text: "delivered" }] })) as unknown as typeof fetch
 
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -451,7 +451,7 @@ describe("proxy request", () => {
   })
 
   test("rejects an unknown previous_response_id instead of failing over", async () => {
-    const upstream = mock(() => Promise.resolve(Response.json({})))
+    const upstream = vi.fn(() => Promise.resolve(Response.json({})))
     globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",
@@ -464,7 +464,7 @@ describe("proxy request", () => {
 
   test("rejects a declared body larger than the configured maximum", async () => {
     process.env.MAX_PROXY_BODY_BYTES = "32"
-    const upstream = mock(() => Promise.resolve(new Response()))
+    const upstream = vi.fn(() => Promise.resolve(new Response()))
     globalThis.fetch = upstream as unknown as typeof fetch
     const response = await proxyRequest(new Request("http://gateway/v1/responses", {
       method: "POST",

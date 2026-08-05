@@ -106,6 +106,8 @@ export interface UsageRollup {
   id: string
   granularity: "hourly" | "daily" | "monthly"
   bucketStart: string
+  gatewayKeyId?: string
+  gatewayModelId?: string
   requests: number
   inputTokens: number
   outputTokens: number
@@ -113,6 +115,9 @@ export interface UsageRollup {
   cacheCreationTokens: number
   totalTokens: number
   costMicros: number
+  pricedRequests?: number
+  unpricedRequests?: number
+  lastEventAt?: string
   updatedAt: string
 }
 

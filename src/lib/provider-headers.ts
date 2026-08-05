@@ -15,11 +15,16 @@ const reservedHeaders = new Set([
   "x-api-key",
 ])
 
+const validationCache = new Map<string, Record<string, string>>()
+
 export function validateProviderHeaders(input: unknown): Record<string, string> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("Provider headers must be a JSON object.")
   }
 
+  const cacheKey = JSON.stringify(input)
+  const cached = validationCache.get(cacheKey)
+  if (cached) return cached
   const validated: Record<string, string> = {}
   for (const [name, value] of Object.entries(input)) {
     const normalized = name.toLowerCase()
@@ -33,5 +38,7 @@ export function validateProviderHeaders(input: unknown): Record<string, string> 
     }
     validated[name] = value
   }
+  if (validationCache.size >= 128) validationCache.delete(validationCache.keys().next().value as string)
+  validationCache.set(cacheKey, validated)
   return validated
 }

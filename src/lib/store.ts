@@ -9,6 +9,9 @@ import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey } fro
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 2_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 2_000
 let compatibilityCache: CompatibilityCache | undefined
+let compatibilityReadPromise: Promise<AppData> | undefined
+let metaCache: { data: Meta; expiresAt: number } | undefined
+let metaReadPromise: Promise<Meta> | undefined
 
 const documentedAdminPassword = "change-me-now"
 const documentedProxyKey = "sk-local-change-me"
@@ -484,16 +487,25 @@ export async function readMeta(): Promise<Meta> {
     const state = ensureMemorySeeded()
     return state.meta!
   }
-  return firestoreReadMeta()
+  if (metaCache && metaCache.expiresAt > Date.now()) return structuredClone(metaCache.data)
+  if (!metaReadPromise) {
+    metaReadPromise = firestoreReadMeta().then((meta) => {
+      metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
+      return meta
+    }).finally(() => { metaReadPromise = undefined })
+  }
+  return structuredClone(await metaReadPromise)
 }
 
 export async function writeMeta(meta: Meta): Promise<void> {
   if (isMemoryBackend()) {
     ensureMemorySeeded().meta = meta
+    metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
     invalidateCompatibilityCache()
     return
   }
   await metaRef().set(stripUndefined(meta))
+  metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
   invalidateCompatibilityCache()
 }
 
@@ -501,10 +513,12 @@ export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>):
   if (isMemoryBackend()) {
     const state = ensureMemorySeeded()
     await mutator(state.meta!)
+    metaCache = { data: structuredClone(state.meta!), expiresAt: Date.now() + cacheTtlMs }
     invalidateCompatibilityCache()
     return state.meta!
   }
   const meta = await firestoreUpdateMeta(mutator)
+  metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
   invalidateCompatibilityCache()
   return meta
 }
@@ -732,26 +746,29 @@ async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
 
 export async function readData(): Promise<AppData> {
   if (compatibilityCache && compatibilityCache.expiresAt > Date.now()) return structuredClone(compatibilityCache.data)
-  const [providers, providerApiKeys, models, aliases, apiKeys, meta] = await Promise.all([
-    listProviders(),
-    listAllProviderApiKeys(),
-    listModels(),
-    listAliases(),
-    listApiKeys(),
-    readMeta(),
-  ])
-  const data: AppData = {
-    version: 4,
-    admin: meta.admin,
-    sessionSecret: meta.sessionSecret,
-    providers,
-    providerApiKeys,
-    models,
-    aliases,
-    apiKeys,
+  if (!compatibilityReadPromise) {
+    compatibilityReadPromise = Promise.all([listProviders(), listAllProviderApiKeys(), listModels(), listAliases(), listApiKeys(), readMeta()]).then(([providers, providerApiKeys, models, aliases, apiKeys, meta]) => {
+      const data: AppData = { version: 4, admin: meta.admin, sessionSecret: meta.sessionSecret, providers, providerApiKeys, models, aliases, apiKeys }
+      compatibilityCache = { data: structuredClone(data), expiresAt: Date.now() + cacheTtlMs }
+      return data
+    }).finally(() => { compatibilityReadPromise = undefined })
   }
-  compatibilityCache = { data: structuredClone(data), expiresAt: Date.now() + cacheTtlMs }
-  return structuredClone(data)
+  return structuredClone(await compatibilityReadPromise)
+}
+
+export async function findApiKeyByValue(value: string): Promise<ApiKey | undefined> {
+  const normalized = normalizeApiKeyValue(value)
+  if (!normalized) return undefined
+  if (isMemoryBackend()) {
+    const state = ensureMemorySeeded()
+    const id = state.apiKeyIndexes.get(apiKeyValueHash(normalized))
+    return id ? state.apiKeys.get(id) : undefined
+  }
+  const index = await apiKeyIndexRef(apiKeyValueHash(normalized)).get()
+  const apiKeyId = index.exists ? (index.data() as { apiKeyId?: string }).apiKeyId : undefined
+  if (!apiKeyId) return undefined
+  const snapshot = await apiKeyRef(apiKeyId).get()
+  return snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
 }
 
 export async function writeData(data: AppData) {
@@ -1042,12 +1059,11 @@ async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: s
 
 async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   const snapshot = await providersRef().get()
-  const out: ProviderApiKey[] = []
-  for (const doc of snapshot.docs) {
+  const children = await Promise.all(snapshot.docs.map(async (doc) => {
     const sub = await providerApiKeysRef(doc.id).get()
-    sub.docs.forEach((subDoc) => out.push(providerApiKeyFromSnapshot(subDoc, doc.id)))
-  }
-  return out
+    return sub.docs.map((subDoc) => providerApiKeyFromSnapshot(subDoc, doc.id))
+  }))
+  return children.flat()
 }
 
 async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
@@ -1102,12 +1118,11 @@ async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: strin
 
 async function firestoreListModels(): Promise<Model[]> {
   const providers = await providersRef().get()
-  const out: Model[] = []
-  for (const doc of providers.docs) {
+  const children = await Promise.all(providers.docs.map(async (doc) => {
     const sub = await modelsRef(doc.id).get()
-    sub.docs.forEach((subDoc) => out.push(modelFromSnapshot(subDoc, doc.id)))
-  }
-  return out
+    return sub.docs.map((subDoc) => modelFromSnapshot(subDoc, doc.id))
+  }))
+  return children.flat()
 }
 
 async function firestoreListProviderModels(providerId: string): Promise<Model[]> {
@@ -1545,4 +1560,7 @@ export function _resetMemoryBackend() {
   memory.apiKeyIndexes = new Map()
   memory.initialized = false
   compatibilityCache = undefined
+  compatibilityReadPromise = undefined
+  metaCache = undefined
+  metaReadPromise = undefined
 }

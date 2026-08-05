@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "vitest"
 
 import { getPricingAdminData, getPricingForModelAt, resetModelPricingForTests, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { listUsageEvents, recordGatewayUsage } from "@/lib/analytics"

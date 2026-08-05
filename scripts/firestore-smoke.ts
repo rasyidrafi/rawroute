@@ -1,5 +1,6 @@
 import { applicationDefault, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore } from "firebase-admin/firestore"
+import { spawn } from "node:child_process"
 
 if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) throw new Error("GOOGLE_APPLICATION_CREDENTIALS is required")
 if (!process.env.GOOGLE_CLOUD_PROJECT) throw new Error("GOOGLE_CLOUD_PROJECT is required")
@@ -22,17 +23,22 @@ async function deleteCollection(path: string) {
 await deleteCollection(`${prefix}_system`)
 await deleteCollection(`${prefix}`)
 
-const childEnvironment = {
+const childEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   NODE_ENV: "production",
   DEFAULT_ADMIN_PASSWORD: "integration-admin-password",
   DEFAULT_PROXY_API_KEY: "sk-integration-gateway-key",
   SESSION_SECRET: "integration-session-secret-32-bytes-minimum",
 }
-const workers = Array.from({ length: 4 }, () => Bun.spawn([
-  "bun", "-e", "import { readMeta, listProviders } from './src/lib/store.ts'; await readMeta(); await listProviders()",
-], { cwd: process.cwd(), env: childEnvironment, stdout: "pipe", stderr: "pipe" }))
-const exitCodes = await Promise.all(workers.map((worker) => worker.exited))
+const workers = Array.from({ length: 4 }, () => spawn(
+  process.execPath,
+  ["--import", "tsx", "--eval", "import { readMeta, listProviders } from './src/lib/store.ts'; await readMeta(); await listProviders()"],
+  { cwd: process.cwd(), env: childEnvironment, stdio: "ignore" },
+))
+const exitCodes = await Promise.all(workers.map((worker) => new Promise<number | null>((resolve, reject) => {
+  worker.once("error", reject)
+  worker.once("exit", resolve)
+})))
 if (exitCodes.some((code) => code !== 0)) throw new Error("Concurrent Firestore initialization failed")
 
 const { readMeta, updateMeta, listProviders, upsertProvider } = await import("../src/lib/store")

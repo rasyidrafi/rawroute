@@ -1,5 +1,5 @@
 import { authenticateProxyKey } from "@/lib/auth"
-import { BudgetDeniedError, checkBudget, recordGatewayUsage } from "@/lib/analytics"
+import { BudgetDeniedError, getBudgetAdmission, recordGatewayUsage, type BudgetAdmission } from "@/lib/analytics"
 import { refreshCodexAccount } from "@/lib/codex"
 import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
 import { jsonError } from "@/lib/http"
@@ -51,7 +51,8 @@ async function readBoundedBody(request: Request, maximum: number) {
   if (!request.body) return { ok: true as const, value: "" }
 
   const reader = request.body.getReader()
-  const chunks: Uint8Array[] = []
+  const decoder = new TextDecoder()
+  let raw = ""
   let total = 0
   while (true) {
     const { done, value } = await reader.read()
@@ -61,15 +62,10 @@ async function readBoundedBody(request: Request, maximum: number) {
       await reader.cancel("Request body too large")
       return { ok: false as const }
     }
-    chunks.push(value)
+    raw += decoder.decode(value, { stream: true })
   }
-  const body = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    body.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return { ok: true as const, value: new TextDecoder().decode(body) }
+  raw += decoder.decode()
+  return { ok: true as const, value: raw }
 }
 
 function retryAfterSeconds(headers: Headers) {
@@ -177,7 +173,7 @@ function trackedUpstreamBody(
   onCancelled: () => Promise<void>,
 ) {
   if (!upstream.body) {
-    void onFinished({})
+    void onFinished({}).catch((error) => writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" }))
     return null
   }
   const reader = upstream.body.getReader()
@@ -187,6 +183,7 @@ function trackedUpstreamBody(
   let finished = false
   let firstByteAt: number | undefined
   let latestUsage: UsageMetrics | undefined
+  const maxMetadataBufferBytes = 2 * 1024 * 1024
   const mappedResponseIds = new Set<string>()
   const mapResponseIds = async (ids: string[]) => {
     const newIds = ids.filter((id) => {
@@ -207,23 +204,19 @@ function trackedUpstreamBody(
     if (contentType.includes("application/json") && buffered) {
       try {
         const parsed = JSON.parse(buffered) as Record<string, unknown>
-        if (typeof parsed.id === "string") await mapResponseIds([parsed.id])
+        if (typeof parsed.id === "string") void mapResponseIds([parsed.id])
         latestUsage = mergeUsage(latestUsage, extractUsageMetrics(parsed))
       } catch { /* The upstream body remains untouched when it is not valid JSON. */ }
     }
     if (contentType.includes("text/event-stream") && buffered) {
       const metadata = responseMetadataFromSse(buffered)
-      await mapResponseIds(metadata.ids)
+      void mapResponseIds(metadata.ids)
       latestUsage = mergeUsage(latestUsage, metadata.usage)
     }
-    try {
-      await onFinished({
-        ...(firstByteAt !== undefined ? { ttftMs: firstByteAt } : {}),
-        ...(latestUsage ? { usage: latestUsage } : {}),
-      })
-    } catch (error) {
-      writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
-    }
+    void onFinished({
+      ...(firstByteAt !== undefined ? { ttftMs: firstByteAt } : {}),
+      ...(latestUsage ? { usage: latestUsage } : {}),
+    }).catch((error) => writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" }))
   }
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -231,20 +224,26 @@ function trackedUpstreamBody(
         const { done, value } = await reader.read()
         if (done) {
           buffered += decoder.decode()
-          await finish()
-          controller.close()
+          if (contentType.includes("text/event-stream")) {
+            controller.close()
+            void finish()
+          } else {
+            await finish()
+            controller.close()
+          }
           return
         }
         firstByteAt ??= Date.now()
         if (contentType.includes("text/event-stream")) {
           const text = decoder.decode(value, { stream: true })
           buffered += text
+          if (buffered.length > maxMetadataBufferBytes) buffered = buffered.slice(-maxMetadataBufferBytes)
           const boundary = buffered.lastIndexOf("\n\n")
           if (boundary >= 0) {
             const complete = buffered.slice(0, boundary + 2)
             buffered = buffered.slice(boundary + 2)
             const metadata = responseMetadataFromSse(complete)
-            await mapResponseIds(metadata.ids)
+            void mapResponseIds(metadata.ids)
             latestUsage = mergeUsage(latestUsage, metadata.usage)
           }
         } else if (contentType.includes("application/json") && buffered.length < 2 * 1024 * 1024) {
@@ -257,9 +256,9 @@ function trackedUpstreamBody(
       }
     },
     async cancel(reason) {
-      await onCancelled()
+      void onCancelled()
       await reader.cancel(reason)
-      await finish()
+      void finish()
     },
   })
 }
@@ -293,8 +292,9 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   }
   const { model, provider, protocol: modelProtocol } = route
   const gatewayModelId = model.gatewayModelId || model.id
+  let budgetAdmission: BudgetAdmission | undefined
   try {
-    await checkBudget(gatewayApiKey.id, gatewayModelId, model.id)
+    budgetAdmission = await getBudgetAdmission(gatewayApiKey.id, gatewayModelId, model.id, payload)
   } catch (error) {
     if (error instanceof BudgetDeniedError) {
       return Response.json({ error: { message: error.message } }, { status: error.status, headers: { "retry-after": String(error.retryAfterSeconds) } })
@@ -311,6 +311,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   let providerApiKey: ProviderApiKey | undefined = providerApiKeys[0]
   let routingStore: ReturnType<typeof getRoutingStateStore> | undefined
   let routingLeaseId: string | undefined
+  let budgetLeaseId: string | undefined
   const session = extractSessionIdentity(request, payload, modelProtocol, {
     gatewayKeyId: gatewayApiKey.id,
     providerId: provider.id,
@@ -328,6 +329,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
         sessionKey: routingSessionKey,
         hardAffinity: session?.hard || false,
         responseId: session?.responseId,
+        budget: budgetAdmission,
       })
       if (!reservation.ok) {
         writeLog("warn", "gateway", "Provider routing reservation unavailable", {
@@ -338,6 +340,9 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
         })
         if (reservation.reason === "hard-response-missing") {
           return jsonError("The previous response session is unavailable or expired.", 409)
+        }
+        if (reservation.reason === "budget") {
+          return Response.json({ error: { message: "Weekly budget reservation unavailable." } }, { status: 429, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
         }
         const status = reservation.reason === "capacity" ? 429 : 503
         return Response.json({ error: { message: reservation.reason === "capacity"
@@ -355,10 +360,12 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           credentialId: reservation.credentialId,
           leaseId: reservation.leaseId,
           status: 502,
+          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0 } } : {}),
         }).catch(() => undefined)
         return jsonError("The selected provider API key is unavailable.", 503)
       }
       routingLeaseId = reservation.leaseId
+      budgetLeaseId = budgetAdmission ? reservation.leaseId : undefined
       try {
         providerApiKey = await refreshCodexAccount(providerApiKey)
       } catch (error) {
@@ -368,12 +375,23 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           credentialId: providerApiKey.id,
           leaseId: routingLeaseId,
           status: 503,
+          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0 } } : {}),
         }).catch(() => undefined)
         return jsonError(error instanceof Error ? error.message : "Codex account refresh failed.", 503)
       }
     } catch (error) {
       writeLog("error", "gateway", "Shared routing state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
       return jsonError("Shared routing state is unavailable.", 503)
+    }
+  } else if (budgetAdmission) {
+    try {
+      routingStore = getRoutingStateStore()
+      const reservation = await routingStore.reserveBudget(budgetAdmission)
+      if (!reservation.ok) return Response.json({ error: { message: "Weekly budget reservation unavailable." } }, { status: 429, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
+      budgetLeaseId = reservation.leaseId
+    } catch (error) {
+      writeLog("error", "gateway", "Shared budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+      return jsonError("Shared budget state is unavailable.", 503)
     }
   }
 
@@ -389,10 +407,14 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     requestTimeout = undefined
     clientAbortListener = undefined
   }
-  const releaseLease = (status: number, retryAfterSeconds?: number) => {
-    if (!routingStore || !providerApiKey || !routingLeaseId) {
+  const releaseLease = (status: number, retryAfterSeconds?: number, actualMicros = 0) => {
+    if (!routingStore) {
       cleanupLease()
       return Promise.resolve()
+    }
+    if (!providerApiKey || !routingLeaseId) {
+      if (!budgetAdmission || !budgetLeaseId) return Promise.resolve()
+      return routingStore.settleBudget({ key: budgetAdmission.key, leaseId: budgetLeaseId, actualMicros, ttlSeconds: budgetAdmission.ttlSeconds }).finally(cleanupLease)
     }
     return routingStore.release({
       providerId: provider.id,
@@ -401,17 +423,18 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       leaseId: routingLeaseId,
       status,
       retryAfterSeconds,
+      ...(budgetAdmission && budgetLeaseId ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros } } : {}),
     })
   }
-  const releaseOnce = (status: number, retryAfterSeconds?: number) => {
+  const releaseOnce = (status: number, retryAfterSeconds?: number, actualMicros = 0) => {
     if (!releasePromise) {
-      releasePromise = releaseLease(status, retryAfterSeconds).finally(cleanupLease)
+      releasePromise = releaseLease(status, retryAfterSeconds, actualMicros).finally(cleanupLease)
     }
     return releasePromise
   }
-  const safeRelease = async (status: number, retryAfterSeconds?: number) => {
+  const safeRelease = async (status: number, retryAfterSeconds?: number, actualMicros = 0) => {
     try {
-      await releaseOnce(status, retryAfterSeconds)
+      await releaseOnce(status, retryAfterSeconds, actualMicros)
     } catch (error) {
       writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
     }
@@ -522,22 +545,30 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       },
       async ({ ttftMs, usage }) => {
         if (!upstream.ok) return
-        await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
         const elapsed = Date.now() - startedAt
         const firstByteMs = ttftMs === undefined ? undefined : ttftMs - startedAt
-        await recordGatewayUsage({
-          gatewayKeyId: gatewayApiKey.id,
-          providerId: provider.id,
-          providerModelId: model.id,
-          gatewayModelId,
-          protocol: modelProtocol,
-          startedAt: new Date(startedAt).toISOString(),
-          status: upstream.status,
-          durationMs: elapsed,
-          ...(firstByteMs !== undefined ? { ttftMs: firstByteMs } : {}),
-          metrics: usage,
-        })
         writeLog("info", "gateway", completionSummary(elapsed, firstByteMs, usage))
+        void (async () => {
+          let actualMicros = 0
+          try {
+            const event = await recordGatewayUsage({
+              gatewayKeyId: gatewayApiKey.id,
+              providerId: provider.id,
+              providerModelId: model.id,
+              gatewayModelId,
+              protocol: modelProtocol,
+              startedAt: new Date(startedAt).toISOString(),
+              status: upstream.status,
+              durationMs: elapsed,
+              ...(firstByteMs !== undefined ? { ttftMs: firstByteMs } : {}),
+              metrics: usage,
+            })
+            actualMicros = event.costMicros
+          } catch (error) {
+            writeLog("warn", "gateway", "Unable to persist usage event", { error: error instanceof Error ? error.message : "Unknown error" })
+          }
+          await safeRelease(upstream.status, retryAfterSeconds(upstream.headers), actualMicros)
+        })()
       },
       async () => {
         upstreamController.abort(new Error("Downstream response was cancelled"))

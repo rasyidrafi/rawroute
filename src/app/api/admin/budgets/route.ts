@@ -1,12 +1,11 @@
 import { requireAdmin } from "@/lib/auth"
-import { getBudgetRows, getBudgetWindow, listBudgetBypassSessions, upsertBudget } from "@/lib/analytics"
+import { getBudgetAdminData, upsertBudget } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 
 
 export async function GET() {
   try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
-  const [budgets, bypassSessions, window] = await Promise.all([getBudgetRows(), listBudgetBypassSessions(), getBudgetWindow()])
-  return Response.json({ budgets, bypassSessions, window })
+return Response.json(await getBudgetAdminData())
 }
 
 export async function POST(request: Request) {

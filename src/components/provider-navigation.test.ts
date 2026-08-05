@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, test } from "vitest"
 import { readFileSync } from "node:fs"
 
 test("providers use a list page and a dynamic detail page", () => {

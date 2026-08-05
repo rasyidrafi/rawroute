@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { cookies } from "next/headers"
 
-import { readData } from "@/lib/store"
+import { findApiKeyByValue, readMeta } from "@/lib/store"
 
 const COOKIE_NAME = "rawroute_session"
 
@@ -10,7 +10,7 @@ function sign(value: string, secret: string) {
 }
 
 export async function createSession() {
-  const data = await readData()
+  const data = await readMeta()
   const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 7
   const value = `${expiresAt}.${sign(String(expiresAt), data.sessionSecret)}`
   const jar = await cookies()
@@ -34,7 +34,7 @@ export async function isAuthenticated() {
   if (!value) return false
   const [expires, signature] = value.split(".")
   if (!expires || !signature || Number(expires) < Date.now()) return false
-  const data = await readData()
+  const data = await readMeta()
   const expected = sign(expires, data.sessionSecret)
   const left = Buffer.from(signature)
   const right = Buffer.from(expected)
@@ -51,8 +51,7 @@ export async function authenticateProxyKey(request: Request) {
     ? authorization.slice(7)
     : request.headers.get("x-api-key")
   if (!supplied) return undefined
-  const data = await readData()
-  return data.apiKeys.find((entry) => entry.key === supplied)
+  return findApiKeyByValue(supplied)
 }
 
 export async function validateProxyKey(request: Request) {

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, test } from "vitest"
 import { readFileSync } from "node:fs"
 
 test("Codex OAuth accounts expose dynamically detected usage limits", () => {

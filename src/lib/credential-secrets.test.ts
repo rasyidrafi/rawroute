@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "vitest"
 
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 
@@ -14,11 +14,10 @@ describe("credential secrets", () => {
     process.env.CREDENTIAL_ENCRYPTION_KEY = "test-encryption-key"
     const first = encryptCredentialSecret("refresh-token")
     const second = encryptCredentialSecret("refresh-token")
-    expect(first).toStartWith("rr1:")
-    expect(second).toStartWith("rr1:")
+    expect(first?.startsWith("rr1:")).toBe(true)
+    expect(second?.startsWith("rr1:")).toBe(true)
     expect(first).not.toBe(second)
     expect(decryptCredentialSecret(first)).toBe("refresh-token")
     expect(decryptCredentialSecret("legacy-value")).toBe("legacy-value")
   })
 })
-

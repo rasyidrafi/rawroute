@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
 import type { Provider } from "@/lib/types"

@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test } from "vitest"
 
 import { extractSessionIdentity } from "@/lib/session-routing"
 

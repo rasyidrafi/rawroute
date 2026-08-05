@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "vitest"
 
 import { _resetMemoryBackend, deleteAlias, listAliases, readData, upsertAlias } from "@/lib/store"
 import type { ModelAlias } from "@/lib/types"

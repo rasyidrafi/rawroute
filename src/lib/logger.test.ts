@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "bun:test"
+import { beforeEach, expect, test } from "vitest"
 
 import { clearLogs, readLogs, writeLog } from "@/lib/logger"
 

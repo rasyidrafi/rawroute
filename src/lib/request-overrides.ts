@@ -27,9 +27,10 @@ export function validateRequestOverrides(value: unknown) {
 }
 
 export function mergeRequestOverrides(payload: Record<string, unknown>, overrides: Record<string, unknown>) {
+  if (!Object.keys(overrides).length) return payload
   const merge = (base: unknown, configured: unknown): unknown => {
     if (!isPlainObject(base) || !isPlainObject(configured)) return structuredClone(configured)
-    const result: Record<string, unknown> = structuredClone(base)
+    const result: Record<string, unknown> = { ...(base as Record<string, unknown>) }
     for (const [key, value] of Object.entries(configured)) result[key] = key in result ? merge(result[key], value) : structuredClone(value)
     return result
   }
