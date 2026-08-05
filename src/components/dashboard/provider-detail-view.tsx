@@ -256,7 +256,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
-          <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal. Codex limits update every five minutes.</CardDescription>
+          <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal.</CardDescription>
           <CardAction>{provider.prefix === "codex" ? <Button aria-busy={starting} onClick={() => void addCodexAccount()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>

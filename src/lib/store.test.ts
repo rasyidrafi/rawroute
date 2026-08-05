@@ -16,6 +16,7 @@ import {
   migrateData,
   readData,
   stripUndefined,
+  updateApiKeyName,
   updateData,
   upsertModel,
   upsertProvider,
@@ -237,6 +238,13 @@ describe("configuration storage", () => {
     const custom = await createApiKey("Custom", "  client-secret  ")
     expect(generated.key).toMatch(/^sk-rr-/)
     expect(custom.key).toBe("client-secret")
+  })
+
+  test("updates a gateway API key name without changing its value", async () => {
+    const apiKey = await createApiKey("Original", "client-secret")
+    const updated = await updateApiKeyName(apiKey.id, " Renamed ")
+    expect(updated).toMatchObject({ id: apiKey.id, name: "Renamed", key: "client-secret" })
+    expect((await listApiKeys()).find((entry) => entry.id === apiKey.id)).toMatchObject({ name: "Renamed", key: "client-secret" })
   })
 
   test("enforces case-sensitive uniqueness against the bootstrap key and cleans indexes on delete", async () => {

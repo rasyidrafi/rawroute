@@ -656,6 +656,31 @@ export async function createApiKey(name: string, customKey?: string): Promise<Ap
   return apiKey
 }
 
+export async function updateApiKeyName(apiKeyId: string, name: string): Promise<ApiKey> {
+  const normalizedName = name.trim()
+  if (!normalizedName) throw new Error("API key name is required.")
+  if (normalizedName.length > 80) throw new Error("API key name must be 80 characters or fewer.")
+  if (isMemoryBackend()) {
+    const state = ensureMemorySeeded()
+    const existing = state.apiKeys.get(apiKeyId)
+    if (!existing) throw new Error("API key not found.")
+    const updated = { ...existing, name: normalizedName }
+    state.apiKeys.set(apiKeyId, updated)
+    invalidateCompatibilityCache()
+    return updated
+  }
+  const firestore = getFirestoreInstance()
+  const updated = await firestore.runTransaction(async (transaction) => {
+    const ref = apiKeyRef(apiKeyId)
+    const snapshot = await transaction.get(ref)
+    if (!snapshot.exists) throw new Error("API key not found.")
+    transaction.update(ref, { name: normalizedName })
+    return { ...apiKeyFromSnapshot(snapshot), name: normalizedName }
+  })
+  invalidateCompatibilityCache()
+  return updated
+}
+
 export async function _setApiKey(apiKey: ApiKey): Promise<void> {
   if (isMemoryBackend()) {
     const state = ensureMemorySeeded()
