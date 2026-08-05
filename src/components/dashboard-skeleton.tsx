@@ -1,4 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card"
 
 type DashboardSkeletonVariant = "default" | "endpoint-key" | "providers" | "oauth-providers" | "aliases" | "provider-detail" | "settings" | "usage" | "budgets" | "model-pricing" | "console-log"
 type DashboardSkeletonProps = { variant?: DashboardSkeletonVariant }
@@ -65,7 +66,26 @@ function BudgetsSkeleton() {
 }
 
 function ModelPricingSkeleton() {
-  return <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-36" descriptionWidth="w-[34rem]" actionWidth="w-24" /><div className="mt-6 grid gap-3 rounded-lg border bg-muted/20 p-4 md:grid-cols-2 xl:grid-cols-6">{Array.from({ length: 6 }).map((_, index) => <Skeleton key={index} className={`h-10 ${index === 0 ? "xl:col-span-2" : ""}`} />)}</div><SkeletonTable columns={6} rows={3} /></section>
+  return <main aria-busy="true" aria-label="Loading model pricing" className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8"><div className="mx-auto flex max-w-7xl flex-col gap-6"><Card>
+    <CardHeader>
+      <div className="flex items-center gap-2"><Skeleton className="size-5 rounded" /><Skeleton className="h-5 w-32" /></div>
+      <Skeleton className="h-4 w-full max-w-3xl" />
+      <CardAction><Skeleton className="h-9 w-24" /></CardAction>
+    </CardHeader>
+    <CardContent className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><Skeleton className="h-4 w-28" /><Skeleton className="mt-2 h-3 w-80 max-w-full" /></div><Skeleton className="h-8 w-40" /></div>
+      <div className="overflow-x-auto"><div className="min-w-[52rem]">
+        <div className="grid h-10 items-center gap-4 border-b px-2" style={{ gridTemplateColumns: "minmax(14rem, 1.4fr) 6rem minmax(10rem, 1fr) minmax(10rem, 1fr) auto" }}>{Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className={`h-4 ${index === 4 ? "w-16" : "w-20"}`} />)}</div>
+        {Array.from({ length: 3 }).map((_, row) => <div key={row} className="grid min-h-20 items-center gap-4 border-b px-2 last:border-0" style={{ gridTemplateColumns: "minmax(14rem, 1.4fr) 6rem minmax(10rem, 1fr) minmax(10rem, 1fr) auto" }}>
+          <div className="space-y-2"><Skeleton className="h-4 w-36" /><Skeleton className="h-3 w-48 max-w-full" /><Skeleton className="h-3 w-32 max-w-full" /></div>
+          <Skeleton className="h-5 w-14" />
+          <div className="space-y-2"><Skeleton className="h-4 w-8" /><Skeleton className="h-3 w-32 max-w-full" /></div>
+          <div className="space-y-2"><Skeleton className="h-4 w-24" /><Skeleton className="h-3 w-28 max-w-full" /></div>
+          <div className="flex justify-end gap-2"><Skeleton className="h-8 w-16" /><Skeleton className="h-8 w-16" /><Skeleton className="h-8 w-16" /></div>
+        </div>)}
+      </div></div>
+    </CardContent>
+  </Card></div></main>
 }
 
 function ConsoleLogSkeleton() {

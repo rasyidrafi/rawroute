@@ -14,3 +14,13 @@ test("dashboard loading state preserves the dashboard navigation shell", () => {
   expect(layout).toContain('<AppSidebar variant="inset" />')
   expect(layout).toContain("<SiteHeader />")
 })
+
+test("model pricing loading state mirrors the pricing card layout", () => {
+  const markup = renderToStaticMarkup(<DashboardContentSkeleton variant="model-pricing" />)
+
+  expect(markup).toContain('aria-label="Loading model pricing"')
+  expect(markup).toContain('data-slot="card-header"')
+  expect(markup).toContain('data-slot="card-content"')
+  expect(markup).toContain("minmax(14rem, 1.4fr)")
+  expect(markup).not.toContain("xl:grid-cols-6")
+})

@@ -864,21 +864,46 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     ? query.granularity
     : span <= 2 * 86_400_000 ? "hourly" : span <= 45 * 86_400_000 ? "daily" : "monthly"
   const granularity = requestedGranularity === "weekly" ? "daily" : requestedGranularity
-  const toExclusive = new Date(range.to.getTime() + (query.preset === "custom" ? 1 : 0))
+  const toExclusive = new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1))
+  const boundary = dashboardBoundaryRanges(range.from, toExclusive, granularity)
 
   const rollupsPromise = listUsageRollups(
     granularity as UsageRollup["granularity"],
     range.from.toISOString(),
     toExclusive.toISOString(),
   )
+  const boundaryEventsPromise = boundary.ranges.length
+    ? Promise.all(boundary.ranges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
+      .then((batches) => [...new Map(batches.flat().map((event) => [event.id, event])).values()])
+    : Promise.resolve([] as UsageEvent[])
   const keysPromise = publicView ? Promise.resolve([] as Awaited<ReturnType<typeof listApiKeys>>) : listApiKeys()
   const budgetDataPromise = budgetWindowPromise.then((window) => loadBudgetRows([], window))
-  const [rollupsResult, keysResult, budgetResult] = await Promise.allSettled([
+  const [rollupsResult, boundaryEventsResult, keysResult, budgetResult] = await Promise.allSettled([
     rollupsPromise,
+    boundaryEventsPromise,
     keysPromise,
     budgetDataPromise,
   ])
   const rollups = rollupsResult.status === "fulfilled" ? rollupsResult.value : []
+  const boundaryEvents = boundaryEventsResult.status === "fulfilled" ? boundaryEventsResult.value : []
+  const exactBoundaryData = boundaryEventsResult.status === "fulfilled"
+  const missingDimensionBucketStarts = new Set(
+    rollups
+      .filter((rollup) => !rollup.gatewayKeyId || !rollup.gatewayModelId)
+      .map((rollup) => rollup.bucketStart),
+  )
+  const missingDimensionRanges = [...missingDimensionBucketStarts].map((bucket) => [
+    new Date(Math.max(range.from.getTime(), Date.parse(bucket))),
+    new Date(Math.min(toExclusive.getTime(), nextBucketStart(new Date(bucket), granularity).getTime())),
+  ] as [Date, Date]).filter(([from, to]) => from < to)
+  const missingDimensionEventsResult = missingDimensionRanges.length
+    ? await Promise.allSettled(missingDimensionRanges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
+    : []
+  const missingDimensionData = missingDimensionRanges.length === 0 || missingDimensionEventsResult.every((result) => result.status === "fulfilled")
+  const missingDimensionEvents = missingDimensionData
+    ? missingDimensionEventsResult.flatMap((result) => result.status === "fulfilled" ? result.value : [])
+    : []
+  const replacementEvents = [...new Map([...boundaryEvents, ...missingDimensionEvents].map((event) => [event.id, event])).values()]
   const keys = keysResult.status === "fulfilled" ? keysResult.value : []
   const budgetRows = budgetResult.status === "fulfilled" ? budgetResult.value.rows : []
   const budgetWindow = budgetResult.status === "fulfilled" ? budgetResult.value.window : undefined
@@ -895,7 +920,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   let pricedRequests = 0
   let lastEventAt: string | null = null
 
-  for (const rollup of rollups) {
+  const rollupsToAggregate = exactBoundaryData
+    ? rollups.filter((rollup) => !boundary.partialBucketStarts.has(rollup.bucketStart) && (!missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart)))
+    : rollups.filter((rollup) => !missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart))
+  for (const rollup of [...rollupsToAggregate, ...replacementEvents.map((event) => rollupFromEvent(event, granularity as UsageRollup["granularity"]))]) {
     requestCount += rollup.requests
     totalTokens += rollup.totalTokens
     totalCostMicros += rollup.costMicros
@@ -912,8 +940,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     point.costMicros += rollup.costMicros
 
     if (!rollup.gatewayKeyId || !rollup.gatewayModelId) continue
-    const keyId = rollup.gatewayKeyId
-    const modelId = rollup.gatewayModelId
+    addDimensions(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.requests, rollup.totalTokens, rollup.costMicros, rollup.lastEventAt)
+  }
+
+  function addDimensions(keyId: string, modelId: string, requests: number, tokens: number, costMicros: number, lastUsedAt?: string) {
     let row = keyRows.get(keyId)
     if (!row) {
       const key = keyMap.get(keyId)
@@ -930,20 +960,20 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
       keyRows.set(keyId, row)
       modelsByKey.set(keyId, new Set())
     }
-    row.requests += rollup.requests
-    row.tokens += rollup.totalTokens
-    row.costMicros += rollup.costMicros
-    if (rollup.lastEventAt && (!row.lastUsed || row.lastUsed < rollup.lastEventAt)) row.lastUsed = rollup.lastEventAt
+    row.requests += requests
+    row.tokens += tokens
+    row.costMicros += costMicros
     modelsByKey.get(keyId)?.add(modelId)
+    if (lastUsedAt && (!row.lastUsed || row.lastUsed < lastUsedAt)) row.lastUsed = lastUsedAt
 
     let model = modelRows.get(modelId)
     if (!model) {
       model = { model: modelId, requests: 0, tokens: 0, costMicros: 0 }
       modelRows.set(modelId, model)
     }
-    model.requests += rollup.requests
-    model.tokens += rollup.totalTokens
-    model.costMicros += rollup.costMicros
+    model.requests += requests
+    model.tokens += tokens
+    model.costMicros += costMicros
   }
 
   for (const [keyId, row] of keyRows) {
@@ -972,6 +1002,50 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     models: [...modelRows.values()].sort((a, b) => b.requests - a.requests),
     freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt },
     pricingConfidence: { pricedRequests, unpricedRequests },
+  }
+}
+
+function dashboardBoundaryRanges(from: Date, toExclusive: Date, granularity: string) {
+  const startBucket = bucketStart(from, granularity)
+  const endBucket = bucketStart(new Date(toExclusive.getTime() - 1), granularity)
+  const startAligned = startBucket.getTime() === from.getTime()
+  const endAligned = bucketStart(toExclusive, granularity).getTime() === toExclusive.getTime()
+  const ranges: Array<[Date, Date]> = []
+
+  if (!startAligned) ranges.push([from, new Date(Math.min(toExclusive.getTime(), nextBucketStart(startBucket, granularity).getTime()))])
+  if (!endAligned) ranges.push([new Date(Math.max(from.getTime(), endBucket.getTime())), toExclusive])
+
+  const merged = ranges.sort((a, b) => a[0].getTime() - b[0].getTime()).reduce<Array<[Date, Date]>>((result, current) => {
+    const previous = result[result.length - 1]
+    if (previous && current[0].getTime() <= previous[1].getTime()) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
+    else result.push(current)
+    return result
+  }, [])
+  const partialBucketStarts = new Set<string>()
+  if (!startAligned) partialBucketStarts.add(startBucket.toISOString())
+  if (!endAligned) partialBucketStarts.add(endBucket.toISOString())
+  return { ranges: merged.filter(([rangeFrom, rangeTo]) => rangeFrom < rangeTo), partialBucketStarts }
+}
+
+function nextBucketStart(value: Date, granularity: string) {
+  if (granularity === "hourly") return addZonedDays(value, 1 / 24)
+  if (granularity === "monthly") return addZonedMonths(value, 1)
+  return addZonedDays(value, 1)
+}
+
+function rollupFromEvent(event: UsageEvent, granularity: UsageRollup["granularity"]): UsageRollup {
+  const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
+  return {
+    ...emptyRollup(`boundary:${event.id}`, granularity, bucket, event),
+    requests: 1,
+    inputTokens: event.inputTokens,
+    outputTokens: event.outputTokens,
+    cacheReadTokens: event.cacheReadTokens,
+    cacheCreationTokens: event.cacheCreationTokens,
+    totalTokens: event.totalTokens,
+    costMicros: event.costMicros,
+    pricedRequests: event.pricingConfidence === "exact" ? 1 : 0,
+    unpricedRequests: event.pricingConfidence === "exact" ? 0 : 1,
   }
 }
 

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
-import { checkBudget, getBudgetAdmission, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { createApiKey, _resetMemoryBackend } from "@/lib/store"
+import type { UsageEvent } from "@/lib/types"
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"
@@ -9,7 +10,7 @@ beforeEach(() => {
   resetAnalyticsForTests()
 })
 
-describe("usage analytics", () => {
+describe.sequential("usage analytics", () => {
   test("normalizes cache buckets and calculates integer micros", async () => {
     const key = await createApiKey("Analytics")
     await upsertModelPricing({ modelId: "model-doc", provider: "test", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 100_000, cacheCreationMicrosPerMillion: 200_000, enabled: true })
@@ -75,6 +76,41 @@ describe("usage analytics", () => {
     expect(payload.range.label).toBe("Budget window")
     expect(payload.range.from).toBe("2026-08-06T09:30:00.000Z")
     expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
+  })
+
+  test("calculates keys and models exactly inside partial budget-window buckets", async () => {
+    const firstKey = await createApiKey("First key")
+    const secondKey = await createApiKey("Second key")
+    await updateBudgetWindow({ anchor: "custom", start: "2026-08-04T09:30:00.000Z", end: "2026-08-06T17:45:00.000Z" })
+
+    const event = (id: string, completedAt: string, gatewayKeyId: string, gatewayModelId: string): UsageEvent => ({
+      id,
+      gatewayKeyId,
+      gatewayModelId,
+      protocol: "openai-chat",
+      startedAt: completedAt,
+      completedAt,
+      status: 200,
+      durationMs: 1,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 15,
+      costMicros: 100,
+      pricingConfidence: "exact",
+      usageAvailable: true,
+    })
+
+    await recordUsageEvent(event("before", "2026-08-04T09:00:00.000Z", secondKey.id, "before-model"))
+    await recordUsageEvent(event("inside-start", "2026-08-04T10:00:00.000Z", firstKey.id, "start-model"))
+    await recordUsageEvent(event("inside-end", "2026-08-06T17:00:00.000Z", secondKey.id, "end-model"))
+    await recordUsageEvent(event("after", "2026-08-06T18:00:00.000Z", secondKey.id, "after-model"))
+
+    const payload = await getDashboardPayload({ preset: "budget" })
+    expect(payload.summary.requests).toBe(2)
+    expect(payload.keys.map((row) => [row.label, row.requests])).toEqual([["First key", 1], ["Second key", 1]])
+    expect(payload.models.map((row) => [row.model, row.requests])).toEqual([["start-model", 1], ["end-model", 1]])
   })
 
   test("rejects an invalid shared budget window", async () => {
