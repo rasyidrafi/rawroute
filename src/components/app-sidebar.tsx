@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, LogOutIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon } from "lucide-react"
+import { ArrowLeftRightIcon, ChartNoAxesCombinedIcon, ChevronDownIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, LogOutIcon, PlusIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useRouter } from "next/navigation"
@@ -8,7 +8,10 @@ import { useState } from "react"
 
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
+
+const workspaces = ["Default Workspace", "Second Workspace", "Third Workspace"]
 
 const navigationGroups = [
   {
@@ -42,13 +45,31 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
   const [signingOut, setSigningOut] = useState(false)
   const [logoutOpen, setLogoutOpen] = useState(false)
+  const [selectedWorkspace, setSelectedWorkspace] = useState(workspaces[0])
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <SidebarMenu><SidebarMenuItem><SidebarMenuButton size="lg" tooltip="RawRoute">
-          <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-slate-950 text-white"><RouteIcon className="size-4" /></div>
-          <div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">RawRoute</span><span className="truncate text-xs">Native protocol gateway</span></div>
-        </SidebarMenuButton></SidebarMenuItem></SidebarMenu>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<SidebarMenuButton size="lg" tooltip="Switch workspace" />}>
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-slate-950 text-white"><RouteIcon className="size-4" /></div>
+                <div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">RawRoute</span><span className="truncate text-xs">{selectedWorkspace}</span></div>
+                <ChevronDownIcon className="ml-auto size-4 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-64" align="start" side="bottom" sideOffset={8}>
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={selectedWorkspace} onValueChange={setSelectedWorkspace}>
+                    {workspaces.map((workspace) => <DropdownMenuRadioItem key={workspace} value={workspace}><div className="flex size-7 items-center justify-center rounded-md border bg-background"><RouteIcon className="size-3.5" /></div><span>{workspace}</span></DropdownMenuRadioItem>)}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem><div className="flex size-7 items-center justify-center rounded-md border bg-background"><PlusIcon className="size-4" /></div><span>Add New Workspace</span></DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
         {navigationGroups.map((group) => <SidebarGroup key={group.label}><SidebarGroupLabel>{group.label}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
