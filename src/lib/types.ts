@@ -137,9 +137,13 @@ export interface GatewayKeyBudget {
   updatedAt: string
 }
 
+export type BudgetWindowAnchor = "codex" | "custom"
+
 export interface BudgetWindow {
   start: string
   end: string
+  anchor: BudgetWindowAnchor
+  codexAccountId?: string | null
   bypassLimits: boolean
   bypassSessionId?: string | null
   updatedAt: string

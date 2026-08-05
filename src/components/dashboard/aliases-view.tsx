@@ -9,6 +9,7 @@ import { AliasForm } from "@/components/dashboard/alias-form"
 import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { LoadingSpinner } from "@/components/loading-spinner"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
@@ -18,12 +19,12 @@ import type { Model, ModelAlias, Provider } from "@/lib/types"
 type AliasesResponse = { aliases: ModelAlias[]; models: Model[]; providers: Provider[] }
 
 export function AliasesView() {
-  const { data, error, isLoading, mutate } = useSWR<AliasesResponse>("/api/admin/aliases")
+  const { data, error, isLoading, isValidating, mutate } = useSWR<AliasesResponse>("/api/admin/aliases")
   const [aliasOpen, setAliasOpen] = useState(false)
   const [editingAlias, setEditingAlias] = useState<ModelAlias | null>(null)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Aliases unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" onClick={() => void mutate()}>Try again</Button></div></main>
+  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Aliases unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
   if (isLoading || !data) return <DashboardContentSkeleton variant="aliases" />
 
   const isPending = (key: string) => pending.has(key)

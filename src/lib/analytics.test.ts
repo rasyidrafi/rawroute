@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
-import { checkBudget, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, upsertBudget, upsertModelPricing } from "@/lib/analytics"
+import { checkBudget, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { createApiKey, _resetMemoryBackend } from "@/lib/store"
 
 beforeEach(() => {
@@ -46,5 +46,15 @@ describe("usage analytics", () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.every((session) => session.startedAt && session.endedAt)).toBe(true)
     expect((await getBudgetWindow()).bypassLimits).toBe(false)
+  })
+
+  test("persists a custom shared budget window", async () => {
+    const window = await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T00:00:00.000Z", end: "2026-08-13T00:00:00.000Z" })
+    expect(window).toMatchObject({ anchor: "custom", start: "2026-08-06T00:00:00.000Z", end: "2026-08-13T00:00:00.000Z", codexAccountId: null })
+    expect((await getBudgetWindow()).anchor).toBe("custom")
+  })
+
+  test("rejects an invalid shared budget window", async () => {
+    await expect(updateBudgetWindow({ anchor: "custom", start: "2026-08-13T00:00:00.000Z", end: "2026-08-06T00:00:00.000Z" })).rejects.toThrow("Invalid budget window")
   })
 })

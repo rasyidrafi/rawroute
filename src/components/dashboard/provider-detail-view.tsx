@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RefreshCwIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR, { mutate as globalMutate } from "swr"
@@ -16,6 +16,7 @@ import { ProviderForm } from "@/components/dashboard/provider-form"
 import { Input } from "@/components/ui/input"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -165,7 +166,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     if (nextIndex < 0 || nextIndex >= apiKeys.length) return
     const orderedIds = apiKeys.map((apiKey) => apiKey.id)
     ;[orderedIds[index], orderedIds[nextIndex]] = [orderedIds[nextIndex], orderedIds[index]]
-    const pendingKey = `move-provider-api-key:${apiKeys[index].id}`
+    const pendingKey = `move-provider-api-key:${apiKeys[index].id}:${direction}`
     setPending((current) => new Set(current).add(pendingKey))
     try {
       await apiPost(`/api/admin/providers/${provider.id}/api-keys/reorder`, { orderedIds })
@@ -255,7 +256,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
           <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal. Codex limits update every five minutes.</CardDescription>
-          <CardAction>{provider.prefix === "codex" ? <Button onClick={() => void addCodexAccount()} disabled={starting || Boolean(device)}>{starting ? <RefreshCwIcon className="animate-spin" /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
+          <CardAction>{provider.prefix === "codex" ? <Button aria-busy={starting} onClick={() => void addCodexAccount()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
           <DialogContent>
@@ -281,13 +282,14 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
             <TableBody>
               {apiKeys.map((apiKey, index) => {
                 const pendingKey = `delete-provider-api-key:${apiKey.id}`
-                const movePending = isPending(`move-provider-api-key:${apiKey.id}`)
+                const moveUpPending = isPending(`move-provider-api-key:${apiKey.id}:-1`)
+                const moveDownPending = isPending(`move-provider-api-key:${apiKey.id}:1`)
                 const showQuota = isOAuthProvider && apiKey.credentialKind === "codex-oauth"
                 return <TableRow key={apiKey.id} className={apiKey.enabled ? undefined : "opacity-60"}>
                     <TableCell className="align-middle">
                       <div className="flex items-center gap-0.5">
-                        <Button aria-label={`Move ${apiKey.name} up`} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || movePending} onClick={() => void moveProviderApiKey(index, -1)}><ChevronUpIcon /></Button>
-                        <Button aria-label={`Move ${apiKey.name} down`} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || movePending} onClick={() => void moveProviderApiKey(index, 1)}><ChevronDownIcon /></Button>
+                        <Button aria-label={`Move ${apiKey.name} up`} aria-busy={moveUpPending} title="Move up" size="icon-xs" variant="ghost" disabled={index === 0 || moveUpPending || moveDownPending} onClick={() => void moveProviderApiKey(index, -1)}>{moveUpPending ? <LoadingSpinner /> : <ChevronUpIcon />}</Button>
+                        <Button aria-label={`Move ${apiKey.name} down`} aria-busy={moveDownPending} title="Move down" size="icon-xs" variant="ghost" disabled={index === apiKeys.length - 1 || moveUpPending || moveDownPending} onClick={() => void moveProviderApiKey(index, 1)}>{moveDownPending ? <LoadingSpinner /> : <ChevronDownIcon />}</Button>
                       </div>
                     </TableCell>
                     <TableCell className="font-medium">{apiKey.name}</TableCell>
@@ -297,7 +299,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     {isOAuthProvider && <TableCell>{usageLoading && !usageData ? "…" : usageData?.accounts[apiKey.id]?.unusedResetCredits ?? "N/A"}</TableCell>}
                     {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
                     <TableCell className="align-middle text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <RefreshCwIcon className="animate-spin" /> : <RotateCcwIcon />}Redeem</Button></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 9 : 6} />}
@@ -309,7 +311,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>Redeem Codex reset credit?</AlertDialogTitle><AlertDialogDescription>This consumes one banked reset credit for {resetAccount?.name}. Type <code>use my codex reset</code> to confirm.</AlertDialogDescription></AlertDialogHeader>
           <Input value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} placeholder="use my codex reset" autoFocus />
-          <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || isPending(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>Redeem reset</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogCancel disabled={isPending(`reset:${resetAccount?.id}`)}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={isPending(`reset:${resetAccount?.id}`)} disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || isPending(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>{isPending(`reset:${resetAccount?.id}`) && <LoadingSpinner />}Redeem reset</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <Card>

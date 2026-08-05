@@ -58,7 +58,10 @@ function UsageSkeleton() {
 }
 
 function BudgetsSkeleton() {
-  return <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-28" descriptionWidth="w-[34rem]" actionWidth="w-24" /><div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><Skeleton className="h-10 w-64" /><div className="flex gap-3"><Skeleton className="h-10 w-40" /><Skeleton className="h-10 w-32" /></div></div><div className="mt-4 flex items-center justify-between rounded-lg border p-4"><div className="space-y-2"><Skeleton className="h-4 w-28" /><Skeleton className="h-4 w-64 max-w-full" /></div><Skeleton className="h-9 w-24" /></div><SkeletonTable columns={6} rows={3} /></section>
+  return <>
+    <section className="rounded-xl border bg-card p-6"><div><div className="flex items-center gap-2"><Skeleton className="size-5 rounded" /><Skeleton className="h-6 w-36" /></div><Skeleton className="mt-2 h-4 w-[32rem] max-w-full" /></div><div className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><Skeleton className="h-16 w-full max-w-md flex-none" /><div className="flex flex-col gap-3 sm:flex-row lg:ml-auto"><Skeleton className="h-10 w-48" /><Skeleton className="h-10 w-48" /><Skeleton className="h-10 w-28" /></div></div></section>
+    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-28" descriptionWidth="w-[34rem]" actionWidth="w-24" /><div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-end"><Skeleton className="h-10 w-64" /><Skeleton className="h-10 w-40" /><Skeleton className="h-10 w-32" /></div><div className="mt-4 flex items-center justify-between rounded-lg border p-4"><div className="space-y-2"><Skeleton className="h-4 w-28" /><Skeleton className="h-4 w-64 max-w-full" /></div><Skeleton className="h-9 w-32" /></div><div className="mt-4 flex items-center justify-between"><div className="space-y-2"><Skeleton className="h-4 w-28" /><Skeleton className="h-3 w-64 max-w-full" /></div><Skeleton className="h-9 w-44" /></div><SkeletonTable columns={5} rows={3} /></section>
+  </>
 }
 
 function ModelPricingSkeleton() {

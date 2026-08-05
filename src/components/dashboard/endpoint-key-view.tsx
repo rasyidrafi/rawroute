@@ -6,6 +6,7 @@ import useSWR from "swr"
 import { toast } from "sonner"
 
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { LoadingSpinner } from "@/components/loading-spinner"
 import { ApiKeyForm } from "@/components/dashboard/api-key-form"
 import { ConfirmAction, EndpointValue, maskApiKey } from "@/components/dashboard/shared"
 import { apiDelete, apiPost } from "@/components/dashboard/api"
@@ -18,12 +19,12 @@ import type { ApiKey } from "@/lib/types"
 type EndpointKeyResponse = { endpoint: string; apiKeys: ApiKey[] }
 
 export function EndpointKeyView() {
-  const { data, error, isLoading, mutate } = useSWR<EndpointKeyResponse>("/api/admin/endpoint-key")
+  const { data, error, isLoading, isValidating, mutate } = useSWR<EndpointKeyResponse>("/api/admin/endpoint-key")
   const [keyOpen, setKeyOpen] = useState(false)
   const [createdKey, setCreatedKey] = useState<string>()
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" onClick={() => void mutate()}>Try again</Button></div></main>
+  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
   if (isLoading || !data) return <DashboardContentSkeleton variant="endpoint-key" />
 
   const isPending = (key: string) => pending.has(key)

@@ -32,9 +32,9 @@ export function maskApiKey(key: string) {
   return `${key.slice(0, 7)}${"•".repeat(20)}${key.slice(-4)}`
 }
 
-export function ConfirmAction({ title, description, buttonLabel, pending, disabled, onConfirm, children }: { title: string; description: string; buttonLabel?: string; pending: boolean; disabled?: boolean; onConfirm: () => Promise<boolean>; children: ReactNode }) {
+export function ConfirmAction({ title, description, buttonLabel, pending, disabled, onConfirm, children }: { title: string; description: string; buttonLabel?: string; pending: boolean; disabled?: boolean; onConfirm: () => Promise<boolean>; children?: ReactNode }) {
   const [open, setOpen] = useState(false)
-  return <AlertDialog open={open} onOpenChange={setOpen}><Button aria-label={title} disabled={disabled || pending} size={buttonLabel ? "sm" : "icon-sm"} variant={buttonLabel ? "destructive" : "ghost"} onClick={() => setOpen(true)}>{pending ? <LoadingSpinner /> : children}{buttonLabel}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{title}</AlertDialogTitle><AlertDialogDescription>{description}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={pending} onClick={async () => { if (await onConfirm()) setOpen(false) }}>{pending && <LoadingSpinner />}{buttonLabel || "Delete"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  return <AlertDialog open={open} onOpenChange={setOpen}><Button aria-label={title} disabled={disabled || pending} size={buttonLabel ? "sm" : "icon-sm"} variant="destructive" onClick={() => setOpen(true)}>{pending ? <LoadingSpinner /> : children}{buttonLabel}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{title}</AlertDialogTitle><AlertDialogDescription>{description}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={pending} onClick={async () => { if (await onConfirm()) setOpen(false) }}>{pending && <LoadingSpinner />}{buttonLabel || "Delete"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
 }
 
 export function EndpointValue() {

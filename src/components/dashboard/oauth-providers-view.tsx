@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { CopyIcon, LinkIcon, LogInIcon, RefreshCwIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
+import { CopyIcon, LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
@@ -9,6 +9,7 @@ import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/ap
 import { CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -48,7 +49,7 @@ function expiryLabel(value?: string) {
 }
 
 export function OAuthProvidersView() {
-  const { data, error, isLoading, mutate } = useSWR<OAuthResponse>("/api/admin/oauth-providers", fetcher)
+  const { data, error, isLoading, isValidating, mutate } = useSWR<OAuthResponse>("/api/admin/oauth-providers", fetcher)
   const { data: usageData, error: usageError, isLoading: usageLoading, mutate: mutateUsage } = useSWR<UsageResponse>("/api/admin/oauth-providers/usage", fetcher, {
     refreshInterval: 300000,
     dedupingInterval: 300000,
@@ -97,7 +98,7 @@ export function OAuthProvidersView() {
     }
   }, [accountName, device, mutate, mutateUsage, polling])
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">OAuth providers unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" onClick={() => void mutate()}>Try again</Button></div></main>
+  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">OAuth providers unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
   if (isLoading || !data) return <DashboardContentSkeleton variant="oauth-providers" />
 
   async function connectCodex() {
@@ -165,7 +166,7 @@ export function OAuthProvidersView() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />Codex Providers</CardTitle>
           <CardDescription>Connect multiple Codex accounts once and route native Responses requests through this gateway. Usage limits update every five minutes.</CardDescription>
-          <CardAction><Button onClick={() => void connectCodex()} disabled={starting || Boolean(device)}>{starting ? <RefreshCwIcon className="animate-spin" /> : <LogInIcon />}Add Codex account</Button></CardAction>
+          <CardAction><Button aria-busy={starting} onClick={() => void connectCodex()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex account</Button></CardAction>
         </CardHeader>
         <CardContent>
           <Table>
@@ -181,7 +182,7 @@ export function OAuthProvidersView() {
                     <CodexQuotaTableCell accountUsage={usage} loading={usageLoading && !usageData} error={usageError?.message} />
                     <TableCell>{usageLoading && !usageData ? "…" : usage?.unusedResetCredits ?? "N/A"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
-                    <TableCell><div className="flex justify-end gap-1"><Button size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <RefreshCwIcon className="animate-spin" /> : account.enabled ? "Disable" : "Enable"}</Button><Button size="sm" variant="outline" disabled={!usage?.unusedResetCredits || usage.weekly?.remainingPercent !== 0 || pending.has(`reset:${account.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(account)}>{pending.has(`reset:${account.id}`) ? <RefreshCwIcon className="animate-spin" /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                    <TableCell><div className="flex justify-end gap-1"><Button aria-busy={pending.has(updateKey)} size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <LoadingSpinner /> : account.enabled ? "Disable" : "Enable"}</Button><Button aria-busy={pending.has(`reset:${account.id}`)} size="sm" variant="outline" disabled={!usage?.unusedResetCredits || usage.weekly?.remainingPercent !== 0 || pending.has(`reset:${account.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(account)}>{pending.has(`reset:${account.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                   </TableRow>
               })}
               {!data.accounts.length && <EmptyRow label="No Codex accounts connected yet." colSpan={7} />}
@@ -201,7 +202,7 @@ export function OAuthProvidersView() {
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>Redeem Codex reset credit?</AlertDialogTitle><AlertDialogDescription>This consumes one banked reset credit for {resetAccount?.name}. Type <code>use my codex reset</code> to confirm.</AlertDialogDescription></AlertDialogHeader>
         <Input value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} placeholder="use my codex reset" autoFocus />
-        <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || pending.has(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>Redeem reset</AlertDialogAction></AlertDialogFooter>
+        <AlertDialogFooter><AlertDialogCancel disabled={pending.has(`reset:${resetAccount?.id}`)}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={pending.has(`reset:${resetAccount?.id}`)} disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || pending.has(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>{pending.has(`reset:${resetAccount?.id}`) && <LoadingSpinner />}Redeem reset</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
   </main>

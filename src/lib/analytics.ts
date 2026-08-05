@@ -3,8 +3,10 @@ import { applicationDefault, cert, getApp, getApps, initializeApp } from "fireba
 import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore"
 
 import { listApiKeys } from "@/lib/store"
+import { listCodexAccounts } from "@/lib/codex"
+import { getCodexUsageForAccount } from "@/lib/codex-usage"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
-import type { BudgetBypassSession, BudgetWindow, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, UsageEvent, UsageRollup } from "@/lib/types"
+import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, UsageEvent, UsageRollup } from "@/lib/types"
 
 let firestore: Firestore | undefined
 const memoryEvents = new Map<string, UsageEvent>()
@@ -33,7 +35,7 @@ function bypassSessionsRef() { return db().collection(`${prefix()}_budget_bypass
 function windowRef() { return db().collection(`${prefix()}_budget_windows`).doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
 function monday(date = new Date()) { const value = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())); const day = value.getUTCDay(); value.setUTCDate(value.getUTCDate() - (day === 0 ? 6 : day - 1)); return value }
-function defaultWindow(): BudgetWindow { const start = monday(); const end = new Date(start); end.setUTCDate(end.getUTCDate() + 7); return { start: start.toISOString(), end: end.toISOString(), bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
+function defaultWindow(): BudgetWindow { const start = monday(); const end = new Date(start); end.setUTCDate(end.getUTCDate() + 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
 
 export class BudgetDeniedError extends Error { status = 429; retryAfterSeconds: number; constructor(message: string, retryAfterSeconds: number) { super(message); this.name = "BudgetDeniedError"; this.retryAfterSeconds = retryAfterSeconds } }
 
@@ -155,11 +157,35 @@ export async function getBudgetWindow() {
   const snapshot = await windowRef().get()
   return snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
 }
-export async function updateBudgetWindow(input: Partial<BudgetWindow>) {
+async function resolveCodexBudgetWindow(accountId: string | null | undefined) {
+  const { accounts } = await listCodexAccounts()
+  if (!accounts.length) throw new Error("Connect a Codex account before syncing the budget window.")
+  const account = accounts.find((entry) => entry.id === accountId) || (accountId ? undefined : accounts[0])
+  if (!account) throw new Error("The selected Codex account was not found.")
+  const usage = await getCodexUsageForAccount(account)
+  const resetAt = usage.weekly?.resetAt
+  if (!resetAt) throw new Error("The selected Codex account has no weekly reset time available.")
+  const end = new Date(resetAt)
+  if (!Number.isFinite(end.getTime())) throw new Error("The selected Codex account returned an invalid weekly reset time.")
+  const start = new Date(end)
+  start.setUTCDate(start.getUTCDate() - 7)
+  return { start: start.toISOString(), end: end.toISOString(), anchor: "codex" as const, codexAccountId: account.id }
+}
+
+export async function updateBudgetWindow(input: Partial<BudgetWindow> & { anchor?: BudgetWindowAnchor; codexAccountId?: string | null }) {
   const current = await getBudgetWindow()
   let base = current
   if (input.bypassLimits !== undefined && input.bypassLimits !== current.bypassLimits) base = (await setBudgetBypassEnabled(input.bypassLimits)).window
-  const next = { ...base, ...input, bypassSessionId: base.bypassSessionId, updatedAt: new Date().toISOString() }
+  const anchor = input.anchor || base.anchor || "custom"
+  let next = { ...base, ...input, anchor, bypassSessionId: base.bypassSessionId, updatedAt: new Date().toISOString() } as BudgetWindow
+  if (anchor === "codex" && (input.anchor === "codex" || input.codexAccountId !== undefined)) {
+    next = { ...next, ...await resolveCodexBudgetWindow(input.codexAccountId ?? base.codexAccountId) }
+  } else if (anchor === "custom") {
+    next = { ...next, anchor: "custom", codexAccountId: null }
+  }
+  const start = new Date(next.start)
+  const end = new Date(next.end)
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) throw new Error("Invalid budget window.")
   if (isMemory()) memoryWindow = next; else await windowRef().set(next)
   return next
 }

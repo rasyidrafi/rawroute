@@ -11,6 +11,7 @@ import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { ProviderForm } from "@/components/dashboard/provider-form"
 import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,12 +23,12 @@ type ProvidersResponse = { providers: ProviderSummary[] }
 
 export function ProvidersView() {
   const router = useRouter()
-  const { data, error, isLoading, mutate } = useSWR<ProvidersResponse>("/api/admin/providers")
+  const { data, error, isLoading, isValidating, mutate } = useSWR<ProvidersResponse>("/api/admin/providers")
   const [providerOpen, setProviderOpen] = useState(false)
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" onClick={() => void mutate()}>Try again</Button></div></main>
+  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
   if (isLoading || !data) return <DashboardContentSkeleton variant="providers" />
 
   const isPending = (key: string) => pending.has(key)
