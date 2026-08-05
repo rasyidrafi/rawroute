@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowLeftRightIcon, ChartNoAxesCombinedIcon, KeyRoundIcon, LogsIcon, LogOutIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon } from "lucide-react"
+import { ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, LogOutIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useRouter } from "next/navigation"
@@ -25,7 +25,7 @@ const navigationGroups = [
     items: [
       { title: "Usage", icon: ChartNoAxesCombinedIcon, href: "/dashboard/usage" },
       { title: "Budgets", icon: WalletCardsIcon, href: "/dashboard/budgets" },
-      { title: "Model Pricing", icon: SettingsIcon, href: "/dashboard/model-pricing" },
+      { title: "Model Pricing", icon: DollarSignIcon, href: "/dashboard/model-pricing" },
     ],
   },
   {
