@@ -4,8 +4,6 @@ import { writeLog } from "@/lib/logger"
 import { upsertProviderApiKey } from "@/lib/store"
 import type { ProviderApiKey } from "@/lib/types"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 function parseInteger(value: unknown, label: string, minimum: number, maximum?: number): number | undefined {
   if (value === undefined || value === null) return undefined

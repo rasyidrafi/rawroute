@@ -2,8 +2,6 @@ import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { reorderProviderApiKeys } from "@/lib/store"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
   try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }

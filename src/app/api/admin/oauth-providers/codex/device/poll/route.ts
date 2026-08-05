@@ -2,8 +2,6 @@ import { requireAdmin } from "@/lib/auth"
 import { codexDeviceRedirectUri, exchangeCodexAuthorizationCode, pollCodexDeviceCode, saveCodexAccount } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function POST(request: Request) {
   try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }

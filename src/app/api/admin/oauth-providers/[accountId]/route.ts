@@ -3,8 +3,6 @@ import { listCodexAccounts } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
 import { deleteProviderApiKey, upsertProviderApiKey } from "@/lib/store"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function PATCH(request: Request, context: { params: Promise<{ accountId: string }> }) {
   try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }

@@ -6,6 +6,7 @@ import useSWR from "swr"
 import { toast } from "sonner"
 
 import { LoadingSpinner } from "@/components/loading-spinner"
+import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,8 @@ export function ConsoleLog() {
   const [clearOpen, setClearOpen] = useState(false)
   const { data, error, isLoading, isValidating, mutate } = useSWR("/api/admin/logs", fetchLogs, { refreshInterval: live ? 3000 : 0, revalidateOnFocus: false })
   const logs = useMemo(() => (data?.logs || []).filter((entry) => (level === "all" || entry.level === level) && formatLog(entry).toLowerCase().includes(query.toLowerCase())), [data, level, query])
+
+  if (isLoading && !data) return <DashboardContentSkeleton variant="console-log" />
 
   async function clear() {
     setClearing(true)

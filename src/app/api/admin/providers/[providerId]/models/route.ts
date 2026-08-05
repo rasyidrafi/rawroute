@@ -5,8 +5,6 @@ import { validateRequestOverrides } from "@/lib/request-overrides"
 import { getProvider, upsertModel } from "@/lib/store"
 import type { Model, Protocol } from "@/lib/types"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 const protocols: Protocol[] = ["openai-chat", "openai-responses", "anthropic-messages"]
 

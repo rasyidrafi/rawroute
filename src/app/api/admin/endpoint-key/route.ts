@@ -2,8 +2,6 @@ import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { listApiKeys } from "@/lib/store"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function GET() {
   try {

@@ -12,7 +12,7 @@ import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import type { ApiKey } from "@/lib/types"
 
 type EndpointKeyResponse = { endpoint: string; apiKeys: ApiKey[] }
@@ -20,6 +20,7 @@ type EndpointKeyResponse = { endpoint: string; apiKeys: ApiKey[] }
 export function EndpointKeyView() {
   const { data, error, isLoading, mutate } = useSWR<EndpointKeyResponse>("/api/admin/endpoint-key")
   const [keyOpen, setKeyOpen] = useState(false)
+  const [createdKey, setCreatedKey] = useState<string>()
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
   if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button className="mt-4" onClick={() => void mutate()}>Try again</Button></div></main>
@@ -27,11 +28,12 @@ export function EndpointKeyView() {
 
   const isPending = (key: string) => pending.has(key)
 
-  async function createKey(name: string) {
+  async function createKey(name: string, key?: string) {
     setPending((current) => new Set(current).add("create-api-key"))
     try {
-      await apiPost("/api/admin/api-keys", { name })
+      const response = await apiPost<{ apiKey: ApiKey }>("/api/admin/api-keys", { name, ...(key ? { key } : {}) })
       toast.success("API key created")
+      setCreatedKey(response.apiKey.key)
       await mutate()
       setKeyOpen(false)
       return true
@@ -80,7 +82,8 @@ export function EndpointKeyView() {
           <CardDescription>Clients use these keys to access every proxy endpoint.</CardDescription>
           <CardAction><Button onClick={() => setKeyOpen(true)}><PlusIcon />Create key</Button></CardAction>
         </CardHeader>
-        <Dialog open={keyOpen} onOpenChange={setKeyOpen}><DialogContent><ApiKeyForm onSave={createKey} /></DialogContent></Dialog>
+      <Dialog open={keyOpen} onOpenChange={setKeyOpen}><DialogContent><ApiKeyForm onSave={createKey} /></DialogContent></Dialog>
+      <Dialog open={Boolean(createdKey)} onOpenChange={(open) => { if (!open) setCreatedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>API key created</DialogTitle><DialogDescription>Copy this value now. It will only be available from the admin dashboard.</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{createdKey}</code><Button aria-label="Copy created API key" size="icon-sm" variant="outline" onClick={() => { if (createdKey) { void navigator.clipboard.writeText(createdKey); toast.success("Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setCreatedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
         <CardContent className="space-y-3">
           {data.apiKeys.map((key) => {
             const pendingKey = `delete-api-key:${key.id}`

@@ -1,4 +1,5 @@
 import { authenticateProxyKey } from "@/lib/auth"
+import { BudgetDeniedError, checkBudget, recordGatewayUsage } from "@/lib/analytics"
 import { refreshCodexAccount } from "@/lib/codex"
 import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
 import { jsonError } from "@/lib/http"
@@ -11,6 +12,9 @@ import { getRoutingStateStore } from "@/lib/routing-state"
 import { extractSessionIdentity } from "@/lib/session-routing"
 import { readData } from "@/lib/store"
 import { protocolPaths, type Protocol, type ProviderApiKey } from "@/lib/types"
+import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
+
+export { extractUsageMetrics } from "@/lib/usage-metrics"
 
 const blockedRequestHeaders = new Set([
   "authorization", "x-api-key", "cookie", "host", "content-length", "connection",
@@ -92,7 +96,7 @@ function requestItemCount(payload: Record<string, unknown>, protocol?: Protocol)
   return 0
 }
 
-function requestToolCount(payload: Record<string, unknown>, protocol?: Protocol) {
+function requestToolCount(payload: Record<string, unknown>) {
   // 9router-style tool counting: count declared tool definitions on the
   // request side. Different protocols name the array differently:
   //   - openai-chat: `tools` (modern) or `functions` (legacy)
@@ -131,7 +135,7 @@ function requestSummary(provider: string, gatewayModel: string, upstreamModel: s
   ]
   if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
   parts.push(`MSG:${requestItemCount(payload, protocol)}`)
-  const toolCount = requestToolCount(payload, protocol)
+  const toolCount = requestToolCount(payload)
   if (toolCount) parts.push(`TOOL:${toolCount}`)
   return parts.join(" ")
 }
@@ -147,85 +151,8 @@ function completionSummary(durationMs: number, ttftMs: number | undefined, usage
   return parts.join(" ")
 }
 
-type UsageMetrics = { input?: number; output?: number; cached?: number }
-
 function objectValue(value: unknown) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-}
-
-function numericValue(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined
-}
-
-function firstNumber(record: Record<string, unknown> | undefined, keys: string[]) {
-  for (const key of keys) {
-    const value = numericValue(record?.[key])
-    if (value !== undefined) return value
-  }
-  return undefined
-}
-
-function mergeUsage(current: UsageMetrics | undefined, next: UsageMetrics | undefined) {
-  if (!next) return current
-  return {
-    ...(current || {}),
-    ...(next.input !== undefined ? { input: next.input } : {}),
-    ...(next.output !== undefined ? { output: next.output } : {}),
-    ...(next.cached !== undefined ? { cached: next.cached } : {}),
-  }
-}
-
-export function extractUsageMetrics(payload: Record<string, unknown>): UsageMetrics | undefined {
-  const response = objectValue(payload.response) || payload
-  const message = objectValue(payload.message)
-  const meta = objectValue(payload.meta)
-  const metadata = objectValue(payload.metadata)
-  const sources = [
-    objectValue(response.usage),
-    objectValue(message?.usage),
-    objectValue(meta?.billed_units),
-    objectValue(response.usageMetadata),
-    objectValue(response.usage_metadata),
-    objectValue(payload.metrics),
-    objectValue(metadata?.usage),
-    objectValue(payload["amazon-bedrock-invocationMetrics"]),
-  ].filter((source): source is Record<string, unknown> => Boolean(source))
-
-  let result: UsageMetrics | undefined
-  for (const source of sources) {
-    let input = firstNumber(source, [
-      "input_tokens", "prompt_tokens", "inputTokens", "promptTokenCount", "inputTokenCount",
-      "input_token_count", "inputTokenCount",
-    ])
-    const output = firstNumber(source, [
-      "output_tokens", "completion_tokens", "outputTokens", "candidatesTokenCount",
-      "outputTokenCount", "output_token_count",
-    ])
-    const inputDetails = objectValue(source.input_tokens_details) || objectValue(source.prompt_tokens_details)
-    const cached = firstNumber(inputDetails, ["cached_tokens", "cachedTokens", "cache_read_tokens", "cacheReadTokens"])
-      ?? firstNumber(source, [
-        "cache_read_input_tokens", "cacheReadInputTokens", "cacheReadInputTokenCount",
-        "cached_content_token_count", "cachedContentTokenCount", "prompt_cache_hit_tokens",
-        "cache_read_tokens", "cached_tokens", "cachedTokens", "input_cached_tokens",
-      ])
-
-    // Anthropic exposes uncached, cache-read, and cache-created input as separate buckets.
-    const anthropicCacheRead = firstNumber(source, ["cache_read_input_tokens", "cacheReadInputTokens"])
-    const anthropicCacheCreation = firstNumber(source, ["cache_creation_input_tokens", "cacheCreationInputTokens"])
-    if (input !== undefined && (anthropicCacheRead !== undefined || anthropicCacheCreation !== undefined)) {
-      input += (anthropicCacheRead || 0) + (anthropicCacheCreation || 0)
-    }
-
-    const extracted = {
-      ...(input !== undefined ? { input } : {}),
-      ...(output !== undefined ? { output } : {}),
-      ...(cached !== undefined ? { cached } : {}),
-    }
-    if (input !== undefined || output !== undefined || cached !== undefined) {
-      result = mergeUsage(result, extracted)
-    }
-  }
-  return result
 }
 
 function responseMetadataFromSse(buffer: string) {
@@ -366,6 +293,15 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   }
   const { model, provider, protocol: modelProtocol } = route
   const gatewayModelId = model.gatewayModelId || model.id
+  try {
+    await checkBudget(gatewayApiKey.id, gatewayModelId, model.id)
+  } catch (error) {
+    if (error instanceof BudgetDeniedError) {
+      return Response.json({ error: { message: error.message } }, { status: error.status, headers: { "retry-after": String(error.retryAfterSeconds) } })
+    }
+    writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+    return jsonError("Budget state is unavailable.", 503)
+  }
   const providerApiKeys = data.providerApiKeys.filter((apiKey) => apiKey.providerId === provider.id && apiKey.enabled)
   if (provider.authType !== "none" && !providerApiKeys.length) {
     writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.name, model: gatewayModelId })
@@ -587,7 +523,21 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       async ({ ttftMs, usage }) => {
         if (!upstream.ok) return
         await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
-        writeLog("info", "gateway", completionSummary(Date.now() - startedAt, ttftMs === undefined ? undefined : ttftMs - startedAt, usage))
+        const elapsed = Date.now() - startedAt
+        const firstByteMs = ttftMs === undefined ? undefined : ttftMs - startedAt
+        await recordGatewayUsage({
+          gatewayKeyId: gatewayApiKey.id,
+          providerId: provider.id,
+          providerModelId: model.id,
+          gatewayModelId,
+          protocol: modelProtocol,
+          startedAt: new Date(startedAt).toISOString(),
+          status: upstream.status,
+          durationMs: elapsed,
+          ...(firstByteMs !== undefined ? { ttftMs: firstByteMs } : {}),
+          metrics: usage,
+        })
+        writeLog("info", "gateway", completionSummary(elapsed, firstByteMs, usage))
       },
       async () => {
         upstreamController.abort(new Error("Downstream response was cancelled"))

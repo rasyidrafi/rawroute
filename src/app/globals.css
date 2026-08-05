@@ -128,3 +128,69 @@
     @apply font-sans;
   }
 }
+
+@keyframes plan-chip-sheen {
+  0% {
+    transform: translateX(-140%) skewX(-20deg);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.95;
+  }
+  42% {
+    transform: translateX(140%) skewX(-20deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(140%) skewX(-20deg);
+    opacity: 0;
+  }
+}
+
+@layer components {
+  .unlimited-button,
+  .unlimited-button-idle {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+
+  .unlimited-button {
+    border-color: color-mix(in oklab, oklch(0.78 0.16 92) 42%, transparent);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, white 58%, transparent), transparent 48%),
+      linear-gradient(135deg, oklch(0.96 0.06 98 / 0.96), oklch(0.87 0.13 88 / 0.94) 48%, oklch(0.78 0.16 76 / 0.92));
+    color: oklch(0.25 0.05 76);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 0 0 1px rgba(161, 98, 7, 0.08), 0 0 18px rgba(245, 158, 11, 0.2);
+  }
+
+  .unlimited-button-idle {
+    background:
+      linear-gradient(180deg, color-mix(in oklab, white 52%, transparent), transparent 48%),
+      linear-gradient(135deg, oklch(0.98 0.025 100 / 0.94), oklch(0.9 0.07 88 / 0.86));
+    color: oklch(0.28 0.04 76);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62), 0 0 14px rgba(245, 158, 11, 0.12);
+  }
+
+  .unlimited-button::after,
+  .unlimited-button-idle::after {
+    content: "";
+    position: absolute;
+    inset: -40% -90%;
+    z-index: -1;
+    background: linear-gradient(108deg, transparent 30%, rgba(255, 255, 255, 0.06) 42%, rgba(255, 255, 255, 0.94) 50%, rgba(255, 248, 220, 0.62) 54%, rgba(255, 255, 255, 0.06) 60%, transparent 72%);
+    transform: translateX(-140%) skewX(-18deg);
+    animation: plan-chip-sheen 3.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  .dark .unlimited-button,
+  .dark .unlimited-button-idle {
+    border-color: color-mix(in oklab, oklch(0.83 0.09 88) 32%, transparent);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 42%),
+      linear-gradient(135deg, oklch(0.42 0.07 88 / 0.88), oklch(0.5 0.13 84 / 0.8) 50%, oklch(0.38 0.08 74 / 0.84));
+    color: oklch(0.97 0.03 95);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.11), 0 0 20px rgba(251, 191, 36, 0.24);
+  }
+}

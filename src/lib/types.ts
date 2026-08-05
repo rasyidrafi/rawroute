@@ -75,6 +75,123 @@ export interface ApiKey {
   createdAt: string
 }
 
+export type PricingConfidence = "exact" | "unpriced" | "assumed"
+
+export interface UsageEvent {
+  id: string
+  gatewayKeyId: string
+  providerId?: string
+  providerModelId?: string
+  gatewayModelId: string
+  protocol: Protocol
+  startedAt: string
+  completedAt: string
+  status: number
+  durationMs: number
+  ttftMs?: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  totalTokens: number
+  costMicros: number
+  pricingConfidence: PricingConfidence
+  usageAvailable: boolean
+}
+
+export interface UsageRollup {
+  id: string
+  granularity: "hourly" | "daily" | "monthly"
+  bucketStart: string
+  requests: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  totalTokens: number
+  costMicros: number
+  updatedAt: string
+}
+
+export interface ModelPricing {
+  id: string
+  modelId: string
+  provider: string
+  gatewayModelId: string
+  upstreamModel: string
+  inputMicrosPerMillion: number
+  outputMicrosPerMillion: number
+  cacheReadMicrosPerMillion: number
+  cacheCreationMicrosPerMillion: number
+  enabled: boolean
+  updatedAt: string
+}
+
+export interface GatewayKeyBudget {
+  apiKeyId: string
+  weeklyLimitMicros: number
+  enabled: boolean
+  spentMicros: number
+  windowStart: string
+  windowEnd: string
+  updatedAt: string
+}
+
+export interface BudgetWindow {
+  start: string
+  end: string
+  bypassLimits: boolean
+  bypassSessionId?: string | null
+  updatedAt: string
+}
+
+export interface BudgetBypassSession {
+  id: string
+  startedAt: string
+  endedAt: string | null
+}
+
+export interface DashboardQuery {
+  preset: "today" | "yesterday" | "week" | "month" | "year" | "all" | "custom"
+  from?: string
+  to?: string
+  granularity?: "hourly" | "daily" | "weekly" | "monthly"
+}
+
+export interface DashboardPayload {
+  generatedAt: string
+  range: { label: string; from: string; to: string; granularity: string }
+  summary: { requests: number; tokens: number; costMicros: number; activeKeys: number; pricedRequests: number; unpricedRequests: number }
+  trend: Array<{ bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>
+  keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null }>
+  models: Array<{ model: string; requests: number; tokens: number; costMicros: number }>
+  freshness: { source: "firestore" | "memory"; lastEventAt: string | null }
+  pricingConfidence: { pricedRequests: number; unpricedRequests: number }
+}
+
+export interface PublicDashboardPayload extends DashboardPayload {
+  keys: Array<Omit<DashboardPayload["keys"][number], "id"> & { id: string }>
+}
+
+export interface CodexLimitPayload {
+  accountId: string
+  name: string
+  planType?: string
+  enabled: boolean
+  fiveHour: { usedPercent: number; remainingPercent: number; resetAt?: string } | null
+  weekly: { usedPercent: number; remainingPercent: number; resetAt?: string } | null
+  unusedResetCredits: number
+  additionalPools: Array<{ label: string; fiveHour: CodexLimitPayload["fiveHour"]; weekly: CodexLimitPayload["weekly"] }>
+  error?: string
+}
+
+export interface CodexResetResult {
+  ok: boolean
+  redeemRequestId: string
+  status: number
+  message: string
+}
+
 export interface AppData {
   version: 4
   admin: {

@@ -117,19 +117,19 @@ export function ProvidersView() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />OAuth Providers</CardTitle>
-          <CardDescription>Manage OAuth accounts separately from ordinary provider API keys.</CardDescription>
+          <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />Codex Providers</CardTitle>
+          <CardDescription>Manage Codex accounts separately from ordinary provider API keys.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader><TableRow><TableHead>Provider</TableHead><TableHead>Prefix</TableHead><TableHead>Protocol</TableHead><TableHead>Accounts</TableHead><TableHead>Models</TableHead><TableHead /></TableRow></TableHeader>
             <TableBody>
               {codexProvider && <TableRow className="cursor-pointer" onClick={() => router.push("/dashboard/providers/codex")}>
-                <TableCell className="font-medium">Codex OAuth</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
+                <TableCell className="font-medium">Codex Providers</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
                 <TableCell><span className="font-medium tabular-nums">{codexProvider.apiKeyCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell><TableCell><span className="font-medium tabular-nums">{codexProvider.modelCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell>
-                <TableCell><Button nativeButton={false} aria-label="Open Codex OAuth" size="icon-sm" variant="ghost" render={<Link href="/dashboard/providers/codex" prefetch={false} />}><ChevronRightIcon /></Button></TableCell>
+                <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="ghost" render={<Link href="/dashboard/providers/codex" prefetch={false} />}><ChevronRightIcon /></Button></TableCell>
               </TableRow>}
-              {!codexProvider && <EmptyRow label="Codex OAuth is not configured yet." colSpan={6} />}
+              {!codexProvider && <EmptyRow label="Codex Providers are not configured yet." colSpan={6} />}
             </TableBody>
           </Table>
           <p className="mt-4 text-sm text-muted-foreground">Open the Codex provider page to add an account.</p>

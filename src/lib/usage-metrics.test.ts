@@ -36,7 +36,7 @@ describe("usage metric extraction", () => {
           output_tokens: 4,
         },
       },
-    })).toEqual({ input: 1000, output: 4, cached: 850 })
+    })).toEqual({ input: 1000, output: 4, cached: 850, cacheCreation: 30 })
   })
 
   test("reads Gemini native usage metadata", () => {

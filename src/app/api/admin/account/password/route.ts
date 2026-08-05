@@ -3,8 +3,6 @@ import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { hashPassword, updateMeta, validatePasswordUpdate } from "@/lib/store"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function POST(request: Request) {
   try {

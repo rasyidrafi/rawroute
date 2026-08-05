@@ -232,6 +232,30 @@ describe("configuration storage", () => {
     expect((await listApiKeys()).map((apiKey) => apiKey.id)).toEqual([onlyKey.id])
   })
 
+  test("supports custom gateway key values and preserves generated keys", async () => {
+    const generated = await createApiKey("Generated")
+    const custom = await createApiKey("Custom", "  client-secret  ")
+    expect(generated.key).toMatch(/^sk-rr-/)
+    expect(custom.key).toBe("client-secret")
+  })
+
+  test("enforces case-sensitive uniqueness against the bootstrap key and cleans indexes on delete", async () => {
+    const bootstrap = (await listApiKeys())[0]
+    if (!bootstrap) throw new Error("Memory backend did not seed a gateway API key.")
+    await expect(createApiKey("Duplicate", bootstrap.key)).rejects.toThrow("already in use")
+    const lower = await createApiKey("Lower", "Case-Sensitive")
+    const upper = await createApiKey("Upper", "case-sensitive")
+    expect(lower.key).not.toBe(upper.key)
+    await deleteApiKey(lower.id)
+    const recreated = await createApiKey("Recreated", lower.key)
+    expect(recreated.key).toBe(lower.key)
+  })
+
+  test("rejects empty and oversized custom values", async () => {
+    await expect(createApiKey("Empty", "   ")).rejects.toThrow("value is required")
+    await expect(createApiKey("Long", "x".repeat(257))).rejects.toThrow("256 characters")
+  })
+
   test("allows updateData to synchronize removal of the final gateway key", async () => {
     await updateData((data) => { data.apiKeys = [] })
     expect(await listApiKeys()).toEqual([])

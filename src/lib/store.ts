@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore"
 
@@ -42,6 +42,29 @@ export function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex")
   const hash = scryptSync(password, salt, 64).toString("hex")
   return `${salt}:${hash}`
+}
+
+export class ApiKeyConflictError extends Error {
+  constructor() {
+    super("API key value is already in use.")
+    this.name = "ApiKeyConflictError"
+  }
+}
+
+export function normalizeApiKeyValue(value: string) {
+  return value.trim()
+}
+
+export function apiKeyValueHash(value: string) {
+  return createHash("sha256").update(normalizeApiKeyValue(value), "utf8").digest("hex")
+}
+
+function validateGatewayApiKeyValue(value: unknown) {
+  if (typeof value !== "string") throw new Error("API key value is required.")
+  const normalized = normalizeApiKeyValue(value)
+  if (!normalized) throw new Error("API key value is required.")
+  if (normalized.length > 256) throw new Error("API key value must be 256 characters or fewer.")
+  return normalized
 }
 
 export function verifyPassword(password: string, stored: string) {
@@ -334,6 +357,7 @@ interface MemoryState {
   models: Map<string, Map<string, Model>>
   aliases: Map<string, ModelAlias>
   apiKeys: Map<string, ApiKey>
+  apiKeyIndexes: Map<string, string>
   initialized: boolean
 }
 
@@ -344,6 +368,7 @@ const memory: MemoryState = {
   models: new Map(),
   aliases: new Map(),
   apiKeys: new Map(),
+  apiKeyIndexes: new Map(),
   initialized: false,
 }
 
@@ -352,6 +377,7 @@ function ensureMemorySeeded(): MemoryState {
     memory.meta = initialMeta()
     const seedKey = initialGatewayApiKey()
     memory.apiKeys.set(seedKey.id, seedKey)
+    memory.apiKeyIndexes.set(apiKeyValueHash(seedKey.key), seedKey.id)
     memory.initialized = true
   }
   return memory
@@ -365,6 +391,7 @@ function memorySnapshot(state: MemoryState) {
     models: new Map(state.models),
     aliases: new Map(state.aliases),
     apiKeys: new Map(state.apiKeys),
+    apiKeyIndexes: new Map(state.apiKeyIndexes),
   }
 }
 
@@ -438,6 +465,14 @@ function apiKeysRef() {
 
 function apiKeyRef(apiKeyId: string) {
   return apiKeysRef().doc(apiKeyId)
+}
+
+function apiKeyIndexesRef() {
+  return getFirestoreInstance().collection(`${collectionPrefix()}_api_key_indexes`)
+}
+
+function apiKeyIndexRef(hash: string) {
+  return apiKeyIndexesRef().doc(hash)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -615,19 +650,42 @@ export async function listApiKeys(): Promise<ApiKey[]> {
   return firestoreListApiKeys()
 }
 
-export async function createApiKey(name: string): Promise<ApiKey> {
-  const apiKey = isMemoryBackend() ? memoryCreateApiKey(name) : await firestoreCreateApiKey(name)
+export async function createApiKey(name: string, customKey?: string): Promise<ApiKey> {
+  const apiKey = isMemoryBackend() ? memoryCreateApiKey(name, customKey) : await firestoreCreateApiKey(name, customKey)
   invalidateCompatibilityCache()
   return apiKey
 }
 
 export async function _setApiKey(apiKey: ApiKey): Promise<void> {
   if (isMemoryBackend()) {
-    ensureMemorySeeded().apiKeys.set(apiKey.id, apiKey)
+    const state = ensureMemorySeeded()
+    const previous = state.apiKeys.get(apiKey.id)
+    const normalized = normalizeApiKeyValue(apiKey.key)
+    const hash = apiKeyValueHash(normalized)
+    const owner = state.apiKeyIndexes.get(hash)
+    if (owner && owner !== apiKey.id) throw new ApiKeyConflictError()
+    if (previous) state.apiKeyIndexes.delete(apiKeyValueHash(previous.key))
+    state.apiKeys.set(apiKey.id, { ...apiKey, key: normalized })
+    state.apiKeyIndexes.set(hash, apiKey.id)
     invalidateCompatibilityCache()
     return
   }
-  await apiKeyRef(apiKey.id).set(storedApiKey(apiKey))
+  const firestore = getFirestoreInstance()
+  await firestore.runTransaction(async (transaction) => {
+    const ref = apiKeyRef(apiKey.id)
+    const previousSnapshot = await transaction.get(ref)
+    const normalized = normalizeApiKeyValue(apiKey.key)
+    const indexRef = apiKeyIndexRef(apiKeyValueHash(normalized))
+    const indexSnapshot = await transaction.get(indexRef)
+    if (indexSnapshot.exists && (indexSnapshot.data() as { apiKeyId?: string }).apiKeyId !== apiKey.id) throw new ApiKeyConflictError()
+    const next = { ...apiKey, key: normalized }
+    if (previousSnapshot.exists) {
+      const previous = apiKeyFromSnapshot(previousSnapshot)
+      transaction.delete(apiKeyIndexRef(apiKeyValueHash(previous.key)))
+    }
+    transaction.set(ref, storedApiKey(next))
+    transaction.set(indexRef, { apiKeyId: apiKey.id, createdAt: apiKey.createdAt })
+  })
   invalidateCompatibilityCache()
 }
 
@@ -1151,16 +1209,41 @@ async function firestoreListApiKeys(): Promise<ApiKey[]> {
   return snapshot.docs.map(apiKeyFromSnapshot)
 }
 
-async function firestoreCreateApiKey(name: string): Promise<ApiKey> {
-  const ref = apiKeysRef().doc()
-  const apiKey: ApiKey = {
-    id: ref.id,
-    name,
-    key: `sk-rr-${crypto.randomUUID().replaceAll("-", "")}`,
-    createdAt: new Date().toISOString(),
-  }
-  await ref.set(storedApiKey(apiKey))
-  return apiKey
+async function firestoreCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
+  const firestore = getFirestoreInstance()
+  return firestore.runTransaction(async (transaction) => {
+    const apiKey = {
+      id: apiKeysRef().doc().id,
+      name,
+      key: customKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : validateGatewayApiKeyValue(customKey),
+      createdAt: new Date().toISOString(),
+    } satisfies ApiKey
+    const apiKeyRefValue = apiKeyRef(apiKey.id)
+    const requestedHash = apiKeyValueHash(apiKey.key)
+    const [existingKeys, existingIndexes] = await Promise.all([
+      transaction.get(apiKeysRef()),
+      transaction.get(apiKeyIndexesRef()),
+    ])
+    const existingKeyIds = new Set(existingKeys.docs.map((document) => document.id))
+    const indexByHash = new Map(existingIndexes.docs.map((document) => [document.id, document.data() as { apiKeyId?: string }]))
+
+    for (const document of existingKeys.docs) {
+      const existing = apiKeyFromSnapshot(document)
+      const hash = apiKeyValueHash(existing.key)
+      const index = indexByHash.get(hash)
+      if (!index || !existingKeyIds.has(index.apiKeyId || "")) {
+        transaction.set(apiKeyIndexRef(hash), { apiKeyId: document.id, createdAt: existing.createdAt })
+        indexByHash.set(hash, { apiKeyId: document.id })
+      }
+    }
+    const existingIndex = indexByHash.get(requestedHash)
+    if (existingIndex && existingKeyIds.has(existingIndex.apiKeyId || "")) {
+      throw new ApiKeyConflictError()
+    }
+    transaction.create(apiKeyRefValue, storedApiKey(apiKey))
+    transaction.set(apiKeyIndexRef(requestedHash), { apiKeyId: apiKey.id, createdAt: apiKey.createdAt })
+    return apiKey
+  })
 }
 
 async function firestoreDeleteApiKey(apiKeyId: string): Promise<void> {
@@ -1177,7 +1260,9 @@ async function firestoreDeleteApiKeyWithInvariant(apiKeyId: string, enforceAtLea
       const all = await transaction.get(apiKeysRef())
       if (all.size <= 1) throw new Error("At least one gateway API key is required.")
     }
+    const apiKey = apiKeyFromSnapshot(target)
     transaction.delete(ref)
+    transaction.delete(apiKeyIndexRef(apiKeyValueHash(apiKey.key)))
   })
 }
 
@@ -1394,15 +1479,18 @@ function memoryDeleteAlias(aliasId: string): void {
   compatibilityCache = undefined
 }
 
-function memoryCreateApiKey(name: string): ApiKey {
+function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
   const state = ensureMemorySeeded()
   const apiKey: ApiKey = {
     id: crypto.randomUUID(),
     name,
-    key: `sk-rr-${crypto.randomUUID().replaceAll("-", "")}`,
+    key: customKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : validateGatewayApiKeyValue(customKey),
     createdAt: new Date().toISOString(),
   }
+  const hash = apiKeyValueHash(apiKey.key)
+  if (state.apiKeyIndexes.has(hash)) throw new ApiKeyConflictError()
   state.apiKeys.set(apiKey.id, apiKey)
+  state.apiKeyIndexes.set(hash, apiKey.id)
   compatibilityCache = undefined
   return apiKey
 }
@@ -1411,7 +1499,9 @@ function memoryDeleteApiKey(apiKeyId: string, enforceAtLeastOne = true): void {
   const state = ensureMemorySeeded()
   if (!state.apiKeys.has(apiKeyId)) return
   if (enforceAtLeastOne && state.apiKeys.size <= 1) throw new Error("At least one gateway API key is required.")
+  const apiKey = state.apiKeys.get(apiKeyId)
   state.apiKeys.delete(apiKeyId)
+  if (apiKey) state.apiKeyIndexes.delete(apiKeyValueHash(apiKey.key))
   compatibilityCache = undefined
 }
 
@@ -1427,6 +1517,7 @@ export function _resetMemoryBackend() {
   memory.models = new Map()
   memory.aliases = new Map()
   memory.apiKeys = new Map()
+  memory.apiKeyIndexes = new Map()
   memory.initialized = false
   compatibilityCache = undefined
 }

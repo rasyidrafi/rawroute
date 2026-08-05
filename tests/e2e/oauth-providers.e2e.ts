@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test"
 
-test("OAuth Providers menu connects and manages a Codex account", async ({ page }) => {
+test("Codex Providers menu connects and manages a Codex account", async ({ page }) => {
   await page.request.post("http://127.0.0.1:3211/reset")
   const login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "change-me-now" } })
   expect(login.ok()).toBe(true)
   const password = await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })
   expect(password.ok()).toBe(true)
-  await page.goto("/dashboard/oauth-providers")
+  await page.goto("/dashboard/providers/codex")
 
-  await expect(page.getByRole("link", { name: "OAuth Providers" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Codex Providers" })).toBeVisible()
   await expect(page.getByText("No Codex accounts connected yet.")).toBeVisible()
   await page.getByRole("button", { name: "Add Codex account" }).click()
   await expect(page.getByTestId("codex-user-code")).toHaveText("ABCD-EFGH")

@@ -2,8 +2,6 @@ import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { clearLogs, readLogs, writeLog } from "@/lib/logger"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 async function authorize() {
   try { await requireAdmin(); return true } catch { return false }

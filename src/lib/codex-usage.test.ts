@@ -88,7 +88,7 @@ describe("Codex usage", () => {
       calls += 1
       if (calls > 1) throw new Error("upstream unavailable")
       return Response.json({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } } })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const first = await getCodexUsageForAccount(account, fetchImpl)
     const cached = await getCodexUsageForAccount(account, fetchImpl)

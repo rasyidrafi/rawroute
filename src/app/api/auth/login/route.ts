@@ -3,7 +3,6 @@ import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { readData, verifyPassword } from "@/lib/store"
 
-export const runtime = "nodejs"
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { username?: string; password?: string } | null

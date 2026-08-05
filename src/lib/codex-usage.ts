@@ -19,6 +19,7 @@ export interface CodexQuotaWindow {
 export interface CodexUsageSnapshot {
   fiveHour: CodexQuotaWindow | null
   weekly: CodexQuotaWindow | null
+  unusedResetCredits?: number
 }
 
 export interface CodexUsageResult extends CodexUsageSnapshot {
@@ -37,6 +38,7 @@ interface CachedCodexUsage {
 export interface UsageRedis {
   get<T = unknown>(key: string): Promise<T | null>
   set<T = unknown>(key: string, value: T, options?: { ex?: number; nx?: boolean }): Promise<unknown>
+  del?(key: string): Promise<unknown>
 }
 
 let redisClient: UsageRedis | undefined
@@ -149,6 +151,10 @@ export function parseCodexUsagePayload(payload: unknown): CodexUsageSnapshot {
     const kind = classifyWindow(parsed.windowSeconds, fallback)
     if (kind && !snapshot[kind]) snapshot[kind] = parsed.quota
   }
+
+  const resetCredits = objectValue(data?.rate_limit_reset_credits)
+  const available = numberValue(resetCredits?.available_count)
+  if (available !== undefined) snapshot.unusedResetCredits = Math.max(0, Math.floor(available))
 
   return snapshot
 }
@@ -264,4 +270,11 @@ export function setCodexUsageRedisForTests(redis?: UsageRedis) {
 
 export function setCodexUsageClockForTests(clock?: () => number) {
   now = clock || (() => Date.now())
+}
+
+export async function invalidateCodexUsageCache(accountId: string) {
+  try {
+    const redis = getRedis()
+    if (redis.del) await redis.del(cacheKey(accountId))
+  } catch {}
 }

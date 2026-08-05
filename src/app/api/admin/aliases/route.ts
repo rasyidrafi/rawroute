@@ -4,8 +4,6 @@ import { writeLog } from "@/lib/logger"
 import { listAliases, listModels, listProviders, upsertAlias } from "@/lib/store"
 import type { ModelAlias } from "@/lib/types"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function GET() {
   try {

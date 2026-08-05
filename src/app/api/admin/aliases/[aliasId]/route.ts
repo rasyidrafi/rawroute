@@ -3,8 +3,6 @@ import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { deleteAlias } from "@/lib/store"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function DELETE(_request: Request, context: { params: Promise<{ aliasId: string }> }) {
   try {

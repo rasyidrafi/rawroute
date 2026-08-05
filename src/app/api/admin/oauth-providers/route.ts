@@ -2,8 +2,6 @@ import { requireAdmin } from "@/lib/auth"
 import { listCodexAccounts } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 function publicAccount(account: Awaited<ReturnType<typeof listCodexAccounts>>["accounts"][number]) {
   return {

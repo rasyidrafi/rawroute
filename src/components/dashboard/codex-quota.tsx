@@ -13,6 +13,7 @@ export type QuotaWindow = {
 export type AccountUsage = {
   fiveHour: QuotaWindow | null
   weekly: QuotaWindow | null
+  unusedResetCredits?: number
   fetchedAt: string | null
   stale: boolean
   error?: string

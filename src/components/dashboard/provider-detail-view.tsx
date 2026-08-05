@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RefreshCwIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR, { mutate as globalMutate } from "swr"
@@ -14,6 +14,7 @@ import { ModelForm } from "@/components/dashboard/model-form"
 import { ProviderApiKeyForm } from "@/components/dashboard/provider-api-key-form"
 import { ProviderForm } from "@/components/dashboard/provider-form"
 import { Input } from "@/components/ui/input"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -44,6 +45,8 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const [accountName, setAccountName] = useState("")
   const [polling, setPolling] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [resetAccount, setResetAccount] = useState<ProviderApiKey | null>(null)
+  const [resetConfirmation, setResetConfirmation] = useState("")
 
   useEffect(() => {
     if (!device || !polling) return
@@ -71,6 +74,22 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     try { setDevice(await apiPost("/api/admin/oauth-providers/codex/device/start", {})); setPolling(true) }
     catch (startError) { toast.error(startError instanceof Error ? startError.message : "Unable to start Codex login") }
     finally { setStarting(false) }
+  }
+
+  async function redeemReset(account: ProviderApiKey) {
+    const pendingKey = `reset:${account.id}`
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      await apiPost(`/api/admin/oauth-providers/${account.id}/reset`, { confirmation: resetConfirmation })
+      await globalMutate("/api/admin/oauth-providers/usage")
+      setResetAccount(null)
+      setResetConfirmation("")
+      toast.success("Codex reset credit redeemed")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to redeem reset credit")
+    } finally {
+      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
+    }
   }
 
   async function saveProvider(provider: Partial<Provider> & { originalId?: string }) {
@@ -253,6 +272,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                 <TableHead>{isOAuthProvider ? "Plan" : "Limits"}</TableHead>
                 <TableHead>Status</TableHead>
                 {isOAuthProvider && <TableHead>Usage Limits</TableHead>}
+                {isOAuthProvider && <TableHead>Unused Resets</TableHead>}
                 {isOAuthProvider && <TableHead>Token expiry</TableHead>}
                 <TableHead>Created</TableHead>
                 <TableHead />
@@ -274,16 +294,24 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     {showQuota && <CodexQuotaTableCell accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} />}
+                    {isOAuthProvider && <TableCell>{usageLoading && !usageData ? "…" : usageData?.accounts[apiKey.id]?.unusedResetCredits ?? "N/A"}</TableCell>}
                     {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : "Unknown"}</TableCell>}
                     <TableCell className="align-middle text-xs text-muted-foreground">{new Date(apiKey.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div /> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <RefreshCwIcon className="animate-spin" /> : <RotateCcwIcon />}Redeem</Button></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}
-              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 8 : 6} />}
+              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 9 : 6} />}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+      <AlertDialog open={Boolean(resetAccount)} onOpenChange={(open) => { if (!open) { setResetAccount(null); setResetConfirmation("") } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>Redeem Codex reset credit?</AlertDialogTitle><AlertDialogDescription>This consumes one banked reset credit for {resetAccount?.name}. Type <code>use my codex reset</code> to confirm.</AlertDialogDescription></AlertDialogHeader>
+          <Input value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} placeholder="use my codex reset" autoFocus />
+          <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || isPending(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>Redeem reset</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><BoxesIcon className="size-5" />Models</CardTitle>

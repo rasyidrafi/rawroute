@@ -3,8 +3,6 @@ import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { deleteModel } from "@/lib/store"
 
-export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 export async function DELETE(_request: Request, context: { params: Promise<{ providerId: string; modelId: string }> }) {
   try {

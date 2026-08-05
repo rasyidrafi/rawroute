@@ -1,7 +1,5 @@
-"use client"
+import { redirect } from "next/navigation"
 
-import { OAuthProvidersView } from "@/components/dashboard/oauth-providers-view"
-
-export default function Page() {
-  return <OAuthProvidersView />
+export default function OAuthProvidersRedirect() {
+  redirect("/dashboard/providers/codex")
 }
