@@ -10,6 +10,7 @@ import useSWR from "swr"
 
 import { apiDelete, apiFetch, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
+import { formatCost } from "@/components/dashboard/usage-utils"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
@@ -185,13 +186,13 @@ const rateFields = [
   ["cacheCreationMicrosPerMillion", "Cache creation"],
 ] as const
 
-function formatRate(value: number) { return `$${(value / 1_000_000).toFixed(4)} / 1M` }
+function formatRate(value: number) { return `${formatCost(value)} / 1M` }
 function formatDollarInput(value: number) { return value === 0 ? "0" : String(value / 1_000_000) }
 function parseDollarInput(value: string) {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed * 1_000_000) : 0
 }
-function formatCanonicalRate(value: number) { return value === 0 ? "$0" : `$${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })}` }
+function formatCanonicalRate(value: number) { return formatCost(value) }
 function canonicalSourceLabel(value: PricingCanonicalSource) { return value === "models.dev" ? "models.dev" : "Custom ID" }
 
 export function ModelPricingView() {
@@ -251,8 +252,13 @@ export function ModelPricingView() {
     setPending(true)
     try {
       const canonical = canonicalModelId.trim() ? { canonicalModelId: canonicalModelId.trim(), canonicalSource: "models.dev" as const, canonicalModelName: canonicalModel?.name, canonicalProvider: canonicalModel?.provider } : { canonicalModelId: null }
-      if (groupDialog === "new") await apiPost("/api/admin/model-pricing", { action: "create-group", name: groupName, modelIds: selectedModels, ...canonical })
-      else await apiPost("/api/admin/model-pricing", { action: "update-group", groupId: groupDialog, name: groupName, modelIds: selectedModels, ...canonical })
+      const result = groupDialog === "new"
+        ? await apiPost<{ group: ModelPricingGroup }>("/api/admin/model-pricing", { action: "create-group", name: groupName, modelIds: selectedModels, ...canonical })
+        : await apiPost<{ group: ModelPricingGroup }>("/api/admin/model-pricing", { action: "update-group", groupId: groupDialog, name: groupName, modelIds: selectedModels, ...canonical })
+      const catalogPricing = canonicalModel?.pricing
+      const currentPricing = editingGroup?.currentVersion
+      const pricingChanged = catalogPricing && (!currentPricing || rateFields.some(([field]) => currentPricing[field] !== catalogPricing[field]) || (currentPricing.contextTiers?.length || 0) > 0)
+      if (catalogPricing && pricingChanged) await apiPost("/api/admin/model-pricing", { action: "save-version", groupId: result.group.id, mode: "new", ...catalogPricing, contextTiers: [] })
       await mutate(); setGroupDialog(undefined)
     } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save model group") }
     finally { setPending(false) }
@@ -311,19 +317,19 @@ export function ModelPricingView() {
     <Table><TableHeader><TableRow><TableHead>Group</TableHead><TableHead>Type</TableHead><TableHead>Models</TableHead><TableHead>Current pricing</TableHead><TableHead /></TableRow></TableHeader><TableBody>{data.groups.map((group) => { const members = modelsForGroup(group); const contextTiers = Array.isArray(group.currentVersion?.contextTiers) ? group.currentVersion.contextTiers : []; return <TableRow key={group.id}><TableCell><div className="font-medium">{group.name}</div><div className="text-xs text-muted-foreground">{group.currentVersion ? `v${group.currentVersion.version} active ${formatAppDate(group.currentVersion.effectiveAt)}` : "No version configured"}</div>{(group.canonicalModel || group.canonicalModelId) && <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="shrink-0">{canonicalSourceLabel(group.canonicalSource || "custom")}</span><span className="truncate">{group.canonicalModel?.name || group.canonicalModelId}</span></div>}</TableCell><TableCell><Badge variant={group.kind === "fixed" ? "outline" : "secondary"}>{group.kind === "fixed" ? "Fixed" : "Custom"}</Badge></TableCell><TableCell><div className="font-medium tabular-nums">{members.length}</div><div className="text-xs text-muted-foreground">{members.slice(0, 2).map((model) => model.gatewayModelId).join(", ")}{members.length > 2 ? ` +${members.length - 2}` : ""}</div></TableCell><TableCell>{group.currentVersion ? <div><div className="font-medium">{formatRate(group.currentVersion.inputMicrosPerMillion)} input</div><div className="text-xs text-muted-foreground">{contextTiers.length ? `${contextTiers.length} context override${contextTiers.length === 1 ? "" : "s"}` : "Standard context"}</div></div> : <Badge variant="destructive">Missing</Badge>}</TableCell><TableCell className="text-right"><div className="flex flex-wrap justify-end gap-2"><Button size="sm" variant="outline" onClick={() => startGroupEdit(group.id)}><PencilIcon />Models</Button><Button size="sm" onClick={() => startPricingEdit(group.id)}>Pricing</Button>{group.kind === "custom" && <ConfirmAction buttonLabel="Delete" title={`Delete ${group.name}?`} description="Models will become ungrouped and can be assigned again." pending={pending} disabled={pending} onConfirm={() => deleteGroup(group.id)} />}</div></TableCell></TableRow> })}{!data.groups.length && <EmptyRow label="No model groups found. Refresh to scan configured models." colSpan={5} />}</TableBody></Table>
     {data.jobs.length > 0 && <div className="space-y-3 rounded-lg border p-4"><div><div className="font-medium">Repricing history</div><div className="text-sm text-muted-foreground">Replacing a current version recalculates historical events in the background.</div></div>{data.jobs.slice(0, 5).map((job) => <div key={job.id} className="flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between"><span>{groupById(job.groupId)?.name || "Model group"}</span><span className="text-muted-foreground">{job.status} {job.totalEvents ? `${job.processedEvents}/${job.totalEvents}` : ""}</span></div>)}</div>}
     <Dialog open={Boolean(groupDialog)} onOpenChange={(open) => { if (!open && !pending) setGroupDialog(undefined) }}>
-      <DialogContent className="h-[min(42rem,calc(100svh-2rem))] max-w-3xl">
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>{groupDialog === "new" ? "Create custom model group" : `Edit ${editingGroup?.name || "model group"}`}</DialogTitle>
           <DialogDescription>{groupDialog === "new" ? "Choose models to keep one shared pricing history." : "Choose which configured models belong to this group."}</DialogDescription>
         </DialogHeader>
-        <div className="grid h-[min(32rem,calc(100svh-15rem))] min-h-0 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
-          <div className="flex h-full min-h-0 flex-col gap-2">
+        <div className="grid min-h-0 gap-4 md:min-h-[min(24rem,calc(100svh-15rem))] md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+          <div className="flex h-72 min-h-0 flex-col gap-2 md:h-full">
             <div className="text-sm font-medium">Models in group</div>
             <div className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border">
               {modelSelectionRows.length ? <LegendList<ModelSelectionRow> data={modelSelectionRows} keyExtractor={(row) => row.id} estimatedItemSize={52} className="h-full overscroll-y-contain px-2 py-2 outline-none [&>div]:!block [&>div]:!min-w-0 [&>div]:!w-full" renderItem={({ item }) => item.type === "heading" ? <div className="flex items-center justify-between px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground first:pt-1"><span>{item.label}</span><span>{item.count}</span></div> : <label className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted"><Checkbox checked={selectedModels.includes(item.model.id)} onCheckedChange={() => toggleModel(item.model.id)} /><span className="min-w-0"><span className="block truncate text-sm font-medium">{item.model.name}</span><span className="block truncate text-xs text-muted-foreground">{item.model.gatewayModelId}</span></span></label>} /> : <p className="p-3 text-sm text-muted-foreground">No available models.</p>}
             </div>
           </div>
-          <div className="space-y-4">
+          <div className="flex min-h-full flex-col gap-4">
             <div className="space-y-2"><label htmlFor="pricing-group-name" className="block text-sm font-medium">Group name</label><Input id="pricing-group-name" value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="Group name" /></div>
             <div className="space-y-2">
               <div className="text-sm font-medium">Canonical upstream</div>
@@ -337,7 +343,7 @@ export function ModelPricingView() {
                       <CommandInput placeholder="Search model ID, name, or provider..." value={canonicalSearch} onValueChange={(value) => { setCanonicalSearch(value); setCanonicalLoading(true); setCanonicalError(null) }} />
                       <CommandList className="max-h-none min-h-0 flex-1 overscroll-contain overflow-y-auto px-2 py-1">
                         <CommandItem value="clear-canonical" onSelect={() => { setCanonicalModelId(""); setCanonicalModel(null); setCanonicalSearch(""); setCanonicalPopoverOpen(false) }}>Clear canonical link</CommandItem>
-                        {canonicalLoading ? <div className="space-y-2 p-3">{Array.from({ length: 2 }, (_, index) => <div key={index} className="space-y-2 rounded-md px-3 py-2"><Skeleton className="h-4 w-40 max-w-full" /><Skeleton className="h-3 w-56 max-w-full" /></div>)}</div> : canonicalError ? <CommandEmpty>{canonicalError}</CommandEmpty> : canonicalModels.length === 0 ? <CommandEmpty>{canonicalSearch.trim() ? `No canonical models matched "${canonicalSearch.trim()}".` : "No canonical models available."}</CommandEmpty> : <CommandGroup heading={"Canonical models (" + canonicalModels.length + ")"} className="p-0">{canonicalModels.map((item) => <CommandItem key={item.id} value={item.name + " " + item.id + " " + item.provider} className="items-start gap-3 rounded-md px-3 py-2" onSelect={() => { setCanonicalModelId(item.id); setCanonicalModel(item); setCanonicalSearch(""); setCanonicalPopoverOpen(false) }}><div className="min-w-0 flex-1"><div className="truncate font-medium">{item.name}</div><div className="truncate text-xs text-muted-foreground">{item.id} · {item.provider}</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>Input {formatCanonicalRate(item.pricing.inputMicrosPerMillion)}</span><span>Output {formatCanonicalRate(item.pricing.outputMicrosPerMillion)}</span><span>Cache read {formatCanonicalRate(item.pricing.cacheReadMicrosPerMillion)}</span></div></div>{canonicalModelId === item.id && <CheckIcon className="mt-1 size-4 text-primary" />}</CommandItem>)}</CommandGroup>}
+                        {canonicalLoading ? <div className="space-y-2 p-3">{Array.from({ length: 2 }, (_, index) => <div key={index} className="space-y-2 rounded-md px-3 py-2"><Skeleton className="h-4 w-40 max-w-full" /><Skeleton className="h-3 w-56 max-w-full" /></div>)}</div> : canonicalError ? <CommandEmpty>{canonicalError}</CommandEmpty> : canonicalModels.length === 0 ? <CommandEmpty>{canonicalSearch.trim() ? `No canonical models matched "${canonicalSearch.trim()}".` : "No canonical models available."}</CommandEmpty> : <CommandGroup heading={"Canonical models (" + canonicalModels.length + ")"} className="p-0">{canonicalModels.map((item) => <CommandItem key={item.id} value={item.name + " " + item.id + " " + item.provider} className="items-start gap-3 rounded-md px-3 py-2" onSelect={() => { setCanonicalModelId(item.id); setCanonicalModel(item); setGroupName(item.name); setCanonicalSearch(""); setCanonicalPopoverOpen(false) }}><div className="min-w-0 flex-1"><div className="truncate font-medium">{item.name}</div><div className="truncate text-xs text-muted-foreground">{item.id} · {item.provider}</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>Input {formatCanonicalRate(item.pricing.inputMicrosPerMillion)}</span><span>Output {formatCanonicalRate(item.pricing.outputMicrosPerMillion)}</span><span>Cache read {formatCanonicalRate(item.pricing.cacheReadMicrosPerMillion)}</span></div></div>{canonicalModelId === item.id && <CheckIcon className="mt-1 size-4 text-primary" />}</CommandItem>)}</CommandGroup>}
                       </CommandList>
                     </Command>
                   </div>
@@ -345,7 +351,7 @@ export function ModelPricingView() {
                 </Popover>
               </div>
             </div>
-            {canonicalModel && <div className="rounded-lg border bg-muted/20 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-sm font-medium">{canonicalModel.name}</div><div className="truncate text-xs text-muted-foreground">{canonicalModel.id} · {canonicalModel.provider}</div></div><Badge variant="secondary">models.dev</Badge></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><div><div className="text-muted-foreground">Input</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.inputMicrosPerMillion)}</div></div><div><div className="text-muted-foreground">Output</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.outputMicrosPerMillion)}</div></div><div><div className="text-muted-foreground">Cache read</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.cacheReadMicrosPerMillion)}</div></div><div><div className="text-muted-foreground">Cache creation</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.cacheCreationMicrosPerMillion)}</div></div></div>{canonicalModel.contextLimit && <div className="mt-2 text-xs text-muted-foreground">Context limit: {canonicalModel.contextLimit.toLocaleString()} tokens</div>}</div>}
+            {canonicalModel && <div className="flex-1 rounded-lg border bg-muted/20 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate text-sm font-medium">{canonicalModel.name}</div><div className="truncate text-xs text-muted-foreground">{canonicalModel.id} · {canonicalModel.provider}</div></div><Badge variant="secondary">models.dev</Badge></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><div><div className="text-muted-foreground">Input</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.inputMicrosPerMillion)}</div></div><div><div className="text-muted-foreground">Output</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.outputMicrosPerMillion)}</div></div><div><div className="text-muted-foreground">Cache read</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.cacheReadMicrosPerMillion)}</div></div><div><div className="text-muted-foreground">Cache creation</div><div className="font-medium">{formatCanonicalRate(canonicalModel.pricing.cacheCreationMicrosPerMillion)}</div></div></div>{canonicalModel.contextLimit && <div className="mt-2 text-xs text-muted-foreground">Context limit: {canonicalModel.contextLimit.toLocaleString()} tokens</div>}</div>}
           </div>
         </div>
         <DialogFooter><Button variant="outline" onClick={() => setGroupDialog(undefined)} disabled={pending}>Cancel</Button><Button onClick={() => void saveGroup()} disabled={pending || (groupDialog === "new" && !groupName.trim())}>{pending && <LoadingSpinner />}Save group</Button></DialogFooter>
