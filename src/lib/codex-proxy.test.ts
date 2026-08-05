@@ -52,7 +52,7 @@ describe("Codex native request adapter", () => {
   })
 
   test("injects account authentication without forwarding gateway secrets", () => {
-    const headers = buildCodexHeaders(new Headers({ authorization: "Bearer gateway", cookie: "secret", "x-client-request-id": "client" }), provider, "access", "acct-1", "session-1")
+    const headers = buildCodexHeaders(new Headers({ authorization: "Bearer gateway", cookie: "secret", "x-client-request-id": "client" }), provider.headers, "access", "acct-1", "session-1")
     expect(headers.get("authorization")).toBe("Bearer access")
     expect(headers.get("chatgpt-account-id")).toBe("acct-1")
     expect(headers.get("session_id")).toBe("session-1")

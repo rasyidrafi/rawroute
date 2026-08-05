@@ -9,6 +9,9 @@ const CACHE_RETENTION_SECONDS = 24 * 60 * 60
 const REFRESH_LOCK_TTL_SECONDS = 30
 const CACHE_PREFIX = "rawroute:codex-usage:v1"
 const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+const configuredLocalCacheTtlMs = Number(process.env.CODEX_USAGE_LOCAL_CACHE_TTL_MS || 30_000)
+const localCacheTtlMs = Number.isFinite(configuredLocalCacheTtlMs) && configuredLocalCacheTtlMs >= 0 ? configuredLocalCacheTtlMs : 30_000
+const maximumLocalCacheEntries = 128
 
 export interface CodexQuotaWindow {
   usedPercent: number
@@ -43,18 +46,42 @@ export interface UsageRedis {
 
 let redisClient: UsageRedis | undefined
 let now = () => Date.now()
+const localUsageCache = new Map<string, { result: CodexUsageResult; expiresAt: number }>()
+const usageInflight = new Map<string, Promise<CodexUsageResult>>()
+let localCacheGeneration = 0
+
+function setLocalUsageCache(accountId: string, result: CodexUsageResult) {
+  if (localCacheTtlMs <= 0) return
+  if (!localUsageCache.has(accountId) && localUsageCache.size >= maximumLocalCacheEntries) {
+    const oldest = localUsageCache.keys().next().value
+    if (oldest !== undefined) localUsageCache.delete(oldest)
+  }
+  localUsageCache.set(accountId, { result, expiresAt: now() + localCacheTtlMs })
+}
+
+function clearLocalUsageCache(accountId?: string) {
+  localCacheGeneration += 1
+  if (accountId) {
+    localUsageCache.delete(accountId)
+    usageInflight.delete(accountId)
+    return
+  }
+  localUsageCache.clear()
+  usageInflight.clear()
+}
 
 function getUsageUrl() {
   return process.env.CODEX_USAGE_URL || DEFAULT_USAGE_URL
 }
 
-function getRedis() {
+function getRedis(): UsageRedis {
   if (redisClient) return redisClient
   const url = process.env.UPSTASH_REDIS_REST_URL
   const token = process.env.UPSTASH_REDIS_REST_TOKEN
   if (!url || !token) throw new Error("Upstash Redis is not configured.")
-  redisClient = new Redis({ url, token })
-  return redisClient
+  const client: UsageRedis = new Redis({ url, token })
+  redisClient = client
+  return client
 }
 
 function cacheKey(accountId: string) {
@@ -211,7 +238,7 @@ function isUnauthorized(error: unknown) {
   return objectValue(error)?.status === 401 || (error instanceof Error && /\(401\)/.test(error.message))
 }
 
-export async function getCodexUsageForAccount(
+async function loadCodexUsageForAccount(
   account: ProviderApiKey,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CodexUsageResult> {
@@ -264,15 +291,39 @@ export async function getCodexUsageForAccount(
   }
 }
 
+export async function getCodexUsageForAccount(
+  account: ProviderApiKey,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CodexUsageResult> {
+  const cached = localUsageCache.get(account.id)
+  if (cached && cached.expiresAt > now()) return cached.result
+  if (cached) localUsageCache.delete(account.id)
+
+  const existing = usageInflight.get(account.id)
+  if (existing) return existing
+  const generation = localCacheGeneration
+  const promise = loadCodexUsageForAccount(account, fetchImpl).then((result) => {
+    if (generation === localCacheGeneration) setLocalUsageCache(account.id, result)
+    return result
+  }).finally(() => {
+    if (usageInflight.get(account.id) === promise) usageInflight.delete(account.id)
+  })
+  usageInflight.set(account.id, promise)
+  return promise
+}
+
 export function setCodexUsageRedisForTests(redis?: UsageRedis) {
   redisClient = redis
+  clearLocalUsageCache()
 }
 
 export function setCodexUsageClockForTests(clock?: () => number) {
   now = clock || (() => Date.now())
+  clearLocalUsageCache()
 }
 
 export async function invalidateCodexUsageCache(accountId: string) {
+  clearLocalUsageCache(accountId)
   try {
     const redis = getRedis()
     if (redis.del) await redis.del(cacheKey(accountId))

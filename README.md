@@ -71,13 +71,21 @@ gcloud run deploy rawroute \
   --set-secrets DEFAULT_ADMIN_PASSWORD=rawroute-admin-password:latest,DEFAULT_PROXY_API_KEY=rawroute-proxy-key:latest,SESSION_SECRET=rawroute-session-secret:latest
 ```
 
-Grant the Cloud Run service account Firestore access. `roles/datastore.user` is the usual starting point; use a narrower custom role when practical. The proxy caches its routing snapshot in each instance for `ROUTING_CACHE_TTL_MS` (2 seconds by default), avoiding a Firestore read for every inference request while limiting cross-instance configuration staleness.
+Grant the Cloud Run service account Firestore access. `roles/datastore.user` is the usual starting point; use a narrower custom role when practical. The proxy caches its routing snapshot in each instance for `ROUTING_CACHE_TTL_MS` (30 seconds by default), avoiding a Firestore read for every inference request. Admin mutations invalidate the current process immediately; other instances observe the change after their cache expires.
 
 Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on every Cloud Run instance. Redis stores session affinity, rolling RPM reservations, expiring concurrency leases, credential cooldowns, and Responses API ID mappings. Requests fail with `503` when shared routing state is unavailable instead of falling back to inconsistent per-instance state.
 
 Proxy request bodies are limited by `MAX_PROXY_BODY_BYTES` (10 MiB by default), including streamed requests without a `Content-Length` header.
 
 Routing leases renew during long requests. Streaming requests are aborted after `ROUTING_MAX_STREAM_DURATION_SECONDS` (290 seconds by default), and non-streaming requests after `ROUTING_MAX_NON_STREAM_DURATION_SECONDS` (60 seconds by default). Keep the streaming deadline below the Cloud Run request timeout so abandoned upstream work is cancelled and its lease is released before the platform terminates the request.
+
+## Performance and cost tuning
+
+RawRoute keeps configuration, gateway-key authentication, budget state, pricing catalogs, quota snapshots, and dashboard payloads in bounded process-local caches with single-flight loading. Firestore remains the durable source of truth, while Redis performs atomic routing-capacity and budget reservations. The defaults in `.env.example` are aimed at a small single-instance deployment; lower cache TTLs only when cross-instance configuration propagation is more important than database cost.
+
+Budget admission uses a constant-time conservative reservation derived from request bytes, configured output limits, and model pricing. `BUDGET_DEFAULT_OUTPUT_TOKENS`, `BUDGET_INPUT_BYTES_PER_TOKEN`, and `BUDGET_RESERVATION_SAFETY_PERCENT` tune uncapped-request headroom without reserving an API key's entire weekly budget.
+
+The usage dashboard reads only the requested Firestore rollup date range and caches the assembled payload briefly. `DASHBOARD_CACHE_TTL_MS` controls that freshness/cost tradeoff. Model pricing and Codex quota pages also use short bounded caches and only poll while work is active.
 
 Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the persistent configuration source and supports multiple Cloud Run instances safely.
 

@@ -48,6 +48,7 @@ interface ReleaseInput {
     key: string
     reservationMicros: number
     actualMicros: number
+    ttlSeconds: number
   }
 }
 
@@ -230,6 +231,8 @@ export class RedisRoutingStateStore {
   private readonly affinityTtlSeconds: number
   private readonly responseTtlSeconds: number
   private readonly inflightLeaseTtlSeconds: number
+  private readonly defaultRpmLimit: number
+  private readonly defaultMaxConcurrency: number
   private readonly reserveRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
   private readonly releaseRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
   private readonly renewRunner: (keys: string[], args: Array<string | number>) => Promise<unknown>
@@ -242,6 +245,8 @@ export class RedisRoutingStateStore {
     this.affinityTtlSeconds = options.affinityTtlSeconds || positiveInteger(Number(process.env.ROUTING_AFFINITY_TTL_SECONDS), 3600)
     this.responseTtlSeconds = options.responseTtlSeconds || positiveInteger(Number(process.env.ROUTING_RESPONSE_TTL_SECONDS), 86400)
     this.inflightLeaseTtlSeconds = options.inflightLeaseTtlSeconds || positiveInteger(Number(process.env.ROUTING_INFLIGHT_LEASE_TTL_SECONDS), 900)
+    this.defaultRpmLimit = positiveInteger(Number(process.env.ROUTING_DEFAULT_RPM_LIMIT), 60)
+    this.defaultMaxConcurrency = positiveInteger(Number(process.env.ROUTING_DEFAULT_MAX_CONCURRENCY), 4)
     const reserveScriptRunner = redis.createScript?.(reserveScript)
     const releaseScriptRunner = redis.createScript?.(releaseScript)
     const renewScriptRunner = redis.createScript?.(renewScript)
@@ -281,7 +286,8 @@ export class RedisRoutingStateStore {
   }
 
   async reserve(input: ReserveInput) {
-    const credentials = input.credentials.filter((credential) => credential.enabled)
+    let credentials = input.credentials
+    if (credentials.some((credential) => !credential.enabled)) credentials = credentials.filter((credential) => credential.enabled)
     const scope = this.scope(input.providerId, input.modelId)
     const affinityKey = input.sessionKey ? `${this.prefix}:affinity:${scope}:${input.sessionKey}` : ""
     const responseAffinityKey = input.responseId ? this.responseKey(input.providerId, input.responseId) : ""
@@ -293,8 +299,8 @@ export class RedisRoutingStateStore {
       keys.push(`${this.prefix}:rpm:${credentialScope}`, `${this.prefix}:inflight:${credentialScope}`, `${this.prefix}:cooldown:${credentialScope}`)
       args.push(
         credential.id,
-        positiveInteger(credential.rpmLimit, positiveInteger(Number(process.env.ROUTING_DEFAULT_RPM_LIMIT), 60)),
-        positiveInteger(credential.maxConcurrency, positiveInteger(Number(process.env.ROUTING_DEFAULT_MAX_CONCURRENCY), 4)),
+        positiveInteger(credential.rpmLimit, this.defaultRpmLimit),
+        positiveInteger(credential.maxConcurrency, this.defaultMaxConcurrency),
         Number.isFinite(credential.priority) ? Number(credential.priority) : 0,
       )
     }
@@ -323,7 +329,7 @@ export class RedisRoutingStateStore {
     const args: Array<string | number> = [input.status, positiveInteger(input.retryAfterSeconds, 5), 0, input.leaseId]
     if (input.budget) {
       keys.push(input.budget.key, `${input.budget.key}:lease:${input.leaseId}`)
-      args.push(input.budget.actualMicros, input.budget.reservationMicros > 0 ? Math.ceil(input.budget.reservationMicros / 1_000_000) + 60 : 60)
+      args.push(input.budget.actualMicros, positiveInteger(input.budget.ttlSeconds, 60))
     }
     await this.releaseRunner(keys, args)
   }
@@ -356,7 +362,14 @@ export class RedisRoutingStateStore {
   }
 
   async mapResponses(responseIds: string[], providerId: string, credentialId: string) {
-    const uniqueResponseIds = [...new Set(responseIds.filter(Boolean))]
+    const uniqueResponseIds: string[] = []
+    const seen = new Set<string>()
+    for (const responseId of responseIds) {
+      if (uniqueResponseIds.length >= 64) break
+      if (!responseId || responseId.length > 512 || seen.has(responseId)) continue
+      seen.add(responseId)
+      uniqueResponseIds.push(responseId)
+    }
     if (!uniqueResponseIds.length) return
     if (uniqueResponseIds.length === 1) {
       await this.redis.set(this.responseKey(providerId, uniqueResponseIds[0]), credentialId, { ex: this.responseTtlSeconds })

@@ -1,6 +1,9 @@
 export const DEFAULT_TIME_ZONE = "Asia/Jakarta"
 const DISPLAY_LOCALE = "en-GB"
 const DAY_MS = 24 * 60 * 60 * 1000
+const formatterCache = new Map<string, Intl.DateTimeFormat>()
+let cachedTimeZoneSource: string | undefined
+let cachedTimeZone = DEFAULT_TIME_ZONE
 
 type ZonedParts = {
   year: number
@@ -14,12 +17,26 @@ type ZonedParts = {
 
 function configuredTimeZone() {
   const value = process.env.NEXT_PUBLIC_TIMEZONE || process.env.TIMEZONE || DEFAULT_TIME_ZONE
+  if (value === cachedTimeZoneSource) return cachedTimeZone
   try {
     new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: value }).format()
-    return value
+    cachedTimeZone = value
   } catch {
-    return DEFAULT_TIME_ZONE
+    cachedTimeZone = DEFAULT_TIME_ZONE
   }
+  cachedTimeZoneSource = value
+  formatterCache.clear()
+  return cachedTimeZone
+}
+
+function dateFormatter(key: string, locale: string, timeZone: string, options: Intl.DateTimeFormatOptions) {
+  const cacheKey = `${key}:${locale}:${timeZone}`
+  let formatter = formatterCache.get(cacheKey)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, { ...options, timeZone })
+    formatterCache.set(cacheKey, formatter)
+  }
+  return formatter
 }
 
 function toDate(value: Date | string | number) {
@@ -27,8 +44,7 @@ function toDate(value: Date | string | number) {
 }
 
 function numericParts(value: Date, timeZone = configuredTimeZone()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
+  const parts = dateFormatter("numeric", "en-US", timeZone, {
     calendar: "gregory",
     numberingSystem: "latn",
     year: "numeric",
@@ -39,15 +55,22 @@ function numericParts(value: Date, timeZone = configuredTimeZone()) {
     second: "2-digit",
     hourCycle: "h23",
   }).formatToParts(value)
-  const result = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]))
-  return {
-    year: result.year,
-    month: result.month,
-    day: result.day,
-    hour: result.hour,
-    minute: result.minute,
-    second: result.second,
+  let year = NaN
+  let month = NaN
+  let day = NaN
+  let hour = NaN
+  let minute = NaN
+  let second = NaN
+  for (const part of parts) {
+    const number = Number(part.value)
+    if (part.type === "year") year = number
+    else if (part.type === "month") month = number
+    else if (part.type === "day") day = number
+    else if (part.type === "hour") hour = number
+    else if (part.type === "minute") minute = number
+    else if (part.type === "second") second = number
   }
+  return { year, month, day, hour, minute, second }
 }
 
 function timeZoneOffsetMs(value: Date, timeZone = configuredTimeZone()) {
@@ -77,36 +100,38 @@ export function formatAppDateTime(value: Date | string | number | null | undefin
   if (value === null || value === undefined) return "Never"
   const date = toDate(value)
   if (!Number.isFinite(date.getTime())) return "Unknown"
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: configuredTimeZone(), dateStyle: "medium", timeStyle: "short", hourCycle: "h23" }).format(date)
+  const timeZone = configuredTimeZone()
+  return dateFormatter("date-time", DISPLAY_LOCALE, timeZone, { dateStyle: "medium", timeStyle: "short", hourCycle: "h23" }).format(date)
 }
 
 export function formatAppDate(value: Date | string | number | null | undefined) {
   if (value === null || value === undefined) return "Unknown"
   const date = toDate(value)
   if (!Number.isFinite(date.getTime())) return "Unknown"
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: configuredTimeZone(), dateStyle: "medium" }).format(date)
+  const timeZone = configuredTimeZone()
+  return dateFormatter("date", DISPLAY_LOCALE, timeZone, { dateStyle: "medium" }).format(date)
 }
 
 export function formatAppTime(value: Date | string | number | null | undefined) {
   if (value === null || value === undefined) return "Unknown"
   const date = toDate(value)
   if (!Number.isFinite(date.getTime())) return "Unknown"
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: configuredTimeZone(), hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date)
+  const timeZone = configuredTimeZone()
+  return dateFormatter("time", DISPLAY_LOCALE, timeZone, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date)
 }
 
 export function formatAppWindowDate(value: Date | string | number) {
   const date = toDate(value)
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: configuredTimeZone(), month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
+  const timeZone = configuredTimeZone()
+  return dateFormatter("window", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
 }
 
 export function formatAppTrendBucket(value: Date | string | number, granularity: string) {
   const date = toDate(value)
-  const options: Intl.DateTimeFormatOptions = granularity === "hourly"
-    ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }
-    : granularity === "monthly"
-      ? { month: "short", year: "numeric" }
-      : { month: "short", day: "numeric" }
-  return new Intl.DateTimeFormat(DISPLAY_LOCALE, { ...options, timeZone: configuredTimeZone() }).format(date)
+  const timeZone = configuredTimeZone()
+  if (granularity === "hourly") return dateFormatter("trend-hourly", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
+  if (granularity === "monthly") return dateFormatter("trend-monthly", DISPLAY_LOCALE, timeZone, { month: "short", year: "numeric" }).format(date)
+  return dateFormatter("trend-daily", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric" }).format(date)
 }
 
 export function calendarDateFromInstant(value: Date | string | number) {

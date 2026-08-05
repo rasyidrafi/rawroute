@@ -17,3 +17,11 @@ test("rejects model replacement and prototype pollution keys", () => {
 test("requires an object rather than an array", () => {
   expect(() => validateRequestOverrides([])).toThrow("must be a JSON object")
 })
+
+test("clones nested configured arrays rather than sharing mutable override state", () => {
+  const overrides = validateRequestOverrides({ tools: [{ type: "web_search", options: { depth: 1 } }] })
+  const merged = mergeRequestOverrides({ input: "hello" }, overrides)
+  const tools = merged.tools as Array<{ options: { depth: number } }>
+  tools[0].options.depth = 9
+  expect(overrides).toEqual({ tools: [{ type: "web_search", options: { depth: 1 } }] })
+})

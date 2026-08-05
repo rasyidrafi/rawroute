@@ -1,15 +1,19 @@
 import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
-import { clearLogs, readLogs, writeLog } from "@/lib/logger"
+import { clearLogs, logVersion, readLogs, writeLog } from "@/lib/logger"
 
 
 async function authorize() {
   try { await requireAdmin(); return true } catch { return false }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   if (!(await authorize())) return jsonError("Unauthorized", 401)
-  return Response.json({ logs: readLogs() })
+  const etag = `W/"${logVersion()}"`
+  if (request.headers.get("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: { etag, "cache-control": "private, no-cache" } })
+  }
+  return Response.json({ logs: readLogs() }, { headers: { etag, "cache-control": "private, no-cache" } })
 }
 
 export async function DELETE() {

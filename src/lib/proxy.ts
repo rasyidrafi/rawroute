@@ -1,5 +1,5 @@
 import { authenticateProxyKey } from "@/lib/auth"
-import { BudgetDeniedError, getBudgetAdmission, recordGatewayUsage, type BudgetAdmission } from "@/lib/analytics"
+import { BudgetDeniedError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, type BudgetAdmission, type BudgetUsageContext, type ResolvedModelPricing } from "@/lib/analytics"
 import { refreshCodexAccount } from "@/lib/codex"
 import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
 import { jsonError } from "@/lib/http"
@@ -10,7 +10,7 @@ import { mergeRequestOverrides } from "@/lib/request-overrides"
 import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
 import { getRoutingStateStore } from "@/lib/routing-state"
 import { extractSessionIdentity } from "@/lib/session-routing"
-import { readData } from "@/lib/store"
+import { readRoutingData } from "@/lib/store"
 import { protocolPaths, type Protocol, type ProviderApiKey } from "@/lib/types"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
 
@@ -27,32 +27,75 @@ const blockedResponseHeaders = new Set([
   "trailer", "transfer-encoding", "upgrade", "content-length", "content-encoding", "set-cookie",
 ])
 
+let maximumBodyCache: { raw: string | undefined; value: number } | undefined
+const durationCache = new Map<string, { raw: string | undefined; value: number }>()
+const enabledProviderKeysCache = new WeakMap<ProviderApiKey[], Map<string, ProviderApiKey[]>>()
+const providerKeyIndexCache = new WeakMap<ProviderApiKey[], Map<string, ProviderApiKey>>()
+const emptyPayload = Object.freeze({}) as Record<string, unknown>
+const maxMappedResponseIds = 64
+const maxResponseIdChars = 512
+
 function maximumBodyBytes() {
-  const configured = Number(process.env.MAX_PROXY_BODY_BYTES || 10 * 1024 * 1024)
-  return Number.isSafeInteger(configured) && configured > 0 ? configured : 10 * 1024 * 1024
+  const raw = process.env.MAX_PROXY_BODY_BYTES
+  const cached = maximumBodyCache
+  if (cached && cached.raw === raw) return cached.value
+  const configured = Number(raw || 10 * 1024 * 1024)
+  const value = Number.isSafeInteger(configured) && configured > 0 ? configured : 10 * 1024 * 1024
+  maximumBodyCache = { raw, value }
+  return value
 }
 
-function configuredDurationMs(value: string | undefined, fallbackSeconds: number) {
+function configuredDurationMs(cacheKey: string, value: string | undefined, fallbackSeconds: number) {
+  const cached = durationCache.get(cacheKey)
+  if (cached && cached.raw === value) return cached.value
   const configured = Number(value || fallbackSeconds)
-  return Number.isSafeInteger(configured) && configured > 0 ? configured * 1000 : fallbackSeconds * 1000
+  const duration = Number.isSafeInteger(configured) && configured > 0 ? configured * 1000 : fallbackSeconds * 1000
+  durationCache.set(cacheKey, { raw: value, value: duration })
+  return duration
 }
 
 function maximumRoutingRequestMs(streaming: boolean) {
-  if (!streaming) return configuredDurationMs(process.env.ROUTING_MAX_NON_STREAM_DURATION_SECONDS, 60)
-  return configuredDurationMs(
-    process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || process.env.ROUTING_MAX_REQUEST_DURATION_SECONDS,
-    290,
-  )
+  if (!streaming) return configuredDurationMs("non-stream", process.env.ROUTING_MAX_NON_STREAM_DURATION_SECONDS, 60)
+  const configured = process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || process.env.ROUTING_MAX_REQUEST_DURATION_SECONDS
+  return configuredDurationMs("stream", configured, 290)
+}
+
+function providerKeysFor(providerApiKeys: ProviderApiKey[], providerId: string) {
+  let byProvider = enabledProviderKeysCache.get(providerApiKeys)
+  if (!byProvider) {
+    byProvider = new Map()
+    for (const apiKey of providerApiKeys) {
+      if (!apiKey.enabled) continue
+      const current = byProvider.get(apiKey.providerId)
+      if (current) current.push(apiKey)
+      else byProvider.set(apiKey.providerId, [apiKey])
+    }
+    enabledProviderKeysCache.set(providerApiKeys, byProvider)
+  }
+  return byProvider.get(providerId) || []
+}
+
+function providerKeyFor(providerApiKeys: ProviderApiKey[], id: string) {
+  let byId = providerKeyIndexCache.get(providerApiKeys)
+  if (!byId) {
+    byId = new Map()
+    for (const apiKey of providerApiKeys) byId.set(apiKey.id, apiKey)
+    providerKeyIndexCache.set(providerApiKeys, byId)
+  }
+  return byId.get(id)
 }
 
 async function readBoundedBody(request: Request, maximum: number) {
   const declared = request.headers.get("content-length")
-  if (declared && Number(declared) > maximum) return { ok: false as const }
-  if (!request.body) return { ok: true as const, value: "" }
+  if (declared) {
+    const declaredBytes = Number(declared)
+    if (Number.isFinite(declaredBytes) && declaredBytes > maximum) return { ok: false as const }
+  }
+  if (!request.body) return { ok: true as const, value: "", byteLength: 0 }
 
   const reader = request.body.getReader()
   const decoder = new TextDecoder()
-  let raw = ""
+  const chunks: string[] = []
   let total = 0
   while (true) {
     const { done, value } = await reader.read()
@@ -62,10 +105,11 @@ async function readBoundedBody(request: Request, maximum: number) {
       await reader.cancel("Request body too large")
       return { ok: false as const }
     }
-    raw += decoder.decode(value, { stream: true })
+    chunks.push(decoder.decode(value, { stream: true }))
   }
-  raw += decoder.decode()
-  return { ok: true as const, value: raw }
+  const tail = decoder.decode()
+  if (tail) chunks.push(tail)
+  return { ok: true as const, value: chunks.join(""), byteLength: total }
 }
 
 function retryAfterSeconds(headers: Headers) {
@@ -154,16 +198,33 @@ function objectValue(value: unknown) {
 function responseMetadataFromSse(buffer: string) {
   const ids: string[] = []
   let usage: UsageMetrics | undefined
-  for (const line of buffer.split("\n")) {
-    if (!line.startsWith("data:")) continue
-    try {
-      const data = JSON.parse(line.slice(5).trim()) as Record<string, unknown>
-      const response = objectValue(data.response) || data
-      if (typeof response.id === "string") ids.push(response.id)
-      usage = mergeUsage(usage, extractUsageMetrics(data))
-    } catch { /* Partial and non-JSON SSE data is passed through unchanged. */ }
+  let lineStart = 0
+  while (lineStart < buffer.length) {
+    let lineEnd = buffer.indexOf("\n", lineStart)
+    if (lineEnd < 0) lineEnd = buffer.length
+    let contentEnd = lineEnd
+    if (contentEnd > lineStart && buffer.charCodeAt(contentEnd - 1) === 13) contentEnd -= 1
+    if (contentEnd - lineStart >= 5 && buffer.startsWith("data:", lineStart)) {
+      const raw = buffer.slice(lineStart + 5, contentEnd).trim()
+      if (raw && raw !== "[DONE]") {
+        try {
+          const data = JSON.parse(raw) as Record<string, unknown>
+          const response = objectValue(data.response) || data
+          if (typeof response.id === "string" && response.id.length <= maxResponseIdChars && ids.length < maxMappedResponseIds) ids.push(response.id)
+          usage = mergeUsage(usage, extractUsageMetrics(data))
+        } catch { /* Partial and non-JSON SSE data is passed through unchanged. */ }
+      }
+    }
+    lineStart = lineEnd + 1
   }
   return { ids, usage }
+}
+
+function lastSseBoundary(buffer: string) {
+  const lf = buffer.lastIndexOf("\n\n")
+  const crlf = buffer.lastIndexOf("\r\n\r\n")
+  if (crlf > lf) return { index: crlf, length: 4 }
+  return lf >= 0 ? { index: lf, length: 2 } : undefined
 }
 
 function trackedUpstreamBody(
@@ -177,40 +238,47 @@ function trackedUpstreamBody(
     return null
   }
   const reader = upstream.body.getReader()
-  const contentType = upstream.headers.get("content-type") || ""
-  const decoder = new TextDecoder()
+  const contentType = (upstream.headers.get("content-type") || "").toLowerCase()
+  const isEventStream = contentType.includes("text/event-stream")
+  const isJson = !isEventStream && contentType.includes("application/json")
+  const decoder = isEventStream || isJson ? new TextDecoder() : undefined
   let buffered = ""
   let finished = false
   let firstByteAt: number | undefined
   let latestUsage: UsageMetrics | undefined
-  const maxMetadataBufferBytes = 2 * 1024 * 1024
+  const maxMetadataBufferChars = 2 * 1024 * 1024
   const mappedResponseIds = new Set<string>()
+
   const mapResponseIds = async (ids: string[]) => {
-    const newIds = ids.filter((id) => {
-      if (mappedResponseIds.has(id)) return false
+    let newIds: string[] | undefined
+    for (const id of ids) {
+      if (mappedResponseIds.size >= maxMappedResponseIds) break
+      if (!id || id.length > maxResponseIdChars) continue
+      if (mappedResponseIds.has(id)) continue
       mappedResponseIds.add(id)
-      return true
-    })
-    if (!newIds.length) return
+      if (newIds) newIds.push(id)
+      else newIds = [id]
+    }
+    if (!newIds) return
     try {
       await onResponseIds(newIds)
     } catch (error) {
       writeLog("warn", "gateway", "Unable to persist response affinity", { error: error instanceof Error ? error.message : "Unknown error" })
     }
   }
+
   const finish = async () => {
     if (finished) return
     finished = true
-    if (contentType.includes("application/json") && buffered) {
+    if (isJson && buffered) {
       try {
         const parsed = JSON.parse(buffered) as Record<string, unknown>
-        if (typeof parsed.id === "string") void mapResponseIds([parsed.id])
+        if (typeof parsed.id === "string" && parsed.id.length <= maxResponseIdChars) void mapResponseIds([parsed.id])
         latestUsage = mergeUsage(latestUsage, extractUsageMetrics(parsed))
       } catch { /* The upstream body remains untouched when it is not valid JSON. */ }
-    }
-    if (contentType.includes("text/event-stream") && buffered) {
+    } else if (isEventStream && buffered) {
       const metadata = responseMetadataFromSse(buffered)
-      void mapResponseIds(metadata.ids)
+      if (metadata.ids.length) void mapResponseIds(metadata.ids)
       latestUsage = mergeUsage(latestUsage, metadata.usage)
     }
     void onFinished({
@@ -218,13 +286,14 @@ function trackedUpstreamBody(
       ...(latestUsage ? { usage: latestUsage } : {}),
     }).catch((error) => writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" }))
   }
+
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read()
         if (done) {
-          buffered += decoder.decode()
-          if (contentType.includes("text/event-stream")) {
+          if (decoder) buffered += decoder.decode()
+          if (isEventStream) {
             controller.close()
             void finish()
           } else {
@@ -234,20 +303,22 @@ function trackedUpstreamBody(
           return
         }
         firstByteAt ??= Date.now()
-        if (contentType.includes("text/event-stream")) {
-          const text = decoder.decode(value, { stream: true })
-          buffered += text
-          if (buffered.length > maxMetadataBufferBytes) buffered = buffered.slice(-maxMetadataBufferBytes)
-          const boundary = buffered.lastIndexOf("\n\n")
-          if (boundary >= 0) {
-            const complete = buffered.slice(0, boundary + 2)
-            buffered = buffered.slice(boundary + 2)
+        if (isEventStream && decoder) {
+          buffered += decoder.decode(value, { stream: true })
+          const boundary = lastSseBoundary(buffered)
+          if (boundary) {
+            const end = boundary.index + boundary.length
+            const complete = buffered.slice(0, end)
+            buffered = buffered.slice(end)
             const metadata = responseMetadataFromSse(complete)
-            void mapResponseIds(metadata.ids)
+            if (metadata.ids.length) void mapResponseIds(metadata.ids)
             latestUsage = mergeUsage(latestUsage, metadata.usage)
           }
-        } else if (contentType.includes("application/json") && buffered.length < 2 * 1024 * 1024) {
-          buffered += decoder.decode(value, { stream: true })
+          if (buffered.length > maxMetadataBufferChars) buffered = buffered.slice(-maxMetadataBufferChars)
+        } else if (isJson && decoder && buffered.length < maxMetadataBufferChars) {
+          const text = decoder.decode(value, { stream: true })
+          const remaining = maxMetadataBufferChars - buffered.length
+          buffered += text.length <= remaining ? text : text.slice(0, remaining)
         }
         controller.enqueue(value)
       } catch (error) {
@@ -269,22 +340,32 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: requestedProtocol })
     return jsonError("Invalid gateway API key.", 401)
   }
-  if (!request.headers.get("content-type")?.includes("application/json")) {
+  if (!request.headers.get("content-type")?.toLowerCase().includes("application/json")) {
     return jsonError("Content-Type must be application/json.", 415)
   }
 
+  // Configuration can be loaded while the request stream is being decoded. Attach
+  // a handler immediately so an early body validation return cannot leave a
+  // rejected configuration promise unobserved.
+  const dataPromise = readRoutingData()
+  void dataPromise.catch(() => undefined)
   const body = await readBoundedBody(request, maximumBodyBytes())
   if (!body.ok) return jsonError("Request body exceeds the configured limit.", 413)
-  const raw = body.value
   let payload: Record<string, unknown>
   try {
-    payload = JSON.parse(raw) as Record<string, unknown>
+    const parsed = JSON.parse(body.value)
+    const parsedObject = objectValue(parsed)
+    if (!parsedObject) return jsonError("Request body must be a JSON object.", 400)
+    payload = parsedObject
   } catch {
     return jsonError("Request body must be valid JSON.", 400)
   }
+  // Drop the raw JSON string before creating the upstream serialization. On large
+  // requests this avoids retaining two equivalent multi-megabyte strings.
+  body.value = ""
 
   if (typeof payload.model !== "string") return jsonError("A model ID is required.", 400)
-  const data = await readData()
+  const data = await dataPromise
   const route = resolveRoute(data.providers, data.models, data.aliases, payload.model, requestedProtocol)
   if (!route.ok) {
     writeLog("warn", "gateway", "Request could not be routed", { model: payload.model, protocol: requestedProtocol, status: route.status })
@@ -292,26 +373,12 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   }
   const { model, provider, protocol: modelProtocol } = route
   const gatewayModelId = model.gatewayModelId || model.id
-  let budgetAdmission: BudgetAdmission | undefined
-  try {
-    budgetAdmission = await getBudgetAdmission(gatewayApiKey.id, gatewayModelId, model.id, payload)
-  } catch (error) {
-    if (error instanceof BudgetDeniedError) {
-      return Response.json({ error: { message: error.message } }, { status: error.status, headers: { "retry-after": String(error.retryAfterSeconds) } })
-    }
-    writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
-    return jsonError("Budget state is unavailable.", 503)
-  }
-  const providerApiKeys = data.providerApiKeys.filter((apiKey) => apiKey.providerId === provider.id && apiKey.enabled)
+  const providerApiKeys = providerKeysFor(data.providerApiKeys, provider.id)
   if (provider.authType !== "none" && !providerApiKeys.length) {
     writeLog("warn", "gateway", "Provider has no enabled API keys", { provider: provider.name, model: gatewayModelId })
     return jsonError("The model provider has no enabled API keys.", 503)
   }
 
-  let providerApiKey: ProviderApiKey | undefined = providerApiKeys[0]
-  let routingStore: ReturnType<typeof getRoutingStateStore> | undefined
-  let routingLeaseId: string | undefined
-  let budgetLeaseId: string | undefined
   const session = extractSessionIdentity(request, payload, modelProtocol, {
     gatewayKeyId: gatewayApiKey.id,
     providerId: provider.id,
@@ -319,6 +386,26 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     secret: data.sessionSecret,
   })
   const routingSessionKey = session?.key
+  let budgetAdmission: BudgetAdmission | undefined
+  let budgetUsageContext: BudgetUsageContext | undefined
+  let budgetPricing: ResolvedModelPricing | undefined
+  try {
+    const budgetState = await getBudgetRequestState(gatewayApiKey.id, gatewayModelId, model.id, payload, body.byteLength)
+    budgetAdmission = budgetState.admission
+    budgetUsageContext = budgetState.usageContext
+    budgetPricing = budgetState.pricing
+  } catch (error) {
+    if (error instanceof BudgetDeniedError) {
+      return Response.json({ error: { message: error.message } }, { status: error.status, headers: { "retry-after": String(error.retryAfterSeconds) } })
+    }
+    writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+    return jsonError("Budget state is unavailable.", 503)
+  }
+
+  let providerApiKey: ProviderApiKey | undefined = providerApiKeys[0]
+  let routingStore: ReturnType<typeof getRoutingStateStore> | undefined
+  let routingLeaseId: string | undefined
+  let budgetLeaseId: string | undefined
   if (provider.authType !== "none") {
     try {
       routingStore = getRoutingStateStore()
@@ -352,7 +439,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           headers: { "retry-after": String(reservation.retryAfterSeconds) },
         })
       }
-      providerApiKey = providerApiKeys.find((apiKey) => apiKey.id === reservation.credentialId)
+      providerApiKey = providerKeyFor(data.providerApiKeys, reservation.credentialId)
       if (!providerApiKey) {
         await routingStore.release({
           providerId: provider.id,
@@ -360,7 +447,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           credentialId: reservation.credentialId,
           leaseId: reservation.leaseId,
           status: 502,
-          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0 } } : {}),
+          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
         }).catch(() => undefined)
         return jsonError("The selected provider API key is unavailable.", 503)
       }
@@ -375,7 +462,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           credentialId: providerApiKey.id,
           leaseId: routingLeaseId,
           status: 503,
-          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0 } } : {}),
+          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
         }).catch(() => undefined)
         return jsonError(error instanceof Error ? error.message : "Codex account refresh failed.", 503)
       }
@@ -413,7 +500,10 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       return Promise.resolve()
     }
     if (!providerApiKey || !routingLeaseId) {
-      if (!budgetAdmission || !budgetLeaseId) return Promise.resolve()
+      if (!budgetAdmission || !budgetLeaseId) {
+        cleanupLease()
+        return Promise.resolve()
+      }
       return routingStore.settleBudget({ key: budgetAdmission.key, leaseId: budgetLeaseId, actualMicros, ttlSeconds: budgetAdmission.ttlSeconds }).finally(cleanupLease)
     }
     return routingStore.release({
@@ -423,7 +513,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       leaseId: routingLeaseId,
       status,
       retryAfterSeconds,
-      ...(budgetAdmission && budgetLeaseId ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros } } : {}),
+      ...(budgetAdmission && budgetLeaseId ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
     })
   }
   const releaseOnce = (status: number, retryAfterSeconds?: number, actualMicros = 0) => {
@@ -446,19 +536,18 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
     // credential kind. Codex can also be configured with a regular bearer key.
     const isCodexProvider = provider.prefix === "codex" || providerApiKey?.credentialKind === "codex-oauth"
     const isCodexOAuth = providerApiKey?.credentialKind === "codex-oauth"
-    payload = isCodexProvider ? normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey) : { ...payload, model: model.upstreamModel }
+    if (isCodexProvider) payload = normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey)
+    else payload.model = model.upstreamModel
     const streamOptions = objectValue(payload.stream_options)
-    if (modelProtocol === "openai-chat" && payload.stream === true && streamOptions) {
-      payload.stream_options = { ...streamOptions, include_usage: true }
-    }
+    if (modelProtocol === "openai-chat" && payload.stream === true && streamOptions) streamOptions.include_usage = true
     const reasoningEffort = extractReasoningEffort(payload)
     const validatedProviderHeaders = validateProviderHeaders(provider.headers)
     let headers = isCodexOAuth
-      ? buildCodexHeaders(request.headers, { ...provider, headers: validatedProviderHeaders }, providerApiKey?.key || "", providerApiKey?.accountId, routingSessionKey)
+      ? buildCodexHeaders(request.headers, validatedProviderHeaders, providerApiKey?.key || "", providerApiKey?.accountId, routingSessionKey)
       : new Headers()
     if (!isCodexOAuth) {
       request.headers.forEach((value, key) => {
-        if (!blockedRequestHeaders.has(key.toLowerCase())) headers.set(key, value)
+        if (!blockedRequestHeaders.has(key)) headers.set(key, value)
       })
       headers.set("content-type", "application/json")
       Object.entries(validatedProviderHeaders).forEach(([key, value]) => headers.set(key, value))
@@ -469,6 +558,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
 
     const account = providerApiKey?.name || provider.name
     const startedAt = Date.now()
+    const startedAtIso = new Date(startedAt).toISOString()
     const upstreamController = new AbortController()
     clientAbortListener = () => {
       upstreamController.abort(request.signal.reason)
@@ -481,7 +571,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       upstreamController.abort(new Error("Maximum routing request duration exceeded"))
       void safeRelease(502)
     }, maximumRoutingRequestMs(payload.stream === true))
-    if (requestTimeout && typeof requestTimeout === "object" && "unref" in requestTimeout) requestTimeout.unref()
+    if (typeof requestTimeout === "object" && requestTimeout !== null && "unref" in requestTimeout) (requestTimeout as { unref(): void }).unref()
     if (routingStore && providerApiKey && routingLeaseId) {
       let renewing = false
       leaseRenewalTimer = setInterval(() => {
@@ -502,15 +592,17 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
           writeLog("warn", "gateway", "Unable to renew routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
         }).finally(() => { renewing = false })
       }, routingStore.leaseRenewalIntervalMs())
-      if (leaseRenewalTimer && typeof leaseRenewalTimer === "object" && "unref" in leaseRenewalTimer) leaseRenewalTimer.unref()
+      if (typeof leaseRenewalTimer === "object" && leaseRenewalTimer !== null && "unref" in leaseRenewalTimer) (leaseRenewalTimer as { unref(): void }).unref()
     }
     writeLog("info", "gateway", requestSummary(provider.name, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
     const upstreamPath = isCodexOAuth ? (model.upstreamPath || "/responses") : (model.upstreamPath || protocolPaths[modelProtocol])
     const upstreamUrl = buildUpstreamUrl(provider.baseUrl, upstreamPath)
+    let upstreamBody = JSON.stringify(payload)
+    payload = emptyPayload
     let upstream = await fetch(upstreamUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: upstreamBody,
       signal: upstreamController.signal,
       redirect: "manual",
     })
@@ -518,11 +610,11 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
       await upstream.body?.cancel().catch(() => undefined)
       try {
         providerApiKey = await refreshCodexAccount(providerApiKey, true)
-        headers = buildCodexHeaders(request.headers, { ...provider, headers: validatedProviderHeaders }, providerApiKey.key, providerApiKey.accountId, routingSessionKey)
+        headers = buildCodexHeaders(request.headers, validatedProviderHeaders, providerApiKey.key, providerApiKey.accountId, routingSessionKey)
         upstream = await fetch(upstreamUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify(payload),
+          body: upstreamBody,
           signal: upstreamController.signal,
           redirect: "manual",
         })
@@ -530,57 +622,75 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
         writeLog("warn", "gateway", "Codex token refresh after unauthorized response failed", { provider: provider.name, account: providerApiKey.name, error: error instanceof Error ? error.message : "Unknown error" })
       }
     }
+    // A Codex retry can no longer occur once response headers are available.
+    // Release the potentially multi-megabyte request serialization before the
+    // downstream response stream completes.
+    upstreamBody = ""
     const responseHeaders = new Headers()
     upstream.headers.forEach((value, key) => {
-      if (!blockedResponseHeaders.has(key.toLowerCase())) responseHeaders.set(key, value)
+      if (!blockedResponseHeaders.has(key)) responseHeaders.set(key, value)
     })
     responseHeaders.set("x-rawroute-provider", provider.id)
     responseHeaders.set("x-rawroute-model", gatewayModelId)
     if (providerApiKey) responseHeaders.set("x-rawroute-provider-key", providerApiKey.id)
     if (!upstream.ok) await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
-    const responseBody = trackedUpstreamBody(
-      upstream,
-      async (responseIds) => {
-        if (routingStore && providerApiKey) await routingStore.mapResponses(responseIds, provider.id, providerApiKey.id)
-      },
-      async ({ ttftMs, usage }) => {
-        if (!upstream.ok) return
-        const elapsed = Date.now() - startedAt
-        const firstByteMs = ttftMs === undefined ? undefined : ttftMs - startedAt
-        writeLog("info", "gateway", completionSummary(elapsed, firstByteMs, usage))
-        void (async () => {
-          let actualMicros = 0
-          try {
-            const event = await recordGatewayUsage({
-              gatewayKeyId: gatewayApiKey.id,
-              providerId: provider.id,
-              providerModelId: model.id,
-              gatewayModelId,
-              protocol: modelProtocol,
-              startedAt: new Date(startedAt).toISOString(),
-              status: upstream.status,
-              durationMs: elapsed,
-              ...(firstByteMs !== undefined ? { ttftMs: firstByteMs } : {}),
-              metrics: usage,
-            })
-            actualMicros = event.costMicros
-          } catch (error) {
-            writeLog("warn", "gateway", "Unable to persist usage event", { error: error instanceof Error ? error.message : "Unknown error" })
-          }
-          await safeRelease(upstream.status, retryAfterSeconds(upstream.headers), actualMicros)
-        })()
-      },
-      async () => {
-        upstreamController.abort(new Error("Downstream response was cancelled"))
-        await safeRelease(499)
-      },
-    )
+    const responseBody = upstream.ok
+      ? trackedUpstreamBody(
+          upstream,
+          async (responseIds) => {
+            if (routingStore && providerApiKey) await routingStore.mapResponses(responseIds, provider.id, providerApiKey.id)
+          },
+          async ({ ttftMs, usage }) => {
+            const elapsed = Date.now() - startedAt
+            const firstByteMs = ttftMs === undefined ? undefined : ttftMs - startedAt
+            writeLog("info", "gateway", completionSummary(elapsed, firstByteMs, usage))
+            void (async () => {
+              const retryAfter = retryAfterSeconds(upstream.headers)
+              const eventPromise = createGatewayUsageEvent({
+                gatewayKeyId: gatewayApiKey.id,
+                providerId: provider.id,
+                providerModelId: model.id,
+                gatewayModelId,
+                protocol: modelProtocol,
+                startedAt: startedAtIso,
+                status: upstream.status,
+                durationMs: elapsed,
+                ...(firstByteMs !== undefined ? { ttftMs: firstByteMs } : {}),
+                metrics: usage,
+                ...(budgetAdmission ? { assumedCostMicros: budgetAdmission.reservationMicros } : {}),
+              }, budgetPricing)
+              void eventPromise.catch(() => undefined)
+              // Requests without an active budget do not need pricing before the
+              // scarce routing slot can be returned to the pool.
+              if (!budgetAdmission) await safeRelease(upstream.status, retryAfter)
+              let event: Awaited<typeof eventPromise>
+              try {
+                event = await eventPromise
+              } catch (error) {
+                await safeRelease(upstream.status, retryAfter)
+                writeLog("warn", "gateway", "Unable to calculate usage event", { error: error instanceof Error ? error.message : "Unknown error" })
+                return
+              }
+              // Budget reservations need the priced amount, but persistence does not
+              // need to hold the routing lease open.
+              if (budgetAdmission) await safeRelease(upstream.status, retryAfter, event.costMicros)
+              try {
+                await recordUsageEvent(event, budgetUsageContext || null)
+              } catch (error) {
+                writeLog("warn", "gateway", "Unable to persist usage event", { error: error instanceof Error ? error.message : "Unknown error" })
+              }
+            })()
+          },
+          async () => {
+            upstreamController.abort(new Error("Downstream response was cancelled"))
+            await safeRelease(499)
+          },
+        )
+      : upstream.body
     if (!upstream.ok) writeLog("warn", "gateway", `FAILED ${upstream.status} ${Date.now() - startedAt}ms`)
     return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
-    if (routingStore && providerApiKey && routingLeaseId) {
-      await safeRelease(502).catch(() => undefined)
-    }
+    if (routingStore) await safeRelease(502).catch(() => undefined)
     cleanupLease()
     writeLog("error", "gateway", "Upstream request failed", { provider: provider.name, model: gatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError("Upstream request failed.", 502, error instanceof Error ? error.message : undefined)

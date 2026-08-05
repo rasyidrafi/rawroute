@@ -106,7 +106,10 @@ export function calculateCostMicros(usage: ReturnType<typeof normalizeUsageMetri
   contextTiers?: PricingContextTier[]
 } | undefined) {
   if (!pricing || !usage.usageAvailable) return { costMicros: 0, pricingConfidence: "unpriced" as const }
-  const selectedTier = pricing.contextTiers?.filter((tier) => usage.inputTokens >= tier.thresholdTokens).sort((a, b) => a.thresholdTokens - b.thresholdTokens).at(-1)
+  let selectedTier: PricingContextTier | undefined
+  for (const tier of pricing.contextTiers || []) {
+    if (usage.inputTokens >= tier.thresholdTokens && (!selectedTier || tier.thresholdTokens > selectedTier.thresholdTokens)) selectedTier = tier
+  }
   const rates = selectedTier || pricing
   const billableInput = Math.max(usage.inputTokens - usage.cacheReadTokens - usage.cacheCreationTokens, 0)
   const costMicros = Math.round(

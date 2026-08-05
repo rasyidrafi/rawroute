@@ -4,6 +4,11 @@ import type { DateRange } from "react-day-picker"
 import type { DashboardQuery } from "@/lib/types"
 import { formatAppDateTime } from "@/lib/timezone"
 
+const integerFormatter = new Intl.NumberFormat("en-US")
+const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const subDollarCurrencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })
+const TOKEN_UNITS = ["", "K", "M", "B", "T"] as const
+
 export const DEFAULT_PRESET: DashboardQuery["preset"] = "budget"
 export const DEFAULT_GRANULARITY: NonNullable<DashboardQuery["granularity"]> = "auto"
 export const KEY_COLORS = [
@@ -32,22 +37,21 @@ export const PRESET_OPTIONS: Array<{ value: DashboardQuery["preset"]; label: str
 export const DESKTOP_PRESET_OPTIONS = PRESET_OPTIONS.filter((option) => option.value !== "custom")
 
 export function formatNumber(value: number) {
-  return new Intl.NumberFormat("en-US").format(Math.round(value))
+  return integerFormatter.format(Math.round(value))
 }
 
 export function formatTokenCount(value: number) {
   const absolute = Math.abs(value)
-  const units = ["", "K", "M", "B", "T"]
   if (absolute < 1000) return formatNumber(value)
-  const index = Math.min(Math.floor(Math.log10(absolute) / 3), units.length - 1)
+  const index = Math.min(Math.floor(Math.log10(absolute) / 3), TOKEN_UNITS.length - 1)
   const scaled = value / 1000 ** index
   const digits = Math.abs(scaled) >= 100 ? 0 : Math.abs(scaled) >= 10 ? 1 : 2
-  return `${scaled.toFixed(digits)}${units[index]}`
+  return `${scaled.toFixed(digits)}${TOKEN_UNITS[index]}`
 }
 
 export function formatCost(micros: number) {
   const value = micros / 1_000_000
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2, maximumFractionDigits: value < 1 ? 3 : 2 }).format(value)
+  return (value < 1 ? subDollarCurrencyFormatter : currencyFormatter).format(value)
 }
 
 export function formatDateTime(value: string | null) {

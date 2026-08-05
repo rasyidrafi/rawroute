@@ -95,4 +95,46 @@ describe("usage analytics", () => {
     const admission = await getBudgetAdmission(key.id, "test/model", "model-doc", { model: "test/model", input: "hello", max_output_tokens: 2 })
     expect(admission?.reservationMicros).toBeLessThan(10_000)
   })
+
+  test("uses a conservative bounded reservation for uncapped requests", async () => {
+    const key = await createApiKey("Uncapped admission")
+    await upsertModelPricing({ modelId: "uncapped-model", provider: "test", gatewayModelId: "test/uncapped", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
+    const admission = await getBudgetAdmission(key.id, "test/uncapped", "uncapped-model", { model: "test/uncapped", input: "hello" }, 48)
+    expect(admission?.reservationMicros).toBeGreaterThan(0)
+    expect(admission?.reservationMicros).toBeLessThan(10_000)
+  })
+
+  test("recognizes the chat-completions max_completion_tokens cap", async () => {
+    const key = await createApiKey("Completion cap")
+    await upsertModelPricing({ modelId: "completion-model", provider: "test", gatewayModelId: "test/completion", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
+    const admission = await getBudgetAdmission(key.id, "test/completion", "completion-model", { model: "test/completion", messages: [], max_completion_tokens: 3 }, 64)
+    expect(admission?.reservationMicros).toBeLessThan(100)
+  })
+
+  test("retains the conservative reservation when successful usage metadata is missing", async () => {
+    const key = await createApiKey("Missing usage")
+    await upsertModelPricing({ modelId: "missing-usage-model", provider: "test", gatewayModelId: "test/missing-usage", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
+    const admission = await getBudgetAdmission(key.id, "test/missing-usage", "missing-usage-model", { model: "test/missing-usage", input: "hello", max_output_tokens: 4 }, 64)
+    expect(admission?.reservationMicros).toBeGreaterThan(0)
+
+    await recordGatewayUsage({
+      gatewayKeyId: key.id,
+      providerModelId: "missing-usage-model",
+      gatewayModelId: "test/missing-usage",
+      protocol: "openai-chat",
+      startedAt: new Date().toISOString(),
+      status: 200,
+      durationMs: 1,
+      assumedCostMicros: admission?.reservationMicros,
+    })
+
+    const budget = (await getBudgetRows()).find((row) => row.apiKeyId === key.id)
+    expect(budget?.spentMicros).toBe(admission?.reservationMicros)
+    const payload = await getDashboardPayload({ preset: "all" })
+    expect(payload.summary.costMicros).toBe(admission?.reservationMicros)
+    expect(payload.summary.unpricedRequests).toBe(1)
+  })
 })

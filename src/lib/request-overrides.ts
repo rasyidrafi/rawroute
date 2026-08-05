@@ -26,12 +26,22 @@ export function validateRequestOverrides(value: unknown) {
   return value
 }
 
+function cloneOverride(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneOverride)
+  if (isPlainObject(value)) {
+    const clone: Record<string, unknown> = {}
+    for (const [key, nested] of Object.entries(value)) clone[key] = cloneOverride(nested)
+    return clone
+  }
+  return value
+}
+
 export function mergeRequestOverrides(payload: Record<string, unknown>, overrides: Record<string, unknown>) {
   if (!Object.keys(overrides).length) return payload
   const merge = (base: unknown, configured: unknown): unknown => {
-    if (!isPlainObject(base) || !isPlainObject(configured)) return structuredClone(configured)
-    const result: Record<string, unknown> = { ...(base as Record<string, unknown>) }
-    for (const [key, value] of Object.entries(configured)) result[key] = key in result ? merge(result[key], value) : structuredClone(value)
+    if (!isPlainObject(base) || !isPlainObject(configured)) return cloneOverride(configured)
+    const result: Record<string, unknown> = { ...base }
+    for (const [key, value] of Object.entries(configured)) result[key] = key in result ? merge(result[key], value) : cloneOverride(value)
     return result
   }
   return merge(payload, overrides) as Record<string, unknown>

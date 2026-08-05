@@ -71,23 +71,47 @@ async function loadCatalog(fetchFn: FetchLike) {
 export function createModelsDevCatalogClient(args?: { ttlMs?: number; fetchFn?: FetchLike }) {
   const ttlMs = args?.ttlMs ?? MODELS_DEV_TTL_MS
   const fetchFn = args?.fetchFn ?? fetch
-  let cachedModels: { expiresAt: number; models: CatalogModel[] } | undefined
-  let pendingLoad: Promise<CatalogModel[]> | undefined
+  type CatalogState = { expiresAt: number; models: CatalogModel[]; byId: Map<string, CatalogModel> }
+  let cachedCatalog: CatalogState | undefined
+  let pendingLoad: Promise<CatalogState> | undefined
+  let generation = 0
+
+  async function getCatalog() {
+    if (cachedCatalog && cachedCatalog.expiresAt > Date.now()) return cachedCatalog
+    if (!pendingLoad) {
+      const loadGeneration = generation
+      const promise = loadCatalog(fetchFn).then((models) => {
+        const catalog = { models, byId: new Map(models.map((model) => [model.id, model])), expiresAt: Date.now() + ttlMs }
+        if (loadGeneration === generation) cachedCatalog = catalog
+        return catalog
+      }).finally(() => {
+        if (pendingLoad === promise) pendingLoad = undefined
+      })
+      pendingLoad = promise
+    }
+    return pendingLoad
+  }
 
   return {
     clear() {
-      cachedModels = undefined
+      generation += 1
+      cachedCatalog = undefined
       pendingLoad = undefined
     },
     async getModels() {
-      if (cachedModels && cachedModels.expiresAt > Date.now()) return cachedModels.models
-      if (!pendingLoad) {
-        pendingLoad = loadCatalog(fetchFn).then((models) => {
-          cachedModels = { models, expiresAt: Date.now() + ttlMs }
-          return models
-        }).finally(() => { pendingLoad = undefined })
+      return (await getCatalog()).models
+    },
+    async getModel(id: string) {
+      return (await getCatalog()).byId.get(id)
+    },
+    async getModelsByIds(ids: Iterable<string>) {
+      const byId = (await getCatalog()).byId
+      const result: CatalogModel[] = []
+      for (const id of ids) {
+        const model = byId.get(id)
+        if (model) result.push(model)
       }
-      return pendingLoad
+      return result
     },
   }
 }
@@ -102,30 +126,55 @@ function normalizeSearch(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
 }
 
-function searchScore(model: CatalogModel, query: string) {
-  if (!query) return 100
-  const normalized = normalizeSearch(query)
-  const searchable = `${normalizeSearch(model.id)} ${normalizeSearch(model.name)} ${normalizeSearch(model.provider)} ${normalizeSearch(model.family || "")}`
-  const tokens = normalized.split(" ")
-  if (!tokens.every((token) => searchable.includes(token))) return Number.POSITIVE_INFINITY
-  const id = normalizeSearch(model.id)
-  const name = normalizeSearch(model.name)
-  if (id === normalized) return 0
-  if (id.startsWith(normalized)) return 1
-  if (name.startsWith(normalized)) return 2
-  if (id.includes(normalized) || name.includes(normalized)) return 3
+interface SearchIndexEntry { id: string; name: string; searchable: string }
+const modelSearchIndex = new WeakMap<CatalogModel, SearchIndexEntry>()
+
+function indexedSearchText(model: CatalogModel) {
+  let indexed = modelSearchIndex.get(model)
+  if (!indexed) {
+    const id = normalizeSearch(model.id)
+    const name = normalizeSearch(model.name)
+    indexed = {
+      id,
+      name,
+      searchable: `${id} ${name} ${normalizeSearch(model.provider)} ${normalizeSearch(model.family || "")}`,
+    }
+    modelSearchIndex.set(model, indexed)
+  }
+  return indexed
+}
+
+function searchScore(model: CatalogModel, normalized: string, tokens: string[]) {
+  const indexed = indexedSearchText(model)
+  for (const token of tokens) if (!indexed.searchable.includes(token)) return -1
+  if (indexed.id === normalized) return 0
+  if (indexed.id.startsWith(normalized)) return 1
+  if (indexed.name.startsWith(normalized)) return 2
+  if (indexed.id.includes(normalized) || indexed.name.includes(normalized)) return 3
   return 4
 }
 
 export function filterModelsDevCanonicalModels(models: CatalogModel[], query = "", limit = DEFAULT_LIMIT) {
-  const normalizedQuery = query.trim()
   const boundedLimit = limit === 0 ? MAX_LIMIT : Math.max(1, Math.min(MAX_LIMIT, limit))
-  return models
-    .map((model) => ({ model, score: searchScore(model, normalizedQuery) }))
-    .filter((entry) => Number.isFinite(entry.score))
-    .sort((left, right) => left.score - right.score || left.model.id.localeCompare(right.model.id))
-    .slice(0, boundedLimit)
-    .map((entry) => entry.model)
+  const normalized = normalizeSearch(query)
+  if (!normalized) return models.slice(0, boundedLimit)
+
+  const tokens = normalized.split(" ")
+  const buckets: CatalogModel[][] = [[], [], [], [], []]
+  for (const model of models) {
+    const score = searchScore(model, normalized, tokens)
+    if (score >= 0) buckets[score].push(model)
+  }
+
+  const result: CatalogModel[] = []
+  for (const bucket of buckets) {
+    bucket.sort((left, right) => left.id.localeCompare(right.id))
+    const remaining = boundedLimit - result.length
+    if (remaining <= 0) break
+    if (bucket.length <= remaining) result.push(...bucket)
+    else result.push(...bucket.slice(0, remaining))
+  }
+  return result
 }
 
 export async function searchModelsDevCanonicalModels(query = "", limit = DEFAULT_LIMIT) {
@@ -135,7 +184,11 @@ export async function searchModelsDevCanonicalModels(query = "", limit = DEFAULT
 export async function findModelsDevCanonicalModel(id: string) {
   const normalizedId = id.trim()
   if (!normalizedId) return undefined
-  return (await getModelsDevCanonicalModels()).find((model) => model.id === normalizedId)
+  return modelsDevCatalogClient.getModel(normalizedId)
+}
+
+export async function findModelsDevCanonicalModels(ids: Iterable<string>) {
+  return modelsDevCatalogClient.getModelsByIds(ids)
 }
 
 export function clearModelsDevCanonicalCache() {

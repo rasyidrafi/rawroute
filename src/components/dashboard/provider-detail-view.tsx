@@ -31,7 +31,10 @@ const providerKey = (providerId: string) => `/api/admin/providers/${encodeURICom
 export function ProviderDetailView({ providerId }: { providerId: string }) {
   const router = useRouter()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId))
-  const { data: usageData, error: usageError, isLoading: usageLoading } = useSWR<UsageResponse>("/api/admin/oauth-providers/usage", fetcher, {
+  const usageKey = data && (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-oauth"))
+    ? "/api/admin/oauth-providers/usage"
+    : null
+  const { data: usageData, error: usageError, isLoading: usageLoading } = useSWR<UsageResponse>(usageKey, fetcher, {
     refreshInterval: 300000,
     dedupingInterval: 300000,
     revalidateOnFocus: false,

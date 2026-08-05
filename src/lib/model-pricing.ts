@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore, type Firestore } from "firebase-admin/firestore"
 
-import { findModelsDevCanonicalModel } from "@/lib/models-dev"
+import { findModelsDevCanonicalModels } from "@/lib/models-dev"
 import { listModels, listProviders } from "@/lib/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
 
@@ -11,8 +11,36 @@ const memoryGroups = new Map<string, ModelPricingGroup>()
 const memoryVersions = new Map<string, ModelPricingVersion>()
 const memoryJobs = new Map<string, PricingJob>()
 const runningJobs = new Set<string>()
-let pricingCatalogCache: { groups: ModelPricingGroup[]; versions: ModelPricingVersion[]; models: Model[]; providers: Awaited<ReturnType<typeof listProviders>>; expiresAt: number } | undefined
-let pricingCatalogPromise: Promise<{ groups: ModelPricingGroup[]; versions: ModelPricingVersion[]; models: Model[]; providers: Awaited<ReturnType<typeof listProviders>> }> | undefined
+type ProviderRows = Awaited<ReturnType<typeof listProviders>>
+type PricingCatalog = {
+  groups: ModelPricingGroup[]
+  versions: ModelPricingVersion[]
+  models: Model[]
+  providers: ProviderRows
+  modelById: Map<string, Model>
+  modelByGatewayId: Map<string, Model>
+  groupByModelId: Map<string, ModelPricingGroup>
+  versionsByGroup: Map<string, ModelPricingVersion[]>
+}
+type PricingAdminData = Awaited<ReturnType<typeof buildPricingAdminData>>
+
+let pricingCatalogCache: (PricingCatalog & { expiresAt: number }) | undefined
+let pricingCatalogPromise: Promise<PricingCatalog> | undefined
+let pricingAdminCache: { value: PricingAdminData; expiresAt: number } | undefined
+let pricingAdminPromise: Promise<PricingAdminData> | undefined
+let pricingJobsCache: { value: PricingJob[]; expiresAt: number } | undefined
+let pricingJobsPromise: Promise<PricingJob[]> | undefined
+let legacyMigrationPromise: Promise<boolean> | undefined
+let legacyMigrationComplete = false
+let pricingCacheGeneration = 0
+let pricingAdminGeneration = 0
+let pricingJobsGeneration = 0
+
+const pricingCatalogTtlMs = positiveDuration(process.env.PRICING_CATALOG_CACHE_TTL_MS, 30_000)
+const pricingAdminTtlMs = positiveDuration(process.env.PRICING_ADMIN_CACHE_TTL_MS, 5_000)
+const pricingJobsTtlMs = positiveDuration(process.env.PRICING_JOBS_CACHE_TTL_MS, 2_000)
+
+export function getModelPricingGeneration() { return pricingCacheGeneration }
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
@@ -30,7 +58,27 @@ function versionsRef() { return db().collection(`${prefix()}_model_pricing_versi
 function jobsRef() { return db().collection(`${prefix()}_model_pricing_jobs`) }
 function legacyPricingRef() { return db().collection(`${prefix()}_model_pricing`) }
 function stableGroupId(key: string) { return `fixed-${createHash("sha1").update(key).digest("hex").slice(0, 20)}` }
-function invalidatePricingCatalog() { pricingCatalogCache = undefined }
+function positiveDuration(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+function invalidatePricingAdmin() {
+  pricingAdminGeneration += 1
+  pricingAdminCache = undefined
+  pricingAdminPromise = undefined
+}
+function invalidatePricingJobs() {
+  pricingJobsGeneration += 1
+  pricingJobsCache = undefined
+  pricingJobsPromise = undefined
+  invalidatePricingAdmin()
+}
+function invalidatePricingCatalog() {
+  pricingCacheGeneration += 1
+  pricingCatalogCache = undefined
+  pricingCatalogPromise = undefined
+  invalidatePricingAdmin()
+}
 
 function modelGroupKey(model: Model, providerPrefixes: Map<string, string>) {
   const prefix = providerPrefixes.get(model.providerId)?.trim()
@@ -95,9 +143,37 @@ async function writeGroup(group: ModelPricingGroup) {
   invalidatePricingCatalog()
 }
 
+async function writeGroups(groups: ModelPricingGroup[]) {
+  if (!groups.length) return
+  if (isMemory()) {
+    for (const group of groups) memoryGroups.set(group.id, group)
+  } else {
+    for (let offset = 0; offset < groups.length; offset += 450) {
+      const batch = db().batch()
+      for (const group of groups.slice(offset, offset + 450)) batch.set(groupsRef().doc(group.id), group)
+      await batch.commit()
+    }
+  }
+  invalidatePricingCatalog()
+}
+
 async function writeVersion(version: ModelPricingVersion) {
   if (isMemory()) memoryVersions.set(version.id, version)
   else await versionsRef().doc(version.id).set(version)
+  invalidatePricingCatalog()
+}
+
+async function writeVersions(versions: ModelPricingVersion[]) {
+  if (!versions.length) return
+  if (isMemory()) {
+    for (const version of versions) memoryVersions.set(version.id, version)
+  } else {
+    for (let offset = 0; offset < versions.length; offset += 450) {
+      const batch = db().batch()
+      for (const version of versions.slice(offset, offset + 450)) batch.set(versionsRef().doc(version.id), version)
+      await batch.commit()
+    }
+  }
   invalidatePricingCatalog()
 }
 
@@ -105,7 +181,7 @@ export async function syncModelPricingGroups() {
   const [models, providers] = await Promise.all([listModels(), listProviders()])
   const providerPrefixes = new Map(providers.map((provider) => [provider.id, provider.prefix]))
   const existing = await readGroups()
-  const existingById = new Map(existing.map((group) => [group.id, group]))
+  const existingById = new Map<string, ModelPricingGroup>(existing.map((group) => [group.id, group]))
   const customAssigned = new Set(existing.filter((group) => group.kind === "custom").flatMap((group) => group.memberModelIds))
   const fixedAddedOwner = new Map<string, string>()
   for (const group of existing.filter((entry) => entry.kind === "fixed")) {
@@ -116,10 +192,13 @@ export async function syncModelPricingGroups() {
   const grouped = new Map<string, Model[]>()
   for (const model of models) {
     const key = modelGroupKey(model, providerPrefixes)
-    grouped.set(key, [...(grouped.get(key) || []), model])
+    const entries = grouped.get(key)
+    if (entries) entries.push(model)
+    else grouped.set(key, [model])
   }
   const validModelIds = new Set(models.map((model) => model.id))
   const now = new Date().toISOString()
+  const writes: ModelPricingGroup[] = []
   for (const [key, groupedModels] of grouped) {
     const id = stableGroupId(key)
     const current = existingById.get(id)
@@ -130,8 +209,9 @@ export async function syncModelPricingGroups() {
       ...groupedModels.map((model) => model.id).filter((modelId) => customAssigned.has(modelId)),
       ...groupedModels.map((model) => model.id).filter((modelId) => fixedAddedOwner.has(modelId) && fixedAddedOwner.get(modelId) !== id),
     ])].filter((modelId) => availableIds.has(modelId))
-    const memberModelIds = [...groupedModels.map((model) => model.id).filter((modelId) => !excluded.includes(modelId)), ...addedModelIds]
-    await writeGroup({
+    const excludedIds = new Set(excluded)
+    const memberModelIds = [...groupedModels.map((model) => model.id).filter((modelId) => !excludedIds.has(modelId)), ...addedModelIds]
+    writes.push({
       ...current,
       id,
       name: current?.name?.trim() || modelGroupLabel(groupedModels[0], providerPrefixes),
@@ -144,6 +224,7 @@ export async function syncModelPricingGroups() {
       updatedAt: now,
     })
   }
+  await writeGroups(writes)
   return readGroups()
 }
 
@@ -152,58 +233,103 @@ export async function listPricingVersions(groupId?: string) {
   return (await readVersions()).filter((version) => !groupId || version.groupId === groupId).sort((a, b) => a.effectiveAt.localeCompare(b.effectiveAt))
 }
 
-async function ensurePricingGroups() {
-  const groups = await readGroups()
-  return groups.length ? groups : syncModelPricingGroups()
-}
-
 export function activePricingVersion(versions: ModelPricingVersion[], at = new Date()) {
-  return versions.filter((version) => Date.parse(version.effectiveAt) <= at.getTime()).sort((a, b) => Date.parse(b.effectiveAt) - Date.parse(a.effectiveAt))[0]
+  const atMs = at.getTime()
+  let selected: ModelPricingVersion | undefined
+  let selectedAt = -Infinity
+  for (const version of versions) {
+    const effectiveAt = Date.parse(version.effectiveAt)
+    if (effectiveAt <= atMs && (effectiveAt > selectedAt || (effectiveAt === selectedAt && version.version > (selected?.version || 0)))) {
+      selected = version
+      selectedAt = effectiveAt
+    }
+  }
+  return selected
 }
 
-export async function getPricingAdminData() {
-  await ensurePricingGroups()
-  const [models, providers] = await Promise.all([listModels(), listProviders()])
-  const providerPrefixes = new Map(providers.map((provider) => [provider.id, provider.prefix]))
-  await migrateLegacyPricing(models)
-  const [groups, versions, jobs] = await Promise.all([listPricingGroups(), readVersions(), listPricingJobs()])
-  const assigned = new Set(groups.flatMap((group) => group.memberModelIds))
-  const versionsByGroup = new Map<string, ModelPricingVersion[]>()
-  for (const version of versions) versionsByGroup.set(version.groupId, [...(versionsByGroup.get(version.groupId) || []), version])
-  const modelRows = models.map((model) => ({ id: model.id, name: model.name, groupKey: modelGroupKey(model, providerPrefixes), gatewayModelId: model.gatewayModelId, upstreamModel: model.upstreamModel, providerId: model.providerId, enabled: model.enabled }))
+async function migrateLegacyPricing(catalog: PricingCatalog) {
+  if (isMemory()) return false
+  const legacy = await legacyPricingRef().get()
+  if (legacy.empty) return false
+
+  const groupsWithVersions = new Set(catalog.versions.map((version) => version.groupId))
+  const writes: ModelPricingVersion[] = []
+  for (const document of legacy.docs) {
+    const entry = document.data() as Record<string, unknown>
+    const modelId = typeof entry.modelId === "string" ? entry.modelId : undefined
+    const gatewayModelId = typeof entry.gatewayModelId === "string" ? entry.gatewayModelId : undefined
+    const target = (modelId ? catalog.modelById.get(modelId) : undefined) || (gatewayModelId ? catalog.modelByGatewayId.get(gatewayModelId) : undefined)
+    if (!target) continue
+    const group = catalog.groupByModelId.get(target.id)
+    if (!group || groupsWithVersions.has(group.id)) continue
+    const updatedAt = typeof entry.updatedAt === "string" && Number.isFinite(Date.parse(entry.updatedAt)) ? entry.updatedAt : new Date().toISOString()
+    writes.push({ id: crypto.randomUUID(), groupId: group.id, version: 1, effectiveAt: updatedAt, createdAt: updatedAt, updatedAt, inputMicrosPerMillion: Number(entry.inputMicrosPerMillion) || 0, outputMicrosPerMillion: Number(entry.outputMicrosPerMillion) || 0, cacheReadMicrosPerMillion: Number(entry.cacheReadMicrosPerMillion) || 0, cacheCreationMicrosPerMillion: Number(entry.cacheCreationMicrosPerMillion) || 0, contextTiers: [] })
+    groupsWithVersions.add(group.id)
+  }
+  await writeVersions(writes)
+  return writes.length > 0
+}
+
+async function ensureLegacyPricingMigrated(catalog: PricingCatalog) {
+  if (legacyMigrationComplete || isMemory()) return false
+  if (!legacyMigrationPromise) {
+    legacyMigrationPromise = migrateLegacyPricing(catalog).then((changed) => {
+      legacyMigrationComplete = true
+      return changed
+    }).finally(() => { legacyMigrationPromise = undefined })
+  }
+  return legacyMigrationPromise
+}
+
+async function buildPricingAdminData() {
+  let catalog = await loadPricingCatalog()
+  if (await ensureLegacyPricingMigrated(catalog)) catalog = await loadPricingCatalog()
+
+  const providerPrefixes = new Map(catalog.providers.map((provider) => [provider.id, provider.prefix]))
+  const canonicalIds = new Set(catalog.groups
+    .filter((group) => group.canonicalSource !== "custom")
+    .map((group) => group.canonicalModelId)
+    .filter((id): id is string => Boolean(id)))
+  const [jobs, canonicalModels] = await Promise.all([
+    listPricingJobs(),
+    canonicalIds.size ? findModelsDevCanonicalModels(canonicalIds).catch(() => []) : Promise.resolve([]),
+  ])
   const canonicalById = new Map<string, CanonicalModelSummary>()
-  await Promise.all([...new Set(groups.filter((group) => group.canonicalSource !== "custom").map((group) => group.canonicalModelId).filter((id): id is string => Boolean(id)))].map(async (id) => {
-    const model = await findModelsDevCanonicalModel(id).catch(() => undefined)
-    if (model) canonicalById.set(id, model)
-  }))
+  for (const model of canonicalModels) {
+    if (canonicalIds.has(model.id)) canonicalById.set(model.id, model)
+  }
+
+  const modelRows = catalog.models.map((model) => ({ id: model.id, name: model.name, groupKey: modelGroupKey(model, providerPrefixes), gatewayModelId: model.gatewayModelId, upstreamModel: model.upstreamModel, providerId: model.providerId, enabled: model.enabled }))
   return {
-    groups: groups.map((group) => ({
-      ...group,
-      canonicalModel: group.canonicalModelId ? canonicalById.get(group.canonicalModelId) || null : null,
-      versions: (versionsByGroup.get(group.id) || []).sort((a, b) => b.version - a.version),
-      currentVersion: activePricingVersion(versionsByGroup.get(group.id) || []) || null,
-    })),
+    groups: catalog.groups.map((group) => {
+      const versions = catalog.versionsByGroup.get(group.id) || []
+      return {
+        ...group,
+        canonicalModel: group.canonicalModelId ? canonicalById.get(group.canonicalModelId) || null : null,
+        versions: [...versions].sort((a, b) => b.version - a.version),
+        currentVersion: activePricingVersion(versions) || null,
+      }
+    }),
     models: modelRows,
-    ungroupedModels: modelRows.filter((model) => !assigned.has(model.id)),
+    ungroupedModels: modelRows.filter((model) => !catalog.groupByModelId.has(model.id)),
     jobs,
   }
 }
 
-async function migrateLegacyPricing(models: Model[]) {
-  if (isMemory()) return
-  const legacy = await legacyPricingRef().get()
-  if (legacy.empty) return
-  const groups = await listPricingGroups()
-  const versions = await readVersions()
-  for (const document of legacy.docs) {
-    const entry = document.data() as Record<string, unknown>
-    const target = models.find((model) => model.id === entry.modelId || model.gatewayModelId === entry.gatewayModelId)
-    if (!target) continue
-    const group = groups.find((candidate) => candidate.memberModelIds.includes(target.id))
-    if (!group || versions.some((version) => version.groupId === group.id)) continue
-    const updatedAt = typeof entry.updatedAt === "string" && Number.isFinite(Date.parse(entry.updatedAt)) ? entry.updatedAt : new Date().toISOString()
-    await writeVersion({ id: crypto.randomUUID(), groupId: group.id, version: 1, effectiveAt: updatedAt, createdAt: updatedAt, updatedAt, inputMicrosPerMillion: Number(entry.inputMicrosPerMillion) || 0, outputMicrosPerMillion: Number(entry.outputMicrosPerMillion) || 0, cacheReadMicrosPerMillion: Number(entry.cacheReadMicrosPerMillion) || 0, cacheCreationMicrosPerMillion: Number(entry.cacheCreationMicrosPerMillion) || 0, contextTiers: [] })
-  }
+export async function getPricingAdminData() {
+  const now = Date.now()
+  if (pricingAdminCache && pricingAdminCache.expiresAt > now) return pricingAdminCache.value
+  if (pricingAdminPromise) return pricingAdminPromise
+
+  const generation = pricingAdminGeneration
+  const promise = buildPricingAdminData().then((value) => {
+    if (generation === pricingAdminGeneration) pricingAdminCache = { value, expiresAt: Date.now() + pricingAdminTtlMs }
+    return value
+  }).finally(() => {
+    if (pricingAdminPromise === promise) pricingAdminPromise = undefined
+  })
+  pricingAdminPromise = promise
+  return promise
 }
 
 export async function createPricingGroup(name: string, modelIds: string[], canonical?: CanonicalLinkInput) {
@@ -293,35 +419,69 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
 
 export async function getPricingForModelAt(model: { gatewayModelId: string; providerModelId?: string }, at = new Date()) {
   const catalog = await loadPricingCatalog()
-  const target = catalog.models.find((entry) => entry.id === model.providerModelId || entry.gatewayModelId === model.gatewayModelId)
+  const target = (model.providerModelId ? catalog.modelById.get(model.providerModelId) : undefined) || catalog.modelByGatewayId.get(model.gatewayModelId)
   if (!target) return undefined
-  const group = catalog.groups.find((entry) => entry.memberModelIds.includes(target.id))
+  const group = catalog.groupByModelId.get(target.id)
   if (!group) return undefined
-  const version = activePricingVersion(catalog.versions.filter((entry) => entry.groupId === group.id), at)
+  const version = activePricingVersion(catalog.versionsByGroup.get(group.id) || [], at)
   if (!version) return undefined
   return { ...version, groupId: group.id, pricingGroupId: group.id, pricingVersionId: version.id }
+}
+
+function indexPricingCatalog(groups: ModelPricingGroup[], versions: ModelPricingVersion[], models: Model[], providers: ProviderRows): PricingCatalog {
+  const modelById = new Map(models.map((model) => [model.id, model]))
+  const modelByGatewayId = new Map(models.map((model) => [model.gatewayModelId, model]))
+  const groupByModelId = new Map<string, ModelPricingGroup>()
+  for (const group of groups) {
+    for (const modelId of group.memberModelIds) groupByModelId.set(modelId, group)
+  }
+  const versionsByGroup = new Map<string, ModelPricingVersion[]>()
+  for (const version of versions) {
+    const entries = versionsByGroup.get(version.groupId)
+    if (entries) entries.push(version)
+    else versionsByGroup.set(version.groupId, [version])
+  }
+  return { groups, versions, models, providers, modelById, modelByGatewayId, groupByModelId, versionsByGroup }
 }
 
 async function loadPricingCatalog() {
   if (pricingCatalogCache && pricingCatalogCache.expiresAt > Date.now()) return pricingCatalogCache
   if (!pricingCatalogPromise) {
-    pricingCatalogPromise = (async () => {
+    const promise = (async () => {
+      let generation = pricingCacheGeneration
       let groups = await readGroups()
-      if (!groups.length) groups = await syncModelPricingGroups()
+      if (!groups.length) {
+        groups = await syncModelPricingGroups()
+        generation = pricingCacheGeneration
+      }
       const [versions, models, providers] = await Promise.all([readVersions(), listModels(), listProviders()])
-      return { groups, versions, models, providers }
-    })().then((catalog) => {
-      pricingCatalogCache = { ...catalog, expiresAt: Date.now() + 2_000 }
+      return { catalog: indexPricingCatalog(groups, versions, models, providers), generation }
+    })().then(({ catalog, generation }) => {
+      if (generation === pricingCacheGeneration) pricingCatalogCache = { ...catalog, expiresAt: Date.now() + pricingCatalogTtlMs }
       return catalog
-    }).finally(() => { pricingCatalogPromise = undefined })
+    }).finally(() => {
+      if (pricingCatalogPromise === promise) pricingCatalogPromise = undefined
+    })
+    pricingCatalogPromise = promise
   }
   return pricingCatalogPromise
 }
 
 async function listPricingJobs() {
-  if (isMemory()) return [...memoryJobs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  const snapshot = await jobsRef().get()
-  return snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as PricingJob)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  if (isMemory()) return [...memoryJobs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 50)
+  const now = Date.now()
+  if (pricingJobsCache && pricingJobsCache.expiresAt > now) return pricingJobsCache.value
+  if (pricingJobsPromise) return pricingJobsPromise
+  const generation = pricingJobsGeneration
+  const promise = jobsRef().orderBy("updatedAt", "desc").limit(50).get().then((snapshot) => {
+    const value = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as PricingJob))
+    if (generation === pricingJobsGeneration) pricingJobsCache = { value, expiresAt: Date.now() + pricingJobsTtlMs }
+    return value
+  }).finally(() => {
+    if (pricingJobsPromise === promise) pricingJobsPromise = undefined
+  })
+  pricingJobsPromise = promise
+  return promise
 }
 
 export async function getPricingJob(jobId: string) {
@@ -333,6 +493,7 @@ export async function getPricingJob(jobId: string) {
 async function writeJob(job: PricingJob) {
   if (isMemory()) memoryJobs.set(job.id, job)
   else await jobsRef().doc(job.id).set(job)
+  invalidatePricingJobs()
 }
 
 async function createPricingJob(groupId: string, versionId: string) {
@@ -365,5 +526,8 @@ export function resetModelPricingForTests() {
   memoryVersions.clear()
   memoryJobs.clear()
   runningJobs.clear()
+  legacyMigrationComplete = false
+  legacyMigrationPromise = undefined
+  invalidatePricingJobs()
   invalidatePricingCatalog()
 }

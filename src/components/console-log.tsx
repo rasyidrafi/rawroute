@@ -17,11 +17,21 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import type { LogEntry, LogLevel } from "@/lib/logger"
 import { formatAppDateTime, formatAppTime } from "@/lib/timezone"
 
+let cachedLogPayload: { logs: LogEntry[] } | undefined
+let cachedLogEtag = ""
+
 async function fetchLogs(url: string) {
-  const response = await fetch(url, { cache: "no-store" })
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: cachedLogEtag ? { "if-none-match": cachedLogEtag } : undefined,
+  })
+  if (response.status === 304 && cachedLogPayload) return cachedLogPayload
   if (response.status === 401) { window.location.assign("/login"); throw new Error("Unauthorized") }
   if (!response.ok) throw new Error("Unable to load console logs")
-  return response.json() as Promise<{ logs: LogEntry[] }>
+  const payload = await response.json() as { logs: LogEntry[] }
+  cachedLogPayload = payload
+  cachedLogEtag = response.headers.get("etag") || ""
+  return payload
 }
 
 function formatLog(entry: LogEntry) {
@@ -36,7 +46,10 @@ export function ConsoleLog() {
   const [clearing, setClearing] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
   const { data, error, isLoading, isValidating, mutate } = useSWR("/api/admin/logs", fetchLogs, { refreshInterval: live ? 3000 : 0, revalidateOnFocus: false })
-  const logs = useMemo(() => (data?.logs || []).filter((entry) => (level === "all" || entry.level === level) && formatLog(entry).toLowerCase().includes(query.toLowerCase())), [data, level, query])
+  const logs = useMemo(() => {
+    const normalizedQuery = query.toLowerCase()
+    return (data?.logs || []).filter((entry) => (level === "all" || entry.level === level) && formatLog(entry).toLowerCase().includes(normalizedQuery))
+  }, [data, level, query])
 
   if (isLoading && !data) return <DashboardContentSkeleton variant="console-log" />
 

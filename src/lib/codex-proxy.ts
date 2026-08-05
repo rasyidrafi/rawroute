@@ -1,5 +1,3 @@
-import type { Provider } from "@/lib/types"
-
 const removedFields = [
   "max_output_tokens",
   "max_completion_tokens",
@@ -20,15 +18,24 @@ function normalizeInput(input: unknown) {
     return [{ type: "message", role: "user", content: [{ type: "input_text", text: input }] }]
   }
   if (!Array.isArray(input)) return input
-  return input.map((item) => {
-    const record = objectValue(item)
-    if (!record || record.role !== "system") return item
-    return { ...record, role: "developer" }
-  })
+  let firstSystemIndex = -1
+  for (let index = 0; index < input.length; index++) {
+    if (objectValue(input[index])?.role === "system") {
+      firstSystemIndex = index
+      break
+    }
+  }
+  if (firstSystemIndex < 0) return input
+  const normalized = input.slice()
+  for (let index = firstSystemIndex; index < normalized.length; index++) {
+    const record = objectValue(normalized[index])
+    if (record?.role === "system") normalized[index] = { ...record, role: "developer" }
+  }
+  return normalized
 }
 
 export function normalizeCodexRequest(payload: Record<string, unknown>, upstreamModel: string, sessionKey?: string) {
-  const normalized = structuredClone(payload)
+  const normalized = { ...payload }
   normalized.model = upstreamModel
   normalized.stream = true
   normalized.store = false
@@ -41,7 +48,6 @@ export function normalizeCodexRequest(payload: Record<string, unknown>, upstream
   for (const field of removedFields) delete normalized[field]
   // Responses Lite requires this flag to be present and false, including
   // requests that do not contain tools.
-  normalized.parallel_tool_calls = false
   if (sessionKey && typeof normalized.prompt_cache_key !== "string") normalized.prompt_cache_key = sessionKey
   return normalized
 }
@@ -52,10 +58,10 @@ const blocked = new Set([
   "transfer-encoding", "upgrade", "x-rawroute-session-id", "x-session-id", "session_id",
 ])
 
-export function buildCodexHeaders(requestHeaders: Headers, provider: Provider, accessToken: string, accountId?: string, sessionKey?: string) {
+export function buildCodexHeaders(requestHeaders: Headers, providerHeaders: Readonly<Record<string, string>>, accessToken: string, accountId?: string, sessionKey?: string) {
   const headers = new Headers()
-  requestHeaders.forEach((value, key) => { if (!blocked.has(key.toLowerCase())) headers.set(key, value) })
-  Object.entries(provider.headers).forEach(([key, value]) => headers.set(key, value))
+  requestHeaders.forEach((value, key) => { if (!blocked.has(key)) headers.set(key, value) })
+  for (const [key, value] of Object.entries(providerHeaders)) headers.set(key, value)
   headers.set("content-type", "application/json")
   headers.set("authorization", `Bearer ${accessToken}`)
   headers.set("accept", "text/event-stream")

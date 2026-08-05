@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
-import { FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore"
 
 import { listApiKeys, listModels } from "@/lib/store"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
-import { getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
+import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
-import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, PricingContextTier, UsageEvent, UsageRollup } from "@/lib/types"
+import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, UsageEvent, UsageRollup } from "@/lib/types"
 
 let firestore: Firestore | undefined
 const memoryEvents = new Map<string, UsageEvent>()
@@ -18,9 +18,87 @@ const memoryBudgets = new Map<string, GatewayKeyBudget>()
 const memoryBudgetCounters = new Map<string, { spentMicros: number; lastUsedAt?: string }>()
 const memoryBypassSessions = new Map<string, BudgetBypassSession>()
 let memoryWindow: BudgetWindow | undefined
-const pricingCache = new Map<string, { value: Awaited<ReturnType<typeof getModernPricingForModelAt>> | ModelPricing | undefined; expiresAt: number }>()
-const pricingInflight = new Map<string, Promise<Awaited<ReturnType<typeof getModernPricingForModelAt>> | ModelPricing | undefined>>()
+export type ResolvedModelPricing = Exclude<Awaited<ReturnType<typeof getModernPricingForModelAt>>, undefined> | ModelPricing
+const pricingCache = new Map<string, { value: ResolvedModelPricing | undefined; expiresAt: number; modelPricingGeneration: number; legacyPricingGeneration: number }>()
+const pricingInflight = new Map<string, Promise<ResolvedModelPricing | undefined>>()
 const pricingCacheTtlMs = 30_000
+let legacyPricingCache: TimedValue<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }> | undefined
+let legacyPricingInflight: Promise<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }> | undefined
+let legacyPricingGeneration = 0
+
+interface TimedValue<T> { value: T; expiresAt: number }
+
+const budgetCacheTtlMs = positiveDuration(process.env.BUDGET_CACHE_TTL_MS, 5_000)
+const budgetCounterCacheTtlMs = positiveDuration(process.env.BUDGET_COUNTER_CACHE_TTL_MS, 15_000)
+const dashboardCacheTtlMs = positiveDuration(process.env.DASHBOARD_CACHE_TTL_MS, 5_000)
+const defaultBudgetOutputTokens = positiveInteger(process.env.BUDGET_DEFAULT_OUTPUT_TOKENS, 4_096)
+const budgetInputBytesPerToken = positiveNumber(process.env.BUDGET_INPUT_BYTES_PER_TOKEN, 3)
+const budgetReservationSafetyMultiplier = positiveNumber(process.env.BUDGET_RESERVATION_SAFETY_PERCENT, 125) / 100
+const budgetConfigCache = new Map<string, TimedValue<GatewayKeyBudget | null>>()
+const budgetConfigInflight = new Map<string, Promise<GatewayKeyBudget | undefined>>()
+const budgetCounterCache = new Map<string, TimedValue<number>>()
+const budgetCounterInflight = new Map<string, Promise<number>>()
+type BudgetCounterRow = { id: string; spentMicros?: number; lastUsedAt?: string }
+const budgetCounterListCache = new Map<string, TimedValue<BudgetCounterRow[]>>()
+const budgetCounterListInflight = new Map<string, Promise<BudgetCounterRow[]>>()
+const bypassSessionCache = new Map<string, TimedValue<BudgetBypassSession | null>>()
+const bypassSessionInflight = new Map<string, Promise<BudgetBypassSession | undefined>>()
+const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
+const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
+let budgetsCache: TimedValue<GatewayKeyBudget[]> | undefined
+let budgetsInflight: Promise<GatewayKeyBudget[]> | undefined
+let budgetWindowCache: TimedValue<BudgetWindow> | undefined
+let budgetWindowInflight: Promise<BudgetWindow> | undefined
+let budgetCacheGeneration = 0
+
+function positiveDuration(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function positiveNumber(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1_024) {
+  if (!cache.has(key) && cache.size >= maximum) {
+    const oldest = cache.keys().next().value
+    if (oldest !== undefined) cache.delete(oldest)
+  }
+  cache.set(key, value)
+}
+
+function invalidateBudgetReadCaches() {
+  budgetCacheGeneration += 1
+  budgetsCache = undefined
+  budgetsInflight = undefined
+  budgetWindowCache = undefined
+  budgetWindowInflight = undefined
+  budgetConfigCache.clear()
+  budgetConfigInflight.clear()
+  budgetCounterCache.clear()
+  budgetCounterInflight.clear()
+  budgetCounterListCache.clear()
+  budgetCounterListInflight.clear()
+  bypassSessionCache.clear()
+  bypassSessionInflight.clear()
+  dashboardCache.clear()
+  dashboardInflight.clear()
+}
+
+function invalidateLegacyPricingCaches() {
+  legacyPricingGeneration += 1
+  legacyPricingCache = undefined
+  legacyPricingInflight = undefined
+  pricingCache.clear()
+  pricingInflight.clear()
+}
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
@@ -58,21 +136,67 @@ function advanceExpiredWindow(window: BudgetWindow, now = Date.now()) {
 async function budgetUsageStart(window: BudgetWindow) {
   if (!window.bypassLimits || !window.bypassSessionId) return window.start
   if (isMemory()) return memoryBypassSessions.get(window.bypassSessionId)?.startedAt || window.start
-  const snapshot = await bypassSessionsRef().doc(window.bypassSessionId).get()
-  return snapshot.exists ? (snapshot.data() as BudgetBypassSession).startedAt : window.start
+  const sessionId = window.bypassSessionId
+  const cached = bypassSessionCache.get(sessionId)
+  if (cached && cached.expiresAt > Date.now()) return cached.value?.startedAt || window.start
+  const existing = bypassSessionInflight.get(sessionId)
+  if (existing) return (await existing)?.startedAt || window.start
+
+  const generation = budgetCacheGeneration
+  const promise = bypassSessionsRef().doc(sessionId).get().then((snapshot) => {
+    const session = snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as BudgetBypassSession : undefined
+    if (generation === budgetCacheGeneration) boundedSet(bypassSessionCache, sessionId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
+    return session
+  }).finally(() => {
+    if (bypassSessionInflight.get(sessionId) === promise) bypassSessionInflight.delete(sessionId)
+  })
+  bypassSessionInflight.set(sessionId, promise)
+  return (await promise)?.startedAt || window.start
 }
 
 async function budgetConfig(apiKeyId: string) {
   if (isMemory()) return memoryBudgets.get(apiKeyId)
-  const snapshot = await budgetsRef().doc(apiKeyId).get()
-  return snapshot.exists ? { ...snapshot.data(), apiKeyId: snapshot.id } as GatewayKeyBudget : undefined
+  const now = Date.now()
+  const cached = budgetConfigCache.get(apiKeyId)
+  if (cached && cached.expiresAt > now) return cached.value || undefined
+  if (budgetsCache && budgetsCache.expiresAt > now) {
+    const budget = budgetsCache.value.find((entry) => entry.apiKeyId === apiKeyId)
+    boundedSet(budgetConfigCache, apiKeyId, { value: budget || null, expiresAt: budgetsCache.expiresAt })
+    return budget
+  }
+  const existing = budgetConfigInflight.get(apiKeyId)
+  if (existing) return existing
+
+  const generation = budgetCacheGeneration
+  const promise = budgetsRef().doc(apiKeyId).get().then((snapshot) => {
+    const budget = snapshot.exists ? { ...snapshot.data(), apiKeyId: snapshot.id } as GatewayKeyBudget : undefined
+    if (generation === budgetCacheGeneration) boundedSet(budgetConfigCache, apiKeyId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
+    return budget
+  }).finally(() => {
+    if (budgetConfigInflight.get(apiKeyId) === promise) budgetConfigInflight.delete(apiKeyId)
+  })
+  budgetConfigInflight.set(apiKeyId, promise)
+  return promise
 }
 
 async function budgetCounter(apiKeyId: string, usageStart: string) {
   const id = budgetCounterId(apiKeyId, usageStart)
   if (isMemory()) return memoryBudgetCounters.get(id)?.spentMicros || 0
-  const snapshot = await budgetCountersRef().doc(id).get()
-  return Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+  const cached = budgetCounterCache.get(id)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = budgetCounterInflight.get(id)
+  if (existing) return existing
+
+  const generation = budgetCacheGeneration
+  const promise = budgetCountersRef().doc(id).get().then((snapshot) => {
+    const spentMicros = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+    if (generation === budgetCacheGeneration) boundedSet(budgetCounterCache, id, { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
+    return spentMicros
+  }).finally(() => {
+    if (budgetCounterInflight.get(id) === promise) budgetCounterInflight.delete(id)
+  })
+  budgetCounterInflight.set(id, promise)
+  return promise
 }
 
 function rollupId(granularity: UsageRollup["granularity"], bucket: string, event: UsageEvent) {
@@ -89,18 +213,45 @@ function emptyRollup(id: string, granularity: UsageRollup["granularity"], bucket
 
 export class BudgetDeniedError extends Error { status = 429; retryAfterSeconds: number; constructor(message: string, retryAfterSeconds: number) { super(message); this.name = "BudgetDeniedError"; this.retryAfterSeconds = retryAfterSeconds } }
 
-export async function recordUsageEvent(event: UsageEvent) {
+export interface BudgetUsageContext {
+  usageStartAt: string
+  windowEnd: string
+}
+
+const usageRollupGranularities = ["hourly", "daily", "monthly"] as const
+
+function isAlreadyExistsError(error: unknown) {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 6 || code === "already-exists" || code === "ALREADY_EXISTS"
+}
+
+async function usageBudgetContext(event: UsageEvent) {
   const budget = await budgetConfig(event.gatewayKeyId).catch(() => undefined)
-  const window = budget ? await getBudgetWindow().catch(() => undefined) : undefined
-  const usageStart = window ? await budgetUsageStart(window).catch(() => window.start) : undefined
-  const completedAt = Date.parse(event.completedAt)
-  const countForBudget = Boolean(budget && window && usageStart && event.status >= 200 && event.status < 300 && completedAt >= Date.parse(usageStart) && completedAt < Date.parse(window.end))
-  const counterId = countForBudget && usageStart ? budgetCounterId(event.gatewayKeyId, usageStart) : undefined
+  if (!budget) return null
+  const window = await getBudgetWindow().catch(() => undefined)
+  if (!window) return null
+  const usageStartAt = await budgetUsageStart(window).catch(() => window.start)
+  return { usageStartAt, windowEnd: window.end } satisfies BudgetUsageContext
+}
+
+export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: BudgetUsageContext | null) {
+  const context = budgetUsageContext === undefined ? await usageBudgetContext(event) : budgetUsageContext
+  const completedAtMs = Date.parse(event.completedAt)
+  const countForBudget = Boolean(
+    context &&
+    event.status >= 200 && event.status < 300 &&
+    completedAtMs >= Date.parse(context.usageStartAt) &&
+    completedAtMs < Date.parse(context.windowEnd),
+  )
+  const counterId = countForBudget && context ? budgetCounterId(event.gatewayKeyId, context.usageStartAt) : undefined
+  const completedDate = new Date(event.completedAt)
+  const updatedAt = new Date().toISOString()
+
   if (isMemory()) {
     if (memoryEvents.has(event.id)) return event
     memoryEvents.set(event.id, event)
-    for (const granularity of ["hourly", "daily", "monthly"] as const) {
-      const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
+    for (const granularity of usageRollupGranularities) {
+      const bucket = bucketStart(completedDate, granularity).toISOString()
       const id = rollupId(granularity, bucket, event)
       const current = memoryRollups.get(id) || emptyRollup(id, granularity, bucket, event)
       memoryRollups.set(id, {
@@ -115,63 +266,108 @@ export async function recordUsageEvent(event: UsageEvent) {
         pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0),
         unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1),
         lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt,
-        updatedAt: new Date().toISOString(),
+        updatedAt,
       })
     }
-    if (counterId && budget) memoryBudgetCounters.set(counterId, { spentMicros: (memoryBudgetCounters.get(counterId)?.spentMicros || 0) + event.costMicros, lastUsedAt: event.completedAt })
+    if (counterId) {
+      memoryBudgetCounters.set(counterId, {
+        spentMicros: (memoryBudgetCounters.get(counterId)?.spentMicros || 0) + event.costMicros,
+        lastUsedAt: event.completedAt,
+      })
+    }
+    dashboardCache.clear()
     return event
   }
-  const ref = eventsRef().doc(event.id)
-  await db().runTransaction(async (transaction) => {
-    const rollupRefs = (["hourly", "daily", "monthly"] as const).map((granularity) => {
-      const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-      return { granularity, ref: rollupsRef().doc(rollupId(granularity, bucket, event)), bucketStart: bucket }
-    })
-    const existing = await transaction.get(ref)
-    if (existing.exists) return
-    transaction.create(ref, event)
-    rollupRefs.forEach((entry) => {
-      const base = emptyRollup(entry.ref.id, entry.granularity, entry.bucketStart, event)
-      transaction.set(entry.ref, {
-        ...base,
-        requests: FieldValue.increment(1),
-        inputTokens: FieldValue.increment(event.inputTokens),
-        outputTokens: FieldValue.increment(event.outputTokens),
-        cacheReadTokens: FieldValue.increment(event.cacheReadTokens),
-        cacheCreationTokens: FieldValue.increment(event.cacheCreationTokens),
-        totalTokens: FieldValue.increment(event.totalTokens),
-        costMicros: FieldValue.increment(event.costMicros),
-        pricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 1 : 0),
-        unpricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 0 : 1),
-        lastEventAt: event.completedAt,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true })
-    })
-    if (counterId && budget && usageStart && window) {
-      transaction.set(budgetCountersRef().doc(counterId), {
-        apiKeyId: event.gatewayKeyId,
-        usageStartAt: usageStart,
-        windowEnd: window.end,
-        spentMicros: FieldValue.increment(event.costMicros),
-        lastUsedAt: event.completedAt,
-        updatedAt: new Date().toISOString(),
-      }, { merge: true })
+
+  const batch = db().batch()
+  batch.create(eventsRef().doc(event.id), event)
+  for (const granularity of usageRollupGranularities) {
+    const bucket = bucketStart(completedDate, granularity).toISOString()
+    const ref = rollupsRef().doc(rollupId(granularity, bucket, event))
+    const base = emptyRollup(ref.id, granularity, bucket, event)
+    batch.set(ref, {
+      ...base,
+      requests: FieldValue.increment(1),
+      inputTokens: FieldValue.increment(event.inputTokens),
+      outputTokens: FieldValue.increment(event.outputTokens),
+      cacheReadTokens: FieldValue.increment(event.cacheReadTokens),
+      cacheCreationTokens: FieldValue.increment(event.cacheCreationTokens),
+      totalTokens: FieldValue.increment(event.totalTokens),
+      costMicros: FieldValue.increment(event.costMicros),
+      pricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 1 : 0),
+      unpricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 0 : 1),
+      lastEventAt: event.completedAt,
+      updatedAt,
+    }, { merge: true })
+  }
+  if (counterId && context) {
+    batch.set(budgetCountersRef().doc(counterId), {
+      apiKeyId: event.gatewayKeyId,
+      usageStartAt: context.usageStartAt,
+      windowEnd: context.windowEnd,
+      spentMicros: FieldValue.increment(event.costMicros),
+      lastUsedAt: event.completedAt,
+      updatedAt,
+    }, { merge: true })
+  }
+
+  try {
+    await batch.commit()
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) throw error
+    return event
+  }
+  if (counterId && context) {
+    const now = Date.now()
+    const cached = budgetCounterCache.get(counterId)
+    if (cached && cached.expiresAt > now) {
+      budgetCounterCache.set(counterId, { value: cached.value + event.costMicros, expiresAt: cached.expiresAt })
     }
-  })
+    const list = budgetCounterListCache.get(context.usageStartAt)
+    if (list && list.expiresAt > now) {
+      const row = list.value.find((entry) => entry.id === counterId)
+      if (row) {
+        row.spentMicros = Number(row.spentMicros || 0) + event.costMicros
+        if (!row.lastUsedAt || row.lastUsedAt < event.completedAt) row.lastUsedAt = event.completedAt
+      } else {
+        list.value.push({ id: counterId, spentMicros: event.costMicros, lastUsedAt: event.completedAt })
+      }
+    }
+  }
   return event
 }
 
 export async function listUsageRollups(granularity?: UsageRollup["granularity"], from?: string, to?: string) {
-  const fromTime = from ? Date.parse(from) : -Infinity
-  const toTime = to ? Date.parse(to) : Infinity
-  if (isMemory()) return [...memoryRollups.values()].filter((rollup) => (!granularity || rollup.granularity === granularity) && Date.parse(rollup.bucketStart) >= fromTime && Date.parse(rollup.bucketStart) < toTime)
+  if (isMemory()) {
+    return [...memoryRollups.values()].filter((rollup) =>
+      (!granularity || rollup.granularity === granularity) &&
+      (!from || rollup.bucketStart >= from) &&
+      (!to || rollup.bucketStart < to),
+    )
+  }
+
   let query = rollupsRef() as FirebaseFirestore.Query
-  if (granularity) query = query.where("granularity", "==", granularity)
+  if (granularity) {
+    // IDs begin with `${granularity}:${ISO bucket}`. The document-ID range avoids
+    // downloading all historical rollups and requires no composite index.
+    query = query
+      .where(FieldPath.documentId(), ">=", `${granularity}:${from || ""}`)
+      .where(FieldPath.documentId(), "<", to ? `${granularity}:${to}` : `${granularity};`)
+  } else {
+    if (from) query = query.where("bucketStart", ">=", from)
+    if (to) query = query.where("bucketStart", "<", to)
+  }
   const snapshot = await query.get()
-  return snapshot.docs.map((document) => document.data() as UsageRollup).filter((rollup) => (!granularity || rollup.granularity === granularity) && Date.parse(rollup.bucketStart) >= fromTime && Date.parse(rollup.bucketStart) < toTime)
+  return snapshot.docs
+    .map((document) => document.data() as UsageRollup)
+    .filter((rollup) =>
+      (!granularity || rollup.granularity === granularity) &&
+      (!from || rollup.bucketStart >= from) &&
+      (!to || rollup.bucketStart < to),
+    )
 }
 
-export async function recordGatewayUsage(input: {
+export interface GatewayUsageInput {
   id?: string
   gatewayKeyId: string
   providerId?: string
@@ -183,13 +379,21 @@ export async function recordGatewayUsage(input: {
   durationMs: number
   ttftMs?: number
   metrics?: UsageMetrics
-}) {
+  assumedCostMicros?: number
+}
+
+export async function createGatewayUsageEvent(input: GatewayUsageInput, resolvedPricing?: ResolvedModelPricing): Promise<UsageEvent> {
   const normalized = normalizeUsageMetrics(input.metrics)
-  let pricing: (ModelPricing | { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cacheReadMicrosPerMillion: number; cacheCreationMicrosPerMillion: number; contextTiers?: PricingContextTier[]; pricingGroupId?: string; pricingVersionId?: string }) | undefined
-  try { pricing = await getPricingForModel(input.gatewayModelId, input.providerModelId) }
-  catch { pricing = undefined }
-  const calculated = calculateCostMicros(normalized, pricing || undefined)
-  const event: UsageEvent = {
+  let pricing = resolvedPricing
+  if (!pricing) {
+    try { pricing = await getPricingForModel(input.gatewayModelId, input.providerModelId) }
+    catch { pricing = undefined }
+  }
+  const calculated = calculateCostMicros(normalized, pricing)
+  const assumedCostMicros = calculated.pricingConfidence !== "exact" && pricing && Number.isSafeInteger(input.assumedCostMicros) && Number(input.assumedCostMicros) > 0
+    ? Number(input.assumedCostMicros)
+    : undefined
+  return {
     id: input.id || crypto.randomUUID(),
     gatewayKeyId: input.gatewayKeyId,
     ...(input.providerId ? { providerId: input.providerId } : {}),
@@ -202,13 +406,16 @@ export async function recordGatewayUsage(input: {
     durationMs: Math.max(0, input.durationMs),
     ...(input.ttftMs !== undefined ? { ttftMs: Math.max(0, input.ttftMs) } : {}),
     ...normalized,
-    costMicros: calculated.costMicros,
-    pricingConfidence: calculated.pricingConfidence,
+    costMicros: assumedCostMicros ?? calculated.costMicros,
+    pricingConfidence: assumedCostMicros !== undefined ? "assumed" : calculated.pricingConfidence,
     ...(pricing && "pricingGroupId" in pricing && pricing.pricingGroupId ? { pricingGroupId: pricing.pricingGroupId } : {}),
     ...(pricing && "pricingVersionId" in pricing && pricing.pricingVersionId ? { pricingVersionId: pricing.pricingVersionId } : {}),
     ...(calculated.pricingContextTier ? { pricingContextTier: calculated.pricingContextTier } : {}),
   }
-  return recordUsageEvent(event)
+}
+
+export async function recordGatewayUsage(input: GatewayUsageInput, budgetUsageContext?: BudgetUsageContext | null) {
+  return recordUsageEvent(await createGatewayUsageEvent(input), budgetUsageContext)
 }
 
 export async function listUsageEvents(from?: string, to?: string): Promise<UsageEvent[]> {
@@ -225,42 +432,96 @@ export async function listModelPricing() {
   const snapshot = await pricingRef().get()
   return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as ModelPricing))
 }
+
+async function legacyPricingIndex() {
+  if (isMemory()) {
+    const byProviderModelId = new Map<string, ModelPricing>()
+    const byGatewayModelId = new Map<string, ModelPricing>()
+    for (const pricing of memoryPricing.values()) {
+      if (!pricing.enabled) continue
+      if (!byProviderModelId.has(pricing.modelId)) byProviderModelId.set(pricing.modelId, pricing)
+      if (!byGatewayModelId.has(pricing.gatewayModelId)) byGatewayModelId.set(pricing.gatewayModelId, pricing)
+    }
+    return { byProviderModelId, byGatewayModelId }
+  }
+  if (legacyPricingCache && legacyPricingCache.expiresAt > Date.now()) return legacyPricingCache.value
+  if (legacyPricingInflight) return legacyPricingInflight
+  const generation = legacyPricingGeneration
+  const promise = listModelPricing().then((entries) => {
+    const byProviderModelId = new Map<string, ModelPricing>()
+    const byGatewayModelId = new Map<string, ModelPricing>()
+    for (const pricing of entries) {
+      if (!pricing.enabled) continue
+      if (!byProviderModelId.has(pricing.modelId)) byProviderModelId.set(pricing.modelId, pricing)
+      if (!byGatewayModelId.has(pricing.gatewayModelId)) byGatewayModelId.set(pricing.gatewayModelId, pricing)
+    }
+    const value = { byProviderModelId, byGatewayModelId }
+    if (generation === legacyPricingGeneration) legacyPricingCache = { value, expiresAt: Date.now() + pricingCacheTtlMs }
+    return value
+  }).finally(() => {
+    if (legacyPricingInflight === promise) legacyPricingInflight = undefined
+  })
+  legacyPricingInflight = promise
+  return promise
+}
+
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {
   const key = `${gatewayModelId}:${providerModelId || ""}`
+  const modelGeneration = getModelPricingGeneration()
+  const legacyGeneration = legacyPricingGeneration
   const cached = pricingCache.get(key)
-  if (cached && cached.expiresAt > Date.now()) return cached.value
-  const existing = pricingInflight.get(key)
+  if (cached && cached.expiresAt > Date.now() && cached.modelPricingGeneration === modelGeneration && cached.legacyPricingGeneration === legacyGeneration) return cached.value
+  const inflightKey = `${modelGeneration}:${legacyGeneration}:${key}`
+  const existing = pricingInflight.get(inflightKey)
   if (existing) return existing
   const promise = (async () => {
-    let value: Awaited<ReturnType<typeof getModernPricingForModelAt>> | ModelPricing | undefined
+    let value: ResolvedModelPricing | undefined
     try {
       value = await getModernPricingForModelAt({ gatewayModelId, providerModelId })
     } catch {
       // Legacy pricing remains available while the advanced catalog is unavailable.
     }
     if (!value) {
-      const entries = await listModelPricing()
-      value = entries.find((entry) => entry.enabled && (entry.modelId === providerModelId || entry.gatewayModelId === gatewayModelId))
+      const legacy = await legacyPricingIndex()
+      value = (providerModelId ? legacy.byProviderModelId.get(providerModelId) : undefined) || legacy.byGatewayModelId.get(gatewayModelId)
     }
-    pricingCache.set(key, { value, expiresAt: Date.now() + pricingCacheTtlMs })
+    if (modelGeneration === getModelPricingGeneration() && legacyGeneration === legacyPricingGeneration) {
+      boundedSet(pricingCache, key, { value, expiresAt: Date.now() + pricingCacheTtlMs, modelPricingGeneration: modelGeneration, legacyPricingGeneration: legacyGeneration })
+    }
     return value
-  })().finally(() => pricingInflight.delete(key))
-  pricingInflight.set(key, promise)
+  })().finally(() => pricingInflight.delete(inflightKey))
+  pricingInflight.set(inflightKey, promise)
   return promise
 }
 export async function upsertModelPricing(input: Omit<ModelPricing, "id" | "updatedAt"> & { id?: string }) {
   const pricing: ModelPricing = { ...input, id: input.id || crypto.randomUUID(), updatedAt: new Date().toISOString() }
   if (isMemory()) memoryPricing.set(pricing.id, pricing)
   else await pricingRef().doc(pricing.id).set(pricing)
-  pricingCache.clear()
+  invalidateLegacyPricingCaches()
   return pricing
 }
-export async function deleteModelPricing(id: string) { if (isMemory()) memoryPricing.delete(id); else await pricingRef().doc(id).delete(); pricingCache.clear() }
+export async function deleteModelPricing(id: string) { if (isMemory()) memoryPricing.delete(id); else await pricingRef().doc(id).delete(); invalidateLegacyPricingCaches() }
 
 export async function listBudgets(): Promise<GatewayKeyBudget[]> {
   if (isMemory()) return [...memoryBudgets.values()]
-  const snapshot = await budgetsRef().get()
-  return snapshot.docs.map((document) => ({ ...document.data(), apiKeyId: document.id } as GatewayKeyBudget))
+  const now = Date.now()
+  if (budgetsCache && budgetsCache.expiresAt > now) return budgetsCache.value
+  if (budgetsInflight) return budgetsInflight
+
+  const generation = budgetCacheGeneration
+  const promise = budgetsRef().get().then((snapshot) => {
+    const budgets = snapshot.docs.map((document) => ({ ...document.data(), apiKeyId: document.id } as GatewayKeyBudget))
+    if (generation === budgetCacheGeneration) {
+      const expiresAt = Date.now() + budgetCacheTtlMs
+      budgetsCache = { value: budgets, expiresAt }
+      for (const budget of budgets) boundedSet(budgetConfigCache, budget.apiKeyId, { value: budget, expiresAt })
+    }
+    return budgets
+  }).finally(() => {
+    if (budgetsInflight === promise) budgetsInflight = undefined
+  })
+  budgetsInflight = promise
+  return promise
 }
 
 export async function listBudgetBypassSessions(limit = 50, currentWindow?: BudgetWindow): Promise<BudgetBypassSession[]> {
@@ -271,24 +532,46 @@ export async function listBudgetBypassSessions(limit = 50, currentWindow?: Budge
   return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as BudgetBypassSession))
 }
 
-export async function getBudgetWindow() {
+export async function getBudgetWindow(): Promise<BudgetWindow> {
   if (isMemory()) {
     const current = memoryWindow || defaultWindow()
     const next = advanceExpiredWindow(current)
-    if (next !== current) memoryWindow = next
+    memoryWindow = next
     return next
   }
-  let result = defaultWindow()
-  await db().runTransaction(async (transaction) => {
+  const now = Date.now()
+  if (budgetWindowCache && budgetWindowCache.expiresAt > now) {
+    const next = advanceExpiredWindow(budgetWindowCache.value, now)
+    if (next === budgetWindowCache.value) return next
+  }
+  if (budgetWindowInflight) return budgetWindowInflight
+
+  const generation = budgetCacheGeneration
+  const promise = (async () => {
     const ref = windowRef()
-    const snapshot = await transaction.get(ref)
+    const snapshot = await ref.get()
     const current = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
     const next = advanceExpiredWindow(current)
-    if (!snapshot.exists) transaction.create(ref, next)
-    else if (next.updatedAt !== current.updatedAt) transaction.set(ref, next)
-    result = next
+    if (snapshot.exists && next === current) return next
+
+    let result = next
+    await db().runTransaction(async (transaction) => {
+      const latest = await transaction.get(ref)
+      const latestWindow = latest.exists ? { ...defaultWindow(), ...latest.data() } as BudgetWindow : defaultWindow()
+      const advanced = advanceExpiredWindow(latestWindow)
+      if (!latest.exists) transaction.create(ref, advanced)
+      else if (advanced !== latestWindow) transaction.set(ref, advanced)
+      result = advanced
+    })
+    return result
+  })().then((window) => {
+    if (generation === budgetCacheGeneration) budgetWindowCache = { value: window, expiresAt: Date.now() + budgetCacheTtlMs }
+    return window
+  }).finally(() => {
+    if (budgetWindowInflight === promise) budgetWindowInflight = undefined
   })
-  return result
+  budgetWindowInflight = promise
+  return promise
 }
 async function resolveCodexBudgetWindow(accountId: string | null | undefined) {
   const { accounts } = await listCodexAccounts()
@@ -318,7 +601,10 @@ export async function updateBudgetWindow(input: Partial<BudgetWindow> & { anchor
   const start = new Date(next.start)
   const end = new Date(next.end)
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) throw new Error("Invalid budget window.")
-  if (isMemory()) memoryWindow = next; else await windowRef().set(next)
+  if (isMemory()) memoryWindow = next
+  else await windowRef().set(next)
+  invalidateBudgetReadCaches()
+  if (!isMemory()) budgetWindowCache = { value: next, expiresAt: Date.now() + budgetCacheTtlMs }
   return next
 }
 
@@ -342,6 +628,7 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
     }
     const next: BudgetWindow = { ...current, bypassLimits: enabled, bypassSessionId: enabled ? session?.id || null : null, updatedAt: now }
     memoryWindow = next
+    invalidateBudgetReadCaches()
     return { window: next, session: enabled ? session : null }
   }
 
@@ -371,20 +658,42 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
     transaction.set(ref, next)
     result = { window: next, session: enabled ? session : null }
   })
+  invalidateBudgetReadCaches()
+  budgetWindowCache = { value: result.window, expiresAt: Date.now() + budgetCacheTtlMs }
   return result
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
   const window = await getBudgetWindow()
   const budget: GatewayKeyBudget = { ...input, spentMicros: 0, windowStart: window.start, windowEnd: window.end, updatedAt: new Date().toISOString() }
-  if (isMemory()) memoryBudgets.set(input.apiKeyId, budget); else await budgetsRef().doc(input.apiKeyId).set(budget)
+  if (isMemory()) memoryBudgets.set(input.apiKeyId, budget)
+  else await budgetsRef().doc(input.apiKeyId).set(budget)
+  invalidateBudgetReadCaches()
   return budget
 }
-export async function deleteBudget(apiKeyId: string) { if (isMemory()) memoryBudgets.delete(apiKeyId); else await budgetsRef().doc(apiKeyId).delete() }
+export async function deleteBudget(apiKeyId: string) {
+  if (isMemory()) memoryBudgets.delete(apiKeyId)
+  else await budgetsRef().doc(apiKeyId).delete()
+  invalidateBudgetReadCaches()
+}
 
-async function listBudgetCounters(usageStart: string) {
+async function listBudgetCounters(usageStart: string): Promise<BudgetCounterRow[]> {
   if (isMemory()) return [...memoryBudgetCounters.entries()].map(([id, value]) => ({ id, ...value }))
-  const snapshot = await budgetCountersRef().where("usageStartAt", "==", usageStart).get()
-  return snapshot.docs.map((document) => ({ id: document.id, ...(document.data() as { spentMicros?: number; lastUsedAt?: string }) }))
+  const now = Date.now()
+  const cached = budgetCounterListCache.get(usageStart)
+  if (cached && cached.expiresAt > now) return cached.value
+  const existing = budgetCounterListInflight.get(usageStart)
+  if (existing) return existing
+
+  const generation = budgetCacheGeneration
+  const promise = budgetCountersRef().where("usageStartAt", "==", usageStart).get().then((snapshot) => {
+    const rows = snapshot.docs.map((document) => ({ id: document.id, ...(document.data() as Omit<BudgetCounterRow, "id">) }))
+    if (generation === budgetCacheGeneration) boundedSet(budgetCounterListCache, usageStart, { value: rows, expiresAt: Date.now() + budgetCacheTtlMs }, 8)
+    return rows
+  }).finally(() => {
+    if (budgetCounterListInflight.get(usageStart) === promise) budgetCounterListInflight.delete(usageStart)
+  })
+  budgetCounterListInflight.set(usageStart, promise)
+  return promise
 }
 
 export interface BudgetAdmission {
@@ -396,74 +705,141 @@ export interface BudgetAdmission {
 }
 
 function requestOutputLimit(payload: Record<string, unknown> | undefined) {
-  for (const key of ["max_output_tokens", "max_tokens"]) {
+  for (const key of ["max_output_tokens", "max_completion_tokens", "max_tokens"]) {
     const value = payload?.[key]
     if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value
   }
   return undefined
 }
 
-function estimateReservationMicros(payload: Record<string, unknown> | undefined, pricing: Parameters<typeof calculateCostMicros>[1], limitMicros: number) {
-  const outputLimit = requestOutputLimit(payload)
-  if (outputLimit === undefined) return limitMicros
-  const inputBytes = payload ? new TextEncoder().encode(JSON.stringify(payload)).byteLength : 0
-  const usage = normalizeUsageMetrics({ input: inputBytes, output: outputLimit })
-  return Math.min(limitMicros, Math.max(1, calculateCostMicros(usage, pricing).costMicros))
+function estimateReservationMicros(
+  payload: Record<string, unknown> | undefined,
+  pricing: Parameters<typeof calculateCostMicros>[1],
+  limitMicros: number,
+  requestBodyBytes?: number,
+) {
+  const outputLimit = requestOutputLimit(payload) || defaultBudgetOutputTokens
+  const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
+  const estimatedInputTokens = Math.ceil(inputBytes / budgetInputBytesPerToken)
+  const usage = normalizeUsageMetrics({ input: estimatedInputTokens, output: outputLimit })
+  const estimatedCost = Math.ceil(calculateCostMicros(usage, pricing).costMicros * budgetReservationSafetyMultiplier)
+  return Math.min(limitMicros, Math.max(1, estimatedCost))
 }
 
-export async function getBudgetAdmission(apiKeyId: string, gatewayModelId: string, providerModelId?: string, payload?: Record<string, unknown>) {
+export interface BudgetRequestState {
+  admission?: BudgetAdmission
+  usageContext?: BudgetUsageContext
+  pricing?: ResolvedModelPricing
+}
+
+export async function getBudgetRequestState(
+  apiKeyId: string,
+  gatewayModelId: string,
+  providerModelId?: string,
+  payload?: Record<string, unknown>,
+  requestBodyBytes?: number,
+): Promise<BudgetRequestState> {
   const budget = await budgetConfig(apiKeyId)
+  if (!budget) return {}
+
   const window = await getBudgetWindow()
-  if (!budget || !budget.enabled || window.bypassLimits) return undefined
-  const pricing = await getPricingForModel(gatewayModelId, providerModelId)
+  const [usageStartAt, pricing] = await Promise.all([
+    budgetUsageStart(window),
+    budget.enabled && !window.bypassLimits ? getPricingForModel(gatewayModelId, providerModelId) : Promise.resolve(undefined),
+  ])
+  const usageContext = { usageStartAt, windowEnd: window.end } satisfies BudgetUsageContext
+  if (!budget.enabled || window.bypassLimits) return { usageContext }
   if (!pricing) throw new BudgetDeniedError("This API key cannot call a model without configured pricing.", budgetRetryAfter(window))
-  const usageStart = await budgetUsageStart(window)
-  const spentMicros = await budgetCounter(apiKeyId, usageStart)
+
+  const spentMicros = await budgetCounter(apiKeyId, usageStartAt)
   if (spentMicros >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
   return {
-    key: `rawroute:budget:${budgetCounterId(apiKeyId, usageStart)}`,
-    limitMicros: budget.weeklyLimitMicros,
-    spentMicros,
-    reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros),
-    ttlSeconds: budgetRetryAfter(window) + 60,
-  } satisfies BudgetAdmission
+    usageContext,
+    pricing,
+    admission: {
+      key: `rawroute:budget:${budgetCounterId(apiKeyId, usageStartAt)}`,
+      limitMicros: budget.weeklyLimitMicros,
+      spentMicros,
+      reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes),
+      ttlSeconds: budgetRetryAfter(window) + 60,
+    },
+  }
+}
+
+export async function getBudgetAdmission(
+  apiKeyId: string,
+  gatewayModelId: string,
+  providerModelId?: string,
+  payload?: Record<string, unknown>,
+  requestBodyBytes?: number,
+) {
+  return (await getBudgetRequestState(apiKeyId, gatewayModelId, providerModelId, payload, requestBodyBytes)).admission
 }
 
 export async function checkBudget(apiKeyId: string, gatewayModelId: string, providerModelId?: string) {
   await getBudgetAdmission(apiKeyId, gatewayModelId, providerModelId)
 }
 
-export async function getBudgetAdminData() {
-  const [budgets, window, keys] = await Promise.all([listBudgets(), getBudgetWindow(), listApiKeys()])
-  const bypassSessions = await listBudgetBypassSessions(50, window)
-  const usageStart = await budgetUsageStart(window)
-  const counters = await listBudgetCounters(usageStart)
+async function loadBudgetRows(keys: Awaited<ReturnType<typeof listApiKeys>> = [], currentWindow?: BudgetWindow) {
+  const [budgets, window] = await Promise.all([
+    listBudgets(),
+    currentWindow ? Promise.resolve(currentWindow) : getBudgetWindow(),
+  ])
+  const usageStartAt = await budgetUsageStart(window)
+  const counters = budgets.length ? await listBudgetCounters(usageStartAt) : []
+  const apiKeyByCounterId = new Map<string, string>()
+  for (const budget of budgets) apiKeyByCounterId.set(budgetCounterId(budget.apiKeyId, usageStartAt), budget.apiKeyId)
+
   const countersByKey = new Map<string, { spentMicros: number; lastUsedAt?: string }>()
   for (const counter of counters) {
-    const budget = budgets.find((entry) => counter.id === budgetCounterId(entry.apiKeyId, usageStart))
-    if (budget) countersByKey.set(budget.apiKeyId, { spentMicros: Number(counter.spentMicros || 0), lastUsedAt: counter.lastUsedAt })
+    const apiKeyId = apiKeyByCounterId.get(counter.id)
+    if (apiKeyId) countersByKey.set(apiKeyId, { spentMicros: Number(counter.spentMicros || 0), lastUsedAt: counter.lastUsedAt })
   }
-  const rows = budgets.map((budget) => ({
-    ...budget,
-    spentMicros: countersByKey.get(budget.apiKeyId)?.spentMicros || 0,
-    windowStart: window.start,
-    windowEnd: window.end,
-    usageStartAt: usageStart,
-    name: keys.find((key) => key.id === budget.apiKeyId)?.name || "Unknown",
-    lastUsedAt: countersByKey.get(budget.apiKeyId)?.lastUsedAt || null,
-  }))
-  return { budgets: rows, bypassSessions, window }
+  const keyNames = new Map(keys.map((key) => [key.id, key.name]))
+  const rows = budgets.map((budget) => {
+    const counter = countersByKey.get(budget.apiKeyId)
+    return {
+      ...budget,
+      spentMicros: counter?.spentMicros || 0,
+      windowStart: window.start,
+      windowEnd: window.end,
+      usageStartAt,
+      name: keyNames.get(budget.apiKeyId) || "Unknown",
+      lastUsedAt: counter?.lastUsedAt || null,
+    }
+  })
+  return { rows, window }
+}
+
+export async function getBudgetAdminData() {
+  const [keys, window, codex] = await Promise.all([
+    listApiKeys(),
+    getBudgetWindow(),
+    listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
+  ])
+  const [{ rows }, bypassSessions] = await Promise.all([
+    loadBudgetRows(keys, window),
+    listBudgetBypassSessions(50, window),
+  ])
+  return {
+    budgets: rows,
+    bypassSessions,
+    window,
+    apiKeys: keys.map((key) => ({ id: key.id, name: key.name })),
+    codexAccounts: codex.accounts.map((account) => ({ id: account.id, name: account.name, ...(account.planType ? { planType: account.planType } : {}) })),
+  }
 }
 
 export async function getBudgetRows() {
-  return (await getBudgetAdminData()).budgets
+  const [keys, window] = await Promise.all([listApiKeys(), getBudgetWindow()])
+  return (await loadBudgetRows(keys, window)).rows
 }
 
-async function resolveRange(query: DashboardQuery) {
+async function resolveRange(query: DashboardQuery, currentBudgetWindow?: BudgetWindow) {
   const now = new Date()
   const today = startOfZonedDay(now)
   if (query.preset === "budget") {
-    const window = await getBudgetWindow()
+    const window = currentBudgetWindow || await getBudgetWindow()
     return { label: "Budget window", from: new Date(window.start), to: new Date(window.end) }
   }
   if (query.preset === "today") return { label: "Today", from: today, to: now }
@@ -480,32 +856,37 @@ function bucketStart(date: Date, granularity: string) { if (granularity === "hou
 function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•".repeat(Math.max(4, key.length - 4))}` : `${key.slice(0, 7)}${"•".repeat(12)}${key.slice(-4)}` }
 function publicKeyLabel(id: string) { return `Key ${hash(id).slice(0, 6).toUpperCase()}` }
 
-export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
-  const range = await resolveRange(query)
+async function buildDashboardPayload(query: DashboardQuery, publicView: boolean): Promise<DashboardPayload> {
+  const budgetWindowPromise = getBudgetWindow()
+  const range = await resolveRange(query, query.preset === "budget" ? await budgetWindowPromise : undefined)
   const span = range.to.getTime() - range.from.getTime()
-  const requestedGranularity = query.granularity && query.granularity !== "auto" ? query.granularity : (span <= 2 * 86400000 ? "hourly" : span <= 45 * 86400000 ? "daily" : "monthly")
+  const requestedGranularity = query.granularity && query.granularity !== "auto"
+    ? query.granularity
+    : span <= 2 * 86_400_000 ? "hourly" : span <= 45 * 86_400_000 ? "daily" : "monthly"
   const granularity = requestedGranularity === "weekly" ? "daily" : requestedGranularity
   const toExclusive = new Date(range.to.getTime() + (query.preset === "custom" ? 1 : 0))
-  let rollups: UsageRollup[] = []
-  let keys: Awaited<ReturnType<typeof listApiKeys>> = []
-  let budgetRows: Awaited<ReturnType<typeof getBudgetRows>> = []
-  let budgetWindow: BudgetWindow | undefined
-  try {
-    ;[rollups, keys, budgetRows, budgetWindow] = await Promise.all([
-      listUsageRollups(granularity as UsageRollup["granularity"], range.from.toISOString(), toExclusive.toISOString()),
-      listApiKeys(),
-      getBudgetRows(),
-      getBudgetWindow(),
-    ])
-  } catch {
-    // Public analytics remains readable while optional Firestore is unavailable.
-  }
-  const dimensionalRollups = rollups.filter((rollup) => rollup.gatewayKeyId && rollup.gatewayModelId)
-  const legacyRollups = rollups.filter((rollup) => !rollup.gatewayKeyId)
-  const aggregateRollups = legacyRollups.length ? [...legacyRollups, ...dimensionalRollups] : dimensionalRollups
+
+  const rollupsPromise = listUsageRollups(
+    granularity as UsageRollup["granularity"],
+    range.from.toISOString(),
+    toExclusive.toISOString(),
+  )
+  const keysPromise = publicView ? Promise.resolve([] as Awaited<ReturnType<typeof listApiKeys>>) : listApiKeys()
+  const budgetDataPromise = budgetWindowPromise.then((window) => loadBudgetRows([], window))
+  const [rollupsResult, keysResult, budgetResult] = await Promise.allSettled([
+    rollupsPromise,
+    keysPromise,
+    budgetDataPromise,
+  ])
+  const rollups = rollupsResult.status === "fulfilled" ? rollupsResult.value : []
+  const keys = keysResult.status === "fulfilled" ? keysResult.value : []
+  const budgetRows = budgetResult.status === "fulfilled" ? budgetResult.value.rows : []
+  const budgetWindow = budgetResult.status === "fulfilled" ? budgetResult.value.window : undefined
+
   const budgetMap = new Map(budgetRows.map((budget) => [budget.apiKeyId, budget]))
   const keyMap = new Map(keys.map((key) => [key.id, key]))
   const keyRows = new Map<string, DashboardPayload["keys"][number]>()
+  const modelsByKey = new Map<string, Set<string>>()
   const modelRows = new Map<string, { model: string; requests: number; tokens: number; costMicros: number }>()
   const trend = new Map<string, { bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>()
   let requestCount = 0
@@ -513,32 +894,103 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
   let totalCostMicros = 0
   let pricedRequests = 0
   let lastEventAt: string | null = null
-  for (const rollup of aggregateRollups) {
+
+  for (const rollup of rollups) {
     requestCount += rollup.requests
     totalTokens += rollup.totalTokens
     totalCostMicros += rollup.costMicros
     pricedRequests += rollup.pricedRequests || 0
     if (rollup.lastEventAt && (!lastEventAt || lastEventAt < rollup.lastEventAt)) lastEventAt = rollup.lastEventAt
-    const point = trend.get(rollup.bucketStart) || { bucketStart: rollup.bucketStart, label: formatAppTrendBucket(rollup.bucketStart, granularity), requests: 0, tokens: 0, costMicros: 0 }
-    point.requests += rollup.requests; point.tokens += rollup.totalTokens; point.costMicros += rollup.costMicros; trend.set(rollup.bucketStart, point)
+
+    let point = trend.get(rollup.bucketStart)
+    if (!point) {
+      point = { bucketStart: rollup.bucketStart, label: formatAppTrendBucket(rollup.bucketStart, granularity), requests: 0, tokens: 0, costMicros: 0 }
+      trend.set(rollup.bucketStart, point)
+    }
+    point.requests += rollup.requests
+    point.tokens += rollup.totalTokens
+    point.costMicros += rollup.costMicros
+
     if (!rollup.gatewayKeyId || !rollup.gatewayModelId) continue
     const keyId = rollup.gatewayKeyId
     const modelId = rollup.gatewayModelId
-    const key = keyMap.get(keyId)
-    const row = keyRows.get(keyId) || { id: keyId, label: publicView ? publicKeyLabel(keyId) : (key?.name || publicKeyLabel(keyId)), maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
-    row.requests += rollup.requests; row.tokens += rollup.totalTokens; row.costMicros += rollup.costMicros
-    row.lastUsed = !row.lastUsed || (rollup.lastEventAt && row.lastUsed < rollup.lastEventAt) ? (rollup.lastEventAt || row.lastUsed) : row.lastUsed
-    if (!row.models.includes(modelId)) row.models.push(modelId)
-    keyRows.set(keyId, row)
-    const model = modelRows.get(modelId) || { model: modelId, requests: 0, tokens: 0, costMicros: 0 }
-    model.requests += rollup.requests; model.tokens += rollup.totalTokens; model.costMicros += rollup.costMicros; modelRows.set(modelId, model)
+    let row = keyRows.get(keyId)
+    if (!row) {
+      const key = keyMap.get(keyId)
+      row = {
+        id: keyId,
+        label: publicView ? publicKeyLabel(keyId) : (key?.name || publicKeyLabel(keyId)),
+        maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"),
+        requests: 0,
+        tokens: 0,
+        costMicros: 0,
+        models: [],
+        lastUsed: null,
+      }
+      keyRows.set(keyId, row)
+      modelsByKey.set(keyId, new Set())
+    }
+    row.requests += rollup.requests
+    row.tokens += rollup.totalTokens
+    row.costMicros += rollup.costMicros
+    if (rollup.lastEventAt && (!row.lastUsed || row.lastUsed < rollup.lastEventAt)) row.lastUsed = rollup.lastEventAt
+    modelsByKey.get(keyId)?.add(modelId)
+
+    let model = modelRows.get(modelId)
+    if (!model) {
+      model = { model: modelId, requests: 0, tokens: 0, costMicros: 0 }
+      modelRows.set(modelId, model)
+    }
+    model.requests += rollup.requests
+    model.tokens += rollup.totalTokens
+    model.costMicros += rollup.costMicros
   }
+
   for (const [keyId, row] of keyRows) {
+    row.models = [...(modelsByKey.get(keyId) || [])]
     const budget = budgetMap.get(keyId)
     if (!budget || !budgetWindow) continue
-    row.budget = { weeklyLimitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros, remainingMicros: Math.max(0, budget.weeklyLimitMicros - budget.spentMicros), percentUsed: budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0, bypassLimits: budgetWindow.bypassLimits, usageStartAt: budget.usageStartAt, windowStart: budgetWindow.start, windowEnd: budgetWindow.end }
+    row.budget = {
+      weeklyLimitMicros: budget.weeklyLimitMicros,
+      spentMicros: budget.spentMicros,
+      remainingMicros: Math.max(0, budget.weeklyLimitMicros - budget.spentMicros),
+      percentUsed: budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0,
+      bypassLimits: budgetWindow.bypassLimits,
+      usageStartAt: budget.usageStartAt,
+      windowStart: budgetWindow.start,
+      windowEnd: budgetWindow.end,
+    }
   }
-  return { generatedAt: new Date().toISOString(), range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity }, summary: { requests: requestCount, tokens: totalTokens, costMicros: totalCostMicros, activeKeys: keyRows.size, pricedRequests, unpricedRequests: requestCount - pricedRequests }, trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)), keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests), models: [...modelRows.values()].sort((a, b) => b.requests - a.requests), freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt }, pricingConfidence: { pricedRequests, unpricedRequests: requestCount - pricedRequests } }
+
+  const unpricedRequests = Math.max(0, requestCount - pricedRequests)
+  return {
+    generatedAt: new Date().toISOString(),
+    range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity },
+    summary: { requests: requestCount, tokens: totalTokens, costMicros: totalCostMicros, activeKeys: keyRows.size, pricedRequests, unpricedRequests },
+    trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)),
+    keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests),
+    models: [...modelRows.values()].sort((a, b) => b.requests - a.requests),
+    freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt },
+    pricingConfidence: { pricedRequests, unpricedRequests },
+  }
+}
+
+export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
+  if (isMemory()) return buildDashboardPayload(query, publicView)
+  const cacheKey = JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto"])
+  const cached = dashboardCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = dashboardInflight.get(cacheKey)
+  if (existing) return existing
+
+  const promise = buildDashboardPayload(query, publicView).then((payload) => {
+    boundedSet(dashboardCache, cacheKey, { value: payload, expiresAt: Date.now() + dashboardCacheTtlMs }, 32)
+    return payload
+  }).finally(() => {
+    if (dashboardInflight.get(cacheKey) === promise) dashboardInflight.delete(cacheKey)
+  })
+  dashboardInflight.set(cacheKey, promise)
+  return promise
 }
 
 export function redactPublicDashboard(payload: DashboardPayload): DashboardPayload {
@@ -604,7 +1056,10 @@ async function rebuildBudgetCounters(events: UsageEvent[]) {
     totals.set(id, { spentMicros: (current?.spentMicros || 0) + event.costMicros, lastUsedAt: !current || current.lastUsedAt < event.completedAt ? event.completedAt : current.lastUsedAt })
   }
   if (isMemory()) {
-    for (const id of [...memoryBudgetCounters.keys()]) if ([...totals.keys()].some((next) => next === id) || budgets.some((budget) => id === budgetCounterId(budget.apiKeyId, usageStart))) memoryBudgetCounters.delete(id)
+    const currentWindowCounterIds = new Set(budgets.map((budget) => budgetCounterId(budget.apiKeyId, usageStart)))
+    for (const id of memoryBudgetCounters.keys()) {
+      if (totals.has(id) || currentWindowCounterIds.has(id)) memoryBudgetCounters.delete(id)
+    }
     for (const [id, value] of totals) memoryBudgetCounters.set(id, value)
     return
   }
@@ -633,6 +1088,7 @@ export async function repriceUsageForGroup(jobId: string) {
   const allEvents = await listUsageEvents()
   const events = allEvents.filter((event) => (event.providerModelId && modelIds.has(event.providerModelId)) || gatewayModelIds.has(event.gatewayModelId))
   await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() })
+  const updatedEvents = new Map<string, UsageEvent>()
   for (let index = 0; index < events.length; index += 100) {
     const chunk = events.slice(index, index + 100)
     for (const event of chunk) {
@@ -654,12 +1110,15 @@ export async function repriceUsageForGroup(jobId: string) {
         delete updatedEvent.pricingVersionId
       }
       await replaceUsageEvent(updatedEvent)
+      updatedEvents.set(updatedEvent.id, updatedEvent)
     }
     await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) })
   }
-  await rebuildUsageRollups(allEvents.map((event) => events.find((updated) => updated.id === event.id) || event))
-  await rebuildBudgetCounters(allEvents.map((event) => events.find((updated) => updated.id === event.id) || event))
+  const repricedEvents = allEvents.map((event) => updatedEvents.get(event.id) || event)
+  await rebuildUsageRollups(repricedEvents)
+  await rebuildBudgetCounters(repricedEvents)
+  dashboardCache.clear()
   return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() })
 }
 
-export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgetCounters.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined; pricingCache.clear(); pricingInflight.clear(); resetModelPricingForTests() }
+export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgetCounters.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined; invalidateLegacyPricingCaches(); invalidateBudgetReadCaches(); resetModelPricingForTests() }

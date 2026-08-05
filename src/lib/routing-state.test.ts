@@ -121,6 +121,28 @@ describe("Redis routing state", () => {
     expect(redis.calls[0]?.args).toEqual([7, 60])
   })
 
+  test("uses the budget window TTL when releasing an authenticated route", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    await store.release({
+      providerId: "provider",
+      modelId: "model",
+      credentialId: "a",
+      leaseId: "lease-a",
+      status: 200,
+      budget: { key: "test:budget:key", reservationMicros: 1, actualMicros: 7, ttlSeconds: 4_321 },
+    })
+    expect(redis.calls[0]?.keys).toEqual([
+      "test:inflight:provider:model:a",
+      "test:rpm:provider:model:a",
+      "test:cooldown:provider:model:a",
+      "test:budget:key",
+      "test:budget:key:lease:lease-a",
+    ])
+    expect(redis.calls[0]?.args.slice(-2)).toEqual([7, 4_321])
+  })
+
   test("maps multiple response IDs in one Redis script", async () => {
     const redis = new FakeRedis()
     redis.responses.push(["ok"])
@@ -129,5 +151,19 @@ describe("Redis routing state", () => {
     expect(redis.calls[0]?.keys).toEqual(["test:response:provider:resp-1", "test:response:provider:resp-2"])
     expect(redis.calls[0]?.args).toEqual([120, "a"])
     expect(redis.calls[0]?.script).toContain('for index = 1, #KEYS do')
+  })
+
+  test("bounds response affinity keys before sending them to Redis", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    const responseIds = Array.from({ length: 70 }, (_, index) => `resp-${index}`)
+    responseIds.splice(3, 0, responseIds[0], "x".repeat(513), "")
+
+    await store.mapResponses(responseIds, "provider", "a")
+
+    expect(redis.calls[0]?.keys).toHaveLength(64)
+    expect(redis.calls[0]?.keys).not.toContain(`test:response:provider:${"x".repeat(513)}`)
+    expect(new Set(redis.calls[0]?.keys).size).toBe(64)
   })
 })

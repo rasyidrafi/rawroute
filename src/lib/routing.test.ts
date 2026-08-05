@@ -118,4 +118,18 @@ describe("alias routing", () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.model).toBe(model)
   })
+
+  test("resolves alias chains without repeated recursive scans", () => {
+    const chained: ModelAlias = { ...alias, id: "alias-2", alias: "friendly", targetModelId: alias.alias }
+    const result = resolveRoute([provider], [model], [alias, chained], "friendly", "openai-responses")
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.model).toBe(model)
+  })
+
+  test("rejects cyclic alias chains", () => {
+    const first: ModelAlias = { ...alias, id: "cycle-a", alias: "cycle-a", targetModelId: "cycle-b" }
+    const second: ModelAlias = { ...alias, id: "cycle-b", alias: "cycle-b", targetModelId: "cycle-a" }
+    const result = resolveRoute([provider], [model], [first, second], "cycle-a", "openai-responses")
+    expect(result).toEqual({ ok: false, status: 404, message: "Unknown or disabled model: cycle-a" })
+  })
 })

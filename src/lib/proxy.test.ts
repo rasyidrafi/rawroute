@@ -462,6 +462,18 @@ describe("proxy request", () => {
     expect(upstream).not.toHaveBeenCalled()
   })
 
+  test.each(["null", "[]"])("rejects non-object JSON roots before contacting upstream: %s", async (body) => {
+    const upstream = vi.fn(() => Promise.resolve(new Response()))
+    globalThis.fetch = upstream as unknown as typeof fetch
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body,
+    }), "openai-responses")
+    expect(response.status).toBe(400)
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
   test("rejects a declared body larger than the configured maximum", async () => {
     process.env.MAX_PROXY_BODY_BYTES = "32"
     const upstream = vi.fn(() => Promise.resolve(new Response()))

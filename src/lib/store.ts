@@ -6,12 +6,40 @@ import { gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey } from "@/lib/types"
 
-const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 2_000)
-const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 2_000
+const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 30_000)
+const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 30_000
+const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 15_000)
+const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 15_000
+const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 2_000)
+const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 2_000
 let compatibilityCache: CompatibilityCache | undefined
 let compatibilityReadPromise: Promise<AppData> | undefined
+let routingDataCache: DataCache<RoutingData> | undefined
+let routingDataReadPromise: Promise<RoutingData> | undefined
+let catalogDataCache: DataCache<CatalogData> | undefined
+let catalogDataReadPromise: Promise<CatalogData> | undefined
 let metaCache: { data: Meta; expiresAt: number } | undefined
 let metaReadPromise: Promise<Meta> | undefined
+
+interface ReadCache<T> {
+  value?: T
+  expiresAt: number
+  inflight?: Promise<T>
+}
+
+const providersCache: ReadCache<Provider[]> = { expiresAt: 0 }
+const providerApiKeysCache = new Map<string, ReadCache<ProviderApiKey[]>>()
+const allProviderApiKeysCache: ReadCache<ProviderApiKey[]> = { expiresAt: 0 }
+const providerModelsCache = new Map<string, ReadCache<Model[]>>()
+const modelsCache: ReadCache<Model[]> = { expiresAt: 0 }
+const aliasesCache: ReadCache<ModelAlias[]> = { expiresAt: 0 }
+const apiKeysCache: ReadCache<ApiKey[]> = { expiresAt: 0 }
+const apiKeyLookupCache = new Map<string, { value: ApiKey | null; expiresAt: number }>()
+const apiKeyLookupInflight = new Map<string, Promise<ApiKey | undefined>>()
+const maximumApiKeyLookupEntries = 512
+let apiKeyHashIndex: Map<string, ApiKey> | undefined
+let configurationGeneration = 0
+let metaGeneration = 0
 
 const documentedAdminPassword = "change-me-now"
 const documentedProxyKey = "sk-local-change-me"
@@ -293,6 +321,16 @@ function storedApiKey(apiKey: ApiKey) {
   return stripUndefined(data)
 }
 
+interface ApiKeyIndexData {
+  apiKeyId?: string
+  name?: string
+  createdAt?: string
+}
+
+function apiKeyIndexDocument(apiKey: ApiKey): Required<ApiKeyIndexData> {
+  return { apiKeyId: apiKey.id, name: apiKey.name, createdAt: apiKey.createdAt }
+}
+
 function storedAlias(alias: ModelAlias) {
   const { id, ...data } = alias
   void id
@@ -303,10 +341,75 @@ function isMemoryBackend() {
   return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test"
 }
 
-interface CompatibilityCache { data: AppData; expiresAt: number }
+type RoutingData = Pick<AppData, "sessionSecret" | "providers" | "providerApiKeys" | "models" | "aliases">
+type CatalogData = Pick<AppData, "providers" | "models" | "aliases">
+interface DataCache<T> { data: T; expiresAt: number }
+type CompatibilityCache = DataCache<AppData>
+
+function clearReadCache<T>(cache: ReadCache<T>) {
+  cache.value = undefined
+  cache.expiresAt = 0
+  cache.inflight = undefined
+}
+
+function clearReadCacheMap<T>(cache: Map<string, ReadCache<T>>) {
+  cache.clear()
+}
+
+async function cachedRead<T>(cache: ReadCache<T>, loader: () => Promise<T>): Promise<T> {
+  const now = Date.now()
+  if (cache.value !== undefined && cache.expiresAt > now) return cache.value
+  if (cache.inflight) return cache.inflight
+
+  const generation = configurationGeneration
+  const promise = loader().then((value) => {
+    if (generation === configurationGeneration) {
+      cache.value = value
+      cache.expiresAt = Date.now() + cacheTtlMs
+    }
+    return value
+  }).finally(() => {
+    if (cache.inflight === promise) cache.inflight = undefined
+  })
+  cache.inflight = promise
+  return promise
+}
+
+function providerScopedCache<T>(cache: Map<string, ReadCache<T>>, providerId: string) {
+  let entry = cache.get(providerId)
+  if (!entry) {
+    entry = { expiresAt: 0 }
+    cache.set(providerId, entry)
+  }
+  return entry
+}
+
+function cacheApiKeyLookup(hash: string, value: ApiKey | undefined) {
+  if (!apiKeyLookupCache.has(hash) && apiKeyLookupCache.size >= maximumApiKeyLookupEntries) {
+    const oldest = apiKeyLookupCache.keys().next().value
+    if (oldest !== undefined) apiKeyLookupCache.delete(oldest)
+  }
+  apiKeyLookupCache.set(hash, { value: value || null, expiresAt: Date.now() + (value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs) })
+}
 
 function invalidateCompatibilityCache() {
+  configurationGeneration += 1
   compatibilityCache = undefined
+  compatibilityReadPromise = undefined
+  routingDataCache = undefined
+  routingDataReadPromise = undefined
+  catalogDataCache = undefined
+  catalogDataReadPromise = undefined
+  clearReadCache(providersCache)
+  clearReadCache(allProviderApiKeysCache)
+  clearReadCache(modelsCache)
+  clearReadCache(aliasesCache)
+  clearReadCache(apiKeysCache)
+  clearReadCacheMap(providerApiKeysCache)
+  clearReadCacheMap(providerModelsCache)
+  apiKeyHashIndex = undefined
+  apiKeyLookupCache.clear()
+  apiKeyLookupInflight.clear()
 }
 
 function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { originalId?: string }) {
@@ -482,29 +585,44 @@ function apiKeyIndexRef(hash: string) {
 // Public API
 // -------------------------------------------------------------------------------------------------
 
-export async function readMeta(): Promise<Meta> {
-  if (isMemoryBackend()) {
-    const state = ensureMemorySeeded()
-    return state.meta!
-  }
-  if (metaCache && metaCache.expiresAt > Date.now()) return structuredClone(metaCache.data)
+async function readSharedMeta(): Promise<Meta> {
+  if (isMemoryBackend()) return ensureMemorySeeded().meta!
+  if (metaCache && metaCache.expiresAt > Date.now()) return metaCache.data
   if (!metaReadPromise) {
-    metaReadPromise = firestoreReadMeta().then((meta) => {
-      metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
-      return meta
-    }).finally(() => { metaReadPromise = undefined })
+    const generation = metaGeneration
+    const promise = firestoreReadMeta().then((meta) => {
+      const data = structuredClone(meta)
+      if (generation === metaGeneration) metaCache = { data, expiresAt: Date.now() + cacheTtlMs }
+      return data
+    }).finally(() => {
+      if (metaReadPromise === promise) metaReadPromise = undefined
+    })
+    metaReadPromise = promise
   }
-  return structuredClone(await metaReadPromise)
+  return metaReadPromise
+}
+
+export async function readMeta(): Promise<Meta> {
+  return structuredClone(await readSharedMeta())
+}
+
+/** Read-only session signing secret for hot authentication paths. */
+export async function readSessionSecret(): Promise<string> {
+  return (await readSharedMeta()).sessionSecret
 }
 
 export async function writeMeta(meta: Meta): Promise<void> {
   if (isMemoryBackend()) {
     ensureMemorySeeded().meta = meta
+    metaGeneration += 1
+    metaReadPromise = undefined
     metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
     invalidateCompatibilityCache()
     return
   }
   await metaRef().set(stripUndefined(meta))
+  metaGeneration += 1
+  metaReadPromise = undefined
   metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
   invalidateCompatibilityCache()
 }
@@ -513,11 +631,15 @@ export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>):
   if (isMemoryBackend()) {
     const state = ensureMemorySeeded()
     await mutator(state.meta!)
+    metaGeneration += 1
+    metaReadPromise = undefined
     metaCache = { data: structuredClone(state.meta!), expiresAt: Date.now() + cacheTtlMs }
     invalidateCompatibilityCache()
     return state.meta!
   }
   const meta = await firestoreUpdateMeta(mutator)
+  metaGeneration += 1
+  metaReadPromise = undefined
   metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
   invalidateCompatibilityCache()
   return meta
@@ -528,12 +650,15 @@ export async function listProviders(): Promise<Provider[]> {
     const state = ensureMemorySeeded()
     return [...state.providers.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
-  return firestoreListProviders()
+  return cachedRead(providersCache, firestoreListProviders)
 }
 
 export async function getProvider(providerId: string): Promise<Provider | undefined> {
   if (isMemoryBackend()) {
     return ensureMemorySeeded().providers.get(providerId)
+  }
+  if (providersCache.value && providersCache.expiresAt > Date.now()) {
+    return providersCache.value.find((provider) => provider.id === providerId)
   }
   return firestoreGetProvider(providerId)
 }
@@ -555,11 +680,19 @@ export async function listProviderApiKeys(providerId: string): Promise<ProviderA
     const map = ensureMemorySeeded().providerApiKeys.get(providerId) || new Map<string, ProviderApiKey>()
     return [...map.values()].sort(compareProviderApiKeys)
   }
-  return firestoreListProviderApiKeys(providerId)
+  if (allProviderApiKeysCache.value && allProviderApiKeysCache.expiresAt > Date.now()) {
+    return allProviderApiKeysCache.value.filter((apiKey) => apiKey.providerId === providerId).sort(compareProviderApiKeys)
+  }
+  return cachedRead(providerScopedCache(providerApiKeysCache, providerId), () => firestoreListProviderApiKeys(providerId))
 }
 
 export async function getProviderApiKey(providerId: string, apiKeyId: string): Promise<ProviderApiKey | undefined> {
   if (isMemoryBackend()) return ensureMemorySeeded().providerApiKeys.get(providerId)?.get(apiKeyId)
+  const cached = providerApiKeysCache.get(providerId)
+  if (cached?.value && cached.expiresAt > Date.now()) return cached.value.find((apiKey) => apiKey.id === apiKeyId)
+  if (allProviderApiKeysCache.value && allProviderApiKeysCache.expiresAt > Date.now()) {
+    return allProviderApiKeysCache.value.find((apiKey) => apiKey.providerId === providerId && apiKey.id === apiKeyId)
+  }
   const snapshot = await providerApiKeyRef(providerId, apiKeyId).get()
   return snapshot.exists ? providerApiKeyFromSnapshot(snapshot, providerId) : undefined
 }
@@ -587,7 +720,7 @@ export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
     for (const slot of state.providerApiKeys.values()) out.push(...slot.values())
     return out
   }
-  return firestoreListAllProviderApiKeys()
+  return cachedRead(allProviderApiKeysCache, firestoreListAllProviderApiKeys)
 }
 
 export async function upsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
@@ -610,7 +743,7 @@ export async function listModels(): Promise<Model[]> {
     for (const slot of state.models.values()) out.push(...slot.values())
     return out
   }
-  return firestoreListModels()
+  return cachedRead(modelsCache, firestoreListModels)
 }
 
 export async function listProviderModels(providerId: string): Promise<Model[]> {
@@ -618,7 +751,10 @@ export async function listProviderModels(providerId: string): Promise<Model[]> {
     const map = ensureMemorySeeded().models.get(providerId) || new Map<string, Model>()
     return [...map.values()]
   }
-  return firestoreListProviderModels(providerId)
+  if (modelsCache.value && modelsCache.expiresAt > Date.now()) {
+    return modelsCache.value.filter((model) => model.providerId === providerId)
+  }
+  return cachedRead(providerScopedCache(providerModelsCache, providerId), () => firestoreListProviderModels(providerId))
 }
 
 export async function upsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
@@ -637,7 +773,7 @@ export async function listAliases(): Promise<ModelAlias[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().aliases.values()].sort(compareAliases)
   }
-  return firestoreListAliases()
+  return cachedRead(aliasesCache, firestoreListAliases)
 }
 
 function compareAliases(left: ModelAlias, right: ModelAlias) {
@@ -661,7 +797,11 @@ export async function listApiKeys(): Promise<ApiKey[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().apiKeys.values()]
   }
-  return firestoreListApiKeys()
+  const apiKeys = await cachedRead(apiKeysCache, firestoreListApiKeys)
+  if (!apiKeyHashIndex && apiKeysCache.value === apiKeys && apiKeysCache.expiresAt > Date.now()) {
+    apiKeyHashIndex = new Map(apiKeys.map((apiKey) => [apiKeyValueHash(apiKey.key), apiKey]))
+  }
+  return apiKeys
 }
 
 export async function createApiKey(name: string, customKey?: string): Promise<ApiKey> {
@@ -688,8 +828,10 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
     const ref = apiKeyRef(apiKeyId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("API key not found.")
+    const updated = { ...apiKeyFromSnapshot(snapshot), name: normalizedName }
     transaction.update(ref, { name: normalizedName })
-    return { ...apiKeyFromSnapshot(snapshot), name: normalizedName }
+    transaction.set(apiKeyIndexRef(apiKeyValueHash(updated.key)), apiKeyIndexDocument(updated), { merge: true })
+    return updated
   })
   invalidateCompatibilityCache()
   return updated
@@ -723,7 +865,7 @@ export async function _setApiKey(apiKey: ApiKey): Promise<void> {
       transaction.delete(apiKeyIndexRef(apiKeyValueHash(previous.key)))
     }
     transaction.set(ref, storedApiKey(next))
-    transaction.set(indexRef, { apiKeyId: apiKey.id, createdAt: apiKey.createdAt })
+    transaction.set(indexRef, apiKeyIndexDocument(next))
   })
   invalidateCompatibilityCache()
 }
@@ -744,16 +886,66 @@ async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
 // Compatibility shim (preserved for proxy/auth/catalog)
 // -------------------------------------------------------------------------------------------------
 
-export async function readData(): Promise<AppData> {
-  if (compatibilityCache && compatibilityCache.expiresAt > Date.now()) return structuredClone(compatibilityCache.data)
-  if (!compatibilityReadPromise) {
-    compatibilityReadPromise = Promise.all([listProviders(), listAllProviderApiKeys(), listModels(), listAliases(), listApiKeys(), readMeta()]).then(([providers, providerApiKeys, models, aliases, apiKeys, meta]) => {
-      const data: AppData = { version: 4, admin: meta.admin, sessionSecret: meta.sessionSecret, providers, providerApiKeys, models, aliases, apiKeys }
-      compatibilityCache = { data: structuredClone(data), expiresAt: Date.now() + cacheTtlMs }
+async function readSharedCatalogData(): Promise<CatalogData> {
+  if (catalogDataCache && catalogDataCache.expiresAt > Date.now()) return catalogDataCache.data
+  if (!catalogDataReadPromise) {
+    const generation = configurationGeneration
+    const promise = Promise.all([listProviders(), listModels(), listAliases()]).then(([providers, models, aliases]) => {
+      const data: CatalogData = { providers, models, aliases }
+      if (generation === configurationGeneration) catalogDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
       return data
-    }).finally(() => { compatibilityReadPromise = undefined })
+    }).finally(() => {
+      if (catalogDataReadPromise === promise) catalogDataReadPromise = undefined
+    })
+    catalogDataReadPromise = promise
   }
-  return structuredClone(await compatibilityReadPromise)
+  return catalogDataReadPromise
+}
+
+async function readSharedRoutingData(): Promise<RoutingData> {
+  if (routingDataCache && routingDataCache.expiresAt > Date.now()) return routingDataCache.data
+  if (!routingDataReadPromise) {
+    const generation = configurationGeneration
+    const promise = Promise.all([readSharedCatalogData(), listAllProviderApiKeys(), readSharedMeta()]).then(([catalog, providerApiKeys, meta]) => {
+      const data: RoutingData = { ...catalog, providerApiKeys, sessionSecret: meta.sessionSecret }
+      if (generation === configurationGeneration) routingDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
+      return data
+    }).finally(() => {
+      if (routingDataReadPromise === promise) routingDataReadPromise = undefined
+    })
+    routingDataReadPromise = promise
+  }
+  return routingDataReadPromise
+}
+
+async function readSharedData(): Promise<AppData> {
+  if (compatibilityCache && compatibilityCache.expiresAt > Date.now()) return compatibilityCache.data
+  if (!compatibilityReadPromise) {
+    const generation = configurationGeneration
+    const promise = Promise.all([readSharedRoutingData(), listApiKeys(), readSharedMeta()]).then(([routing, apiKeys, meta]) => {
+      const data: AppData = { version: 4, admin: meta.admin, ...routing, apiKeys }
+      if (generation === configurationGeneration) compatibilityCache = { data, expiresAt: Date.now() + cacheTtlMs }
+      return data
+    }).finally(() => {
+      if (compatibilityReadPromise === promise) compatibilityReadPromise = undefined
+    })
+    compatibilityReadPromise = promise
+  }
+  return compatibilityReadPromise
+}
+
+/** Read-only catalog snapshot. Do not mutate it. */
+export async function readCatalogData(): Promise<CatalogData> {
+  return readSharedCatalogData()
+}
+
+/** Read-only routing snapshot for latency-sensitive server paths. Do not mutate it. */
+export async function readRoutingData(): Promise<RoutingData> {
+  return readSharedRoutingData()
+}
+
+export async function readData(): Promise<AppData> {
+  return structuredClone(await readSharedData())
 }
 
 export async function findApiKeyByValue(value: string): Promise<ApiKey | undefined> {
@@ -764,11 +956,42 @@ export async function findApiKeyByValue(value: string): Promise<ApiKey | undefin
     const id = state.apiKeyIndexes.get(apiKeyValueHash(normalized))
     return id ? state.apiKeys.get(id) : undefined
   }
-  const index = await apiKeyIndexRef(apiKeyValueHash(normalized)).get()
-  const apiKeyId = index.exists ? (index.data() as { apiKeyId?: string }).apiKeyId : undefined
-  if (!apiKeyId) return undefined
-  const snapshot = await apiKeyRef(apiKeyId).get()
-  return snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
+  const hash = apiKeyValueHash(normalized)
+  const cached = apiKeyLookupCache.get(hash)
+  if (cached && cached.expiresAt > Date.now()) return cached.value || undefined
+
+  if (apiKeyHashIndex && apiKeysCache.expiresAt > Date.now()) {
+    const apiKey = apiKeyHashIndex.get(hash)
+    cacheApiKeyLookup(hash, apiKey)
+    return apiKey
+  }
+
+  const existing = apiKeyLookupInflight.get(hash)
+  if (existing) return existing
+  const generation = configurationGeneration
+  const promise = (async () => {
+    const index = await apiKeyIndexRef(hash).get()
+    const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
+    const apiKeyId = indexData?.apiKeyId
+    if (!apiKeyId) {
+      if (generation === configurationGeneration) cacheApiKeyLookup(hash, undefined)
+      return undefined
+    }
+    if (typeof indexData.name === "string" && typeof indexData.createdAt === "string") {
+      const apiKey = { id: apiKeyId, name: indexData.name, key: normalized, createdAt: indexData.createdAt }
+      if (generation === configurationGeneration) cacheApiKeyLookup(hash, apiKey)
+      return apiKey
+    }
+    const snapshot = await apiKeyRef(apiKeyId).get()
+    const apiKey = snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
+    if (generation === configurationGeneration) {
+      cacheApiKeyLookup(hash, apiKey)
+      if (apiKey) void apiKeyIndexRef(hash).set(apiKeyIndexDocument(apiKey), { merge: true }).catch(() => undefined)
+    }
+    return apiKey
+  })().finally(() => apiKeyLookupInflight.delete(hash))
+  apiKeyLookupInflight.set(hash, promise)
+  return promise
 }
 
 export async function writeData(data: AppData) {
@@ -864,8 +1087,12 @@ export async function updateData(mutator: (data: AppData) => void | Promise<void
 // -------------------------------------------------------------------------------------------------
 
 async function firestoreReadMeta(): Promise<Meta> {
+  const ref = metaRef()
+  const current = await ref.get()
+  const currentData = current.exists ? current.data() as Meta : undefined
+  if (currentData && currentData.version >= 4) return currentData
+
   return getFirestoreInstance().runTransaction(async (transaction) => {
-    const ref = metaRef()
     const snapshot = await transaction.get(ref)
     if (snapshot.exists) {
       const meta = snapshot.data() as Meta
@@ -899,13 +1126,20 @@ async function firestoreReadMeta(): Promise<Meta> {
         if (!newProviderId) continue
         for (const model of slot.values()) transaction.set(modelsRef(newProviderId).doc(), storedModel(model))
       }
-      for (const apiKey of migrated.apiKeys.values()) transaction.set(apiKeysRef().doc(), storedApiKey(apiKey))
+      for (const apiKey of migrated.apiKeys.values()) {
+        const keyRef = apiKeysRef().doc()
+        const migratedKey = { ...apiKey, id: keyRef.id }
+        transaction.set(keyRef, storedApiKey(migratedKey))
+        transaction.set(apiKeyIndexRef(apiKeyValueHash(migratedKey.key)), apiKeyIndexDocument(migratedKey))
+      }
       return meta
     }
     const meta = initialMeta()
     transaction.create(ref, meta)
-    const seedKey = initialGatewayApiKey()
-    transaction.set(apiKeysRef().doc(), storedApiKey(seedKey))
+    const seedRef = apiKeysRef().doc()
+    const seedKey = { ...initialGatewayApiKey(), id: seedRef.id }
+    transaction.set(seedRef, storedApiKey(seedKey))
+    transaction.set(apiKeyIndexRef(apiKeyValueHash(seedKey.key)), apiKeyIndexDocument(seedKey))
     return meta
   })
 }
@@ -946,7 +1180,12 @@ async function firestoreMigrateCurrentDocuments(transaction: Transaction, meta: 
       transaction.set(modelsRef(nextProviderId).doc(), storedModel(model))
     }
   }
-  for (const doc of gatewayKeySnapshot.docs) transaction.set(apiKeysRef().doc(), storedApiKey({ ...doc.data(), id: doc.id } as ApiKey))
+  for (const doc of gatewayKeySnapshot.docs) {
+    const keyRef = apiKeysRef().doc()
+    const apiKey = { ...doc.data(), id: keyRef.id } as ApiKey
+    transaction.set(keyRef, storedApiKey(apiKey))
+    transaction.set(apiKeyIndexRef(apiKeyValueHash(apiKey.key)), apiKeyIndexDocument(apiKey))
+  }
 
   for (const provider of providerSnapshot.docs) {
     for (const child of children.find((entry) => entry.providerId === provider.id)?.keys.docs || []) transaction.delete(child.ref)
@@ -1058,12 +1297,15 @@ async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: s
 }
 
 async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
-  const snapshot = await providersRef().get()
-  const children = await Promise.all(snapshot.docs.map(async (doc) => {
-    const sub = await providerApiKeysRef(doc.id).get()
-    return sub.docs.map((subDoc) => providerApiKeyFromSnapshot(subDoc, doc.id))
-  }))
-  return children.flat()
+  const snapshot = await getFirestoreInstance().collectionGroup("apiKeys").get()
+  const providerCollectionPath = providersRef().path
+  const apiKeys: ProviderApiKey[] = []
+  for (const document of snapshot.docs) {
+    const provider = document.ref.parent.parent
+    if (!provider || provider.parent.path !== providerCollectionPath) continue
+    apiKeys.push(providerApiKeyFromSnapshot(document, provider.id))
+  }
+  return apiKeys
 }
 
 async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
@@ -1117,12 +1359,15 @@ async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: strin
 }
 
 async function firestoreListModels(): Promise<Model[]> {
-  const providers = await providersRef().get()
-  const children = await Promise.all(providers.docs.map(async (doc) => {
-    const sub = await modelsRef(doc.id).get()
-    return sub.docs.map((subDoc) => modelFromSnapshot(subDoc, doc.id))
-  }))
-  return children.flat()
+  const snapshot = await getFirestoreInstance().collectionGroup("models").get()
+  const providerCollectionPath = providersRef().path
+  const models: Model[] = []
+  for (const document of snapshot.docs) {
+    const provider = document.ref.parent.parent
+    if (!provider || provider.parent.path !== providerCollectionPath) continue
+    models.push(modelFromSnapshot(document, provider.id))
+  }
+  return models
 }
 
 async function firestoreListProviderModels(providerId: string): Promise<Model[]> {
@@ -1265,15 +1510,16 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
       transaction.get(apiKeyIndexesRef()),
     ])
     const existingKeyIds = new Set(existingKeys.docs.map((document) => document.id))
-    const indexByHash = new Map(existingIndexes.docs.map((document) => [document.id, document.data() as { apiKeyId?: string }]))
+    const indexByHash = new Map<string, ApiKeyIndexData>(existingIndexes.docs.map((document) => [document.id, document.data() as ApiKeyIndexData]))
 
     for (const document of existingKeys.docs) {
       const existing = apiKeyFromSnapshot(document)
       const hash = apiKeyValueHash(existing.key)
       const index = indexByHash.get(hash)
-      if (!index || !existingKeyIds.has(index.apiKeyId || "")) {
-        transaction.set(apiKeyIndexRef(hash), { apiKeyId: document.id, createdAt: existing.createdAt })
-        indexByHash.set(hash, { apiKeyId: document.id })
+      if (!index || !existingKeyIds.has(index.apiKeyId || "") || index.name !== existing.name || index.createdAt !== existing.createdAt) {
+        const indexData = apiKeyIndexDocument(existing)
+        transaction.set(apiKeyIndexRef(hash), indexData)
+        indexByHash.set(hash, indexData)
       }
     }
     const existingIndex = indexByHash.get(requestedHash)
@@ -1281,7 +1527,7 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
       throw new ApiKeyConflictError()
     }
     transaction.create(apiKeyRefValue, storedApiKey(apiKey))
-    transaction.set(apiKeyIndexRef(requestedHash), { apiKeyId: apiKey.id, createdAt: apiKey.createdAt })
+    transaction.set(apiKeyIndexRef(requestedHash), apiKeyIndexDocument(apiKey))
     return apiKey
   })
 }
@@ -1559,8 +1805,7 @@ export function _resetMemoryBackend() {
   memory.apiKeys = new Map()
   memory.apiKeyIndexes = new Map()
   memory.initialized = false
-  compatibilityCache = undefined
-  compatibilityReadPromise = undefined
+  invalidateCompatibilityCache()
   metaCache = undefined
   metaReadPromise = undefined
 }

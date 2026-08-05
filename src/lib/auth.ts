@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 import { cookies } from "next/headers"
 
-import { findApiKeyByValue, readMeta } from "@/lib/store"
+import { findApiKeyByValue, readSessionSecret } from "@/lib/store"
 
 const COOKIE_NAME = "rawroute_session"
 
@@ -10,9 +10,9 @@ function sign(value: string, secret: string) {
 }
 
 export async function createSession() {
-  const data = await readMeta()
+  const sessionSecret = await readSessionSecret()
   const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 7
-  const value = `${expiresAt}.${sign(String(expiresAt), data.sessionSecret)}`
+  const value = `${expiresAt}.${sign(String(expiresAt), sessionSecret)}`
   const jar = await cookies()
   jar.set(COOKIE_NAME, value, {
     httpOnly: true,
@@ -34,8 +34,7 @@ export async function isAuthenticated() {
   if (!value) return false
   const [expires, signature] = value.split(".")
   if (!expires || !signature || Number(expires) < Date.now()) return false
-  const data = await readMeta()
-  const expected = sign(expires, data.sessionSecret)
+  const expected = sign(expires, await readSessionSecret())
   const left = Buffer.from(signature)
   const right = Buffer.from(expected)
   return left.length === right.length && timingSafeEqual(left, right)
@@ -47,7 +46,7 @@ export async function requireAdmin() {
 
 export async function authenticateProxyKey(request: Request) {
   const authorization = request.headers.get("authorization")
-  const supplied = authorization?.toLowerCase().startsWith("bearer ")
+  const supplied = authorization?.slice(0, 7).toLowerCase() === "bearer "
     ? authorization.slice(7)
     : request.headers.get("x-api-key")
   if (!supplied) return undefined

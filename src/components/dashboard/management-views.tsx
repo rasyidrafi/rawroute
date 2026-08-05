@@ -36,9 +36,8 @@ const money = (micros: number) => `$${(micros / 1_000_000).toFixed(2)}`
 type BudgetWindowResponse = { start: string; end: string; anchor?: BudgetWindowAnchor; codexAccountId?: string | null; bypassLimits: boolean }
 type BudgetEntry = { apiKeyId: string; name: string; weeklyLimitMicros: number; spentMicros: number; enabled: boolean; usageStartAt?: string; lastUsedAt?: string | null }
 type BudgetBypassSession = { id: string; startedAt: string; endedAt: string | null }
-type BudgetsResponse = { budgets: BudgetEntry[]; bypassSessions: BudgetBypassSession[]; window: BudgetWindowResponse }
+type BudgetsResponse = { budgets: BudgetEntry[]; bypassSessions: BudgetBypassSession[]; window: BudgetWindowResponse; apiKeys: Array<{ id: string; name: string }>; codexAccounts: CodexAccountOption[] }
 type CodexAccountOption = { id: string; name: string; planType?: string }
-type CodexAccountsResponse = { accounts: CodexAccountOption[] }
 type BudgetSortKey = "limit" | "usage" | "name"
 
 const budgetSortOptions = [{ value: "limit", label: "Highest limit first" }, { value: "usage", label: "Highest usage first" }, { value: "name", label: "API key name" }] as const
@@ -55,8 +54,6 @@ function sanitizeNonNegativeDraft(value: string) { return value.includes("-") ? 
 
 export function BudgetsView() {
   const { data, mutate, isLoading, isValidating } = useSWR<BudgetsResponse>("/api/admin/budgets", fetcher)
-  const { data: keys } = useSWR<{ apiKeys: Array<{ id: string; name: string }> }>("/api/admin/endpoint-key", fetcher)
-  const { data: codexData } = useSWR<CodexAccountsResponse>("/api/admin/oauth-providers", fetcher)
   const [apiKeyId, setApiKeyId] = useState("")
   const [limit, setLimit] = useState("50")
   const [sortBy, setSortBy] = useState<BudgetSortKey>("limit")
@@ -68,7 +65,7 @@ export function BudgetsView() {
   const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null)
   const [editLimitValue, setEditLimitValue] = useState("")
   const [pending, setPending] = useState<Set<string>>(() => new Set())
-  const codexAccounts = codexData?.accounts || []
+  const codexAccounts = data?.codexAccounts || []
   const windowAnchor = windowAnchorOverride ?? data?.window.anchor ?? "custom"
   const codexAccountId = codexAccountOverride ?? data?.window.codexAccountId ?? codexAccounts[0]?.id ?? ""
   const customRange = customRangeOverride ?? (data ? { from: calendarDateFromInstant(data.window.start), to: calendarDateFromInstant(data.window.end) } : undefined)
@@ -144,7 +141,7 @@ export function BudgetsView() {
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
 
-  if (isLoading || !data || !keys || !codexData) return <DashboardContentSkeleton variant="budgets" />
+  if (isLoading || !data) return <DashboardContentSkeleton variant="budgets" />
   const currentAnchor = data.window.anchor || "custom"
   const customRangeValid = Boolean(customRange?.from && customRange.to && dateToAppDateTime(customRange.from, customTime) < dateToAppDateTime(customRange.to, customTime))
   const minCustomDate = addDays(calendarDateFromInstant(new Date()), -7)
@@ -160,7 +157,7 @@ export function BudgetsView() {
     <Card>
       <CardHeader><CardTitle className="flex items-center gap-2"><WalletCardsIcon className="size-5" />Budgets</CardTitle><CardDescription>Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured.</CardDescription><CardAction><Button aria-busy={isValidating} variant="outline" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></CardAction></CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="flex flex-col gap-3 sm:flex-row sm:items-end"><Select value={apiKeyId} onValueChange={(value) => setApiKeyId(value || "")}><SelectTrigger className="md:w-64"><SelectValue placeholder="Select gateway key" /></SelectTrigger><SelectContent>{(keys.apiKeys || []).filter((key) => !data.budgets.some((budget) => budget.apiKeyId === key.id)).map((key) => <SelectItem key={key.id} value={key.id}>{key.name}</SelectItem>)}</SelectContent></Select><div className="flex items-center gap-3"><div className="relative md:w-40"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9 md:w-40" value={limit} onChange={(event) => setLimit(sanitizeNonNegativeDraft(event.target.value))} type="number" min="0.01" step="0.01" placeholder="Weekly USD" /></div><Button aria-busy={isPending("create-budget")} onClick={() => void create()} disabled={isPending("create-budget") || !apiKeyId}>{isPending("create-budget") && <LoadingSpinner />}Create budget</Button></div></div></div>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="flex flex-col gap-3 sm:flex-row sm:items-end"><Select value={apiKeyId} onValueChange={(value) => setApiKeyId(value || "")}><SelectTrigger className="md:w-64"><SelectValue placeholder="Select gateway key" /></SelectTrigger><SelectContent>{data.apiKeys.filter((key) => !data.budgets.some((budget) => budget.apiKeyId === key.id)).map((key) => <SelectItem key={key.id} value={key.id}>{key.name}</SelectItem>)}</SelectContent></Select><div className="flex items-center gap-3"><div className="relative md:w-40"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9 md:w-40" value={limit} onChange={(event) => setLimit(sanitizeNonNegativeDraft(event.target.value))} type="number" min="0.01" step="0.01" placeholder="Weekly USD" /></div><Button aria-busy={isPending("create-budget")} onClick={() => void create()} disabled={isPending("create-budget") || !apiKeyId}>{isPending("create-budget") && <LoadingSpinner />}Create budget</Button></div></div></div>
         <div className="flex items-center justify-between gap-4 rounded-lg border p-4 text-sm"><div><div className="font-medium">Unlimited Mode</div><div className="text-muted-foreground">All gateway keys bypass budget limits until you deactivate it.</div></div><AlertDialog><AlertDialogTrigger render={<Button aria-busy={isPending("toggle-bypass")} variant={bypass ? "default" : "outline"} className={cn("h-9 min-w-40 gap-2 border-border/70", bypass ? "unlimited-button" : "unlimited-button-idle")} disabled={isPending("toggle-bypass")}>{isPending("toggle-bypass") ? <LoadingSpinner /> : <SparklesIcon className="size-4" />}{bypass ? "Deactivate" : "Activate"}</Button>} /><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{bypass ? "Deactivate Unlimited Mode?" : "Activate Unlimited Mode?"}</AlertDialogTitle><AlertDialogDescription>{bypass ? "Budget enforcement will resume immediately for all gateway keys." : "All gateway keys will bypass budget limits until you deactivate Unlimited Mode."}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={isPending("toggle-bypass")}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={isPending("toggle-bypass")} disabled={isPending("toggle-bypass")} onClick={() => void toggleBypass(!bypass)}>{isPending("toggle-bypass") && <LoadingSpinner />}{bypass ? "Deactivate" : "Activate"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div>
         {data.bypassSessions.length > 0 && <div className="space-y-3 rounded-lg border p-4"><div><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div><Table><TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Ended</TableHead><TableHead>Duration</TableHead><TableHead>Status</TableHead></TableRow></TableHeader><TableBody>{data.bypassSessions.map((session) => <TableRow key={session.id}><TableCell className="text-sm">{formatSessionDate(session.startedAt)}</TableCell><TableCell className="text-sm text-muted-foreground">{formatSessionDate(session.endedAt)}</TableCell><TableCell className="text-sm tabular-nums">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{session.endedAt ? "Completed" : "Active"}</Badge></TableCell></TableRow>)}</TableBody></Table></div>}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex flex-col gap-2 sm:w-auto"><span className="text-sm font-medium">Order rows by</span><Select value={sortBy} onValueChange={(value) => { if (value) setSortBy(value as BudgetSortKey) }}><SelectTrigger className="min-w-44"><span className="truncate">{budgetSortLabel(sortBy)}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Ordering</SelectLabel>{budgetSortOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></div></div>
@@ -196,7 +193,10 @@ function formatCanonicalRate(value: number) { return formatCost(value) }
 function canonicalSourceLabel(value: PricingCanonicalSource) { return value === "models.dev" ? "models.dev" : "Custom ID" }
 
 export function ModelPricingView() {
-  const { data, mutate, isValidating } = useSWR<PricingAdminData>("/api/admin/model-pricing", fetcher, { refreshInterval: 3000 })
+  const { data, mutate, isValidating } = useSWR<PricingAdminData>("/api/admin/model-pricing", fetcher, {
+    refreshInterval: (latest) => latest?.jobs.some((job) => job.status === "queued" || job.status === "running") ? 3000 : 0,
+    refreshWhenHidden: false,
+  })
   const [pending, setPending] = useState(false)
   const [groupDialog, setGroupDialog] = useState<string | "new">()
   const [selectedModels, setSelectedModels] = useState<string[]>([])

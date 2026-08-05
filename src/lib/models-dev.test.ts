@@ -52,4 +52,26 @@ describe("models.dev canonical catalog", () => {
     await client.getModels()
     expect(calls).toBe(2)
   })
+
+  test("does not let a cleared in-flight load repopulate the cache", async () => {
+    let releaseFirst: ((response: Response) => void) | undefined
+    let calls = 0
+    const client = createModelsDevCatalogClient({
+      ttlMs: 60_000,
+      fetchFn: async () => {
+        calls += 1
+        if (calls === 1) return new Promise<Response>((resolve) => { releaseFirst = resolve })
+        return new Response(JSON.stringify({ provider: { models: { fresh: { name: "Fresh" } } } }))
+      },
+    })
+    const staleLoad = client.getModels()
+    await Promise.resolve()
+    client.clear()
+    const fresh = await client.getModels()
+    releaseFirst?.(new Response(JSON.stringify({ provider: { models: { stale: { name: "Stale" } } } })))
+    await staleLoad
+    expect(fresh.map((model) => model.id)).toEqual(["provider/fresh"])
+    expect((await client.getModels()).map((model) => model.id)).toEqual(["provider/fresh"])
+    expect(calls).toBe(2)
+  })
 })

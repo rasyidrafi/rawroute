@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from "vitest"
 
-import { clearLogs, readLogs, writeLog } from "@/lib/logger"
+import { clearLogs, logVersion, readLogs, writeLog } from "@/lib/logger"
 
 beforeEach(clearLogs)
 
@@ -16,4 +16,14 @@ test("bounds the in-memory log buffer", () => {
   expect(logs).toHaveLength(500)
   expect(logs[0]?.message).toBe("entry-509")
   expect(logs.at(-1)?.message).toBe("entry-10")
+})
+
+test("changes the lightweight log version without allocating unrelated entry IDs", () => {
+  const before = logVersion()
+  writeLog("info", "system", "versioned")
+  const afterWrite = logVersion()
+  expect(afterWrite).not.toBe(before)
+  expect(readLogs()[0]?.id).toBe(afterWrite)
+  clearLogs()
+  expect(logVersion()).not.toBe(afterWrite)
 })

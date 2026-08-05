@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/auth"
-import { listModelPricing, upsertModelPricing } from "@/lib/analytics"
-import { searchModelsDevCanonicalModels } from "@/lib/models-dev"
+import { upsertModelPricing } from "@/lib/analytics"
+import { findModelsDevCanonicalModel, searchModelsDevCanonicalModels } from "@/lib/models-dev"
 import { createPricingGroup, deletePricingGroup, getPricingAdminData, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
 import type { PricingCanonicalSource } from "@/lib/types"
@@ -13,12 +13,13 @@ export async function GET(request: Request) {
     const query = url.searchParams.get("q")?.trim() || ""
     const modelId = url.searchParams.get("modelId")?.trim() || ""
     if (url.searchParams.get("catalog") === "models.dev" || query || modelId) {
-      const models = modelId
-        ? (await searchModelsDevCanonicalModels(modelId, 100)).filter((model) => model.id === modelId)
-        : await searchModelsDevCanonicalModels(query, Number(url.searchParams.get("limit") || 50))
-      return Response.json({ models })
+      if (modelId) {
+        const model = await findModelsDevCanonicalModel(modelId)
+        return Response.json({ models: model ? [model] : [] })
+      }
+      return Response.json({ models: await searchModelsDevCanonicalModels(query, Number(url.searchParams.get("limit") || 50)) })
     }
-    return Response.json({ ...(await getPricingAdminData()), pricing: await listModelPricing() })
+    return Response.json(await getPricingAdminData())
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Unable to load model pricing.", 500)
   }

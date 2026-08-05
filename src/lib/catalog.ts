@@ -1,77 +1,79 @@
 import type { Model, ModelAlias, Provider } from "@/lib/types"
 
-type AliasTarget = { alias: ModelAlias; model: Model; provider: Provider }
+function enabledProviderIndex(providers: Provider[]) {
+  const index = new Map<string, Provider>()
+  for (const provider of providers) if (provider.enabled) index.set(provider.id, provider)
+  return index
+}
 
-function enabledAliasTargets(providers: Provider[], models: Model[], aliases: ModelAlias[]): AliasTarget[] {
-  return aliases.flatMap((alias) => {
-    const model = models.find((entry) => (entry.gatewayModelId || entry.id) === alias.targetModelId && entry.enabled)
-    if (!model) return []
-    const provider = providers.find((entry) => entry.id === model.providerId && entry.enabled)
-    if (!provider) return []
-    return [{ alias, model, provider }]
-  })
+function modelGatewayId(model: Model) {
+  return model.gatewayModelId || model.id
 }
 
 export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = []) {
-  const enabledProviders = new Map(providers.filter((provider) => provider.enabled).map((provider) => [provider.id, provider]))
-  const entries = models.flatMap((model) => {
+  const enabledProviders = enabledProviderIndex(providers)
+  const enabledModels = new Map<string, { model: Model; provider: Provider }>()
+  const entries: Array<{ id: string; object: "model"; created: number; owned_by: string; protocol: string }> = []
+
+  for (const model of models) {
+    if (!model.enabled) continue
     const provider = enabledProviders.get(model.providerId)
-    if (!model.enabled || !provider) return []
-    const gatewayModelId = model.gatewayModelId || model.id
-    return [{
+    if (!provider) continue
+    const gatewayModelId = modelGatewayId(model)
+    if (!enabledModels.has(gatewayModelId)) enabledModels.set(gatewayModelId, { model, provider })
+    entries.push({
       id: gatewayModelId,
-      object: "model" as const,
-      created: Math.floor(new Date(model.createdAt).getTime() / 1000),
+      object: "model",
+      created: Math.floor(Date.parse(model.createdAt) / 1000),
       owned_by: provider.prefix,
       protocol: model.protocol || provider.protocol,
-    }]
-  })
-  for (const { alias, model, provider } of enabledAliasTargets(providers, models, aliases)) {
+    })
+  }
+
+  for (const alias of aliases) {
+    const target = enabledModels.get(alias.targetModelId)
+    if (!target) continue
     entries.push({
       id: alias.alias,
-      object: "model" as const,
-      created: Math.floor(new Date(alias.createdAt).getTime() / 1000),
-      owned_by: provider.prefix,
-      protocol: model.protocol || provider.protocol,
+      object: "model",
+      created: Math.floor(Date.parse(alias.createdAt) / 1000),
+      owned_by: target.provider.prefix,
+      protocol: target.model.protocol || target.provider.protocol,
     })
   }
   return entries
 }
 
 export function catalogLiteLlmModelInfo(providers: Provider[], models: Model[], aliases: ModelAlias[] = []) {
-  const enabledProviders = new Map(providers.filter((provider) => provider.enabled).map((provider) => [provider.id, provider]))
-  const entries = models.flatMap((model) => {
-    const provider = enabledProviders.get(model.providerId)
-    if (!model.enabled || !provider) return []
-    const gatewayModelId = model.gatewayModelId || model.id
-    const protocol = model.protocol || provider.protocol
-    if (protocol !== "openai-chat") return []
+  const enabledProviders = enabledProviderIndex(providers)
+  const enabledModels = new Map<string, { model: Model; provider: Provider }>()
+  const entries: Array<{
+    model_name: string
+    litellm_params: { model: string }
+    model_info: { id: string; db_model: false; mode: "chat" }
+  }> = []
 
-    return [{
+  for (const model of models) {
+    if (!model.enabled) continue
+    const provider = enabledProviders.get(model.providerId)
+    if (!provider) continue
+    const gatewayModelId = modelGatewayId(model)
+    if (!enabledModels.has(gatewayModelId)) enabledModels.set(gatewayModelId, { model, provider })
+    if ((model.protocol || provider.protocol) !== "openai-chat") continue
+    entries.push({
       model_name: gatewayModelId,
-      litellm_params: {
-        model: model.upstreamModel,
-      },
-      model_info: {
-        id: gatewayModelId,
-        db_model: false,
-        mode: "chat",
-      },
-    }]
-  })
-  for (const { alias, model, provider } of enabledAliasTargets(providers, models, aliases)) {
-    const protocol = model.protocol || provider.protocol
-    if (protocol !== "openai-chat") continue
+      litellm_params: { model: model.upstreamModel },
+      model_info: { id: gatewayModelId, db_model: false, mode: "chat" },
+    })
+  }
+
+  for (const alias of aliases) {
+    const target = enabledModels.get(alias.targetModelId)
+    if (!target || (target.model.protocol || target.provider.protocol) !== "openai-chat") continue
     entries.push({
       model_name: alias.alias,
-      litellm_params: {
-        model: model.upstreamModel,
-      },
-      model_info: {
-        id: alias.alias,
-        db_model: false,
-        mode: "chat",
-      },
+      litellm_params: { model: target.model.upstreamModel },
+      model_info: { id: alias.alias, db_model: false, mode: "chat" },
     })
   }
   return entries
