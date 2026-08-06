@@ -1137,6 +1137,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     const lastBucket = bucketStart(new Date(toExclusive.getTime() - 1), trendGranularity)
     for (let cursor = firstBucket; cursor <= lastBucket; cursor = nextBucketStart(cursor, trendGranularity)) {
       const bucket = cursor.toISOString()
+      // Calendar weeks can begin before a short selected range. Do not add an
+      // empty leading bucket whose label falls outside that range, while still
+      // keeping it when the range contains real usage from that partial week.
+      if (trendGranularity === "weekly" && cursor < range.from && !trend.has(bucket)) continue
       if (!trend.has(bucket)) trend.set(bucket, { bucketStart: bucket, label: formatAppTrendBucket(bucket, trendGranularity, compactHourLabels ? "hour" : undefined), requests: 0, tokens: 0, costMicros: 0 })
     }
   }

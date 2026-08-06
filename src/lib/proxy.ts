@@ -256,7 +256,7 @@ function trackedUpstreamBody(
   // Codex Responses Lite currently omits content-type while still returning
   // an SSE body. Treat an untyped upstream stream as SSE so terminal
   // response.completed usage is not lost.
-  const isEventStream = contentType.includes("text/event-stream") || !contentType
+  const isEventStream = contentType.includes("text/event-stream") || contentType.startsWith("text/plain") || !contentType
   const isJson = !isEventStream && contentType.includes("application/json")
   const decoder = isEventStream || isJson ? new TextDecoder() : undefined
   let buffered = ""
