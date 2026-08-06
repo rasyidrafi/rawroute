@@ -6,6 +6,16 @@ RawRoute changes only the request's `model` value, injects upstream authenticati
 
 Providers, upstream API keys, and models are configured independently. A provider can own multiple enabled API keys; shared Redis routing keeps sessions sticky while distributing new work by RPM and concurrency capacity.
 
+## Workspaces
+
+Workspaces provide independent data scopes inside the same RawRoute deployment and Firestore database. Each workspace has its own gateway API keys, providers, provider credentials, models, aliases, usage, budgets, pricing, Codex accounts, routing state, session affinity, and console logs.
+
+Gateway clients continue using the same API endpoints. The supplied gateway API key identifies its owning workspace, and RawRoute loads configuration and records usage only within that workspace. Gateway API-key values are globally unique across all workspaces; attempting to reuse a value returns a conflict.
+
+The `Default` workspace always exists and cannot be renamed or deleted. Existing installations require no data migration: current Firestore data remains attached to `Default` in its legacy collections, while newly created workspaces use scoped subcollections under `<prefix>_workspaces/{workspaceId}`.
+
+Administrators can create, switch, rename, and delete workspaces from the dashboard sidebar. New workspaces start empty. The selected admin workspace is persisted in the browser and sent to admin APIs through the `x-rawroute-workspace-id` header. The public usage dashboard also has a workspace selector and defaults to `Default`.
+
 ## Native endpoints
 
 | Protocol | Endpoint |
@@ -45,7 +55,17 @@ Run checks with:
 npm test
 npm run lint
 npm run build
+npm run test:e2e
 ```
+
+The Firestore smoke test is destructive only within its configured collection prefix. Always override the prefix with a dedicated value containing `integration`; never run it against the production prefix:
+
+```bash
+FIRESTORE_COLLECTION_PREFIX=rawroute_integration_smoke \
+  npx tsx --env-file=.env.local scripts/firestore-smoke.ts
+```
+
+The smoke test accepts either `GOOGLE_APPLICATION_CREDENTIALS` or the inline `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` values used by the application. It verifies concurrent initialization, workspace isolation, global gateway-key uniqueness, and cleanup.
 
 For explicit service-account authentication, set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`. Newlines in the private key may be encoded as `\n`. When these variables are absent, Cloud Run uses Application Default Credentials from the assigned service identity.
 
@@ -73,7 +93,7 @@ gcloud run deploy rawroute \
 
 Grant the Cloud Run service account Firestore access. `roles/datastore.user` is the usual starting point; use a narrower custom role when practical. The proxy caches its routing snapshot in each instance for `ROUTING_CACHE_TTL_MS` (30 seconds by default), avoiding a Firestore read for every inference request. Admin mutations invalidate the current process immediately; other instances observe the change after their cache expires.
 
-Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on every Cloud Run instance. Redis stores session affinity, rolling RPM reservations, expiring concurrency leases, credential cooldowns, and Responses API ID mappings. Requests fail with `503` when shared routing state is unavailable instead of falling back to inconsistent per-instance state.
+Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on every Cloud Run instance. Redis stores workspace-scoped session affinity, rolling RPM reservations, expiring concurrency leases, credential cooldowns, and Responses API ID mappings. Requests fail with `503` when shared routing state is unavailable instead of falling back to inconsistent per-instance state.
 
 Proxy request bodies are limited by `MAX_PROXY_BODY_BYTES` (10 MiB by default), including streamed requests without a `Content-Length` header.
 
@@ -91,7 +111,7 @@ Do not mount SQLite or JSON state on a Cloud Storage bucket. Firestore is the pe
 
 ## Provider API keys
 
-Provider credentials are stored as records linked to their provider and are never returned to the browser after saving. Existing single-secret providers are migrated automatically into a linked API-key record. Firestore encrypts stored data at rest, but access is controlled by the Cloud Run service identity, so keep its IAM permissions narrow. A future Secret Manager-backed credential adapter can remove the credential values from the configuration document entirely.
+Provider credentials are stored as workspace-scoped records linked to their provider and are never returned to the browser after saving. Existing single-secret providers are migrated automatically into a linked API-key record. Firestore encrypts stored data at rest, but access is controlled by the Cloud Run service identity, so keep its IAM permissions narrow. A future Secret Manager-backed credential adapter can remove the credential values from the configuration document entirely.
 
 New sessions use sticky least-loaded routing based on each key's rolling RPM and concurrency limits. Continuations reuse their pinned key when possible, while `previous_response_id` uses hard credential affinity and never silently fails over. Upstream `429` responses cool down only the affected credential. Prompt-prefix affinity is disabled by default; use an explicit `prompt_cache_key` or session identifier when stickiness is desired.
 
