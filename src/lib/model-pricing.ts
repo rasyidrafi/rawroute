@@ -409,7 +409,6 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
     const replaced = { ...current, ...input.rates, contextTiers, updatedAt: now }
     await writeVersion(replaced)
     const job = await createPricingJob(group.id, replaced.id)
-    schedulePricingJob(job.id)
     return { version: replaced, job }
   }
   const version: ModelPricingVersion = { id: crypto.randomUUID(), groupId: group.id, version: (versions.reduce((max, entry) => Math.max(max, entry.version), 0) || 0) + 1, effectiveAt: now, createdAt: now, updatedAt: now, ...input.rates, contextTiers }
@@ -511,14 +510,17 @@ export async function updatePricingJob(jobId: string, update: Partial<PricingJob
   return next
 }
 
-export function schedulePricingJob(jobId: string) {
+export async function runPricingJob(jobId: string) {
   if (runningJobs.has(jobId)) return
   runningJobs.add(jobId)
-  setTimeout(() => {
-    void import("@/lib/analytics").then(({ repriceUsageForGroup }) => repriceUsageForGroup(jobId)).catch(async (error) => {
-      await updatePricingJob(jobId, { status: "failed", error: error instanceof Error ? error.message : "Unable to reprice usage.", completedAt: new Date().toISOString() })
-    }).finally(() => runningJobs.delete(jobId))
-  }, 0)
+  try {
+    const { repriceUsageForGroup } = await import("@/lib/analytics")
+    await repriceUsageForGroup(jobId)
+  } catch (error) {
+    await updatePricingJob(jobId, { status: "failed", error: error instanceof Error ? error.message : "Unable to reprice usage.", completedAt: new Date().toISOString() })
+  } finally {
+    runningJobs.delete(jobId)
+  }
 }
 
 export function resetModelPricingForTests() {

@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
-import { getPricingAdminData, getPricingForModelAt, resetModelPricingForTests, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
-import { listUsageEvents, recordGatewayUsage } from "@/lib/analytics"
+import { getPricingAdminData, getPricingForModelAt, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
+import { getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { _resetMemoryBackend, upsertModel, upsertProvider } from "@/lib/store"
-import type { Provider } from "@/lib/types"
+import type { Provider, UsageEvent } from "@/lib/types"
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"
   _resetMemoryBackend()
-  resetModelPricingForTests()
+  resetAnalyticsForTests()
 })
 
 function provider(id: string): Partial<Provider> {
@@ -85,9 +85,30 @@ describe("model pricing catalog", () => {
     const model = await upsertModel(providerEntry.id, { id: "first", name: "First", gatewayModelId: "cx/gpt-5.6-sol", upstreamModel: "gpt-5.6-sol" })
     const group = (await syncModelPricingGroups()).find((entry) => entry.name === "First")!
     await savePricingVersion({ groupId: group.id, mode: "new", rates: { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
-    await recordGatewayUsage({ id: "historical", gatewayKeyId: "key", providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 100 } })
-    await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    expect((await listUsageEvents()).find((event) => event.id === "historical")?.costMicros).toBe(200)
+    const completedAt = new Date(Date.now() - 3_600_000).toISOString()
+    const historical: UsageEvent = { id: "historical", gatewayKeyId: "key", providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: completedAt, completedAt, status: 200, durationMs: 1, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 100, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: true }
+    await upsertBudget({ apiKeyId: "key", weeklyLimitMicros: 1_000_000, enabled: true })
+    await recordUsageEvent(historical)
+    const replacement = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
+    await repriceUsageForGroup(replacement.job!.id)
+
+    const event = (await listUsageEvents()).find((entry) => entry.id === historical.id)
+    expect(event).toMatchObject({ costMicros: 200, pricingConfidence: "exact", pricingGroupId: group.id, pricingVersionId: replacement.version.id })
+    expect((await listUsageRollups("hourly")).reduce((total, rollup) => total + rollup.costMicros, 0)).toBe(200)
+    expect((await getDashboardPayload({ preset: "all" })).summary.costMicros).toBe(200)
+    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === "key")?.spentMicros).toBe(200)
+  })
+
+  test("keeps requests without recorded usage unpriced during repricing", async () => {
+    const providerEntry = await upsertProvider(provider("cx"))
+    const model = await upsertModel(providerEntry.id, { id: "first", name: "First", gatewayModelId: "cx/gpt-5.6-sol", upstreamModel: "gpt-5.6-sol" })
+    const group = (await syncModelPricingGroups()).find((entry) => entry.name === "First")!
+    await savePricingVersion({ groupId: group.id, mode: "new", rates: { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
+    const completedAt = new Date(Date.now() - 3_600_000).toISOString()
+    await recordUsageEvent({ id: "missing-usage", gatewayKeyId: "key", providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: completedAt, completedAt, status: 200, durationMs: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: false })
+    const replacement = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
+    await repriceUsageForGroup(replacement.job!.id)
+
+    expect((await listUsageEvents()).find((event) => event.id === "missing-usage")).toMatchObject({ costMicros: 0, pricingConfidence: "unpriced", pricingVersionId: replacement.version.id })
   })
 })

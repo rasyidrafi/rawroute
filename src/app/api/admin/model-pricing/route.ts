@@ -1,7 +1,9 @@
+import { after } from "next/server"
+
 import { requireAdmin } from "@/lib/auth"
 import { upsertModelPricing } from "@/lib/analytics"
 import { findModelsDevCanonicalModel, searchModelsDevCanonicalModels } from "@/lib/models-dev"
-import { createPricingGroup, deletePricingGroup, getPricingAdminData, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
+import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricingJob, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
 import type { PricingCanonicalSource } from "@/lib/types"
 
@@ -56,6 +58,8 @@ export async function POST(request: Request) {
         return { id: typeof value.id === "string" ? value.id : crypto.randomUUID(), thresholdTokens: Number(value.thresholdTokens), inputMicrosPerMillion: Number(value.inputMicrosPerMillion), outputMicrosPerMillion: Number(value.outputMicrosPerMillion), cacheReadMicrosPerMillion: Number(value.cacheReadMicrosPerMillion), cacheCreationMicrosPerMillion: Number(value.cacheCreationMicrosPerMillion) }
       }) : []
       const result = await savePricingVersion({ groupId: String(body?.groupId || ""), rates, contextTiers, mode: body?.mode === "replace" ? "replace" : "new" })
+      const job = result.job
+      if (job) after(() => runPricingJob(job.id))
       return Response.json(result)
     }
   } catch (error) {

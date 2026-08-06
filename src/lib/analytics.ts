@@ -5,10 +5,10 @@ import { FieldPath, FieldValue, getFirestore, type Firestore } from "firebase-ad
 import { listApiKeys, listModels } from "@/lib/store"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
-import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
+import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
-import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, UsageEvent, UsageRollup } from "@/lib/types"
+import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 
 let firestore: Firestore | undefined
 const memoryEvents = new Map<string, UsageEvent>()
@@ -425,6 +425,23 @@ export async function listUsageEvents(from?: string, to?: string): Promise<Usage
     .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
   const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<", to || new Date().toISOString()).get()
   return snapshot.docs.map((document) => document.data() as UsageEvent).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+}
+
+async function listUsageEventsForModels(providerModelIds: Set<string>, gatewayModelIds: Set<string>) {
+  if (isMemory()) {
+    return [...memoryEvents.values()].filter((event) =>
+      Boolean(event.providerModelId && providerModelIds.has(event.providerModelId)) || gatewayModelIds.has(event.gatewayModelId),
+    ).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+  }
+
+  const queryChunks = <T,>(values: T[]) => Array.from({ length: Math.ceil(values.length / 30) }, (_, index) => values.slice(index * 30, index * 30 + 30))
+  const queries = [
+    ...queryChunks([...providerModelIds]).map((ids) => eventsRef().where("providerModelId", "in", ids).get()),
+    ...queryChunks([...gatewayModelIds]).map((ids) => eventsRef().where("gatewayModelId", "in", ids).get()),
+  ]
+  const snapshots = await Promise.all(queries)
+  return [...new Map(snapshots.flatMap((snapshot) => snapshot.docs).map((document) => [document.id, document.data() as UsageEvent])).values()]
+    .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
 }
 
 export async function listModelPricing() {
@@ -1071,127 +1088,145 @@ export function redactPublicDashboard(payload: DashboardPayload): DashboardPaylo
   return { ...payload, keys: payload.keys.map((key) => ({ ...key, id: publicKeyLabel(key.id), label: publicKeyLabel(key.id), maskedKey: "hidden" })) }
 }
 
-async function replaceUsageEvent(event: UsageEvent) {
-  if (isMemory()) {
-    memoryEvents.set(event.id, event)
-    return
-  }
-  await eventsRef().doc(event.id).set(event)
+type RepricedEvent = {
+  before: UsageEvent
+  after: UsageEvent
+  costDelta: number
+  pricedDelta: number
+  unpricedDelta: number
 }
 
-async function rebuildUsageRollups(events: UsageEvent[]) {
-  if (isMemory()) {
-    memoryRollups.clear()
-    for (const event of events) {
-      for (const granularity of ["hourly", "daily", "monthly"] as const) {
-        const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-        const id = rollupId(granularity, bucket, event)
-        const current = memoryRollups.get(id) || emptyRollup(id, granularity, bucket, event)
-        memoryRollups.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0), unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1), lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt, updatedAt: new Date().toISOString() })
-      }
-    }
-    return
+type RepricingBudgetContext = {
+  budgetIds: Set<string>
+  usageStart: string
+  windowEnd: string
+}
+
+function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingVersion): RepricedEvent {
+  const hasUsage = event.usageAvailable === true || (event.usageAvailable !== false && [event.inputTokens, event.outputTokens, event.cacheReadTokens, event.cacheCreationTokens].some((value) => value > 0))
+  const normalized = normalizeUsageMetrics(hasUsage ? { input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens } : undefined)
+  const calculated = calculateCostMicros(normalized, version)
+  const after: UsageEvent = {
+    ...event,
+    ...normalized,
+    costMicros: calculated.costMicros,
+    pricingConfidence: calculated.pricingConfidence,
+    pricingGroupId: groupId,
+    pricingVersionId: version.id,
   }
-  const existing = await rollupsRef().get()
-  for (let index = 0; index < existing.docs.length; index += 400) {
-    const batch = db().batch()
-    for (const document of existing.docs.slice(index, index + 400)) batch.delete(document.ref)
-    await batch.commit()
-  }
-  const aggregates = new Map<string, UsageRollup>()
-  for (const event of events) {
-    for (const granularity of ["hourly", "daily", "monthly"] as const) {
-      const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-      const id = rollupId(granularity, bucket, event)
-      const current = aggregates.get(id) || emptyRollup(id, granularity, bucket, event)
-      aggregates.set(id, { ...current, requests: current.requests + 1, inputTokens: current.inputTokens + event.inputTokens, outputTokens: current.outputTokens + event.outputTokens, cacheReadTokens: current.cacheReadTokens + event.cacheReadTokens, cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens, totalTokens: current.totalTokens + event.totalTokens, costMicros: current.costMicros + event.costMicros, pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0), unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1), lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt })
-    }
-  }
-  const entries = [...aggregates.values()]
-  for (let index = 0; index < entries.length; index += 400) {
-    const batch = db().batch()
-    for (const entry of entries.slice(index, index + 400)) batch.set(rollupsRef().doc(entry.id), entry)
-    await batch.commit()
+  if (calculated.pricingContextTier) after.pricingContextTier = calculated.pricingContextTier
+  else delete after.pricingContextTier
+  const wasPriced = event.pricingConfidence === "exact" ? 1 : 0
+  const isPriced = after.pricingConfidence === "exact" ? 1 : 0
+  return {
+    before: event,
+    after,
+    costDelta: after.costMicros - event.costMicros,
+    pricedDelta: isPriced - wasPriced,
+    unpricedDelta: wasPriced - isPriced,
   }
 }
 
-async function rebuildBudgetCounters(events: UsageEvent[]) {
+async function repricingBudgetContext(): Promise<RepricingBudgetContext | null> {
   const budgets = await listBudgets()
-  if (!budgets.length) return
+  if (!budgets.length) return null
   const window = await getBudgetWindow()
-  const usageStart = await budgetUsageStart(window)
-  const budgetIds = new Set(budgets.map((budget) => budget.apiKeyId))
-  const totals = new Map<string, { spentMicros: number; lastUsedAt: string }>()
-  for (const event of events) {
-    const completedAt = Date.parse(event.completedAt)
-    if (!budgetIds.has(event.gatewayKeyId) || event.status < 200 || event.status >= 300 || completedAt < Date.parse(usageStart) || completedAt >= Date.parse(window.end)) continue
-    const id = budgetCounterId(event.gatewayKeyId, usageStart)
-    const current = totals.get(id)
-    totals.set(id, { spentMicros: (current?.spentMicros || 0) + event.costMicros, lastUsedAt: !current || current.lastUsedAt < event.completedAt ? event.completedAt : current.lastUsedAt })
-  }
-  if (isMemory()) {
-    const currentWindowCounterIds = new Set(budgets.map((budget) => budgetCounterId(budget.apiKeyId, usageStart)))
-    for (const id of memoryBudgetCounters.keys()) {
-      if (totals.has(id) || currentWindowCounterIds.has(id)) memoryBudgetCounters.delete(id)
+  return { budgetIds: new Set(budgets.map((budget) => budget.apiKeyId)), usageStart: await budgetUsageStart(window), windowEnd: window.end }
+}
+
+function countsForRepricingBudget(event: UsageEvent, context: RepricingBudgetContext | null) {
+  if (!context || !context.budgetIds.has(event.gatewayKeyId) || event.status < 200 || event.status >= 300) return false
+  const completedAt = Date.parse(event.completedAt)
+  return completedAt >= Date.parse(context.usageStart) && completedAt < Date.parse(context.windowEnd)
+}
+
+async function applyRepricingChunk(updates: RepricedEvent[], budgetContext: RepricingBudgetContext | null) {
+  const now = new Date().toISOString()
+  const rollupDeltas = new Map<string, { granularity: UsageRollup["granularity"]; bucketStart: string; event: UsageEvent; cost: number; priced: number; unpriced: number }>()
+  const budgetDeltas = new Map<string, { event: UsageEvent; cost: number }>()
+
+  for (const update of updates) {
+    for (const granularity of usageRollupGranularities) {
+      const bucket = bucketStart(new Date(update.after.completedAt), granularity).toISOString()
+      const id = rollupId(granularity, bucket, update.after)
+      const current = rollupDeltas.get(id)
+      rollupDeltas.set(id, {
+        granularity,
+        bucketStart: bucket,
+        event: update.after,
+        cost: (current?.cost || 0) + update.costDelta,
+        priced: (current?.priced || 0) + update.pricedDelta,
+        unpriced: (current?.unpriced || 0) + update.unpricedDelta,
+      })
     }
-    for (const [id, value] of totals) memoryBudgetCounters.set(id, value)
+    if (update.costDelta && countsForRepricingBudget(update.after, budgetContext)) {
+      const id = budgetCounterId(update.after.gatewayKeyId, budgetContext!.usageStart)
+      const current = budgetDeltas.get(id)
+      budgetDeltas.set(id, { event: update.after, cost: (current?.cost || 0) + update.costDelta })
+    }
+  }
+
+  if (isMemory()) {
+    for (const update of updates) memoryEvents.set(update.after.id, update.after)
+    for (const [id, delta] of rollupDeltas) {
+      if (!delta.cost && !delta.priced && !delta.unpriced) continue
+      const current = memoryRollups.get(id) || emptyRollup(id, delta.granularity, delta.bucketStart, delta.event)
+      memoryRollups.set(id, { ...current, costMicros: current.costMicros + delta.cost, pricedRequests: (current.pricedRequests || 0) + delta.priced, unpricedRequests: (current.unpricedRequests || 0) + delta.unpriced, updatedAt: now })
+    }
+    for (const [id, delta] of budgetDeltas) {
+      const current = memoryBudgetCounters.get(id)
+      memoryBudgetCounters.set(id, { spentMicros: (current?.spentMicros || 0) + delta.cost, lastUsedAt: current?.lastUsedAt || delta.event.completedAt })
+    }
     return
   }
-  const existing = await budgetCountersRef().where("usageStartAt", "==", usageStart).get()
-  for (let index = 0; index < existing.docs.length; index += 400) {
-    const batch = db().batch()
-    for (const document of existing.docs.slice(index, index + 400)) batch.delete(document.ref)
-    await batch.commit()
+
+  const batch = db().batch()
+  for (const update of updates) batch.set(eventsRef().doc(update.after.id), update.after)
+  for (const [id, delta] of rollupDeltas) {
+    if (!delta.cost && !delta.priced && !delta.unpriced) continue
+    batch.set(rollupsRef().doc(id), {
+      id,
+      granularity: delta.granularity,
+      bucketStart: delta.bucketStart,
+      gatewayKeyId: delta.event.gatewayKeyId,
+      gatewayModelId: delta.event.gatewayModelId,
+      costMicros: FieldValue.increment(delta.cost),
+      pricedRequests: FieldValue.increment(delta.priced),
+      unpricedRequests: FieldValue.increment(delta.unpriced),
+      updatedAt: now,
+    }, { merge: true })
   }
-  const entries = [...totals.entries()]
-  for (let index = 0; index < entries.length; index += 400) {
-    const batch = db().batch()
-    for (const [id, value] of entries.slice(index, index + 400)) batch.set(budgetCountersRef().doc(id), { usageStartAt: usageStart, windowEnd: window.end, ...value, updatedAt: new Date().toISOString() })
-    await batch.commit()
+  for (const [id, delta] of budgetDeltas) {
+    batch.set(budgetCountersRef().doc(id), {
+      apiKeyId: delta.event.gatewayKeyId,
+      usageStartAt: budgetContext!.usageStart,
+      windowEnd: budgetContext!.windowEnd,
+      spentMicros: FieldValue.increment(delta.cost),
+      updatedAt: now,
+    }, { merge: true })
   }
+  await batch.commit()
 }
 
 export async function repriceUsageForGroup(jobId: string) {
   const job = await getPricingJob(jobId)
   if (!job) return
+  if (job.status === "completed") return job
   const group = (await listPricingGroups()).find((entry) => entry.id === job.groupId)
   if (!group) throw new Error("Pricing group not found for repricing job.")
+  const version = (await listPricingVersions(group.id)).find((entry) => entry.id === job.versionId)
+  if (!version) throw new Error("Pricing version not found for repricing job.")
   const modelIds = new Set(group.memberModelIds)
   const groupModels = await listModels()
   const gatewayModelIds = new Set(groupModels.filter((model) => modelIds.has(model.id)).map((model) => model.gatewayModelId))
-  const allEvents = await listUsageEvents()
-  const events = allEvents.filter((event) => (event.providerModelId && modelIds.has(event.providerModelId)) || gatewayModelIds.has(event.gatewayModelId))
+  const [events, budgetContext] = await Promise.all([listUsageEventsForModels(modelIds, gatewayModelIds), repricingBudgetContext()])
   await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() })
-  const updatedEvents = new Map<string, UsageEvent>()
   for (let index = 0; index < events.length; index += 100) {
     const chunk = events.slice(index, index + 100)
-    for (const event of chunk) {
-      const pricing = await getModernPricingForModelAt({ gatewayModelId: event.gatewayModelId, providerModelId: event.providerModelId }, new Date(event.completedAt))
-      const normalized = normalizeUsageMetrics({ input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens })
-      const calculated = calculateCostMicros(normalized, pricing)
-      const updatedEvent: UsageEvent = {
-        ...event,
-        ...normalized,
-        costMicros: calculated.costMicros,
-        pricingConfidence: calculated.pricingConfidence,
-        ...(calculated.pricingContextTier ? { pricingContextTier: calculated.pricingContextTier } : {}),
-      }
-      if (pricing) {
-        updatedEvent.pricingGroupId = pricing.pricingGroupId
-        updatedEvent.pricingVersionId = pricing.pricingVersionId
-      } else {
-        delete updatedEvent.pricingGroupId
-        delete updatedEvent.pricingVersionId
-      }
-      await replaceUsageEvent(updatedEvent)
-      updatedEvents.set(updatedEvent.id, updatedEvent)
-    }
+    await applyRepricingChunk(chunk.map((event) => repriceEvent(event, group.id, version)), budgetContext)
     await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) })
   }
-  const repricedEvents = allEvents.map((event) => updatedEvents.get(event.id) || event)
-  await rebuildUsageRollups(repricedEvents)
-  await rebuildBudgetCounters(repricedEvents)
-  dashboardCache.clear()
+  invalidateBudgetReadCaches()
   return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() })
 }
 
