@@ -128,6 +128,35 @@ describe.sequential("usage analytics", () => {
     expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
   })
 
+  test("does not add daily and hourly rollups for the same local day", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-06T07:00:00.000Z"))
+    try {
+      const key = await createApiKey("Hybrid budget")
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-03T00:00:00.000Z", end: "2026-08-07T00:00:00.000Z" })
+      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+
+      const memoryRoot = (globalThis as typeof globalThis & { __rawrouteAnalyticsMemory?: Map<string, { rollups: Map<string, UsageEvent & Record<string, unknown>> }> }).__rawrouteAnalyticsMemory!
+      const state = memoryRoot.get("default")!
+      const rollup = (id: string, granularity: "daily" | "hourly", bucketStart: string, costMicros: number, requests: number) => ({
+        id, granularity, bucketStart, gatewayKeyId: key.id, gatewayModelId: "hybrid/model", requests,
+        inputTokens: requests, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: requests,
+        costMicros, pricedRequests: requests, unpricedRequests: 0, lastEventAt: bucketStart, updatedAt: bucketStart,
+      })
+      state.rollups.set("daily:completed", rollup("daily:completed", "daily", "2026-08-04T17:00:00.000Z", 100, 10) as never)
+      state.rollups.set("hourly:completed", rollup("hourly:completed", "hourly", "2026-08-05T00:00:00.000Z", 900, 90) as never)
+      state.rollups.set("hourly:active", rollup("hourly:active", "hourly", "2026-08-06T00:00:00.000Z", 50, 5) as never)
+
+      const budget = (await getBudgetRows()).find((row) => row.apiKeyId === key.id)
+      const dashboard = (await getDashboardPayload({ preset: "budget" })).keys.find((row) => row.label === "Hybrid budget")
+      expect(budget?.spentMicros).toBe(150)
+      expect(dashboard?.costMicros).toBe(150)
+      expect(dashboard?.budget?.spentMicros).toBe(150)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test("keeps complete preset trend axes and supports weekly grouping", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))

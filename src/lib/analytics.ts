@@ -775,6 +775,142 @@ function addBudgetEvent(map: Map<string, BudgetUsageValue>, event: UsageEvent) {
   map.set(event.gatewayKeyId, { spentMicros: current.spentMicros + Number(event.costMicros || 0), lastUsedAt })
 }
 
+interface HybridUsageData {
+  rollups: UsageRollup[]
+  boundaryEvents: UsageEvent[]
+}
+
+function rollupDayStart(rollup: UsageRollup) {
+  return bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
+}
+
+function rollupIsFullyInside(rollup: UsageRollup, from: Date, to: Date) {
+  const start = new Date(rollup.bucketStart)
+  const end = nextBucketStart(start, rollup.granularity)
+  return start >= from && end <= to
+}
+
+function mergeUsageRanges(ranges: Array<[Date, Date]>) {
+  return ranges
+    .filter(([from, to]) => from < to)
+    .sort(([left], [right]) => left.getTime() - right.getTime())
+    .reduce<Array<[Date, Date]>>((merged, current) => {
+      const previous = merged.at(-1)
+      if (previous && current[0] <= previous[1]) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
+      else merged.push(current)
+      return merged
+    }, [])
+}
+
+/**
+ * Select one rollup resolution for each local calendar day. Daily and hourly
+ * rollups are both retained for fast charts, but they are not additive: a
+ * live day can have both resolutions for the same traffic. Completed days use
+ * daily rollups; the active day uses hourly rollups. Partial boundary buckets
+ * are replaced with metadata-only usage events when those events exist.
+ */
+async function getHybridUsageData(from: Date, to: Date): Promise<HybridUsageData> {
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || to <= from) return { rollups: [], boundaryEvents: [] }
+
+  const now = new Date()
+  const activeDayStart = startOfZonedDay(now)
+  const dailyFrom = bucketStart(from, "daily").toISOString()
+  const dailyTo = nextBucketStart(to, "daily").toISOString()
+  const hourlyFrom = bucketStart(from, "hourly").toISOString()
+  const hourlyTo = nextBucketStart(to, "hourly").toISOString()
+  const [daily, hourly] = await Promise.all([
+    listUsageRollups("daily", dailyFrom, dailyTo),
+    listUsageRollups("hourly", hourlyFrom, hourlyTo),
+  ])
+
+  const dailyByDay = new Map<string, UsageRollup[]>()
+  const hourlyByDay = new Map<string, UsageRollup[]>()
+  for (const rollup of daily) {
+    const day = rollupDayStart(rollup)
+    const rows = dailyByDay.get(day) || []
+    rows.push(rollup)
+    dailyByDay.set(day, rows)
+  }
+  for (const rollup of hourly) {
+    const day = rollupDayStart(rollup)
+    const rows = hourlyByDay.get(day) || []
+    rows.push(rollup)
+    hourlyByDay.set(day, rows)
+  }
+
+  const selected: UsageRollup[] = []
+  const boundaryRanges: Array<[Date, Date]> = []
+  const firstDay = bucketStart(from, "daily")
+  const lastDay = bucketStart(new Date(to.getTime() - 1), "daily")
+  for (let day = firstDay; day <= lastDay; day = nextBucketStart(day, "daily")) {
+    const dayEnd = nextBucketStart(day, "daily")
+    const overlaps = dayEnd > from && day < to
+    if (!overlaps) continue
+
+    const isActiveDay = day <= activeDayStart && activeDayStart < dayEnd
+    const fullyInside = day >= from && dayEnd <= to
+    let resolution: UsageRollup["granularity"] = isActiveDay || !fullyInside ? "hourly" : "daily"
+    let candidates = resolution === "hourly" ? hourlyByDay.get(day.toISOString()) || [] : dailyByDay.get(day.toISOString()) || []
+
+    // A historical import may contain daily data without hourly data. Keep
+    // that data usable for the active day rather than reporting zero, while
+    // still refusing to use a full daily bucket for a partial boundary day.
+    if (!candidates.length && resolution === "hourly" && isActiveDay) {
+      resolution = "daily"
+      candidates = dailyByDay.get(day.toISOString()) || []
+    }
+    if (!candidates.length && resolution === "daily") {
+      resolution = "hourly"
+      candidates = hourlyByDay.get(day.toISOString()) || []
+    }
+
+    const effectiveTo = isActiveDay ? new Date(Math.min(to.getTime(), now.getTime())) : to
+    for (const rollup of candidates) {
+      if (rollupIsFullyInside(rollup, from, effectiveTo)) selected.push(rollup)
+    }
+
+    if (resolution === "hourly") {
+      if (day < from && bucketStart(from, "hourly") < from) {
+        const firstHourEnd = nextBucketStart(bucketStart(from, "hourly"), "hourly")
+        boundaryRanges.push([from, new Date(Math.min(to.getTime(), firstHourEnd.getTime()))])
+      }
+      if (dayEnd > to && bucketStart(to, "hourly") < to) {
+        const lastHourStart = bucketStart(to, "hourly")
+        boundaryRanges.push([new Date(Math.max(from.getTime(), lastHourStart.getTime())), to])
+      }
+      if (isActiveDay) {
+        const activeTo = new Date(Math.min(to.getTime(), now.getTime()))
+        const activeHourStart = bucketStart(activeTo, "hourly")
+        if (activeHourStart < activeTo) boundaryRanges.push([activeHourStart, activeTo])
+      }
+    } else if (!fullyInside) {
+      boundaryRanges.push([new Date(Math.max(from.getTime(), day.getTime())), new Date(Math.min(to.getTime(), dayEnd.getTime()))])
+    }
+  }
+
+  const mergedRanges = mergeUsageRanges(boundaryRanges)
+  const boundaryResults = await Promise.allSettled(mergedRanges.map(([rangeFrom, rangeTo]) => listUsageEvents(rangeFrom.toISOString(), rangeTo.toISOString())))
+  const boundaryEvents = [...new Map(
+    boundaryResults.flatMap((result) => result.status === "fulfilled" ? result.value : []).map((event) => [event.id, event]),
+  ).values()]
+  const selectedIds = new Set(selected.map((rollup) => rollup.id))
+  for (let index = 0; index < mergedRanges.length; index++) {
+    const [rangeFrom, rangeTo] = mergedRanges[index]
+    const result = boundaryResults[index]
+    const rangeEndsAtNow = rangeTo.getTime() === Math.min(to.getTime(), now.getTime())
+    if (!rangeEndsAtNow || result.status !== "fulfilled" || result.value.length) continue
+    for (const rollup of hourly) {
+      const rollupStart = new Date(rollup.bucketStart)
+      const rollupEnd = nextBucketStart(rollupStart, "hourly")
+      if (rollupStart < rangeTo && rollupEnd > rangeFrom && !selectedIds.has(rollup.id)) {
+        selected.push(rollup)
+        selectedIds.add(rollup.id)
+      }
+    }
+  }
+  return { rollups: selected, boundaryEvents }
+}
+
 async function getBudgetUsage(window: BudgetWindow): Promise<Map<string, BudgetUsageValue>> {
   const usageStartAt = await budgetUsageStart(window)
   const cacheId = scopedKey(`${usageStartAt}:${window.end}`)
@@ -789,83 +925,10 @@ async function getBudgetUsage(window: BudgetWindow): Promise<Map<string, BudgetU
   const end = new Date(window.end)
   const promise = (async () => {
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return new Map<string, BudgetUsageValue>()
-
-    const hourlyFrom = bucketStart(start, "hourly").toISOString()
-    const hourlyTo = nextBucketStart(end, "hourly").toISOString()
-    const dailyFrom = bucketStart(start, "daily").toISOString()
-    const dailyTo = nextBucketStart(end, "daily").toISOString()
-    const [hourly, daily] = await Promise.all([
-      listUsageRollups("hourly", hourlyFrom, hourlyTo),
-      listUsageRollups("daily", dailyFrom, dailyTo),
-    ])
-
-    const hourlyBoundary = dashboardBoundaryRanges(start, end, "hourly")
-    // Backfilled CCS data may have daily rollups but no usage-event documents.
-    // Keep a dimension-level fallback for those boundary buckets so an empty
-    // event query does not erase historical spend.
-    const dailyBoundaryRanges: Array<[Date, Date]> = []
+    const data = await getHybridUsageData(start, end)
     const result = new Map<string, BudgetUsageValue>()
-    const hourlyDays = new Set<string>()
-    for (const rollup of hourly) {
-      const bucketTime = Date.parse(rollup.bucketStart)
-      if (!Number.isFinite(bucketTime)) continue
-      const bucketStartDate = new Date(bucketTime)
-      const overlapsWindow = nextBucketStart(bucketStartDate, "hourly") > start && bucketStartDate < end
-      if (rollup.gatewayKeyId && overlapsWindow) hourlyDays.add(`${rollup.gatewayKeyId}:${bucketStart(bucketStartDate, "daily").toISOString()}`)
-    }
-
-    // Historical backfills may intentionally contain daily rollups without
-    // hourly documents. Use those days only when hourly data does not exist
-    // for the same key/day, preventing daily+hourly double counting.
-    for (const rollup of daily) {
-      const bucketTime = Date.parse(rollup.bucketStart)
-      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
-      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
-      if (hourlyDays.has(dayKey)) continue
-      const dayStart = new Date(bucketTime)
-      const dayEnd = nextBucketStart(dayStart, "daily")
-      if (dayStart >= start && dayEnd <= end) addBudgetUsage(result, rollup)
-      else dailyBoundaryRanges.push([new Date(Math.max(start.getTime(), dayStart.getTime())), new Date(Math.min(end.getTime(), dayEnd.getTime()))])
-    }
-
-    const boundaryRanges = [...hourlyBoundary.ranges, ...dailyBoundaryRanges]
-      .sort((a, b) => a[0].getTime() - b[0].getTime())
-      .reduce<Array<[Date, Date]>>((ranges, current) => {
-        const previous = ranges[ranges.length - 1]
-        if (previous && current[0] <= previous[1]) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
-        else ranges.push(current)
-        return ranges
-      }, [])
-    const boundaryResults = await Promise.allSettled(boundaryRanges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
-    const boundaryDataAvailable = boundaryResults.every((entry) => entry.status === "fulfilled")
-    const boundaryEvents = boundaryResults.flatMap((entry) => entry.status === "fulfilled" ? entry.value : [])
-    const hourlyEventKeys = new Set(boundaryEvents.map((event) => `${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(new Date(event.completedAt), "hourly").toISOString()}`))
-    const dailyEventKeys = new Set(boundaryEvents.map((event) => `${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(new Date(event.completedAt), "daily").toISOString()}`))
-
-    for (const rollup of hourly) {
-      const bucketTime = Date.parse(rollup.bucketStart)
-      if (!Number.isFinite(bucketTime) || bucketTime < start.getTime() || bucketTime >= end.getTime()) continue
-      const hasBoundaryEvents = hourlyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${rollup.bucketStart}`)
-      if (hourlyBoundary.partialBucketStarts.has(rollup.bucketStart) && boundaryDataAvailable && hasBoundaryEvents) continue
-      addBudgetUsage(result, rollup)
-    }
-
-    for (const rollup of daily) {
-      const bucketTime = Date.parse(rollup.bucketStart)
-      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
-      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
-      if (hourlyDays.has(dayKey)) continue
-      const dayStart = new Date(bucketTime)
-      const dayEnd = nextBucketStart(dayStart, "daily")
-      if (dayStart >= start && dayEnd <= end) continue
-      const hasBoundaryEvents = dailyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${bucketStart(dayStart, "daily").toISOString()}`)
-      if (boundaryDataAvailable && hasBoundaryEvents) continue
-      addBudgetUsage(result, rollup)
-    }
-
-    if (boundaryDataAvailable) {
-      for (const event of boundaryEvents) addBudgetEvent(result, event)
-    }
+    for (const rollup of data.rollups) addBudgetUsage(result, rollup)
+    for (const event of data.boundaryEvents) addBudgetEvent(result, event)
     return result
   })().then((value) => {
     if (generation === budgetCacheGeneration) budgetUsageCache.set(cacheId, { value, expiresAt: Date.now() + dashboardCacheTtlMs })
@@ -1048,15 +1111,20 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const toExclusive = new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1))
   const boundary = dashboardBoundaryRanges(range.from, toExclusive, storageGranularity)
 
-  const rollupsPromise = listUsageRollups(
-    storageGranularity as UsageRollup["granularity"],
-    range.from.toISOString(),
-    toExclusive.toISOString(),
-  )
-  const boundaryEventsPromise = boundary.ranges.length
-    ? Promise.all(boundary.ranges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
-      .then((batches) => [...new Map(batches.flat().map((event) => [event.id, event])).values()])
-    : Promise.resolve([] as UsageEvent[])
+  const hybridUsagePromise = query.preset === "budget" ? getHybridUsageData(range.from, range.to) : undefined
+  const rollupsPromise = hybridUsagePromise
+    ? hybridUsagePromise.then((data) => data.rollups)
+    : listUsageRollups(
+      storageGranularity as UsageRollup["granularity"],
+      range.from.toISOString(),
+      toExclusive.toISOString(),
+    )
+  const boundaryEventsPromise = hybridUsagePromise
+    ? hybridUsagePromise.then((data) => data.boundaryEvents)
+    : boundary.ranges.length
+      ? Promise.all(boundary.ranges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
+        .then((batches) => [...new Map(batches.flat().map((event) => [event.id, event])).values()])
+      : Promise.resolve([] as UsageEvent[])
   const keysPromise = listApiKeys()
   const budgetDataPromise = budgetWindowPromise.then((window) => loadBudgetRows([], window))
   const [rollupsResult, boundaryEventsResult, keysResult, budgetResult] = await Promise.allSettled([
@@ -1084,7 +1152,9 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const missingDimensionEvents = missingDimensionData
     ? missingDimensionEventsResult.flatMap((result) => result.status === "fulfilled" ? result.value : [])
     : []
-  const replacementEvents = [...new Map([...boundaryEvents, ...missingDimensionEvents].map((event) => [event.id, event])).values()]
+  const replacementEvents = hybridUsagePromise
+    ? boundaryEvents
+    : [...new Map([...boundaryEvents, ...missingDimensionEvents].map((event) => [event.id, event])).values()]
   const keys = keysResult.status === "fulfilled" ? keysResult.value : []
   const budgetRows = budgetResult.status === "fulfilled" ? budgetResult.value.rows : []
   const budgetWindow = budgetResult.status === "fulfilled" ? budgetResult.value.window : undefined
@@ -1101,9 +1171,11 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   let pricedRequests = 0
   let lastEventAt: string | null = null
 
-  const rollupsToAggregate = exactBoundaryData
-    ? rollups.filter((rollup) => !boundary.partialBucketStarts.has(rollup.bucketStart) && (!missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart)))
-    : rollups.filter((rollup) => !missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart))
+  const rollupsToAggregate = hybridUsagePromise
+    ? rollups
+    : exactBoundaryData
+      ? rollups.filter((rollup) => !boundary.partialBucketStarts.has(rollup.bucketStart) && (!missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart)))
+      : rollups.filter((rollup) => !missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart))
   const compactHourLabels = (query.preset === "today" || query.preset === "yesterday") && trendGranularity === "hourly"
   for (const rollup of [...rollupsToAggregate, ...replacementEvents.map((event) => rollupFromEvent(event, storageGranularity as UsageRollup["granularity"]))]) {
     requestCount += rollup.requests
