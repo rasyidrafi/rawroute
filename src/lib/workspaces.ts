@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 
-import { _deleteMemoryWorkspace, apiKeyValueHash, collectionPrefix, getFirestoreInstance, isMemoryBackend } from "@/lib/store"
+import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getFirestoreInstance, isMemoryBackend } from "@/lib/store"
 import type { Workspace } from "@/lib/types"
 import { DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME } from "@/lib/workspace-context"
 
@@ -164,6 +164,7 @@ export async function deleteWorkspace(workspaceId: string, confirmation: unknown
   }
   await getFirestoreInstance().recursiveDelete(workspaceRef(workspaceId))
   await workspaceNameIndexesRef().doc(nameHash(workspace.name)).delete()
+  _invalidateApiKeyLookupCache()
 }
 
 export async function resetWorkspacesForTests() {

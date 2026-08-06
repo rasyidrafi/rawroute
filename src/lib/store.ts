@@ -66,6 +66,7 @@ interface IndexedApiKey { workspaceId: string; apiKey: ApiKey }
 const apiKeyLookupCache = new Map<string, { value: IndexedApiKey | null; expiresAt: number }>()
 const apiKeyLookupInflight = new Map<string, Promise<IndexedApiKey | undefined>>()
 const maximumApiKeyLookupEntries = 512
+let apiKeyLookupGeneration = 0
 let metaGeneration = 0
 
 const documentedAdminPassword = "change-me-now"
@@ -421,6 +422,12 @@ function cacheApiKeyLookup(hash: string, value: IndexedApiKey | undefined) {
   apiKeyLookupCache.set(hash, { value: value || null, expiresAt: Date.now() + (value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs) })
 }
 
+function invalidateApiKeyLookupCache() {
+  apiKeyLookupGeneration += 1
+  apiKeyLookupCache.clear()
+  apiKeyLookupInflight.clear()
+}
+
 function invalidateCompatibilityCache() {
   const state = workspaceCacheState()
   state.generation += 1
@@ -438,8 +445,7 @@ function invalidateCompatibilityCache() {
   clearReadCacheMap(state.providerApiKeysCache)
   clearReadCacheMap(state.providerModelsCache)
   state.apiKeyHashIndex = undefined
-  apiKeyLookupCache.clear()
-  apiKeyLookupInflight.clear()
+  invalidateApiKeyLookupCache()
 }
 
 function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { originalId?: string }) {
@@ -1030,22 +1036,23 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
 
   const existing = apiKeyLookupInflight.get(hash)
   if (existing) return existing
+  const generation = apiKeyLookupGeneration
   const promise = (async () => {
     const index = await apiKeyIndexRef(hash).get()
     const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
     const apiKeyId = indexData?.apiKeyId
     if (!apiKeyId) {
-      cacheApiKeyLookup(hash, undefined)
+      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, undefined)
       return undefined
     }
     const workspaceId = indexData.workspaceId || DEFAULT_WORKSPACE_ID
     const snapshot = await runInWorkspace({ id: workspaceId, storageMode: workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped" }, () => apiKeyRef(apiKeyId).get())
     const apiKey = snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
     const value = apiKey ? { workspaceId, apiKey } : undefined
-    cacheApiKeyLookup(hash, value)
-    if (apiKey) {
+    if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+    if (apiKey && generation === apiKeyLookupGeneration) {
       void runInWorkspace({ id: workspaceId, storageMode: workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped" }, () => apiKeyIndexRef(hash).set(apiKeyIndexDocument(apiKey), { merge: true })).catch(() => undefined)
-    } else {
+    } else if (!apiKey && generation === apiKeyLookupGeneration) {
       void apiKeyIndexRef(hash).delete().catch(() => undefined)
     }
     return value
@@ -1841,8 +1848,7 @@ export function _memorySnapshot() {
 export function _resetMemoryBackend() {
   globalThis.__rawrouteMemoryStore = { states: new Map() }
   workspaceCacheStates.clear()
-  apiKeyLookupCache.clear()
-  apiKeyLookupInflight.clear()
+  invalidateApiKeyLookupCache()
   metaCache = undefined
   metaReadPromise = undefined
 }
@@ -1851,6 +1857,9 @@ export function _deleteMemoryWorkspace(workspaceId: string) {
   if (workspaceId === DEFAULT_WORKSPACE_ID) throw new Error("Default workspace cannot be deleted.")
   memoryRoot().states.delete(workspaceId)
   workspaceCacheStates.delete(workspaceId)
-  apiKeyLookupCache.clear()
-  apiKeyLookupInflight.clear()
+  invalidateApiKeyLookupCache()
+}
+
+export function _invalidateApiKeyLookupCache() {
+  invalidateApiKeyLookupCache()
 }

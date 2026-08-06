@@ -12,6 +12,6 @@ export async function GET(request: Request) {
     const data = await readCatalogData()
     return Response.json({
       data: catalogLiteLlmModelInfo(data.providers, data.models, data.aliases),
-    }, { headers: { "cache-control": "private, max-age=5, stale-while-revalidate=30" } })
+    }, { headers: { "cache-control": "private, no-store" } })
   })
 }

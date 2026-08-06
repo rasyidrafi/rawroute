@@ -13,6 +13,6 @@ export async function GET(request: Request) {
     return Response.json({
       object: "list",
       data: catalogModels(data.providers, data.models, data.aliases),
-    }, { headers: { "cache-control": "private, max-age=5, stale-while-revalidate=30" } })
+    }, { headers: { "cache-control": "private, no-store" } })
   })
 }
