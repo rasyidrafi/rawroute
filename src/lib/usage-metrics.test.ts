@@ -15,6 +15,14 @@ describe("usage metric extraction", () => {
     })).toEqual({ input: 139054, output: 2719, cached: 137728 })
   })
 
+  test("reads usage beside a Responses response envelope", () => {
+    expect(extractUsageMetrics({
+      type: "response.completed",
+      response: { id: "resp_1" },
+      usage: { input_tokens: 120, output_tokens: 8 },
+    })).toEqual({ input: 120, output: 8 })
+  })
+
   test("reads OpenAI-compatible and OpenRouter chat usage", () => {
     expect(extractUsageMetrics({
       usage: {

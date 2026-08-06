@@ -272,8 +272,7 @@ export async function refreshCodexAccount(account: ProviderApiKey, force = false
 }
 
 export async function listCodexAccounts() {
-  const provider = (await listProviders()).find((entry) => entry.prefix === CODEX_PROVIDER_PREFIX)
-  if (!provider) return { provider: undefined, accounts: [] as ProviderApiKey[] }
+  const provider = await ensureCodexProvider()
   const accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth")
   return { provider, accounts }
 }

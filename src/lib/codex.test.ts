@@ -3,13 +3,17 @@ import { describe, expect, test } from "vitest"
 import {
   buildCodexAuthorizationUrl,
   codexDeviceRedirectUri,
+  ensureCodexProvider,
   generatePkce,
+  listCodexAccounts,
   pollCodexDeviceCode,
   refreshCodexToken,
   requestCodexDeviceCode,
   saveCodexAccount,
 } from "@/lib/codex"
-import { _resetMemoryBackend, readData } from "@/lib/store"
+import { _resetMemoryBackend, listProviders, readData } from "@/lib/store"
+import { runInWorkspace } from "@/lib/workspace-context"
+import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/lib/workspaces"
 
 describe("Codex OAuth", () => {
   test("generates standards-compliant PKCE authorization parameters", () => {
@@ -62,8 +66,24 @@ describe("Codex OAuth", () => {
     _resetMemoryBackend()
   })
 
+  test("keeps the dedicated Codex provider isolated per workspace", async () => {
+    process.env.STORAGE_BACKEND = "memory"
+    _resetMemoryBackend()
+    await resetWorkspacesForTests()
+    const defaultWorkspace = (await listWorkspaces()).find((workspace) => workspace.isDefault)!
+    const alternateWorkspace = await createWorkspace("Alternate")
+
+    const defaultProvider = await runInWorkspace(defaultWorkspace, () => ensureCodexProvider())
+    const alternateProvider = await runInWorkspace(alternateWorkspace, () => ensureCodexProvider())
+
+    expect(alternateProvider.id).not.toBe(defaultProvider.id)
+    expect((await runInWorkspace(defaultWorkspace, () => listProviders())).map((provider) => provider.id)).toEqual([defaultProvider.id])
+    expect((await runInWorkspace(alternateWorkspace, () => listProviders())).map((provider) => provider.id)).toEqual([alternateProvider.id])
+    expect((await runInWorkspace(alternateWorkspace, () => listCodexAccounts())).provider?.id).toBe(alternateProvider.id)
+    _resetMemoryBackend()
+  })
+
   test("uses the auth issuer device callback for code exchange", () => {
     expect(codexDeviceRedirectUri()).toBe("https://auth.openai.com/deviceauth/callback")
   })
 })
-

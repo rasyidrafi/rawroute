@@ -398,6 +398,24 @@ describe("proxy request", () => {
     expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms IN:139054 \(CACHE ↻137728\) OUT:2719$/)
   })
 
+  test("tracks usage when a streamed Responses provider omits content-type", async () => {
+    clearLogs()
+    globalThis.fetch = vi.fn(async () => new Response([
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"usage":{"input_tokens":13,"output_tokens":5}}}',
+      "",
+    ].join("\n\n"))) as unknown as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", stream: true }),
+    }), "openai-responses")
+    await response.text()
+
+    expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms IN:13 OUT:5$/)
+  })
+
   test("aborts the upstream request when the downstream stream is cancelled", async () => {
     let upstreamSignal: AbortSignal | undefined
     let upstreamCancelled = false

@@ -41,6 +41,10 @@ export function extractUsageMetrics(payload: Record<string, unknown>): UsageMetr
   const metadata = objectValue(payload.metadata)
   const sources = [
     objectValue(response.usage),
+    // Some Responses-compatible gateways attach usage beside the response
+    // envelope (for example: { response: {...}, usage: {...} }). Keep this
+    // fallback even when payload.response exists.
+    objectValue(payload.usage),
     objectValue(message?.usage),
     objectValue(meta?.billed_units),
     objectValue(response.usageMetadata),
