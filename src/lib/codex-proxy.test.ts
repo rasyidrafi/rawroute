@@ -26,6 +26,7 @@ describe("Codex native request adapter", () => {
       input: "hello",
       temperature: 0.2,
       max_output_tokens: 10,
+      max_tokens: 10,
       previous_response_id: "resp_1",
       tools: [],
     }, "gpt-5.4-codex", "session-1")).toEqual({

@@ -1,6 +1,7 @@
 const removedFields = [
   "max_output_tokens",
   "max_completion_tokens",
+  "max_tokens",
   "temperature",
   "top_p",
   "truncation",
@@ -74,4 +75,3 @@ export function buildCodexHeaders(requestHeaders: Headers, providerHeaders: Read
   }
   return headers
 }
-
