@@ -546,7 +546,11 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
     if (isCodexProvider) payload = normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey)
     else payload.model = model.upstreamModel
     const streamOptions = objectValue(payload.stream_options)
-    if (modelProtocol === "openai-chat" && payload.stream === true && streamOptions) streamOptions.include_usage = true
+    if (modelProtocol === "openai-chat" && payload.stream === true) {
+      const options = streamOptions || {}
+      options.include_usage = true
+      payload.stream_options = options
+    }
     const reasoningEffort = extractReasoningEffort(payload)
     const validatedProviderHeaders = validateProviderHeaders(provider.headers)
     let headers = isCodexOAuth

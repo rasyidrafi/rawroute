@@ -193,7 +193,7 @@ describe("proxy request", () => {
     expect(upstream).not.toHaveBeenCalled()
   })
 
-  test("requests usage in streamed OpenAI-compatible chat responses", async () => {
+  test("requests usage in streamed OpenAI-compatible chat responses and preserves stream options", async () => {
     await updateData((data) => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.protocol = "openai-chat"
@@ -213,7 +213,7 @@ describe("proxy request", () => {
     expect(capturedBody?.stream_options).toEqual({ continuous_usage_stats: true, include_usage: true })
   })
 
-  test("does not inject stream options into providers that may not support them", async () => {
+  test("creates stream options for streamed OpenAI-compatible chat responses", async () => {
     await updateData((data) => {
       const provider = data.providers.find((entry) => entry.prefix === "cx")
       if (provider) provider.protocol = "openai-chat"
@@ -228,6 +228,42 @@ describe("proxy request", () => {
       method: "POST",
       headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
       body: JSON.stringify({ model: "cx/codex", messages: [], stream: true }),
+    }), "openai-chat")
+
+    expect(capturedBody?.stream_options).toEqual({ include_usage: true })
+  })
+
+  test("does not inject stream options into unsupported protocols", async () => {
+    let capturedBody: Record<string, unknown> | undefined
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } })
+    }) as unknown as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", stream: true }),
+    }), "openai-responses")
+
+    expect(capturedBody?.stream_options).toBeUndefined()
+  })
+
+  test("does not inject stream options into non-streaming chat requests", async () => {
+    await updateData((data) => {
+      const provider = data.providers.find((entry) => entry.prefix === "cx")
+      if (provider) provider.protocol = "openai-chat"
+    })
+    let capturedBody: Record<string, unknown> | undefined
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body))
+      return Response.json({ id: "chat_completion" })
+    }) as unknown as typeof fetch
+
+    await proxyRequest(new Request("http://gateway/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", messages: [], stream: false }),
     }), "openai-chat")
 
     expect(capturedBody?.stream_options).toBeUndefined()
