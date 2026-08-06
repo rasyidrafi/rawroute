@@ -20,4 +20,6 @@ test("Codex OAuth accounts expose dynamically detected usage limits", () => {
   expect(detail).toContain("Usage Limits")
   expect(detail).toContain("<CodexQuotaTableCell")
   expect(detail).not.toContain("rowSpan")
+  expect(detail).toContain('apiDelete(`/api/admin/oauth-providers/${account.id}`)')
+  expect(detail).toContain('title={`Remove ${apiKey.name}?`}')
 })

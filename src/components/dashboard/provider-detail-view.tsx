@@ -97,6 +97,22 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     }
   }
 
+  async function deleteCodexAccount(account: ProviderApiKey) {
+    const pendingKey = `delete-codex-account:${account.id}`
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      await apiDelete(`/api/admin/oauth-providers/${account.id}`)
+      await Promise.all([mutate(), globalMutate("/api/admin/providers"), globalMutate("/api/admin/oauth-providers/usage")])
+      toast.success("Codex account removed")
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to remove Codex account")
+      return false
+    } finally {
+      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
+    }
+  }
+
   async function saveProvider(provider: Partial<Provider> & { originalId?: string }) {
     setPending((current) => new Set(current).add("save-provider"))
     try {
@@ -303,7 +319,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     {isOAuthProvider && <TableCell>{usageLoading && !usageData ? "…" : usageData?.accounts[apiKey.id]?.unusedResetCredits ?? "N/A"}</TableCell>}
                     {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? formatAppDateTime(apiKey.expiresAt) : "Unknown"}</TableCell>}
                     <TableCell className="align-middle text-xs text-muted-foreground">{formatAppDate(apiKey.createdAt)}</TableCell>
-                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 9 : 6} />}
