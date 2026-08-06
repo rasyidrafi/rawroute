@@ -5,7 +5,7 @@ import { deleteProviderApiKey, upsertProviderApiKey } from "@/lib/store"
 
 
 export async function PATCH(request: Request, context: { params: Promise<{ accountId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const { accountId } = await context.params
   const body = await request.json().catch(() => null) as { enabled?: unknown; name?: unknown; rpmLimit?: unknown; maxConcurrency?: unknown } | null
   const result = await listCodexAccounts()
@@ -39,7 +39,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ accountId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const { accountId } = await context.params
   const result = await listCodexAccounts()
   if (!result.provider || !result.accounts.some((entry) => entry.id === accountId)) return jsonError("Codex account not found.", 404)

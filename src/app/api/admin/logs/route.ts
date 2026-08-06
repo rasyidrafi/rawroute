@@ -4,7 +4,7 @@ import { clearLogs, logVersion, readLogs, writeLog } from "@/lib/logger"
 
 
 async function authorize() {
-  try { await requireAdmin(); return true } catch { return false }
+  try { (await requireAdmin())(); return true } catch { return false }
 }
 
 export async function GET(request: Request) {

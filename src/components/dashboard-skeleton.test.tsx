@@ -7,12 +7,14 @@ import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 test("dashboard loading state preserves the dashboard navigation shell", () => {
   const markup = renderToStaticMarkup(<DashboardContentSkeleton />)
   const layout = readFileSync(new URL("../app/dashboard/layout.tsx", import.meta.url), "utf8")
+  const shell = readFileSync(new URL("../components/dashboard/dashboard-shell.tsx", import.meta.url), "utf8")
 
   expect(markup).toContain('data-slot="dashboard-content-skeleton"')
   expect(markup).not.toContain("min-h-svh")
   expect(markup).not.toContain("h-9 w-28")
-  expect(layout).toContain('<AppSidebar variant="inset" />')
-  expect(layout).toContain("<SiteHeader />")
+  expect(layout).toContain("<DashboardShell>")
+  expect(shell).toContain('<AppSidebar variant="inset" />')
+  expect(shell).toContain("<SiteHeader />")
 })
 
 test("model pricing loading state mirrors the pricing card layout", () => {

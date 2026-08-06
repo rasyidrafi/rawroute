@@ -10,6 +10,7 @@ export interface SessionIdentity {
 }
 
 interface SessionContext {
+  workspaceId: string
   gatewayKeyId: string
   providerId: string
   modelId: string
@@ -45,7 +46,7 @@ function isUserRoleSystemBootstrap(message: unknown) {
 }
 
 function hashed(value: string, source: string, context: SessionContext, hard = false, responseId?: string): SessionIdentity {
-  const scoped = `${context.gatewayKeyId}\n${context.providerId}\n${context.modelId}\n${value}`
+  const scoped = `${context.workspaceId}\n${context.gatewayKeyId}\n${context.providerId}\n${context.modelId}\n${value}`
   return {
     key: createHmac("sha256", context.secret).update(scoped).digest("hex"),
     source,

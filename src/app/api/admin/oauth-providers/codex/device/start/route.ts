@@ -4,11 +4,10 @@ import { jsonError } from "@/lib/http"
 
 
 export async function POST() {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   try {
     return Response.json(await requestCodexDeviceCode())
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Unable to start Codex device login.", 502)
   }
 }
-

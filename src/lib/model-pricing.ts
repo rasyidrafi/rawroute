@@ -5,12 +5,9 @@ import { getFirestore, type Firestore } from "firebase-admin/firestore"
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
 import { listModels, listProviders } from "@/lib/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
+import { currentWorkspaceId, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
 
 let firestore: Firestore | undefined
-const memoryGroups = new Map<string, ModelPricingGroup>()
-const memoryVersions = new Map<string, ModelPricingVersion>()
-const memoryJobs = new Map<string, PricingJob>()
-const runningJobs = new Set<string>()
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>
 type PricingCatalog = {
   groups: ModelPricingGroup[]
@@ -24,23 +21,40 @@ type PricingCatalog = {
 }
 type PricingAdminData = Awaited<ReturnType<typeof buildPricingAdminData>>
 
-let pricingCatalogCache: (PricingCatalog & { expiresAt: number }) | undefined
-let pricingCatalogPromise: Promise<PricingCatalog> | undefined
-let pricingAdminCache: { value: PricingAdminData; expiresAt: number } | undefined
-let pricingAdminPromise: Promise<PricingAdminData> | undefined
-let pricingJobsCache: { value: PricingJob[]; expiresAt: number } | undefined
-let pricingJobsPromise: Promise<PricingJob[]> | undefined
-let legacyMigrationPromise: Promise<boolean> | undefined
-let legacyMigrationComplete = false
-let pricingCacheGeneration = 0
-let pricingAdminGeneration = 0
-let pricingJobsGeneration = 0
+interface PricingWorkspaceState {
+  groups: Map<string, ModelPricingGroup>
+  versions: Map<string, ModelPricingVersion>
+  jobs: Map<string, PricingJob>
+  runningJobs: Set<string>
+  pricingCatalogCache?: PricingCatalog & { expiresAt: number }
+  pricingCatalogPromise?: Promise<PricingCatalog>
+  pricingAdminCache?: { value: PricingAdminData; expiresAt: number }
+  pricingAdminPromise?: Promise<PricingAdminData>
+  pricingJobsCache?: { value: PricingJob[]; expiresAt: number }
+  pricingJobsPromise?: Promise<PricingJob[]>
+  legacyMigrationPromise?: Promise<boolean>
+  legacyMigrationComplete: boolean
+  pricingCacheGeneration: number
+  pricingAdminGeneration: number
+  pricingJobsGeneration: number
+}
+declare global { var __rawroutePricingMemory: Map<string, PricingWorkspaceState> | undefined }
+function workspaceStates() { return globalThis.__rawroutePricingMemory ||= new Map<string, PricingWorkspaceState>() }
+function workspaceState() {
+  const workspaceId = currentWorkspaceId()
+  let state = workspaceStates().get(workspaceId)
+  if (!state) {
+    state = { groups: new Map(), versions: new Map(), jobs: new Map(), runningJobs: new Set(), legacyMigrationComplete: false, pricingCacheGeneration: 0, pricingAdminGeneration: 0, pricingJobsGeneration: 0 }
+    workspaceStates().set(workspaceId, state)
+  }
+  return state
+}
 
 const pricingCatalogTtlMs = positiveDuration(process.env.PRICING_CATALOG_CACHE_TTL_MS, 30_000)
 const pricingAdminTtlMs = positiveDuration(process.env.PRICING_ADMIN_CACHE_TTL_MS, 5_000)
 const pricingJobsTtlMs = positiveDuration(process.env.PRICING_JOBS_CACHE_TTL_MS, 2_000)
 
-export function getModelPricingGeneration() { return pricingCacheGeneration }
+export function getModelPricingGeneration() { return workspaceState().pricingCacheGeneration }
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
@@ -53,30 +67,34 @@ function db() {
   firestore = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)")
   return firestore
 }
-function groupsRef() { return db().collection(`${prefix()}_model_pricing_groups`) }
-function versionsRef() { return db().collection(`${prefix()}_model_pricing_versions`) }
-function jobsRef() { return db().collection(`${prefix()}_model_pricing_jobs`) }
-function legacyPricingRef() { return db().collection(`${prefix()}_model_pricing`) }
+function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
+function groupsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_groups`) : workspaceRef().collection("modelPricingGroups") }
+function versionsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_versions`) : workspaceRef().collection("modelPricingVersions") }
+function jobsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_jobs`) : workspaceRef().collection("modelPricingJobs") }
+function legacyPricingRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing`) : workspaceRef().collection("modelPricing") }
 function stableGroupId(key: string) { return `fixed-${createHash("sha1").update(key).digest("hex").slice(0, 20)}` }
 function positiveDuration(value: string | undefined, fallback: number) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 function invalidatePricingAdmin() {
-  pricingAdminGeneration += 1
-  pricingAdminCache = undefined
-  pricingAdminPromise = undefined
+  const state = workspaceState()
+  state.pricingAdminGeneration += 1
+  state.pricingAdminCache = undefined
+  state.pricingAdminPromise = undefined
 }
 function invalidatePricingJobs() {
-  pricingJobsGeneration += 1
-  pricingJobsCache = undefined
-  pricingJobsPromise = undefined
+  const state = workspaceState()
+  state.pricingJobsGeneration += 1
+  state.pricingJobsCache = undefined
+  state.pricingJobsPromise = undefined
   invalidatePricingAdmin()
 }
 function invalidatePricingCatalog() {
-  pricingCacheGeneration += 1
-  pricingCatalogCache = undefined
-  pricingCatalogPromise = undefined
+  const state = workspaceState()
+  state.pricingCacheGeneration += 1
+  state.pricingCatalogCache = undefined
+  state.pricingCatalogPromise = undefined
   invalidatePricingAdmin()
 }
 
@@ -126,19 +144,19 @@ function validateTiers(tiers: PricingContextTier[]) {
 }
 
 async function readGroups() {
-  if (isMemory()) return [...memoryGroups.values()]
+  if (isMemory()) return [...workspaceState().groups.values()]
   const snapshot = await groupsRef().get()
   return snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as ModelPricingGroup))
 }
 
 async function readVersions() {
-  if (isMemory()) return [...memoryVersions.values()]
+  if (isMemory()) return [...workspaceState().versions.values()]
   const snapshot = await versionsRef().get()
   return snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as ModelPricingVersion))
 }
 
 async function writeGroup(group: ModelPricingGroup) {
-  if (isMemory()) memoryGroups.set(group.id, group)
+  if (isMemory()) workspaceState().groups.set(group.id, group)
   else await groupsRef().doc(group.id).set(group)
   invalidatePricingCatalog()
 }
@@ -146,7 +164,7 @@ async function writeGroup(group: ModelPricingGroup) {
 async function writeGroups(groups: ModelPricingGroup[]) {
   if (!groups.length) return
   if (isMemory()) {
-    for (const group of groups) memoryGroups.set(group.id, group)
+    for (const group of groups) workspaceState().groups.set(group.id, group)
   } else {
     for (let offset = 0; offset < groups.length; offset += 450) {
       const batch = db().batch()
@@ -158,7 +176,7 @@ async function writeGroups(groups: ModelPricingGroup[]) {
 }
 
 async function writeVersion(version: ModelPricingVersion) {
-  if (isMemory()) memoryVersions.set(version.id, version)
+  if (isMemory()) workspaceState().versions.set(version.id, version)
   else await versionsRef().doc(version.id).set(version)
   invalidatePricingCatalog()
 }
@@ -166,7 +184,7 @@ async function writeVersion(version: ModelPricingVersion) {
 async function writeVersions(versions: ModelPricingVersion[]) {
   if (!versions.length) return
   if (isMemory()) {
-    for (const version of versions) memoryVersions.set(version.id, version)
+    for (const version of versions) workspaceState().versions.set(version.id, version)
   } else {
     for (let offset = 0; offset < versions.length; offset += 450) {
       const batch = db().batch()
@@ -271,14 +289,15 @@ async function migrateLegacyPricing(catalog: PricingCatalog) {
 }
 
 async function ensureLegacyPricingMigrated(catalog: PricingCatalog) {
-  if (legacyMigrationComplete || isMemory()) return false
-  if (!legacyMigrationPromise) {
-    legacyMigrationPromise = migrateLegacyPricing(catalog).then((changed) => {
-      legacyMigrationComplete = true
+  const state = workspaceState()
+  if (state.legacyMigrationComplete || isMemory()) return false
+  if (!state.legacyMigrationPromise) {
+    state.legacyMigrationPromise = migrateLegacyPricing(catalog).then((changed) => {
+      state.legacyMigrationComplete = true
       return changed
-    }).finally(() => { legacyMigrationPromise = undefined })
+    }).finally(() => { state.legacyMigrationPromise = undefined })
   }
-  return legacyMigrationPromise
+  return state.legacyMigrationPromise
 }
 
 async function buildPricingAdminData() {
@@ -317,18 +336,19 @@ async function buildPricingAdminData() {
 }
 
 export async function getPricingAdminData() {
+  const state = workspaceState()
   const now = Date.now()
-  if (pricingAdminCache && pricingAdminCache.expiresAt > now) return pricingAdminCache.value
-  if (pricingAdminPromise) return pricingAdminPromise
+  if (state.pricingAdminCache && state.pricingAdminCache.expiresAt > now) return state.pricingAdminCache.value
+  if (state.pricingAdminPromise) return state.pricingAdminPromise
 
-  const generation = pricingAdminGeneration
+  const generation = state.pricingAdminGeneration
   const promise = buildPricingAdminData().then((value) => {
-    if (generation === pricingAdminGeneration) pricingAdminCache = { value, expiresAt: Date.now() + pricingAdminTtlMs }
+    if (generation === state.pricingAdminGeneration) state.pricingAdminCache = { value, expiresAt: Date.now() + pricingAdminTtlMs }
     return value
   }).finally(() => {
-    if (pricingAdminPromise === promise) pricingAdminPromise = undefined
+    if (state.pricingAdminPromise === promise) state.pricingAdminPromise = undefined
   })
-  pricingAdminPromise = promise
+  state.pricingAdminPromise = promise
   return promise
 }
 
@@ -387,7 +407,7 @@ export async function deletePricingGroup(groupId: string) {
   const group = groups.find((entry) => entry.id === groupId)
   if (!group) return
   if (group.kind === "fixed") throw new Error("Fixed pricing groups cannot be deleted.")
-  if (isMemory()) memoryGroups.delete(groupId)
+  if (isMemory()) workspaceState().groups.delete(groupId)
   else await groupsRef().doc(groupId).delete()
   invalidatePricingCatalog()
   const released = new Set(group.memberModelIds)
@@ -444,53 +464,55 @@ function indexPricingCatalog(groups: ModelPricingGroup[], versions: ModelPricing
 }
 
 async function loadPricingCatalog() {
-  if (pricingCatalogCache && pricingCatalogCache.expiresAt > Date.now()) return pricingCatalogCache
-  if (!pricingCatalogPromise) {
+  const state = workspaceState()
+  if (state.pricingCatalogCache && state.pricingCatalogCache.expiresAt > Date.now()) return state.pricingCatalogCache
+  if (!state.pricingCatalogPromise) {
     const promise = (async () => {
-      let generation = pricingCacheGeneration
+      let generation = state.pricingCacheGeneration
       let groups = await readGroups()
       if (!groups.length) {
         groups = await syncModelPricingGroups()
-        generation = pricingCacheGeneration
+        generation = state.pricingCacheGeneration
       }
       const [versions, models, providers] = await Promise.all([readVersions(), listModels(), listProviders()])
       return { catalog: indexPricingCatalog(groups, versions, models, providers), generation }
     })().then(({ catalog, generation }) => {
-      if (generation === pricingCacheGeneration) pricingCatalogCache = { ...catalog, expiresAt: Date.now() + pricingCatalogTtlMs }
+      if (generation === state.pricingCacheGeneration) state.pricingCatalogCache = { ...catalog, expiresAt: Date.now() + pricingCatalogTtlMs }
       return catalog
     }).finally(() => {
-      if (pricingCatalogPromise === promise) pricingCatalogPromise = undefined
+      if (state.pricingCatalogPromise === promise) state.pricingCatalogPromise = undefined
     })
-    pricingCatalogPromise = promise
+    state.pricingCatalogPromise = promise
   }
-  return pricingCatalogPromise
+  return state.pricingCatalogPromise
 }
 
 async function listPricingJobs() {
-  if (isMemory()) return [...memoryJobs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 50)
+  const state = workspaceState()
+  if (isMemory()) return [...state.jobs.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 50)
   const now = Date.now()
-  if (pricingJobsCache && pricingJobsCache.expiresAt > now) return pricingJobsCache.value
-  if (pricingJobsPromise) return pricingJobsPromise
-  const generation = pricingJobsGeneration
+  if (state.pricingJobsCache && state.pricingJobsCache.expiresAt > now) return state.pricingJobsCache.value
+  if (state.pricingJobsPromise) return state.pricingJobsPromise
+  const generation = state.pricingJobsGeneration
   const promise = jobsRef().orderBy("updatedAt", "desc").limit(50).get().then((snapshot) => {
     const value = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as PricingJob))
-    if (generation === pricingJobsGeneration) pricingJobsCache = { value, expiresAt: Date.now() + pricingJobsTtlMs }
+    if (generation === state.pricingJobsGeneration) state.pricingJobsCache = { value, expiresAt: Date.now() + pricingJobsTtlMs }
     return value
   }).finally(() => {
-    if (pricingJobsPromise === promise) pricingJobsPromise = undefined
+    if (state.pricingJobsPromise === promise) state.pricingJobsPromise = undefined
   })
-  pricingJobsPromise = promise
+  state.pricingJobsPromise = promise
   return promise
 }
 
 export async function getPricingJob(jobId: string) {
-  if (isMemory()) return memoryJobs.get(jobId)
+  if (isMemory()) return workspaceState().jobs.get(jobId)
   const snapshot = await jobsRef().doc(jobId).get()
   return snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as PricingJob : undefined
 }
 
 async function writeJob(job: PricingJob) {
-  if (isMemory()) memoryJobs.set(job.id, job)
+  if (isMemory()) workspaceState().jobs.set(job.id, job)
   else await jobsRef().doc(job.id).set(job)
   invalidatePricingJobs()
 }
@@ -511,25 +533,21 @@ export async function updatePricingJob(jobId: string, update: Partial<PricingJob
 }
 
 export async function runPricingJob(jobId: string) {
-  if (runningJobs.has(jobId)) return
-  runningJobs.add(jobId)
+  const state = workspaceState()
+  if (state.runningJobs.has(jobId)) return
+  state.runningJobs.add(jobId)
   try {
     const { repriceUsageForGroup } = await import("@/lib/analytics")
     await repriceUsageForGroup(jobId)
   } catch (error) {
     await updatePricingJob(jobId, { status: "failed", error: error instanceof Error ? error.message : "Unable to reprice usage.", completedAt: new Date().toISOString() })
   } finally {
-    runningJobs.delete(jobId)
+    state.runningJobs.delete(jobId)
   }
 }
 
 export function resetModelPricingForTests() {
-  memoryGroups.clear()
-  memoryVersions.clear()
-  memoryJobs.clear()
-  runningJobs.clear()
-  legacyMigrationComplete = false
-  legacyMigrationPromise = undefined
+  workspaceStates().clear()
   invalidatePricingJobs()
   invalidatePricingCatalog()
 }

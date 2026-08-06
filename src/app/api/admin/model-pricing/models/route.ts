@@ -4,6 +4,6 @@ import { jsonError } from "@/lib/http"
 
 
 export async function GET() {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   return Response.json({ models: await listModels() })
 }

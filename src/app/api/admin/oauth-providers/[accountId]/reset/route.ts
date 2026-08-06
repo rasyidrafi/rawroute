@@ -5,7 +5,7 @@ import { jsonError } from "@/lib/http"
 
 
 export async function POST(request: Request, context: { params: Promise<{ accountId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const accountId = (await context.params).accountId
   const body = await request.json().catch(() => null) as { confirmation?: unknown } | null
   const result = await listCodexAccounts()

@@ -31,7 +31,7 @@ describe("Redis routing state", () => {
 
     expect(result).toMatchObject({ ok: true, credentialId: "b", affinity: "new" })
     if (result.ok) expect(typeof result.leaseId).toBe("string")
-    expect(redis.calls[0]?.keys).toContain("test:affinity:provider:model:session")
+    expect(redis.calls[0]?.keys).toContain("test:affinity:default:provider:model:session")
     expect(redis.calls[0]?.args.join(" ")).toContain("10")
   })
 
@@ -48,7 +48,7 @@ describe("Redis routing state", () => {
       responseId: "resp-1",
       hardAffinity: true,
     })).toEqual({ ok: false, reason: "hard-response-missing", retryAfterSeconds: 1 })
-    expect(redis.calls[0]?.keys[1]).toBe("test:response:provider:resp-1")
+    expect(redis.calls[0]?.keys[1]).toBe("test:response:default:provider:resp-1")
     expect(redis.calls[0]?.script).toContain('redis.call("TIME")')
   })
 
@@ -134,9 +134,9 @@ describe("Redis routing state", () => {
       budget: { key: "test:budget:key", reservationMicros: 1, actualMicros: 7, ttlSeconds: 4_321 },
     })
     expect(redis.calls[0]?.keys).toEqual([
-      "test:inflight:provider:model:a",
-      "test:rpm:provider:model:a",
-      "test:cooldown:provider:model:a",
+      "test:inflight:default:provider:model:a",
+      "test:rpm:default:provider:model:a",
+      "test:cooldown:default:provider:model:a",
       "test:budget:key",
       "test:budget:key:lease:lease-a",
     ])
@@ -148,7 +148,7 @@ describe("Redis routing state", () => {
     redis.responses.push(["ok"])
     const store = new RedisRoutingStateStore(redis, { prefix: "test", responseTtlSeconds: 120 })
     await store.mapResponses(["resp-1", "resp-2", "resp-1"], "provider", "a")
-    expect(redis.calls[0]?.keys).toEqual(["test:response:provider:resp-1", "test:response:provider:resp-2"])
+    expect(redis.calls[0]?.keys).toEqual(["test:response:default:provider:resp-1", "test:response:default:provider:resp-2"])
     expect(redis.calls[0]?.args).toEqual([120, "a"])
     expect(redis.calls[0]?.script).toContain('for index = 1, #KEYS do')
   })
@@ -163,7 +163,7 @@ describe("Redis routing state", () => {
     await store.mapResponses(responseIds, "provider", "a")
 
     expect(redis.calls[0]?.keys).toHaveLength(64)
-    expect(redis.calls[0]?.keys).not.toContain(`test:response:provider:${"x".repeat(513)}`)
+    expect(redis.calls[0]?.keys).not.toContain(`test:response:default:provider:${"x".repeat(513)}`)
     expect(new Set(redis.calls[0]?.keys).size).toBe(64)
   })
 })

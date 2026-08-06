@@ -16,22 +16,10 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { LogEntry, LogLevel } from "@/lib/logger"
 import { formatAppDateTime, formatAppTime } from "@/lib/timezone"
-
-let cachedLogPayload: { logs: LogEntry[] } | undefined
-let cachedLogEtag = ""
+import { apiDelete, apiFetch } from "@/components/dashboard/api"
 
 async function fetchLogs(url: string) {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: cachedLogEtag ? { "if-none-match": cachedLogEtag } : undefined,
-  })
-  if (response.status === 304 && cachedLogPayload) return cachedLogPayload
-  if (response.status === 401) { window.location.assign("/login"); throw new Error("Unauthorized") }
-  if (!response.ok) throw new Error("Unable to load console logs")
-  const payload = await response.json() as { logs: LogEntry[] }
-  cachedLogPayload = payload
-  cachedLogEtag = response.headers.get("etag") || ""
-  return payload
+  return apiFetch<{ logs: LogEntry[] }>(url)
 }
 
 function formatLog(entry: LogEntry) {
@@ -56,8 +44,7 @@ export function ConsoleLog() {
   async function clear() {
     setClearing(true)
     try {
-      const response = await fetch("/api/admin/logs", { method: "DELETE" })
-      if (!response.ok) throw new Error("Unable to clear logs")
+      await apiDelete("/api/admin/logs")
       await mutate()
       setClearOpen(false)
       toast.success("Console logs cleared")

@@ -4,7 +4,7 @@ import { jsonError } from "@/lib/http"
 
 
 export async function PATCH(request: Request, context: { params: Promise<{ pricingId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const id = (await context.params).pricingId
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   const number = (key: string, fallback = 0) => Number.isSafeInteger(Number(body?.[key])) ? Number(body?.[key]) : fallback
@@ -12,7 +12,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ prici
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ pricingId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   await deleteModelPricing((await context.params).pricingId)
   return Response.json({ ok: true })
 }

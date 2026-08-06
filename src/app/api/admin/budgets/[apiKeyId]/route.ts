@@ -4,7 +4,7 @@ import { jsonError } from "@/lib/http"
 
 
 export async function PATCH(request: Request, context: { params: Promise<{ apiKeyId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const { apiKeyId } = await context.params
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   const limit = Number(body?.weeklyLimitUsd)
@@ -13,7 +13,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ apiKe
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ apiKeyId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   await deleteBudget((await context.params).apiKeyId)
   return Response.json({ ok: true })
 }

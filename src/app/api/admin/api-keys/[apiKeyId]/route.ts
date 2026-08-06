@@ -5,7 +5,7 @@ import { deleteApiKey, updateApiKeyName } from "@/lib/store"
 
 export async function PATCH(request: Request, context: { params: Promise<{ apiKeyId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }
@@ -27,7 +27,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ apiKe
 
 export async function DELETE(_request: Request, context: { params: Promise<{ apiKeyId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

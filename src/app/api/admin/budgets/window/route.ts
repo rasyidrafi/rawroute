@@ -4,12 +4,12 @@ import { jsonError } from "@/lib/http"
 
 
 export async function GET() {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   return Response.json({ window: await getBudgetWindow() })
 }
 
 export async function PATCH(request: Request) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   const anchor = body?.anchor === "codex" || body?.anchor === "custom" ? body.anchor : undefined
   const start = typeof body?.start === "string" ? new Date(body.start) : undefined

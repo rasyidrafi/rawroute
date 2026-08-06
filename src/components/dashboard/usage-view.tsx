@@ -10,8 +10,9 @@ import { UsageOverview } from "@/components/dashboard/usage-overview"
 import { DEFAULT_GRANULARITY, DEFAULT_PRESET, formatCalendarSelection, formatCost, formatNumber, formatTokenCount, resolveSelectedRange } from "@/components/dashboard/usage-utils"
 import type { DashboardPayload, DashboardQuery } from "@/lib/types"
 import { calendarDateFromInstant } from "@/lib/timezone"
+import { apiFetch } from "@/components/dashboard/api"
 
-export function UsageView({ initial, publicView = false }: { initial?: DashboardPayload; publicView?: boolean }) {
+export function UsageView({ initial, publicView = false, workspaceId }: { initial?: DashboardPayload; publicView?: boolean; workspaceId?: string }) {
   const endpoint = publicView ? "/api/public/dashboard" : "/api/admin/usage"
   const defaultPreset: DashboardQuery["preset"] = publicView ? "today" : DEFAULT_PRESET
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(initial || null)
@@ -30,6 +31,7 @@ export function UsageView({ initial, publicView = false }: { initial?: Dashboard
 
   const query = useCallback((nextPreset = preset, nextFrom = from, nextTo = to, nextGranularity = activeGranularity) => {
     const params = new URLSearchParams({ preset: nextPreset })
+    if (publicView && workspaceId && workspaceId !== "default") params.set("workspace", workspaceId)
     if (nextPreset === "custom") {
       if (nextFrom) params.set("from", nextFrom)
       if (nextTo) params.set("to", nextTo)
@@ -40,15 +42,15 @@ export function UsageView({ initial, publicView = false }: { initial?: Dashboard
     activeRequest.current = controller
     startTransition(async () => {
       try {
-        const response = await fetch(`${endpoint}?${params.toString()}`, { cache: "no-store", signal: controller.signal })
-        if (response.ok && activeRequest.current === controller) setDashboard(await response.json() as DashboardPayload)
+        const payload = await apiFetch<DashboardPayload>(`${endpoint}?${params.toString()}`, { signal: controller.signal })
+        if (activeRequest.current === controller) setDashboard(payload)
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return
       } finally {
         if (activeRequest.current === controller) activeRequest.current = null
       }
     })
-  }, [activeGranularity, endpoint, from, preset, to])
+  }, [activeGranularity, endpoint, from, preset, publicView, to, workspaceId])
 
   useEffect(() => () => activeRequest.current?.abort(), [])
 

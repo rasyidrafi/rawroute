@@ -10,7 +10,7 @@ const protocols: Protocol[] = ["openai-chat", "openai-responses", "anthropic-mes
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

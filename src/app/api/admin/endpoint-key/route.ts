@@ -5,7 +5,7 @@ import { listApiKeys } from "@/lib/store"
 
 export async function GET() {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

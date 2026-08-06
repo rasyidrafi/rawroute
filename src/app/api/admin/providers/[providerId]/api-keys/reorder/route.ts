@@ -4,7 +4,7 @@ import { reorderProviderApiKeys } from "@/lib/store"
 
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const { providerId } = await context.params
   const body = await request.json().catch(() => null) as { orderedIds?: unknown } | null
   if (!body || !Array.isArray(body.orderedIds) || !body.orderedIds.every((id) => typeof id === "string")) {

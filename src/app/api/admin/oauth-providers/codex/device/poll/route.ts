@@ -4,7 +4,7 @@ import { jsonError } from "@/lib/http"
 
 
 export async function POST(request: Request) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const body = await request.json().catch(() => null) as { deviceAuthId?: unknown; userCode?: unknown; name?: unknown } | null
   const deviceAuthId = typeof body?.deviceAuthId === "string" ? body.deviceAuthId.trim() : ""
   const userCode = typeof body?.userCode === "string" ? body.userCode.trim() : ""
@@ -26,4 +26,3 @@ export async function POST(request: Request) {
     return jsonError(error instanceof Error ? error.message : "Unable to finish Codex device login.", 502)
   }
 }
-

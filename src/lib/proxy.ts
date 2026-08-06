@@ -11,8 +11,9 @@ import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
 import { getRoutingStateStore } from "@/lib/routing-state"
 import { extractSessionIdentity } from "@/lib/session-routing"
 import { readRoutingData } from "@/lib/store"
-import { protocolPaths, type Protocol, type ProviderApiKey } from "@/lib/types"
+import { protocolPaths, type AuthenticatedGatewayKey, type Protocol, type ProviderApiKey } from "@/lib/types"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
+import { runInWorkspace } from "@/lib/workspace-context"
 
 export { extractUsageMetrics } from "@/lib/usage-metrics"
 
@@ -335,11 +336,16 @@ function trackedUpstreamBody(
 }
 
 export async function proxyRequest(request: Request, requestedProtocol: Protocol) {
-  const gatewayApiKey = await authenticateProxyKey(request)
-  if (!gatewayApiKey) {
+  const authenticated = await authenticateProxyKey(request)
+  if (!authenticated) {
     writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: requestedProtocol })
     return jsonError("Invalid gateway API key.", 401)
   }
+  return runInWorkspace(authenticated.workspace, () => proxyAuthenticatedRequest(request, requestedProtocol, authenticated))
+}
+
+async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Protocol, authenticated: AuthenticatedGatewayKey) {
+  const { apiKey: gatewayApiKey, workspace } = authenticated
   if (!request.headers.get("content-type")?.toLowerCase().includes("application/json")) {
     return jsonError("Content-Type must be application/json.", 415)
   }
@@ -380,6 +386,7 @@ export async function proxyRequest(request: Request, requestedProtocol: Protocol
   }
 
   const session = extractSessionIdentity(request, payload, modelProtocol, {
+    workspaceId: workspace.id,
     gatewayKeyId: gatewayApiKey.id,
     providerId: provider.id,
     modelId: gatewayModelId,

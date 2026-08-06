@@ -6,10 +6,11 @@ import { findModelsDevCanonicalModel, searchModelsDevCanonicalModels } from "@/l
 import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricingJob, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
 import type { PricingCanonicalSource } from "@/lib/types"
+import { runInWorkspace, workspaceContext } from "@/lib/workspace-context"
 
 
 export async function GET(request: Request) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   try {
     const url = new URL(request.url)
     const query = url.searchParams.get("q")?.trim() || ""
@@ -28,7 +29,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  try { await requireAdmin() } catch { return jsonError("Unauthorized", 401) }
+  try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   const action = typeof body?.action === "string" ? body.action : "legacy"
   const canonical = body?.canonicalModelId && typeof body.canonicalModelId === "string"
@@ -59,7 +60,10 @@ export async function POST(request: Request) {
       }) : []
       const result = await savePricingVersion({ groupId: String(body?.groupId || ""), rates, contextTiers, mode: body?.mode === "replace" ? "replace" : "new" })
       const job = result.job
-      if (job) after(() => runPricingJob(job.id))
+      if (job) {
+        const workspace = workspaceContext()
+        after(() => runInWorkspace(workspace, () => runPricingJob(job.id)))
+      }
       return Response.json(result)
     }
   } catch (error) {

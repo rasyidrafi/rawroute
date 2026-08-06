@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
-import { cookies } from "next/headers"
+import { cookies, headers } from "next/headers"
 
-import { findApiKeyByValue, readSessionSecret } from "@/lib/store"
+import { findIndexedApiKeyByValue, readSessionSecret } from "@/lib/store"
+import type { AuthenticatedGatewayKey, Workspace } from "@/lib/types"
+import { DEFAULT_WORKSPACE_ID, enterWorkspace } from "@/lib/workspace-context"
+import { getWorkspace } from "@/lib/workspaces"
 
 const COOKIE_NAME = "rawroute_session"
 
@@ -42,6 +45,20 @@ export async function isAuthenticated() {
 
 export async function requireAdmin() {
   if (!(await isAuthenticated())) throw new Error("UNAUTHORIZED")
+  const workspaceId = (await headers()).get("x-rawroute-workspace-id")?.trim() || DEFAULT_WORKSPACE_ID
+  const workspace = await getWorkspace(workspaceId)
+  if (!workspace || workspace.status !== "active") throw new Error("WORKSPACE_UNAVAILABLE")
+  return () => enterWorkspace(workspace)
+}
+
+export async function requireAdminWorkspace(request: Request): Promise<Workspace> {
+  ;(await requireAdmin())()
+  const workspaceId = request.headers.get("x-rawroute-workspace-id")?.trim()
+  if (!workspaceId) throw new Error("WORKSPACE_REQUIRED")
+  const workspace = await getWorkspace(workspaceId)
+  if (!workspace || workspace.status !== "active") throw new Error("WORKSPACE_UNAVAILABLE")
+  enterWorkspace(workspace)
+  return workspace
 }
 
 export async function authenticateProxyKey(request: Request) {
@@ -50,7 +67,12 @@ export async function authenticateProxyKey(request: Request) {
     ? authorization.slice(7)
     : request.headers.get("x-api-key")
   if (!supplied) return undefined
-  return findApiKeyByValue(supplied)
+  const indexed = await findIndexedApiKeyByValue(supplied)
+  if (!indexed) return undefined
+  const workspace = await getWorkspace(indexed.workspaceId)
+  if (!workspace || workspace.status !== "active") return undefined
+  enterWorkspace(workspace)
+  return { workspace, apiKey: indexed.apiKey } satisfies AuthenticatedGatewayKey
 }
 
 export async function validateProxyKey(request: Request) {

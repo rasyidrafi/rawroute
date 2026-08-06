@@ -6,7 +6,7 @@ import { deleteAlias } from "@/lib/store"
 
 export async function DELETE(_request: Request, context: { params: Promise<{ aliasId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

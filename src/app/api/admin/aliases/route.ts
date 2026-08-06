@@ -7,7 +7,7 @@ import type { ModelAlias } from "@/lib/types"
 
 export async function GET() {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }
@@ -17,7 +17,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

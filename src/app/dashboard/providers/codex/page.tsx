@@ -1,5 +1,5 @@
-import { ProviderDetailView } from "@/components/dashboard/provider-detail-view"
+import { OAuthProvidersView } from "@/components/dashboard/oauth-providers-view"
 
 export default function CodexProvidersPage() {
-  return <ProviderDetailView providerId="codex" />
+  return <OAuthProvidersView />
 }

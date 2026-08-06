@@ -2,6 +2,7 @@ import { Redis } from "@upstash/redis"
 
 import { refreshCodexAccount } from "@/lib/codex"
 import type { ProviderApiKey } from "@/lib/types"
+import { currentWorkspaceId } from "@/lib/workspace-context"
 
 export const CODEX_USAGE_CACHE_TTL_SECONDS = 5 * 60
 
@@ -51,6 +52,7 @@ const usageInflight = new Map<string, Promise<CodexUsageResult>>()
 let localCacheGeneration = 0
 
 function setLocalUsageCache(accountId: string, result: CodexUsageResult) {
+  accountId = `${currentWorkspaceId()}:${accountId}`
   if (localCacheTtlMs <= 0) return
   if (!localUsageCache.has(accountId) && localUsageCache.size >= maximumLocalCacheEntries) {
     const oldest = localUsageCache.keys().next().value
@@ -62,6 +64,7 @@ function setLocalUsageCache(accountId: string, result: CodexUsageResult) {
 function clearLocalUsageCache(accountId?: string) {
   localCacheGeneration += 1
   if (accountId) {
+    accountId = `${currentWorkspaceId()}:${accountId}`
     localUsageCache.delete(accountId)
     usageInflight.delete(accountId)
     return
@@ -85,11 +88,11 @@ function getRedis(): UsageRedis {
 }
 
 function cacheKey(accountId: string) {
-  return `${CACHE_PREFIX}:${accountId}`
+  return `${CACHE_PREFIX}:${currentWorkspaceId()}:${accountId}`
 }
 
 function lockKey(accountId: string) {
-  return `${CACHE_PREFIX}:lock:${accountId}`
+  return `${CACHE_PREFIX}:lock:${currentWorkspaceId()}:${accountId}`
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
@@ -295,20 +298,21 @@ export async function getCodexUsageForAccount(
   account: ProviderApiKey,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CodexUsageResult> {
-  const cached = localUsageCache.get(account.id)
+  const localKey = `${currentWorkspaceId()}:${account.id}`
+  const cached = localUsageCache.get(localKey)
   if (cached && cached.expiresAt > now()) return cached.result
-  if (cached) localUsageCache.delete(account.id)
+  if (cached) localUsageCache.delete(localKey)
 
-  const existing = usageInflight.get(account.id)
+  const existing = usageInflight.get(localKey)
   if (existing) return existing
   const generation = localCacheGeneration
   const promise = loadCodexUsageForAccount(account, fetchImpl).then((result) => {
     if (generation === localCacheGeneration) setLocalUsageCache(account.id, result)
     return result
   }).finally(() => {
-    if (usageInflight.get(account.id) === promise) usageInflight.delete(account.id)
+    if (usageInflight.get(localKey) === promise) usageInflight.delete(localKey)
   })
-  usageInflight.set(account.id, promise)
+  usageInflight.set(localKey, promise)
   return promise
 }
 

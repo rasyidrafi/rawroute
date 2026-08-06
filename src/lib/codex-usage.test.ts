@@ -97,7 +97,7 @@ describe("Codex usage", () => {
     expect(calls).toBe(1)
 
     current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
-    redis.values.delete("rawroute:codex-usage:v1:lock:account-1")
+    redis.values.delete("rawroute:codex-usage:v1:lock:default:account-1")
     const stale = await getCodexUsageForAccount(account, fetchImpl)
     const retained = await getCodexUsageForAccount(account, fetchImpl)
     expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 } })

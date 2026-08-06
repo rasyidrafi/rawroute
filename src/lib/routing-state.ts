@@ -1,6 +1,7 @@
 import { Redis } from "@upstash/redis"
 
 import type { ProviderApiKey } from "@/lib/types"
+import { currentWorkspaceId } from "@/lib/workspace-context"
 
 export interface RoutingRedis {
   eval(script: string, keys: string[], args: Array<string | number>): Promise<unknown>
@@ -274,11 +275,11 @@ export class RedisRoutingStateStore {
   }
 
   private scope(providerId: string, modelId: string) {
-    return `${providerId}:${modelId}`
+    return `${currentWorkspaceId()}:${providerId}:${modelId}`
   }
 
   private responseKey(providerId: string, responseId: string) {
-    return `${this.prefix}:response:${providerId}:${responseId}`
+    return `${this.prefix}:response:${currentWorkspaceId()}:${providerId}:${responseId}`
   }
 
   leaseRenewalIntervalMs() {

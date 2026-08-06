@@ -223,14 +223,14 @@ describe("configuration storage", () => {
     await expect(upsertProviderApiKey(provider.id, { name: "Primary", key: "key", rpmLimit: 0 })).rejects.toThrow("RPM limit")
   })
 
-  test("enforces at least one gateway API key for public deletes", async () => {
+  test("allows a workspace to delete its final gateway API key", async () => {
     const onlyKey = (await listApiKeys())[0]
     if (!onlyKey) throw new Error("Memory backend did not seed a gateway API key.")
-    await expect(deleteApiKey(onlyKey.id)).rejects.toThrow("At least one gateway API key is required.")
+    await deleteApiKey(onlyKey.id)
+    expect(await listApiKeys()).toEqual([])
 
     const extraKey = await createApiKey("Extra")
-    await deleteApiKey(extraKey.id)
-    expect((await listApiKeys()).map((apiKey) => apiKey.id)).toEqual([onlyKey.id])
+    expect((await listApiKeys()).map((apiKey) => apiKey.id)).toEqual([extraKey.id])
   })
 
   test("supports custom gateway key values and preserves generated keys", async () => {

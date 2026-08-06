@@ -6,5 +6,5 @@ import type { ReactNode } from "react"
 import { fetcher } from "@/components/dashboard/api"
 
 export function DashboardSWRProvider({ children }: { children: ReactNode }) {
-  return <SWRConfig value={{ fetcher, revalidateOnFocus: false }}>{children}</SWRConfig>
+  return <SWRConfig value={{ fetcher, revalidateOnFocus: false, provider: () => new Map() }}>{children}</SWRConfig>
 }

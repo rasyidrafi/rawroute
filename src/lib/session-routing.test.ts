@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest"
 import { extractSessionIdentity } from "@/lib/session-routing"
 
 const context = {
+  workspaceId: "default",
   gatewayKeyId: "gateway-key",
   providerId: "provider",
   modelId: "provider/model",
@@ -16,7 +17,7 @@ describe("session identity extraction", () => {
       headers: { "x-rawroute-session-id": "subagent:research" },
     })
     expect(extractSessionIdentity(request, { metadata: { rawroute_session_id: "ignored" } }, "openai-responses", context)).toEqual({
-      key: createHmac("sha256", context.secret).update("gateway-key\nprovider\nprovider/model\nexplicit:subagent:research").digest("hex"),
+      key: createHmac("sha256", context.secret).update("default\ngateway-key\nprovider\nprovider/model\nexplicit:subagent:research").digest("hex"),
       source: "x-rawroute-session-id",
       hard: false,
     })

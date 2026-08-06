@@ -4,6 +4,20 @@ export type AuthType = "bearer" | "x-api-key" | "custom-header" | "none"
 
 export type ProviderCredentialKind = "api-key" | "codex-oauth"
 
+export type WorkspaceStatus = "active" | "deleting"
+
+export type WorkspaceStorageMode = "legacy" | "dual" | "scoped-mirror" | "scoped"
+
+export interface Workspace {
+  id: string
+  name: string
+  status: WorkspaceStatus
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+  storageMode?: WorkspaceStorageMode
+}
+
 export interface Provider {
   id: string
   name: string
@@ -73,6 +87,11 @@ export interface ApiKey {
   name: string
   key: string
   createdAt: string
+}
+
+export interface AuthenticatedGatewayKey {
+  workspace: Workspace
+  apiKey: ApiKey
 }
 
 export type PricingConfidence = "exact" | "unpriced" | "assumed"

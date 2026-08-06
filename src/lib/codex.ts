@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto"
 
 import { getProviderApiKey, listProviderApiKeys, listProviders, upsertProvider, upsertProviderApiKey } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
+import { currentWorkspaceId } from "@/lib/workspace-context"
 
 export const CODEX_PROVIDER_PREFIX = "codex"
 export const CODEX_PROVIDER_NAME = "Codex OAuth"
@@ -240,7 +241,8 @@ const refreshes = new Map<string, Promise<ProviderApiKey>>()
 export async function refreshCodexAccount(account: ProviderApiKey, force = false) {
   if (account.credentialKind !== "codex-oauth") return account
   if (!force && !codexCredentialNeedsRefresh(account)) return account
-  const existingRefresh = refreshes.get(account.id)
+  const refreshKey = `${currentWorkspaceId()}:${account.id}`
+  const existingRefresh = refreshes.get(refreshKey)
   if (existingRefresh) return existingRefresh
   const promise = (async () => {
     const current = await getProviderApiKey(account.providerId, account.id) || account
@@ -265,8 +267,8 @@ export async function refreshCodexAccount(account: ProviderApiKey, force = false
       priority: current.priority,
     })
   })()
-  refreshes.set(account.id, promise)
-  try { return await promise } finally { refreshes.delete(account.id) }
+  refreshes.set(refreshKey, promise)
+  try { return await promise } finally { refreshes.delete(refreshKey) }
 }
 
 export async function listCodexAccounts() {

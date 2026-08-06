@@ -6,7 +6,7 @@ import { ApiKeyConflictError, createApiKey } from "@/lib/store"
 
 export async function POST(request: Request) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

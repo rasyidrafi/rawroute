@@ -23,7 +23,7 @@ export function SettingsView() {
       <Card className="max-w-2xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><LockKeyholeIcon className="size-5" />Admin password</CardTitle>
-          <CardDescription>Confirm your current password before choosing a new one.</CardDescription>
+          <CardDescription>This administrator password applies to every workspace. Confirm the current password before choosing a new one.</CardDescription>
         </CardHeader>
         <CardContent>
           <ChangePasswordForm onSave={updatePassword} />

@@ -2,6 +2,18 @@ export class UnauthorizedError extends Error {
   constructor() { super("Unauthorized") }
 }
 
+let activeWorkspaceId = "default"
+
+export function setApiWorkspaceId(workspaceId: string) {
+  activeWorkspaceId = workspaceId || "default"
+}
+
+function withWorkspace(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  headers.set("x-rawroute-workspace-id", activeWorkspaceId)
+  return { ...init, headers }
+}
+
 async function parseError(response: Response) {
   if (response.status === 401) {
     if (typeof window !== "undefined") window.location.assign("/login")
@@ -16,7 +28,7 @@ async function parseError(response: Response) {
 }
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { cache: "no-store", ...init })
+  const response = await fetch(url, withWorkspace({ cache: "no-store", ...init }))
   if (!response.ok) await parseError(response)
   return response.json() as Promise<T>
 }
@@ -24,19 +36,19 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 export const fetcher = <T,>(url: string) => apiFetch<T>(url)
 
 export async function apiPost<T = { ok: true }>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  const response = await fetch(url, withWorkspace({ method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
   if (!response.ok) await parseError(response)
   return response.json() as Promise<T>
 }
 
 export async function apiPatch<T = { ok: true }>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, { method: "PATCH", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  const response = await fetch(url, withWorkspace({ method: "PATCH", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
   if (!response.ok) await parseError(response)
   return response.json() as Promise<T>
 }
 
-export async function apiDelete<T = { ok: true }>(url: string): Promise<T> {
-  const response = await fetch(url, { method: "DELETE", cache: "no-store" })
+export async function apiDelete<T = { ok: true }>(url: string, body?: unknown): Promise<T> {
+  const response = await fetch(url, withWorkspace({ method: "DELETE", cache: "no-store", ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) }))
   if (!response.ok) await parseError(response)
   return response.json() as Promise<T>
 }

@@ -4,6 +4,7 @@ import { invalidateCodexUsageCache } from "@/lib/codex-usage"
 import { refreshCodexAccount } from "@/lib/codex"
 import { writeLog } from "@/lib/logger"
 import type { ProviderApiKey } from "@/lib/types"
+import { currentWorkspaceId } from "@/lib/workspace-context"
 
 const consumeUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 const locks = new Set<string>()
@@ -19,6 +20,7 @@ function redis() {
 }
 
 async function acquire(accountId: string) {
+  accountId = `${currentWorkspaceId()}:${accountId}`
   const client = redis()
   if (client) return (await client.set(`rawroute:codex-reset-lock:${accountId}`, "1", { nx: true, ex: 60 })) === "OK"
   if (locks.has(accountId)) return false
@@ -27,6 +29,7 @@ async function acquire(accountId: string) {
 }
 
 async function release(accountId: string) {
+  accountId = `${currentWorkspaceId()}:${accountId}`
   locks.delete(accountId)
   const client = redis()
   if (client) await client.del(`rawroute:codex-reset-lock:${accountId}`).catch(() => undefined)

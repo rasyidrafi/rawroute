@@ -1,3 +1,5 @@
+import { currentWorkspaceId } from "@/lib/workspace-context"
+
 export type LogLevel = "info" | "warn" | "error"
 
 export interface LogEntry {
@@ -5,6 +7,7 @@ export interface LogEntry {
   timestamp: string
   level: LogLevel
   source: "gateway" | "admin" | "auth" | "system"
+  workspaceId?: string
   message: string
   details?: Record<string, string | number | boolean>
 }
@@ -32,7 +35,7 @@ function entries() {
 export function writeLog(level: LogLevel, source: LogEntry["source"], message: string, details?: LogEntry["details"]) {
   const ring = entries()
   ring.revision += 1
-  ring.entries[ring.next] = { id: `${ring.instanceId}-${ring.revision}`, timestamp: new Date().toISOString(), level, source, message, ...(details ? { details } : {}) }
+  ring.entries[ring.next] = { id: `${ring.instanceId}-${ring.revision}`, timestamp: new Date().toISOString(), level, source, workspaceId: currentWorkspaceId(), message, ...(details ? { details } : {}) }
   ring.next = (ring.next + 1) % maxEntries
   ring.size = Math.min(maxEntries, ring.size + 1)
 }
@@ -48,13 +51,14 @@ export function readLogs() {
   for (let index = 0; index < ring.size; index++) {
     const position = (ring.next - 1 - index + maxEntries) % maxEntries
     const entry = ring.entries[position]
-    if (entry) out.push(entry)
+    if (entry?.workspaceId === currentWorkspaceId()) out.push(entry)
   }
   return structuredClone(out)
 }
 
 export function clearLogs() {
   const current = entries()
+  const retained = readAllLogs().filter((entry) => entry.workspaceId !== currentWorkspaceId())
   globalThis.__rawrouteLogRing = {
     entries: new Array<LogEntry | undefined>(maxEntries),
     next: 0,
@@ -62,4 +66,21 @@ export function clearLogs() {
     revision: current.revision + 1,
     instanceId: current.instanceId,
   }
+  const ring = entries()
+  for (const entry of retained.reverse()) {
+    ring.entries[ring.next] = entry
+    ring.next = (ring.next + 1) % maxEntries
+    ring.size = Math.min(maxEntries, ring.size + 1)
+  }
+}
+
+function readAllLogs() {
+  const ring = entries()
+  const out: LogEntry[] = []
+  for (let index = 0; index < ring.size; index++) {
+    const position = (ring.next - 1 - index + maxEntries) % maxEntries
+    const entry = ring.entries[position]
+    if (entry) out.push(entry)
+  }
+  return out
 }

@@ -9,21 +9,35 @@ import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForM
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
 import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
+import { currentWorkspaceId, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
 
 let firestore: Firestore | undefined
-const memoryEvents = new Map<string, UsageEvent>()
-const memoryRollups = new Map<string, UsageRollup>()
-const memoryPricing = new Map<string, ModelPricing>()
-const memoryBudgets = new Map<string, GatewayKeyBudget>()
-const memoryBudgetCounters = new Map<string, { spentMicros: number; lastUsedAt?: string }>()
-const memoryBypassSessions = new Map<string, BudgetBypassSession>()
-let memoryWindow: BudgetWindow | undefined
+interface AnalyticsMemoryState {
+  events: Map<string, UsageEvent>
+  rollups: Map<string, UsageRollup>
+  pricing: Map<string, ModelPricing>
+  budgets: Map<string, GatewayKeyBudget>
+  budgetCounters: Map<string, { spentMicros: number; lastUsedAt?: string }>
+  bypassSessions: Map<string, BudgetBypassSession>
+  window?: BudgetWindow
+}
+declare global { var __rawrouteAnalyticsMemory: Map<string, AnalyticsMemoryState> | undefined }
+function memoryStates() { return globalThis.__rawrouteAnalyticsMemory ||= new Map<string, AnalyticsMemoryState>() }
+function memoryState() {
+  const workspaceId = currentWorkspaceId()
+  let state = memoryStates().get(workspaceId)
+  if (!state) {
+    state = { events: new Map(), rollups: new Map(), pricing: new Map(), budgets: new Map(), budgetCounters: new Map(), bypassSessions: new Map() }
+    memoryStates().set(workspaceId, state)
+  }
+  return state
+}
 export type ResolvedModelPricing = Exclude<Awaited<ReturnType<typeof getModernPricingForModelAt>>, undefined> | ModelPricing
 const pricingCache = new Map<string, { value: ResolvedModelPricing | undefined; expiresAt: number; modelPricingGeneration: number; legacyPricingGeneration: number }>()
 const pricingInflight = new Map<string, Promise<ResolvedModelPricing | undefined>>()
 const pricingCacheTtlMs = 30_000
-let legacyPricingCache: TimedValue<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }> | undefined
-let legacyPricingInflight: Promise<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }> | undefined
+const legacyPricingCaches = new Map<string, TimedValue<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }>>()
+const legacyPricingInflights = new Map<string, Promise<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }>>()
 let legacyPricingGeneration = 0
 
 interface TimedValue<T> { value: T; expiresAt: number }
@@ -45,10 +59,10 @@ const bypassSessionCache = new Map<string, TimedValue<BudgetBypassSession | null
 const bypassSessionInflight = new Map<string, Promise<BudgetBypassSession | undefined>>()
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
 const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
-let budgetsCache: TimedValue<GatewayKeyBudget[]> | undefined
-let budgetsInflight: Promise<GatewayKeyBudget[]> | undefined
-let budgetWindowCache: TimedValue<BudgetWindow> | undefined
-let budgetWindowInflight: Promise<BudgetWindow> | undefined
+const budgetsCaches = new Map<string, TimedValue<GatewayKeyBudget[]>>()
+const budgetsInflights = new Map<string, Promise<GatewayKeyBudget[]>>()
+const budgetWindowCaches = new Map<string, TimedValue<BudgetWindow>>()
+const budgetWindowInflights = new Map<string, Promise<BudgetWindow>>()
 let budgetCacheGeneration = 0
 
 function positiveDuration(value: string | undefined, fallback: number) {
@@ -74,12 +88,16 @@ function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1
   cache.set(key, value)
 }
 
+function scopedKey(key: string) {
+  return `${currentWorkspaceId()}:${key}`
+}
+
 function invalidateBudgetReadCaches() {
   budgetCacheGeneration += 1
-  budgetsCache = undefined
-  budgetsInflight = undefined
-  budgetWindowCache = undefined
-  budgetWindowInflight = undefined
+  budgetsCaches.delete(currentWorkspaceId())
+  budgetsInflights.delete(currentWorkspaceId())
+  budgetWindowCaches.delete(currentWorkspaceId())
+  budgetWindowInflights.delete(currentWorkspaceId())
   budgetConfigCache.clear()
   budgetConfigInflight.clear()
   budgetCounterCache.clear()
@@ -94,8 +112,8 @@ function invalidateBudgetReadCaches() {
 
 function invalidateLegacyPricingCaches() {
   legacyPricingGeneration += 1
-  legacyPricingCache = undefined
-  legacyPricingInflight = undefined
+  legacyPricingCaches.delete(currentWorkspaceId())
+  legacyPricingInflights.delete(currentWorkspaceId())
   pricingCache.clear()
   pricingInflight.clear()
 }
@@ -111,13 +129,14 @@ function db() {
   firestore = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)")
   return firestore
 }
-function eventsRef() { return db().collection(`${prefix()}_usage_events`) }
-function rollupsRef() { return db().collection(`${prefix()}_usage_rollups`) }
-function pricingRef() { return db().collection(`${prefix()}_model_pricing`) }
-function budgetsRef() { return db().collection(`${prefix()}_budgets`) }
-function budgetCountersRef() { return db().collection(`${prefix()}_budget_counters`) }
-function bypassSessionsRef() { return db().collection(`${prefix()}_budget_bypass_sessions`) }
-function windowRef() { return db().collection(`${prefix()}_budget_windows`).doc("current") }
+function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
+function eventsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_usage_events`) : workspaceRef().collection("usageEvents") }
+function rollupsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_usage_rollups`) : workspaceRef().collection("usageRollups") }
+function pricingRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing`) : workspaceRef().collection("modelPricing") }
+function budgetsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_budgets`) : workspaceRef().collection("budgets") }
+function budgetCountersRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_budget_counters`) : workspaceRef().collection("budgetCounters") }
+function bypassSessionsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_budget_bypass_sessions`) : workspaceRef().collection("budgetBypassSessions") }
+function windowRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_budget_windows`).doc("current") : workspaceRef().collection("budgetWindows").doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
 function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
 function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
@@ -135,67 +154,71 @@ function advanceExpiredWindow(window: BudgetWindow, now = Date.now()) {
 
 async function budgetUsageStart(window: BudgetWindow) {
   if (!window.bypassLimits || !window.bypassSessionId) return window.start
-  if (isMemory()) return memoryBypassSessions.get(window.bypassSessionId)?.startedAt || window.start
+  if (isMemory()) return memoryState().bypassSessions.get(window.bypassSessionId)?.startedAt || window.start
   const sessionId = window.bypassSessionId
-  const cached = bypassSessionCache.get(sessionId)
+  const cacheId = scopedKey(sessionId)
+  const cached = bypassSessionCache.get(cacheId)
   if (cached && cached.expiresAt > Date.now()) return cached.value?.startedAt || window.start
-  const existing = bypassSessionInflight.get(sessionId)
+  const existing = bypassSessionInflight.get(cacheId)
   if (existing) return (await existing)?.startedAt || window.start
 
   const generation = budgetCacheGeneration
   const promise = bypassSessionsRef().doc(sessionId).get().then((snapshot) => {
     const session = snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as BudgetBypassSession : undefined
-    if (generation === budgetCacheGeneration) boundedSet(bypassSessionCache, sessionId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
+    if (generation === budgetCacheGeneration) boundedSet(bypassSessionCache, cacheId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
     return session
   }).finally(() => {
-    if (bypassSessionInflight.get(sessionId) === promise) bypassSessionInflight.delete(sessionId)
+    if (bypassSessionInflight.get(cacheId) === promise) bypassSessionInflight.delete(cacheId)
   })
-  bypassSessionInflight.set(sessionId, promise)
+  bypassSessionInflight.set(cacheId, promise)
   return (await promise)?.startedAt || window.start
 }
 
 async function budgetConfig(apiKeyId: string) {
-  if (isMemory()) return memoryBudgets.get(apiKeyId)
+  if (isMemory()) return memoryState().budgets.get(apiKeyId)
   const now = Date.now()
-  const cached = budgetConfigCache.get(apiKeyId)
+  const cacheId = scopedKey(apiKeyId)
+  const cached = budgetConfigCache.get(cacheId)
   if (cached && cached.expiresAt > now) return cached.value || undefined
+  const budgetsCache = budgetsCaches.get(currentWorkspaceId())
   if (budgetsCache && budgetsCache.expiresAt > now) {
     const budget = budgetsCache.value.find((entry) => entry.apiKeyId === apiKeyId)
-    boundedSet(budgetConfigCache, apiKeyId, { value: budget || null, expiresAt: budgetsCache.expiresAt })
+    boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: budgetsCache.expiresAt })
     return budget
   }
-  const existing = budgetConfigInflight.get(apiKeyId)
+  const existing = budgetConfigInflight.get(cacheId)
   if (existing) return existing
 
   const generation = budgetCacheGeneration
   const promise = budgetsRef().doc(apiKeyId).get().then((snapshot) => {
     const budget = snapshot.exists ? { ...snapshot.data(), apiKeyId: snapshot.id } as GatewayKeyBudget : undefined
-    if (generation === budgetCacheGeneration) boundedSet(budgetConfigCache, apiKeyId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
+    if (generation === budgetCacheGeneration) boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
     return budget
   }).finally(() => {
-    if (budgetConfigInflight.get(apiKeyId) === promise) budgetConfigInflight.delete(apiKeyId)
+    if (budgetConfigInflight.get(cacheId) === promise) budgetConfigInflight.delete(cacheId)
   })
-  budgetConfigInflight.set(apiKeyId, promise)
+  budgetConfigInflight.set(cacheId, promise)
   return promise
 }
 
 async function budgetCounter(apiKeyId: string, usageStart: string) {
   const id = budgetCounterId(apiKeyId, usageStart)
-  if (isMemory()) return memoryBudgetCounters.get(id)?.spentMicros || 0
-  const cached = budgetCounterCache.get(id)
+  if (isMemory()) return memoryState().budgetCounters.get(id)?.spentMicros || 0
+  const cacheId = scopedKey(id)
+  const cached = budgetCounterCache.get(cacheId)
   if (cached && cached.expiresAt > Date.now()) return cached.value
-  const existing = budgetCounterInflight.get(id)
+  const existing = budgetCounterInflight.get(cacheId)
   if (existing) return existing
 
   const generation = budgetCacheGeneration
   const promise = budgetCountersRef().doc(id).get().then((snapshot) => {
     const spentMicros = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
-    if (generation === budgetCacheGeneration) boundedSet(budgetCounterCache, id, { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
+    if (generation === budgetCacheGeneration) boundedSet(budgetCounterCache, cacheId, { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
     return spentMicros
   }).finally(() => {
-    if (budgetCounterInflight.get(id) === promise) budgetCounterInflight.delete(id)
+    if (budgetCounterInflight.get(cacheId) === promise) budgetCounterInflight.delete(cacheId)
   })
-  budgetCounterInflight.set(id, promise)
+  budgetCounterInflight.set(cacheId, promise)
   return promise
 }
 
@@ -248,13 +271,14 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
   const updatedAt = new Date().toISOString()
 
   if (isMemory()) {
-    if (memoryEvents.has(event.id)) return event
-    memoryEvents.set(event.id, event)
+    const memory = memoryState()
+    if (memory.events.has(event.id)) return event
+    memory.events.set(event.id, event)
     for (const granularity of usageRollupGranularities) {
       const bucket = bucketStart(completedDate, granularity).toISOString()
       const id = rollupId(granularity, bucket, event)
-      const current = memoryRollups.get(id) || emptyRollup(id, granularity, bucket, event)
-      memoryRollups.set(id, {
+      const current = memory.rollups.get(id) || emptyRollup(id, granularity, bucket, event)
+      memory.rollups.set(id, {
         ...current,
         requests: current.requests + 1,
         inputTokens: current.inputTokens + event.inputTokens,
@@ -270,8 +294,8 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
       })
     }
     if (counterId) {
-      memoryBudgetCounters.set(counterId, {
-        spentMicros: (memoryBudgetCounters.get(counterId)?.spentMicros || 0) + event.costMicros,
+      memory.budgetCounters.set(counterId, {
+        spentMicros: (memory.budgetCounters.get(counterId)?.spentMicros || 0) + event.costMicros,
         lastUsedAt: event.completedAt,
       })
     }
@@ -319,11 +343,12 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
   }
   if (counterId && context) {
     const now = Date.now()
-    const cached = budgetCounterCache.get(counterId)
+    const counterCacheId = scopedKey(counterId)
+    const cached = budgetCounterCache.get(counterCacheId)
     if (cached && cached.expiresAt > now) {
-      budgetCounterCache.set(counterId, { value: cached.value + event.costMicros, expiresAt: cached.expiresAt })
+      budgetCounterCache.set(counterCacheId, { value: cached.value + event.costMicros, expiresAt: cached.expiresAt })
     }
-    const list = budgetCounterListCache.get(context.usageStartAt)
+    const list = budgetCounterListCache.get(scopedKey(context.usageStartAt))
     if (list && list.expiresAt > now) {
       const row = list.value.find((entry) => entry.id === counterId)
       if (row) {
@@ -339,7 +364,7 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
 
 export async function listUsageRollups(granularity?: UsageRollup["granularity"], from?: string, to?: string) {
   if (isMemory()) {
-    return [...memoryRollups.values()].filter((rollup) =>
+    return [...memoryState().rollups.values()].filter((rollup) =>
       (!granularity || rollup.granularity === granularity) &&
       (!from || rollup.bucketStart >= from) &&
       (!to || rollup.bucketStart < to),
@@ -421,7 +446,7 @@ export async function recordGatewayUsage(input: GatewayUsageInput, budgetUsageCo
 export async function listUsageEvents(from?: string, to?: string): Promise<UsageEvent[]> {
   const start = from ? Date.parse(from) : -Infinity
   const end = to ? Date.parse(to) : Infinity
-  if (isMemory()) return [...memoryEvents.values()].filter((event) => Date.parse(event.completedAt) >= start && Date.parse(event.completedAt) < end)
+  if (isMemory()) return [...memoryState().events.values()].filter((event) => Date.parse(event.completedAt) >= start && Date.parse(event.completedAt) < end)
     .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
   const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<", to || new Date().toISOString()).get()
   return snapshot.docs.map((document) => document.data() as UsageEvent).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
@@ -429,7 +454,7 @@ export async function listUsageEvents(from?: string, to?: string): Promise<Usage
 
 async function listUsageEventsForModels(providerModelIds: Set<string>, gatewayModelIds: Set<string>) {
   if (isMemory()) {
-    return [...memoryEvents.values()].filter((event) =>
+    return [...memoryState().events.values()].filter((event) =>
       Boolean(event.providerModelId && providerModelIds.has(event.providerModelId)) || gatewayModelIds.has(event.gatewayModelId),
     ).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
   }
@@ -445,7 +470,7 @@ async function listUsageEventsForModels(providerModelIds: Set<string>, gatewayMo
 }
 
 export async function listModelPricing() {
-  if (isMemory()) return [...memoryPricing.values()].sort((a, b) => a.gatewayModelId.localeCompare(b.gatewayModelId))
+  if (isMemory()) return [...memoryState().pricing.values()].sort((a, b) => a.gatewayModelId.localeCompare(b.gatewayModelId))
   const snapshot = await pricingRef().get()
   return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as ModelPricing))
 }
@@ -454,15 +479,18 @@ async function legacyPricingIndex() {
   if (isMemory()) {
     const byProviderModelId = new Map<string, ModelPricing>()
     const byGatewayModelId = new Map<string, ModelPricing>()
-    for (const pricing of memoryPricing.values()) {
+    for (const pricing of memoryState().pricing.values()) {
       if (!pricing.enabled) continue
       if (!byProviderModelId.has(pricing.modelId)) byProviderModelId.set(pricing.modelId, pricing)
       if (!byGatewayModelId.has(pricing.gatewayModelId)) byGatewayModelId.set(pricing.gatewayModelId, pricing)
     }
     return { byProviderModelId, byGatewayModelId }
   }
+  const workspaceId = currentWorkspaceId()
+  const legacyPricingCache = legacyPricingCaches.get(workspaceId)
   if (legacyPricingCache && legacyPricingCache.expiresAt > Date.now()) return legacyPricingCache.value
-  if (legacyPricingInflight) return legacyPricingInflight
+  const existingInflight = legacyPricingInflights.get(workspaceId)
+  if (existingInflight) return existingInflight
   const generation = legacyPricingGeneration
   const promise = listModelPricing().then((entries) => {
     const byProviderModelId = new Map<string, ModelPricing>()
@@ -473,17 +501,17 @@ async function legacyPricingIndex() {
       if (!byGatewayModelId.has(pricing.gatewayModelId)) byGatewayModelId.set(pricing.gatewayModelId, pricing)
     }
     const value = { byProviderModelId, byGatewayModelId }
-    if (generation === legacyPricingGeneration) legacyPricingCache = { value, expiresAt: Date.now() + pricingCacheTtlMs }
+    if (generation === legacyPricingGeneration) legacyPricingCaches.set(workspaceId, { value, expiresAt: Date.now() + pricingCacheTtlMs })
     return value
   }).finally(() => {
-    if (legacyPricingInflight === promise) legacyPricingInflight = undefined
+    if (legacyPricingInflights.get(workspaceId) === promise) legacyPricingInflights.delete(workspaceId)
   })
-  legacyPricingInflight = promise
+  legacyPricingInflights.set(workspaceId, promise)
   return promise
 }
 
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {
-  const key = `${gatewayModelId}:${providerModelId || ""}`
+  const key = scopedKey(`${gatewayModelId}:${providerModelId || ""}`)
   const modelGeneration = getModelPricingGeneration()
   const legacyGeneration = legacyPricingGeneration
   const cached = pricingCache.get(key)
@@ -512,17 +540,20 @@ export async function getPricingForModel(gatewayModelId: string, providerModelId
 }
 export async function upsertModelPricing(input: Omit<ModelPricing, "id" | "updatedAt"> & { id?: string }) {
   const pricing: ModelPricing = { ...input, id: input.id || crypto.randomUUID(), updatedAt: new Date().toISOString() }
-  if (isMemory()) memoryPricing.set(pricing.id, pricing)
+  if (isMemory()) memoryState().pricing.set(pricing.id, pricing)
   else await pricingRef().doc(pricing.id).set(pricing)
   invalidateLegacyPricingCaches()
   return pricing
 }
-export async function deleteModelPricing(id: string) { if (isMemory()) memoryPricing.delete(id); else await pricingRef().doc(id).delete(); invalidateLegacyPricingCaches() }
+export async function deleteModelPricing(id: string) { if (isMemory()) memoryState().pricing.delete(id); else await pricingRef().doc(id).delete(); invalidateLegacyPricingCaches() }
 
 export async function listBudgets(): Promise<GatewayKeyBudget[]> {
-  if (isMemory()) return [...memoryBudgets.values()]
+  if (isMemory()) return [...memoryState().budgets.values()]
   const now = Date.now()
+  const workspaceId = currentWorkspaceId()
+  const budgetsCache = budgetsCaches.get(workspaceId)
   if (budgetsCache && budgetsCache.expiresAt > now) return budgetsCache.value
+  const budgetsInflight = budgetsInflights.get(workspaceId)
   if (budgetsInflight) return budgetsInflight
 
   const generation = budgetCacheGeneration
@@ -530,37 +561,41 @@ export async function listBudgets(): Promise<GatewayKeyBudget[]> {
     const budgets = snapshot.docs.map((document) => ({ ...document.data(), apiKeyId: document.id } as GatewayKeyBudget))
     if (generation === budgetCacheGeneration) {
       const expiresAt = Date.now() + budgetCacheTtlMs
-      budgetsCache = { value: budgets, expiresAt }
-      for (const budget of budgets) boundedSet(budgetConfigCache, budget.apiKeyId, { value: budget, expiresAt })
+      budgetsCaches.set(workspaceId, { value: budgets, expiresAt })
+      for (const budget of budgets) boundedSet(budgetConfigCache, scopedKey(budget.apiKeyId), { value: budget, expiresAt })
     }
     return budgets
   }).finally(() => {
-    if (budgetsInflight === promise) budgetsInflight = undefined
+    if (budgetsInflights.get(workspaceId) === promise) budgetsInflights.delete(workspaceId)
   })
-  budgetsInflight = promise
+  budgetsInflights.set(workspaceId, promise)
   return promise
 }
 
 export async function listBudgetBypassSessions(limit = 50, currentWindow?: BudgetWindow): Promise<BudgetBypassSession[]> {
   const window = currentWindow || await getBudgetWindow()
   if (window.bypassLimits && !window.bypassSessionId) await setBudgetBypassEnabled(true)
-  if (isMemory()) return [...memoryBypassSessions.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit)
+  if (isMemory()) return [...memoryState().bypassSessions.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit)
   const snapshot = await bypassSessionsRef().orderBy("startedAt", "desc").limit(limit).get()
   return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as BudgetBypassSession))
 }
 
 export async function getBudgetWindow(): Promise<BudgetWindow> {
   if (isMemory()) {
-    const current = memoryWindow || defaultWindow()
+    const memory = memoryState()
+    const current = memory.window || defaultWindow()
     const next = advanceExpiredWindow(current)
-    memoryWindow = next
+    memory.window = next
     return next
   }
   const now = Date.now()
+  const workspaceId = currentWorkspaceId()
+  const budgetWindowCache = budgetWindowCaches.get(workspaceId)
   if (budgetWindowCache && budgetWindowCache.expiresAt > now) {
     const next = advanceExpiredWindow(budgetWindowCache.value, now)
     if (next === budgetWindowCache.value) return next
   }
+  const budgetWindowInflight = budgetWindowInflights.get(workspaceId)
   if (budgetWindowInflight) return budgetWindowInflight
 
   const generation = budgetCacheGeneration
@@ -582,12 +617,12 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     })
     return result
   })().then((window) => {
-    if (generation === budgetCacheGeneration) budgetWindowCache = { value: window, expiresAt: Date.now() + budgetCacheTtlMs }
+    if (generation === budgetCacheGeneration) budgetWindowCaches.set(workspaceId, { value: window, expiresAt: Date.now() + budgetCacheTtlMs })
     return window
   }).finally(() => {
-    if (budgetWindowInflight === promise) budgetWindowInflight = undefined
+    if (budgetWindowInflights.get(workspaceId) === promise) budgetWindowInflights.delete(workspaceId)
   })
-  budgetWindowInflight = promise
+  budgetWindowInflights.set(workspaceId, promise)
   return promise
 }
 async function resolveCodexBudgetWindow(accountId: string | null | undefined) {
@@ -618,10 +653,10 @@ export async function updateBudgetWindow(input: Partial<BudgetWindow> & { anchor
   const start = new Date(next.start)
   const end = new Date(next.end)
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) throw new Error("Invalid budget window.")
-  if (isMemory()) memoryWindow = next
+  if (isMemory()) memoryState().window = next
   else await windowRef().set(next)
   invalidateBudgetReadCaches()
-  if (!isMemory()) budgetWindowCache = { value: next, expiresAt: Date.now() + budgetCacheTtlMs }
+  if (!isMemory()) budgetWindowCaches.set(currentWorkspaceId(), { value: next, expiresAt: Date.now() + budgetCacheTtlMs })
   return next
 }
 
@@ -630,21 +665,21 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
   if (isMemory()) {
     const current = await getBudgetWindow()
     if (current.bypassLimits === enabled && (!enabled || current.bypassSessionId)) {
-      return { window: current, session: enabled && current.bypassSessionId ? memoryBypassSessions.get(current.bypassSessionId) || null : null }
+      return { window: current, session: enabled && current.bypassSessionId ? memoryState().bypassSessions.get(current.bypassSessionId) || null : null }
     }
     let session: BudgetBypassSession | null = null
     if (enabled) {
       session = { id: crypto.randomUUID(), startedAt: now, endedAt: null }
-      memoryBypassSessions.set(session.id, session)
+      memoryState().bypassSessions.set(session.id, session)
     } else if (current.bypassSessionId) {
-      const active = memoryBypassSessions.get(current.bypassSessionId)
-      if (active) { session = { ...active, endedAt: now }; memoryBypassSessions.set(session.id, session) }
+      const active = memoryState().bypassSessions.get(current.bypassSessionId)
+      if (active) { session = { ...active, endedAt: now }; memoryState().bypassSessions.set(session.id, session) }
     } else if (current.bypassLimits) {
       session = { id: crypto.randomUUID(), startedAt: current.updatedAt, endedAt: now }
-      memoryBypassSessions.set(session.id, session)
+      memoryState().bypassSessions.set(session.id, session)
     }
     const next: BudgetWindow = { ...current, bypassLimits: enabled, bypassSessionId: enabled ? session?.id || null : null, updatedAt: now }
-    memoryWindow = next
+    memoryState().window = next
     invalidateBudgetReadCaches()
     return { window: next, session: enabled ? session : null }
   }
@@ -676,40 +711,41 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
     result = { window: next, session: enabled ? session : null }
   })
   invalidateBudgetReadCaches()
-  budgetWindowCache = { value: result.window, expiresAt: Date.now() + budgetCacheTtlMs }
+  budgetWindowCaches.set(currentWorkspaceId(), { value: result.window, expiresAt: Date.now() + budgetCacheTtlMs })
   return result
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
   const window = await getBudgetWindow()
   const budget: GatewayKeyBudget = { ...input, spentMicros: 0, windowStart: window.start, windowEnd: window.end, updatedAt: new Date().toISOString() }
-  if (isMemory()) memoryBudgets.set(input.apiKeyId, budget)
+  if (isMemory()) memoryState().budgets.set(input.apiKeyId, budget)
   else await budgetsRef().doc(input.apiKeyId).set(budget)
   invalidateBudgetReadCaches()
   return budget
 }
 export async function deleteBudget(apiKeyId: string) {
-  if (isMemory()) memoryBudgets.delete(apiKeyId)
+  if (isMemory()) memoryState().budgets.delete(apiKeyId)
   else await budgetsRef().doc(apiKeyId).delete()
   invalidateBudgetReadCaches()
 }
 
 async function listBudgetCounters(usageStart: string): Promise<BudgetCounterRow[]> {
-  if (isMemory()) return [...memoryBudgetCounters.entries()].map(([id, value]) => ({ id, ...value }))
+  if (isMemory()) return [...memoryState().budgetCounters.entries()].map(([id, value]) => ({ id, ...value }))
   const now = Date.now()
-  const cached = budgetCounterListCache.get(usageStart)
+  const cacheId = scopedKey(usageStart)
+  const cached = budgetCounterListCache.get(cacheId)
   if (cached && cached.expiresAt > now) return cached.value
-  const existing = budgetCounterListInflight.get(usageStart)
+  const existing = budgetCounterListInflight.get(cacheId)
   if (existing) return existing
 
   const generation = budgetCacheGeneration
   const promise = budgetCountersRef().where("usageStartAt", "==", usageStart).get().then((snapshot) => {
     const rows = snapshot.docs.map((document) => ({ id: document.id, ...(document.data() as Omit<BudgetCounterRow, "id">) }))
-    if (generation === budgetCacheGeneration) boundedSet(budgetCounterListCache, usageStart, { value: rows, expiresAt: Date.now() + budgetCacheTtlMs }, 8)
+    if (generation === budgetCacheGeneration) boundedSet(budgetCounterListCache, cacheId, { value: rows, expiresAt: Date.now() + budgetCacheTtlMs }, 8)
     return rows
   }).finally(() => {
-    if (budgetCounterListInflight.get(usageStart) === promise) budgetCounterListInflight.delete(usageStart)
+    if (budgetCounterListInflight.get(cacheId) === promise) budgetCounterListInflight.delete(cacheId)
   })
-  budgetCounterListInflight.set(usageStart, promise)
+  budgetCounterListInflight.set(cacheId, promise)
   return promise
 }
 
@@ -774,7 +810,7 @@ export async function getBudgetRequestState(
     usageContext,
     pricing,
     admission: {
-      key: `rawroute:budget:${budgetCounterId(apiKeyId, usageStartAt)}`,
+      key: `rawroute:budget:${currentWorkspaceId()}:${budgetCounterId(apiKeyId, usageStartAt)}`,
       limitMicros: budget.weeklyLimitMicros,
       spentMicros,
       reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes),
@@ -1068,7 +1104,7 @@ function rollupFromEvent(event: UsageEvent, granularity: UsageRollup["granularit
 
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
   if (isMemory()) return buildDashboardPayload(query, publicView)
-  const cacheKey = JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto"])
+  const cacheKey = scopedKey(JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto"]))
   const cached = dashboardCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = dashboardInflight.get(cacheKey)
@@ -1167,15 +1203,16 @@ async function applyRepricingChunk(updates: RepricedEvent[], budgetContext: Repr
   }
 
   if (isMemory()) {
-    for (const update of updates) memoryEvents.set(update.after.id, update.after)
+    const memory = memoryState()
+    for (const update of updates) memory.events.set(update.after.id, update.after)
     for (const [id, delta] of rollupDeltas) {
       if (!delta.cost && !delta.priced && !delta.unpriced) continue
-      const current = memoryRollups.get(id) || emptyRollup(id, delta.granularity, delta.bucketStart, delta.event)
-      memoryRollups.set(id, { ...current, costMicros: current.costMicros + delta.cost, pricedRequests: (current.pricedRequests || 0) + delta.priced, unpricedRequests: (current.unpricedRequests || 0) + delta.unpriced, updatedAt: now })
+      const current = memory.rollups.get(id) || emptyRollup(id, delta.granularity, delta.bucketStart, delta.event)
+      memory.rollups.set(id, { ...current, costMicros: current.costMicros + delta.cost, pricedRequests: (current.pricedRequests || 0) + delta.priced, unpricedRequests: (current.unpricedRequests || 0) + delta.unpriced, updatedAt: now })
     }
     for (const [id, delta] of budgetDeltas) {
-      const current = memoryBudgetCounters.get(id)
-      memoryBudgetCounters.set(id, { spentMicros: (current?.spentMicros || 0) + delta.cost, lastUsedAt: current?.lastUsedAt || delta.event.completedAt })
+      const current = memory.budgetCounters.get(id)
+      memory.budgetCounters.set(id, { spentMicros: (current?.spentMicros || 0) + delta.cost, lastUsedAt: current?.lastUsedAt || delta.event.completedAt })
     }
     return
   }
@@ -1230,4 +1267,4 @@ export async function repriceUsageForGroup(jobId: string) {
   return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() })
 }
 
-export function resetAnalyticsForTests() { memoryEvents.clear(); memoryRollups.clear(); memoryPricing.clear(); memoryBudgetCounters.clear(); memoryBudgets.clear(); memoryBypassSessions.clear(); memoryWindow = undefined; invalidateLegacyPricingCaches(); invalidateBudgetReadCaches(); resetModelPricingForTests() }
+export function resetAnalyticsForTests() { memoryStates().clear(); invalidateLegacyPricingCaches(); invalidateBudgetReadCaches(); resetModelPricingForTests() }

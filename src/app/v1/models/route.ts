@@ -1,14 +1,18 @@
-import { validateProxyKey } from "@/lib/auth"
+import { authenticateProxyKey } from "@/lib/auth"
 import { catalogModels } from "@/lib/catalog"
 import { jsonError } from "@/lib/http"
 import { readCatalogData } from "@/lib/store"
+import { runInWorkspace } from "@/lib/workspace-context"
 
 
 export async function GET(request: Request) {
-  if (!(await validateProxyKey(request))) return jsonError("Invalid gateway API key.", 401)
-  const data = await readCatalogData()
-  return Response.json({
-    object: "list",
-    data: catalogModels(data.providers, data.models, data.aliases),
-  }, { headers: { "cache-control": "private, max-age=5, stale-while-revalidate=30" } })
+  const authenticated = await authenticateProxyKey(request)
+  if (!authenticated) return jsonError("Invalid gateway API key.", 401)
+  return runInWorkspace(authenticated.workspace, async () => {
+    const data = await readCatalogData()
+    return Response.json({
+      object: "list",
+      data: catalogModels(data.providers, data.models, data.aliases),
+    }, { headers: { "cache-control": "private, max-age=5, stale-while-revalidate=30" } })
+  })
 }

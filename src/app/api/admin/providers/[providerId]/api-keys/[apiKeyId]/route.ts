@@ -6,7 +6,7 @@ import { deleteProviderApiKey } from "@/lib/store"
 
 export async function DELETE(_request: Request, context: { params: Promise<{ providerId: string; apiKeyId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

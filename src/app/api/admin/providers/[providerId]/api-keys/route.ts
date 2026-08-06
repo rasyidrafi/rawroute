@@ -16,7 +16,7 @@ function parseInteger(value: unknown, label: string, minimum: number, maximum?: 
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

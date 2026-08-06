@@ -16,7 +16,7 @@ function maskApiKey(key: string): string {
 
 export async function GET(_request: Request, context: { params: Promise<{ providerId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }
@@ -37,7 +37,7 @@ export async function GET(_request: Request, context: { params: Promise<{ provid
 
 export async function DELETE(_request: Request, context: { params: Promise<{ providerId: string }> }) {
   try {
-    await requireAdmin()
+    (await requireAdmin())()
   } catch {
     return jsonError("Unauthorized", 401)
   }

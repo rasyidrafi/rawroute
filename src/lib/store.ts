@@ -5,6 +5,7 @@ import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, g
 import { gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey } from "@/lib/types"
+import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 30_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 30_000
@@ -12,12 +13,6 @@ const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 15
 const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 15_000
 const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 2_000)
 const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 2_000
-let compatibilityCache: CompatibilityCache | undefined
-let compatibilityReadPromise: Promise<AppData> | undefined
-let routingDataCache: DataCache<RoutingData> | undefined
-let routingDataReadPromise: Promise<RoutingData> | undefined
-let catalogDataCache: DataCache<CatalogData> | undefined
-let catalogDataReadPromise: Promise<CatalogData> | undefined
 let metaCache: { data: Meta; expiresAt: number } | undefined
 let metaReadPromise: Promise<Meta> | undefined
 
@@ -27,18 +22,50 @@ interface ReadCache<T> {
   inflight?: Promise<T>
 }
 
-const providersCache: ReadCache<Provider[]> = { expiresAt: 0 }
-const providerApiKeysCache = new Map<string, ReadCache<ProviderApiKey[]>>()
-const allProviderApiKeysCache: ReadCache<ProviderApiKey[]> = { expiresAt: 0 }
-const providerModelsCache = new Map<string, ReadCache<Model[]>>()
-const modelsCache: ReadCache<Model[]> = { expiresAt: 0 }
-const aliasesCache: ReadCache<ModelAlias[]> = { expiresAt: 0 }
-const apiKeysCache: ReadCache<ApiKey[]> = { expiresAt: 0 }
-const apiKeyLookupCache = new Map<string, { value: ApiKey | null; expiresAt: number }>()
-const apiKeyLookupInflight = new Map<string, Promise<ApiKey | undefined>>()
+interface WorkspaceCacheState {
+  compatibilityCache?: CompatibilityCache
+  compatibilityReadPromise?: Promise<AppData>
+  routingDataCache?: DataCache<RoutingData>
+  routingDataReadPromise?: Promise<RoutingData>
+  catalogDataCache?: DataCache<CatalogData>
+  catalogDataReadPromise?: Promise<CatalogData>
+  providersCache: ReadCache<Provider[]>
+  providerApiKeysCache: Map<string, ReadCache<ProviderApiKey[]>>
+  allProviderApiKeysCache: ReadCache<ProviderApiKey[]>
+  providerModelsCache: Map<string, ReadCache<Model[]>>
+  modelsCache: ReadCache<Model[]>
+  aliasesCache: ReadCache<ModelAlias[]>
+  apiKeysCache: ReadCache<ApiKey[]>
+  apiKeyHashIndex?: Map<string, ApiKey>
+  generation: number
+}
+
+const workspaceCacheStates = new Map<string, WorkspaceCacheState>()
+
+function workspaceCacheState() {
+  const key = currentWorkspaceId()
+  let state = workspaceCacheStates.get(key)
+  if (!state) {
+    state = {
+      providersCache: { expiresAt: 0 },
+      providerApiKeysCache: new Map(),
+      allProviderApiKeysCache: { expiresAt: 0 },
+      providerModelsCache: new Map(),
+      modelsCache: { expiresAt: 0 },
+      aliasesCache: { expiresAt: 0 },
+      apiKeysCache: { expiresAt: 0 },
+      generation: 0,
+    }
+    workspaceCacheStates.set(key, state)
+  }
+  return state
+}
+
+interface IndexedApiKey { workspaceId: string; apiKey: ApiKey }
+
+const apiKeyLookupCache = new Map<string, { value: IndexedApiKey | null; expiresAt: number }>()
+const apiKeyLookupInflight = new Map<string, Promise<IndexedApiKey | undefined>>()
 const maximumApiKeyLookupEntries = 512
-let apiKeyHashIndex: Map<string, ApiKey> | undefined
-let configurationGeneration = 0
 let metaGeneration = 0
 
 const documentedAdminPassword = "change-me-now"
@@ -322,13 +349,14 @@ function storedApiKey(apiKey: ApiKey) {
 }
 
 interface ApiKeyIndexData {
+  workspaceId?: string
   apiKeyId?: string
   name?: string
   createdAt?: string
 }
 
 function apiKeyIndexDocument(apiKey: ApiKey): Required<ApiKeyIndexData> {
-  return { apiKeyId: apiKey.id, name: apiKey.name, createdAt: apiKey.createdAt }
+  return { workspaceId: currentWorkspaceId(), apiKeyId: apiKey.id, name: apiKey.name, createdAt: apiKey.createdAt }
 }
 
 function storedAlias(alias: ModelAlias) {
@@ -337,7 +365,7 @@ function storedAlias(alias: ModelAlias) {
   return stripUndefined(data)
 }
 
-function isMemoryBackend() {
+export function isMemoryBackend() {
   return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test"
 }
 
@@ -361,9 +389,10 @@ async function cachedRead<T>(cache: ReadCache<T>, loader: () => Promise<T>): Pro
   if (cache.value !== undefined && cache.expiresAt > now) return cache.value
   if (cache.inflight) return cache.inflight
 
-  const generation = configurationGeneration
+  const state = workspaceCacheState()
+  const generation = state.generation
   const promise = loader().then((value) => {
-    if (generation === configurationGeneration) {
+    if (generation === state.generation) {
       cache.value = value
       cache.expiresAt = Date.now() + cacheTtlMs
     }
@@ -384,7 +413,7 @@ function providerScopedCache<T>(cache: Map<string, ReadCache<T>>, providerId: st
   return entry
 }
 
-function cacheApiKeyLookup(hash: string, value: ApiKey | undefined) {
+function cacheApiKeyLookup(hash: string, value: IndexedApiKey | undefined) {
   if (!apiKeyLookupCache.has(hash) && apiKeyLookupCache.size >= maximumApiKeyLookupEntries) {
     const oldest = apiKeyLookupCache.keys().next().value
     if (oldest !== undefined) apiKeyLookupCache.delete(oldest)
@@ -393,21 +422,22 @@ function cacheApiKeyLookup(hash: string, value: ApiKey | undefined) {
 }
 
 function invalidateCompatibilityCache() {
-  configurationGeneration += 1
-  compatibilityCache = undefined
-  compatibilityReadPromise = undefined
-  routingDataCache = undefined
-  routingDataReadPromise = undefined
-  catalogDataCache = undefined
-  catalogDataReadPromise = undefined
-  clearReadCache(providersCache)
-  clearReadCache(allProviderApiKeysCache)
-  clearReadCache(modelsCache)
-  clearReadCache(aliasesCache)
-  clearReadCache(apiKeysCache)
-  clearReadCacheMap(providerApiKeysCache)
-  clearReadCacheMap(providerModelsCache)
-  apiKeyHashIndex = undefined
+  const state = workspaceCacheState()
+  state.generation += 1
+  state.compatibilityCache = undefined
+  state.compatibilityReadPromise = undefined
+  state.routingDataCache = undefined
+  state.routingDataReadPromise = undefined
+  state.catalogDataCache = undefined
+  state.catalogDataReadPromise = undefined
+  clearReadCache(state.providersCache)
+  clearReadCache(state.allProviderApiKeysCache)
+  clearReadCache(state.modelsCache)
+  clearReadCache(state.aliasesCache)
+  clearReadCache(state.apiKeysCache)
+  clearReadCacheMap(state.providerApiKeysCache)
+  clearReadCacheMap(state.providerModelsCache)
+  state.apiKeyHashIndex = undefined
   apiKeyLookupCache.clear()
   apiKeyLookupInflight.clear()
 }
@@ -467,23 +497,30 @@ interface MemoryState {
   initialized: boolean
 }
 
-const memory: MemoryState = {
-  meta: undefined,
-  providers: new Map(),
-  providerApiKeys: new Map(),
-  models: new Map(),
-  aliases: new Map(),
-  apiKeys: new Map(),
-  apiKeyIndexes: new Map(),
-  initialized: false,
+interface MemoryRoot { states: Map<string, MemoryState>; meta?: Meta }
+declare global { var __rawrouteMemoryStore: MemoryRoot | undefined }
+function memoryRoot(): MemoryRoot {
+  return globalThis.__rawrouteMemoryStore ||= { states: new Map<string, MemoryState>() }
 }
 
-function ensureMemorySeeded(): MemoryState {
+function newMemoryState(): MemoryState {
+  return { meta: memoryRoot().meta, providers: new Map(), providerApiKeys: new Map(), models: new Map(), aliases: new Map(), apiKeys: new Map(), apiKeyIndexes: new Map(), initialized: false }
+}
+
+function ensureMemorySeeded(workspaceId = currentWorkspaceId()): MemoryState {
+  let memory = memoryRoot().states.get(workspaceId)
+  if (!memory) {
+    memory = newMemoryState()
+    memoryRoot().states.set(workspaceId, memory)
+  }
   if (!memory.initialized) {
-    memory.meta = initialMeta()
+    memoryRoot().meta ||= initialMeta()
+    memory.meta = memoryRoot().meta
+    if (workspaceId === DEFAULT_WORKSPACE_ID) {
     const seedKey = initialGatewayApiKey()
     memory.apiKeys.set(seedKey.id, seedKey)
     memory.apiKeyIndexes.set(apiKeyValueHash(seedKey.key), seedKey.id)
+    }
     memory.initialized = true
   }
   return memory
@@ -501,13 +538,21 @@ function memorySnapshot(state: MemoryState) {
   }
 }
 
+function memoryApiKeyOwner(hash: string) {
+  for (const [workspaceId, state] of memoryRoot().states) {
+    const apiKeyId = state.apiKeyIndexes.get(hash)
+    if (apiKeyId) return { workspaceId, apiKeyId }
+  }
+  return undefined
+}
+
 // -------------------------------------------------------------------------------------------------
 // Firestore backend
 // -------------------------------------------------------------------------------------------------
 
 let firestoreInstance: Firestore | undefined
 
-function getFirestoreInstance(): Firestore {
+export function getFirestoreInstance(): Firestore {
   if (firestoreInstance) return firestoreInstance
   const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
@@ -521,7 +566,7 @@ function getFirestoreInstance(): Firestore {
   return firestoreInstance
 }
 
-function collectionPrefix() {
+export function collectionPrefix() {
   return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
 }
 
@@ -533,8 +578,14 @@ function legacyMetaRef() {
   return getFirestoreInstance().collection(`${collectionPrefix()}_system`).doc("state")
 }
 
+function workspaceRootRef() {
+  return getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).doc(currentWorkspaceId())
+}
+
 function providersRef() {
-  return getFirestoreInstance().collection(collectionPrefix()).doc("providers").collection("providers")
+  return usesLegacyWorkspaceStorage()
+    ? getFirestoreInstance().collection(collectionPrefix()).doc("providers").collection("providers")
+    : workspaceRootRef().collection("providers")
 }
 
 function providerRef(providerId: string) {
@@ -558,7 +609,9 @@ function modelRef(providerId: string, modelId: string) {
 }
 
 function aliasesRef() {
-  return getFirestoreInstance().collection(collectionPrefix()).doc("aliases").collection("aliases")
+  return usesLegacyWorkspaceStorage()
+    ? getFirestoreInstance().collection(collectionPrefix()).doc("aliases").collection("aliases")
+    : workspaceRootRef().collection("aliases")
 }
 
 function aliasRef(aliasId: string) {
@@ -566,7 +619,9 @@ function aliasRef(aliasId: string) {
 }
 
 function apiKeysRef() {
-  return getFirestoreInstance().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
+  return usesLegacyWorkspaceStorage()
+    ? getFirestoreInstance().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
+    : workspaceRootRef().collection("apiKeys")
 }
 
 function apiKeyRef(apiKeyId: string) {
@@ -613,7 +668,8 @@ export async function readSessionSecret(): Promise<string> {
 
 export async function writeMeta(meta: Meta): Promise<void> {
   if (isMemoryBackend()) {
-    ensureMemorySeeded().meta = meta
+    memoryRoot().meta = meta
+    for (const state of memoryRoot().states.values()) state.meta = meta
     metaGeneration += 1
     metaReadPromise = undefined
     metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
@@ -629,13 +685,14 @@ export async function writeMeta(meta: Meta): Promise<void> {
 
 export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
   if (isMemoryBackend()) {
-    const state = ensureMemorySeeded()
-    await mutator(state.meta!)
+    ensureMemorySeeded()
+    await mutator(memoryRoot().meta!)
+    for (const state of memoryRoot().states.values()) state.meta = memoryRoot().meta
     metaGeneration += 1
     metaReadPromise = undefined
-    metaCache = { data: structuredClone(state.meta!), expiresAt: Date.now() + cacheTtlMs }
+    metaCache = { data: structuredClone(memoryRoot().meta!), expiresAt: Date.now() + cacheTtlMs }
     invalidateCompatibilityCache()
-    return state.meta!
+    return memoryRoot().meta!
   }
   const meta = await firestoreUpdateMeta(mutator)
   metaGeneration += 1
@@ -650,15 +707,16 @@ export async function listProviders(): Promise<Provider[]> {
     const state = ensureMemorySeeded()
     return [...state.providers.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
-  return cachedRead(providersCache, firestoreListProviders)
+  return cachedRead(workspaceCacheState().providersCache, firestoreListProviders)
 }
 
 export async function getProvider(providerId: string): Promise<Provider | undefined> {
   if (isMemoryBackend()) {
     return ensureMemorySeeded().providers.get(providerId)
   }
-  if (providersCache.value && providersCache.expiresAt > Date.now()) {
-    return providersCache.value.find((provider) => provider.id === providerId)
+  const cache = workspaceCacheState().providersCache
+  if (cache.value && cache.expiresAt > Date.now()) {
+    return cache.value.find((provider) => provider.id === providerId)
   }
   return firestoreGetProvider(providerId)
 }
@@ -680,18 +738,20 @@ export async function listProviderApiKeys(providerId: string): Promise<ProviderA
     const map = ensureMemorySeeded().providerApiKeys.get(providerId) || new Map<string, ProviderApiKey>()
     return [...map.values()].sort(compareProviderApiKeys)
   }
-  if (allProviderApiKeysCache.value && allProviderApiKeysCache.expiresAt > Date.now()) {
-    return allProviderApiKeysCache.value.filter((apiKey) => apiKey.providerId === providerId).sort(compareProviderApiKeys)
+  const state = workspaceCacheState()
+  if (state.allProviderApiKeysCache.value && state.allProviderApiKeysCache.expiresAt > Date.now()) {
+    return state.allProviderApiKeysCache.value.filter((apiKey) => apiKey.providerId === providerId).sort(compareProviderApiKeys)
   }
-  return cachedRead(providerScopedCache(providerApiKeysCache, providerId), () => firestoreListProviderApiKeys(providerId))
+  return cachedRead(providerScopedCache(state.providerApiKeysCache, providerId), () => firestoreListProviderApiKeys(providerId))
 }
 
 export async function getProviderApiKey(providerId: string, apiKeyId: string): Promise<ProviderApiKey | undefined> {
   if (isMemoryBackend()) return ensureMemorySeeded().providerApiKeys.get(providerId)?.get(apiKeyId)
-  const cached = providerApiKeysCache.get(providerId)
+  const state = workspaceCacheState()
+  const cached = state.providerApiKeysCache.get(providerId)
   if (cached?.value && cached.expiresAt > Date.now()) return cached.value.find((apiKey) => apiKey.id === apiKeyId)
-  if (allProviderApiKeysCache.value && allProviderApiKeysCache.expiresAt > Date.now()) {
-    return allProviderApiKeysCache.value.find((apiKey) => apiKey.providerId === providerId && apiKey.id === apiKeyId)
+  if (state.allProviderApiKeysCache.value && state.allProviderApiKeysCache.expiresAt > Date.now()) {
+    return state.allProviderApiKeysCache.value.find((apiKey) => apiKey.providerId === providerId && apiKey.id === apiKeyId)
   }
   const snapshot = await providerApiKeyRef(providerId, apiKeyId).get()
   return snapshot.exists ? providerApiKeyFromSnapshot(snapshot, providerId) : undefined
@@ -720,7 +780,7 @@ export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
     for (const slot of state.providerApiKeys.values()) out.push(...slot.values())
     return out
   }
-  return cachedRead(allProviderApiKeysCache, firestoreListAllProviderApiKeys)
+  return cachedRead(workspaceCacheState().allProviderApiKeysCache, firestoreListAllProviderApiKeys)
 }
 
 export async function upsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
@@ -743,7 +803,7 @@ export async function listModels(): Promise<Model[]> {
     for (const slot of state.models.values()) out.push(...slot.values())
     return out
   }
-  return cachedRead(modelsCache, firestoreListModels)
+  return cachedRead(workspaceCacheState().modelsCache, firestoreListModels)
 }
 
 export async function listProviderModels(providerId: string): Promise<Model[]> {
@@ -751,10 +811,11 @@ export async function listProviderModels(providerId: string): Promise<Model[]> {
     const map = ensureMemorySeeded().models.get(providerId) || new Map<string, Model>()
     return [...map.values()]
   }
-  if (modelsCache.value && modelsCache.expiresAt > Date.now()) {
-    return modelsCache.value.filter((model) => model.providerId === providerId)
+  const state = workspaceCacheState()
+  if (state.modelsCache.value && state.modelsCache.expiresAt > Date.now()) {
+    return state.modelsCache.value.filter((model) => model.providerId === providerId)
   }
-  return cachedRead(providerScopedCache(providerModelsCache, providerId), () => firestoreListProviderModels(providerId))
+  return cachedRead(providerScopedCache(state.providerModelsCache, providerId), () => firestoreListProviderModels(providerId))
 }
 
 export async function upsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
@@ -773,7 +834,7 @@ export async function listAliases(): Promise<ModelAlias[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().aliases.values()].sort(compareAliases)
   }
-  return cachedRead(aliasesCache, firestoreListAliases)
+  return cachedRead(workspaceCacheState().aliasesCache, firestoreListAliases)
 }
 
 function compareAliases(left: ModelAlias, right: ModelAlias) {
@@ -797,9 +858,10 @@ export async function listApiKeys(): Promise<ApiKey[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().apiKeys.values()]
   }
-  const apiKeys = await cachedRead(apiKeysCache, firestoreListApiKeys)
-  if (!apiKeyHashIndex && apiKeysCache.value === apiKeys && apiKeysCache.expiresAt > Date.now()) {
-    apiKeyHashIndex = new Map(apiKeys.map((apiKey) => [apiKeyValueHash(apiKey.key), apiKey]))
+  const state = workspaceCacheState()
+  const apiKeys = await cachedRead(state.apiKeysCache, firestoreListApiKeys)
+  if (!state.apiKeyHashIndex && state.apiKeysCache.value === apiKeys && state.apiKeysCache.expiresAt > Date.now()) {
+    state.apiKeyHashIndex = new Map(apiKeys.map((apiKey) => [apiKeyValueHash(apiKey.key), apiKey]))
   }
   return apiKeys
 }
@@ -843,8 +905,8 @@ export async function _setApiKey(apiKey: ApiKey): Promise<void> {
     const previous = state.apiKeys.get(apiKey.id)
     const normalized = normalizeApiKeyValue(apiKey.key)
     const hash = apiKeyValueHash(normalized)
-    const owner = state.apiKeyIndexes.get(hash)
-    if (owner && owner !== apiKey.id) throw new ApiKeyConflictError()
+    const owner = memoryApiKeyOwner(hash)
+    if (owner && (owner.workspaceId !== currentWorkspaceId() || owner.apiKeyId !== apiKey.id)) throw new ApiKeyConflictError()
     if (previous) state.apiKeyIndexes.delete(apiKeyValueHash(previous.key))
     state.apiKeys.set(apiKey.id, { ...apiKey, key: normalized })
     state.apiKeyIndexes.set(hash, apiKey.id)
@@ -858,7 +920,9 @@ export async function _setApiKey(apiKey: ApiKey): Promise<void> {
     const normalized = normalizeApiKeyValue(apiKey.key)
     const indexRef = apiKeyIndexRef(apiKeyValueHash(normalized))
     const indexSnapshot = await transaction.get(indexRef)
-    if (indexSnapshot.exists && (indexSnapshot.data() as { apiKeyId?: string }).apiKeyId !== apiKey.id) throw new ApiKeyConflictError()
+    const owner = indexSnapshot.data() as ApiKeyIndexData | undefined
+    if (indexSnapshot.exists && (owner?.workspaceId || DEFAULT_WORKSPACE_ID) !== currentWorkspaceId()) throw new ApiKeyConflictError()
+    if (indexSnapshot.exists && owner?.apiKeyId !== apiKey.id) throw new ApiKeyConflictError()
     const next = { ...apiKey, key: normalized }
     if (previousSnapshot.exists) {
       const previous = apiKeyFromSnapshot(previousSnapshot)
@@ -887,51 +951,54 @@ async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
 // -------------------------------------------------------------------------------------------------
 
 async function readSharedCatalogData(): Promise<CatalogData> {
-  if (catalogDataCache && catalogDataCache.expiresAt > Date.now()) return catalogDataCache.data
-  if (!catalogDataReadPromise) {
-    const generation = configurationGeneration
+  const state = workspaceCacheState()
+  if (state.catalogDataCache && state.catalogDataCache.expiresAt > Date.now()) return state.catalogDataCache.data
+  if (!state.catalogDataReadPromise) {
+    const generation = state.generation
     const promise = Promise.all([listProviders(), listModels(), listAliases()]).then(([providers, models, aliases]) => {
       const data: CatalogData = { providers, models, aliases }
-      if (generation === configurationGeneration) catalogDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
+      if (generation === state.generation) state.catalogDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
       return data
     }).finally(() => {
-      if (catalogDataReadPromise === promise) catalogDataReadPromise = undefined
+      if (state.catalogDataReadPromise === promise) state.catalogDataReadPromise = undefined
     })
-    catalogDataReadPromise = promise
+    state.catalogDataReadPromise = promise
   }
-  return catalogDataReadPromise
+  return state.catalogDataReadPromise
 }
 
 async function readSharedRoutingData(): Promise<RoutingData> {
-  if (routingDataCache && routingDataCache.expiresAt > Date.now()) return routingDataCache.data
-  if (!routingDataReadPromise) {
-    const generation = configurationGeneration
+  const state = workspaceCacheState()
+  if (state.routingDataCache && state.routingDataCache.expiresAt > Date.now()) return state.routingDataCache.data
+  if (!state.routingDataReadPromise) {
+    const generation = state.generation
     const promise = Promise.all([readSharedCatalogData(), listAllProviderApiKeys(), readSharedMeta()]).then(([catalog, providerApiKeys, meta]) => {
       const data: RoutingData = { ...catalog, providerApiKeys, sessionSecret: meta.sessionSecret }
-      if (generation === configurationGeneration) routingDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
+      if (generation === state.generation) state.routingDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
       return data
     }).finally(() => {
-      if (routingDataReadPromise === promise) routingDataReadPromise = undefined
+      if (state.routingDataReadPromise === promise) state.routingDataReadPromise = undefined
     })
-    routingDataReadPromise = promise
+    state.routingDataReadPromise = promise
   }
-  return routingDataReadPromise
+  return state.routingDataReadPromise
 }
 
 async function readSharedData(): Promise<AppData> {
-  if (compatibilityCache && compatibilityCache.expiresAt > Date.now()) return compatibilityCache.data
-  if (!compatibilityReadPromise) {
-    const generation = configurationGeneration
+  const state = workspaceCacheState()
+  if (state.compatibilityCache && state.compatibilityCache.expiresAt > Date.now()) return state.compatibilityCache.data
+  if (!state.compatibilityReadPromise) {
+    const generation = state.generation
     const promise = Promise.all([readSharedRoutingData(), listApiKeys(), readSharedMeta()]).then(([routing, apiKeys, meta]) => {
       const data: AppData = { version: 4, admin: meta.admin, ...routing, apiKeys }
-      if (generation === configurationGeneration) compatibilityCache = { data, expiresAt: Date.now() + cacheTtlMs }
+      if (generation === state.generation) state.compatibilityCache = { data, expiresAt: Date.now() + cacheTtlMs }
       return data
     }).finally(() => {
-      if (compatibilityReadPromise === promise) compatibilityReadPromise = undefined
+      if (state.compatibilityReadPromise === promise) state.compatibilityReadPromise = undefined
     })
-    compatibilityReadPromise = promise
+    state.compatibilityReadPromise = promise
   }
-  return compatibilityReadPromise
+  return state.compatibilityReadPromise
 }
 
 /** Read-only catalog snapshot. Do not mutate it. */
@@ -948,50 +1015,47 @@ export async function readData(): Promise<AppData> {
   return structuredClone(await readSharedData())
 }
 
-export async function findApiKeyByValue(value: string): Promise<ApiKey | undefined> {
+export async function findIndexedApiKeyByValue(value: string): Promise<IndexedApiKey | undefined> {
   const normalized = normalizeApiKeyValue(value)
   if (!normalized) return undefined
   if (isMemoryBackend()) {
-    const state = ensureMemorySeeded()
-    const id = state.apiKeyIndexes.get(apiKeyValueHash(normalized))
-    return id ? state.apiKeys.get(id) : undefined
+    const owner = memoryApiKeyOwner(apiKeyValueHash(normalized))
+    if (!owner) return undefined
+    const apiKey = memoryRoot().states.get(owner.workspaceId)?.apiKeys.get(owner.apiKeyId)
+    return apiKey ? { workspaceId: owner.workspaceId, apiKey } : undefined
   }
   const hash = apiKeyValueHash(normalized)
   const cached = apiKeyLookupCache.get(hash)
   if (cached && cached.expiresAt > Date.now()) return cached.value || undefined
 
-  if (apiKeyHashIndex && apiKeysCache.expiresAt > Date.now()) {
-    const apiKey = apiKeyHashIndex.get(hash)
-    cacheApiKeyLookup(hash, apiKey)
-    return apiKey
-  }
-
   const existing = apiKeyLookupInflight.get(hash)
   if (existing) return existing
-  const generation = configurationGeneration
   const promise = (async () => {
     const index = await apiKeyIndexRef(hash).get()
     const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
     const apiKeyId = indexData?.apiKeyId
     if (!apiKeyId) {
-      if (generation === configurationGeneration) cacheApiKeyLookup(hash, undefined)
+      cacheApiKeyLookup(hash, undefined)
       return undefined
     }
-    if (typeof indexData.name === "string" && typeof indexData.createdAt === "string") {
-      const apiKey = { id: apiKeyId, name: indexData.name, key: normalized, createdAt: indexData.createdAt }
-      if (generation === configurationGeneration) cacheApiKeyLookup(hash, apiKey)
-      return apiKey
-    }
-    const snapshot = await apiKeyRef(apiKeyId).get()
+    const workspaceId = indexData.workspaceId || DEFAULT_WORKSPACE_ID
+    const snapshot = await runInWorkspace({ id: workspaceId, storageMode: workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped" }, () => apiKeyRef(apiKeyId).get())
     const apiKey = snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
-    if (generation === configurationGeneration) {
-      cacheApiKeyLookup(hash, apiKey)
-      if (apiKey) void apiKeyIndexRef(hash).set(apiKeyIndexDocument(apiKey), { merge: true }).catch(() => undefined)
+    const value = apiKey ? { workspaceId, apiKey } : undefined
+    cacheApiKeyLookup(hash, value)
+    if (apiKey) {
+      void runInWorkspace({ id: workspaceId, storageMode: workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped" }, () => apiKeyIndexRef(hash).set(apiKeyIndexDocument(apiKey), { merge: true })).catch(() => undefined)
+    } else {
+      void apiKeyIndexRef(hash).delete().catch(() => undefined)
     }
-    return apiKey
+    return value
   })().finally(() => apiKeyLookupInflight.delete(hash))
   apiKeyLookupInflight.set(hash, promise)
   return promise
+}
+
+export async function findApiKeyByValue(value: string): Promise<ApiKey | undefined> {
+  return (await findIndexedApiKeyByValue(value))?.apiKey
 }
 
 export async function writeData(data: AppData) {
@@ -1078,7 +1142,7 @@ export async function updateData(mutator: (data: AppData) => void | Promise<void
   for (const apiKey of data.apiKeys) {
     await _setApiKey(apiKey)
   }
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
   return data
 }
 
@@ -1505,27 +1569,8 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
     } satisfies ApiKey
     const apiKeyRefValue = apiKeyRef(apiKey.id)
     const requestedHash = apiKeyValueHash(apiKey.key)
-    const [existingKeys, existingIndexes] = await Promise.all([
-      transaction.get(apiKeysRef()),
-      transaction.get(apiKeyIndexesRef()),
-    ])
-    const existingKeyIds = new Set(existingKeys.docs.map((document) => document.id))
-    const indexByHash = new Map<string, ApiKeyIndexData>(existingIndexes.docs.map((document) => [document.id, document.data() as ApiKeyIndexData]))
-
-    for (const document of existingKeys.docs) {
-      const existing = apiKeyFromSnapshot(document)
-      const hash = apiKeyValueHash(existing.key)
-      const index = indexByHash.get(hash)
-      if (!index || !existingKeyIds.has(index.apiKeyId || "") || index.name !== existing.name || index.createdAt !== existing.createdAt) {
-        const indexData = apiKeyIndexDocument(existing)
-        transaction.set(apiKeyIndexRef(hash), indexData)
-        indexByHash.set(hash, indexData)
-      }
-    }
-    const existingIndex = indexByHash.get(requestedHash)
-    if (existingIndex && existingKeyIds.has(existingIndex.apiKeyId || "")) {
-      throw new ApiKeyConflictError()
-    }
+    const existingIndex = await transaction.get(apiKeyIndexRef(requestedHash))
+    if (existingIndex.exists) throw new ApiKeyConflictError()
     transaction.create(apiKeyRefValue, storedApiKey(apiKey))
     transaction.set(apiKeyIndexRef(requestedHash), apiKeyIndexDocument(apiKey))
     return apiKey
@@ -1533,7 +1578,7 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
 }
 
 async function firestoreDeleteApiKey(apiKeyId: string): Promise<void> {
-  return firestoreDeleteApiKeyWithInvariant(apiKeyId, true)
+  return firestoreDeleteApiKeyWithInvariant(apiKeyId, false)
 }
 
 async function firestoreDeleteApiKeyWithInvariant(apiKeyId: string, enforceAtLeastOne: boolean): Promise<void> {
@@ -1542,10 +1587,7 @@ async function firestoreDeleteApiKeyWithInvariant(apiKeyId: string, enforceAtLea
     const ref = apiKeyRef(apiKeyId)
     const target = await transaction.get(ref)
     if (!target.exists) return
-    if (enforceAtLeastOne) {
-      const all = await transaction.get(apiKeysRef())
-      if (all.size <= 1) throw new Error("At least one gateway API key is required.")
-    }
+    void enforceAtLeastOne
     const apiKey = apiKeyFromSnapshot(target)
     transaction.delete(ref)
     transaction.delete(apiKeyIndexRef(apiKeyValueHash(apiKey.key)))
@@ -1593,7 +1635,7 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
   const migratedModels = existingModels ? migrateProviderModels(existingModels.values(), provider.prefix) : undefined
   state.providers.set(id, provider)
   if (migratedModels) state.models.set(id, migratedModels)
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
   return provider
 }
 
@@ -1602,7 +1644,7 @@ function memoryDeleteProvider(providerId: string): void {
   state.providers.delete(providerId)
   state.providerApiKeys.delete(providerId)
   state.models.delete(providerId)
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
 }
 
 function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): ProviderApiKey {
@@ -1643,7 +1685,7 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
       enabledApiKeyCount: provider.enabledApiKeyCount + (apiKey.enabled ? 1 : -1),
     })
   }
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
   return apiKey
 }
 
@@ -1660,7 +1702,7 @@ function memoryDeleteProviderApiKey(providerId: string, apiKeyId: string): void 
     apiKeyCount: Math.max(0, provider.apiKeyCount - 1),
     enabledApiKeyCount: Math.max(0, provider.enabledApiKeyCount - (apiKey.enabled ? 1 : 0)),
   })
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
 }
 
 function memoryUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Model {
@@ -1712,7 +1754,7 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
       enabledModelCount: provider.enabledModelCount + (model.enabled ? 1 : -1),
     })
   }
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
   return model
 }
 
@@ -1729,7 +1771,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
     modelCount: Math.max(0, provider.modelCount - 1),
     enabledModelCount: Math.max(0, provider.enabledModelCount - (model.enabled ? 1 : 0)),
   })
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
 }
 
 function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): ModelAlias {
@@ -1755,14 +1797,14 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
   state.aliases.set(aliasId, alias)
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
   return alias
 }
 
 function memoryDeleteAlias(aliasId: string): void {
   const state = ensureMemorySeeded()
   state.aliases.delete(aliasId)
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
 }
 
 function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
@@ -1774,38 +1816,41 @@ function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
     createdAt: new Date().toISOString(),
   }
   const hash = apiKeyValueHash(apiKey.key)
-  if (state.apiKeyIndexes.has(hash)) throw new ApiKeyConflictError()
+  if (memoryApiKeyOwner(hash)) throw new ApiKeyConflictError()
   state.apiKeys.set(apiKey.id, apiKey)
   state.apiKeyIndexes.set(hash, apiKey.id)
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
   return apiKey
 }
 
-function memoryDeleteApiKey(apiKeyId: string, enforceAtLeastOne = true): void {
+function memoryDeleteApiKey(apiKeyId: string, enforceAtLeastOne = false): void {
   const state = ensureMemorySeeded()
   if (!state.apiKeys.has(apiKeyId)) return
-  if (enforceAtLeastOne && state.apiKeys.size <= 1) throw new Error("At least one gateway API key is required.")
+  void enforceAtLeastOne
   const apiKey = state.apiKeys.get(apiKeyId)
   state.apiKeys.delete(apiKeyId)
   if (apiKey) state.apiKeyIndexes.delete(apiKeyValueHash(apiKey.key))
-  compatibilityCache = undefined
+  workspaceCacheState().compatibilityCache = undefined
 }
 
 // Test-only accessor for memory backend snapshots.
 export function _memorySnapshot() {
-  return memorySnapshot(memory)
+  return memorySnapshot(ensureMemorySeeded())
 }
 
 export function _resetMemoryBackend() {
-  memory.meta = undefined
-  memory.providers = new Map()
-  memory.providerApiKeys = new Map()
-  memory.models = new Map()
-  memory.aliases = new Map()
-  memory.apiKeys = new Map()
-  memory.apiKeyIndexes = new Map()
-  memory.initialized = false
-  invalidateCompatibilityCache()
+  globalThis.__rawrouteMemoryStore = { states: new Map() }
+  workspaceCacheStates.clear()
+  apiKeyLookupCache.clear()
+  apiKeyLookupInflight.clear()
   metaCache = undefined
   metaReadPromise = undefined
+}
+
+export function _deleteMemoryWorkspace(workspaceId: string) {
+  if (workspaceId === DEFAULT_WORKSPACE_ID) throw new Error("Default workspace cannot be deleted.")
+  memoryRoot().states.delete(workspaceId)
+  workspaceCacheStates.delete(workspaceId)
+  apiKeyLookupCache.clear()
+  apiKeyLookupInflight.clear()
 }
