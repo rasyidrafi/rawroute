@@ -23,6 +23,16 @@ describe.sequential("usage analytics", () => {
     expect((await listUsageRollups()).map((rollup) => rollup.granularity).sort()).toEqual(["daily", "hourly", "monthly"])
   })
 
+  test("public dashboard shows key names without exposing credentials", async () => {
+    const key = await createApiKey("Public traffic")
+    await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: "public-model", gatewayModelId: "public/model", protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 1 } })
+
+    const payload = await getDashboardPayload({ preset: "all" }, true)
+
+    expect(payload.keys[0]).toMatchObject({ label: "Public traffic", maskedKey: "hidden" })
+    expect(payload.keys[0].id).not.toBe(key.id)
+  })
+
   test("is idempotent and blocks configured budgets", async () => {
     const key = await createApiKey("Budgeted")
     await upsertModelPricing({ modelId: "model-doc", provider: "test", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })

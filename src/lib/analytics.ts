@@ -929,7 +929,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     ? Promise.all(boundary.ranges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
       .then((batches) => [...new Map(batches.flat().map((event) => [event.id, event])).values()])
     : Promise.resolve([] as UsageEvent[])
-  const keysPromise = publicView ? Promise.resolve([] as Awaited<ReturnType<typeof listApiKeys>>) : listApiKeys()
+  const keysPromise = listApiKeys()
   const budgetDataPromise = budgetWindowPromise.then((window) => loadBudgetRows([], window))
   const [rollupsResult, boundaryEventsResult, keysResult, budgetResult] = await Promise.allSettled([
     rollupsPromise,
@@ -1001,8 +1001,8 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     if (!row) {
       const key = keyMap.get(keyId)
       row = {
-        id: keyId,
-        label: publicView ? publicKeyLabel(keyId) : (key?.name || publicKeyLabel(keyId)),
+        id: publicView ? publicKeyLabel(keyId) : keyId,
+        label: key?.name || publicKeyLabel(keyId),
         maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"),
         requests: 0,
         tokens: 0,
@@ -1121,7 +1121,7 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
 }
 
 export function redactPublicDashboard(payload: DashboardPayload): DashboardPayload {
-  return { ...payload, keys: payload.keys.map((key) => ({ ...key, id: publicKeyLabel(key.id), label: publicKeyLabel(key.id), maskedKey: "hidden" })) }
+  return { ...payload, keys: payload.keys.map((key) => ({ ...key, id: publicKeyLabel(key.id), maskedKey: "hidden" })) }
 }
 
 type RepricedEvent = {
