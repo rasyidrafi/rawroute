@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
+import { buildCodexHeaders, collectCodexResponsesSse, normalizeCodexRequest, normalizeCodexResponsesStream } from "@/lib/codex-proxy"
 import type { Provider } from "@/lib/types"
 
 const provider: Provider = {
@@ -20,6 +20,31 @@ const provider: Provider = {
 }
 
 describe("Codex native request adapter", () => {
+  test("normalizes data-only Responses SSE into standard event framing", async () => {
+    const upstream = new Response('data: {"type":"response.created","response":{"id":"resp_1"}}\n\ndata: [DONE]\n\n')
+    const normalized = normalizeCodexResponsesStream(upstream.body!)
+    expect(await new Response(normalized).text()).toBe('event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1"}}\n\ndata: [DONE]\n\n')
+  })
+
+  test("assembles Codex Responses Lite SSE into a native Responses JSON envelope", () => {
+    const result = collectCodexResponsesSse([
+      'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":123,"model":"gpt-5.4-mini"}}',
+      'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":7,"output_tokens":11,"total_tokens":18}}}',
+      "",
+    ].join("\n\n"))
+
+    expect(result).toMatchObject({
+      id: "resp_1",
+      object: "response",
+      created_at: 123,
+      model: "gpt-5.4-mini",
+      status: "completed",
+      usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 },
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "hello" }] }],
+    })
+  })
+
   test("keeps Responses structure while applying only Codex compatibility rules", () => {
     expect(normalizeCodexRequest({
       model: "gateway/model",

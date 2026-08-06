@@ -143,6 +143,8 @@ describe("proxy request", () => {
       body: JSON.stringify({ model: "cx/codex", input: "hello", stream: false, temperature: 0.4 }),
     }), "openai-responses")
     expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toContain("application/json")
+    expect(await response.json()).toMatchObject({ object: "response", status: "completed", usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } })
     expect(captured.url).toBe("https://chatgpt.com/backend-api/codex/responses")
     expect(captured.body).toMatchObject({ model: "gpt-5.4-codex", stream: true, store: false, include: ["reasoning.encrypted_content"], instructions: "" })
     expect(captured.body?.temperature).toBeUndefined()

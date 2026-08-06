@@ -1,7 +1,7 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { BudgetDeniedError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, type BudgetAdmission, type BudgetUsageContext, type ResolvedModelPricing } from "@/lib/analytics"
 import { refreshCodexAccount } from "@/lib/codex"
-import { buildCodexHeaders, normalizeCodexRequest } from "@/lib/codex-proxy"
+import { buildCodexHeaders, collectCodexResponsesSse, normalizeCodexRequest, normalizeCodexResponsesStream } from "@/lib/codex-proxy"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
@@ -555,6 +555,7 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
 
   try {
     payload = mergeRequestOverrides(payload, model.requestOverrides || {})
+    const downstreamRequestedStreaming = payload.stream === true
     // Apply the Codex Responses Lite contract by provider, not only by the
     // credential kind. Codex can also be configured with a regular bearer key.
     const isCodexProvider = provider.prefix === "codex" || providerApiKey?.credentialKind === "codex-oauth"
@@ -664,7 +665,7 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
     responseHeaders.set("x-rawroute-model", gatewayModelId)
     if (providerApiKey) responseHeaders.set("x-rawroute-provider-key", providerApiKey.id)
     if (!upstream.ok) await safeRelease(upstream.status, retryAfterSeconds(upstream.headers))
-    const responseBody = upstream.ok
+    const trackedBody = upstream.ok
       ? trackedUpstreamBody(
           upstream,
           async (responseIds) => {
@@ -717,8 +718,47 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
           },
         )
       : upstream.body
+    const shouldNormalizeCodexStream = upstream.ok
+      && isCodexProvider
+      && modelProtocol === "openai-responses"
+      && downstreamRequestedStreaming
+    const shouldCollectCodexResponse = upstream.ok
+      && isCodexProvider
+      && modelProtocol === "openai-responses"
+      && !downstreamRequestedStreaming
+    let responseBody: BodyInit | null = trackedBody
+    let responseStatus = upstream.status
+    if (shouldNormalizeCodexStream && trackedBody) {
+      responseHeaders.set("content-type", "text/event-stream")
+      responseHeaders.set("cache-control", "no-cache")
+      responseHeaders.set("connection", "keep-alive")
+      responseBody = normalizeCodexResponsesStream(trackedBody)
+    } else if (shouldCollectCodexResponse) {
+      const raw = trackedBody ? await new Response(trackedBody).text() : ""
+      const contentType = (upstream.headers.get("content-type") || "").toLowerCase()
+      let normalizedResponse: Record<string, unknown> | undefined
+      try {
+        if (contentType.includes("application/json")) {
+          const parsed = JSON.parse(raw)
+          normalizedResponse = objectValue(parsed)
+        } else {
+          normalizedResponse = collectCodexResponsesSse(raw)
+        }
+      } catch {
+        normalizedResponse = undefined
+      }
+      if (normalizedResponse) {
+        responseHeaders.set("content-type", "application/json")
+        responseBody = JSON.stringify(normalizedResponse)
+      } else {
+        responseStatus = 502
+        responseHeaders.set("content-type", "application/json")
+        responseBody = JSON.stringify({ error: { message: "Invalid Codex Responses Lite response." } })
+        writeLog("warn", "gateway", "Codex Responses Lite returned an invalid response", { provider: provider.name, model: gatewayModelId })
+      }
+    }
     if (!upstream.ok) writeLog("warn", "gateway", `FAILED ${upstream.status} ${Date.now() - startedAt}ms`)
-    return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
+    return new Response(responseBody, { status: responseStatus, statusText: upstream.statusText, headers: responseHeaders })
   } catch (error) {
     if (routingStore) await safeRelease(502).catch(() => undefined)
     cleanupLease()
