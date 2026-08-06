@@ -32,10 +32,10 @@ function entries() {
   return ring
 }
 
-export function writeLog(level: LogLevel, source: LogEntry["source"], message: string, details?: LogEntry["details"]) {
+export function writeLog(level: LogLevel, source: LogEntry["source"], message: string, details?: LogEntry["details"], workspaceId = currentWorkspaceId()) {
   const ring = entries()
   ring.revision += 1
-  ring.entries[ring.next] = { id: `${ring.instanceId}-${ring.revision}`, timestamp: new Date().toISOString(), level, source, workspaceId: currentWorkspaceId(), message, ...(details ? { details } : {}) }
+  ring.entries[ring.next] = { id: `${ring.instanceId}-${ring.revision}`, timestamp: new Date().toISOString(), level, source, workspaceId, message, ...(details ? { details } : {}) }
   ring.next = (ring.next + 1) % maxEntries
   ring.size = Math.min(maxEntries, ring.size + 1)
 }
@@ -45,20 +45,20 @@ export function logVersion() {
   return `${ring.instanceId}-${ring.revision}`
 }
 
-export function readLogs() {
+export function readLogs(workspaceId = currentWorkspaceId()) {
   const ring = entries()
   const out: LogEntry[] = []
   for (let index = 0; index < ring.size; index++) {
     const position = (ring.next - 1 - index + maxEntries) % maxEntries
     const entry = ring.entries[position]
-    if (entry?.workspaceId === currentWorkspaceId()) out.push(entry)
+    if (entry?.workspaceId === workspaceId) out.push(entry)
   }
   return structuredClone(out)
 }
 
-export function clearLogs() {
+export function clearLogs(workspaceId = currentWorkspaceId()) {
   const current = entries()
-  const retained = readAllLogs().filter((entry) => entry.workspaceId !== currentWorkspaceId())
+  const retained = readAllLogs().filter((entry) => entry.workspaceId !== workspaceId)
   globalThis.__rawrouteLogRing = {
     entries: new Array<LogEntry | undefined>(maxEntries),
     next: 0,

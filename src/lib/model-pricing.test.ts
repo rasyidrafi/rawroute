@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "vitest"
 
 import { getPricingAdminData, getPricingForModelAt, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
-import { _resetMemoryBackend, upsertModel, upsertProvider } from "@/lib/store"
+import { _resetMemoryBackend, createApiKey, upsertModel, upsertProvider } from "@/lib/store"
 import type { Provider, UsageEvent } from "@/lib/types"
 
 beforeEach(() => {
@@ -86,8 +86,9 @@ describe("model pricing catalog", () => {
     const group = (await syncModelPricingGroups()).find((entry) => entry.name === "First")!
     await savePricingVersion({ groupId: group.id, mode: "new", rates: { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
     const completedAt = new Date(Date.now() - 3_600_000).toISOString()
-    const historical: UsageEvent = { id: "historical", gatewayKeyId: "key", providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: completedAt, completedAt, status: 200, durationMs: 1, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 100, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: true }
-    await upsertBudget({ apiKeyId: "key", weeklyLimitMicros: 1_000_000, enabled: true })
+    const key = await createApiKey("Historical")
+    const historical: UsageEvent = { id: "historical", gatewayKeyId: key.id, providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: completedAt, completedAt, status: 200, durationMs: 1, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 100, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: true }
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
     await recordUsageEvent(historical)
     const replacement = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
     await repriceUsageForGroup(replacement.job!.id)
@@ -96,7 +97,7 @@ describe("model pricing catalog", () => {
     expect(event).toMatchObject({ costMicros: 200, pricingConfidence: "exact", pricingGroupId: group.id, pricingVersionId: replacement.version.id })
     expect((await listUsageRollups("hourly")).reduce((total, rollup) => total + rollup.costMicros, 0)).toBe(200)
     expect((await getDashboardPayload({ preset: "all" })).summary.costMicros).toBe(200)
-    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === "key")?.spentMicros).toBe(200)
+    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
   })
 
   test("keeps requests without recorded usage unpriced during repricing", async () => {

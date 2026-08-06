@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState } from "react"
+import { createContext, useContext, useEffect, useState } from "react"
 import useSWR from "swr"
 
 import { apiFetch, setApiWorkspaceId } from "@/components/dashboard/api"
@@ -42,7 +42,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   }
 
   const workspace = workspaces.find((entry) => entry.id === workspaceId) || workspaces.find((entry) => entry.isDefault) || fallbackWorkspace
-  setApiWorkspaceId(workspace.id)
+  useEffect(() => {
+    if (!data) return
+    const activeWorkspaces = data.workspaces.filter((entry) => entry.status === "active")
+    const resolved = activeWorkspaces.find((entry) => entry.id === workspaceId) || activeWorkspaces.find((entry) => entry.isDefault) || fallbackWorkspace
+    setApiWorkspaceId(resolved.id)
+    if (resolved.id !== workspaceId) {
+      setWorkspaceId(resolved.id)
+      window.localStorage.setItem("rawroute_workspace", resolved.id)
+    }
+  }, [data, workspaceId])
+
   const value = { workspaces, workspace, selectWorkspace, refreshWorkspaces }
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>
 }

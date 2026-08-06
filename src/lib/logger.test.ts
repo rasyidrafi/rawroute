@@ -1,6 +1,7 @@
 import { beforeEach, expect, test } from "vitest"
 
 import { clearLogs, logVersion, readLogs, writeLog } from "@/lib/logger"
+import { runInWorkspace } from "@/lib/workspace-context"
 
 beforeEach(clearLogs)
 
@@ -26,4 +27,12 @@ test("changes the lightweight log version without allocating unrelated entry IDs
   expect(readLogs()[0]?.id).toBe(afterWrite)
   clearLogs()
   expect(logVersion()).not.toBe(afterWrite)
+})
+
+test("filters logs by the explicitly requested workspace", async () => {
+  await runInWorkspace({ id: "default", storageMode: "legacy" }, () => writeLog("info", "admin", "default workspace"))
+  await runInWorkspace({ id: "other", storageMode: "scoped" }, () => writeLog("info", "admin", "other workspace"))
+
+  expect(readLogs("default").map((entry) => entry.message)).toEqual(["default workspace"])
+  expect(readLogs("other").map((entry) => entry.message)).toEqual(["other workspace"])
 })

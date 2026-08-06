@@ -715,6 +715,7 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
   return result
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
+  if (!(await listApiKeys()).some((apiKey) => apiKey.id === input.apiKeyId)) throw new Error("API key not found in the selected workspace.")
   const window = await getBudgetWindow()
   const budget: GatewayKeyBudget = { ...input, spentMicros: 0, windowStart: window.start, windowEnd: window.end, updatedAt: new Date().toISOString() }
   if (isMemory()) memoryState().budgets.set(input.apiKeyId, budget)

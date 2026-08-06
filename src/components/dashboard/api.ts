@@ -10,7 +10,8 @@ export function setApiWorkspaceId(workspaceId: string) {
 
 function withWorkspace(init?: RequestInit): RequestInit {
   const headers = new Headers(init?.headers)
-  headers.set("x-rawroute-workspace-id", activeWorkspaceId)
+  const browserWorkspaceId = typeof window !== "undefined" ? window.localStorage.getItem("rawroute_workspace") : null
+  headers.set("x-rawroute-workspace-id", browserWorkspaceId || activeWorkspaceId)
   return { ...init, headers }
 }
 

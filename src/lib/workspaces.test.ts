@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
-import { getDashboardPayload, listModelPricing, recordGatewayUsage, resetAnalyticsForTests, upsertModelPricing } from "@/lib/analytics"
+import { getDashboardPayload, listModelPricing, recordGatewayUsage, resetAnalyticsForTests, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { authenticateProxyKey } from "@/lib/auth"
 import { clearLogs, readLogs, writeLog } from "@/lib/logger"
 import { _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listProviders, upsertProvider } from "@/lib/store"
@@ -50,14 +50,21 @@ describe("workspace isolation", () => {
     const defaultWorkspace = (await listWorkspaces())[0]
     const workspace = await createWorkspace("Research")
     const completedAt = new Date().toISOString()
+    const defaultKey = await runInWorkspace(defaultWorkspace, () => createApiKey("Default usage", "default-usage-secret"))
+    const researchKey = await runInWorkspace(workspace, () => createApiKey("Research usage", "research-usage-secret"))
+    await runInWorkspace(workspace, () => expect(upsertBudget({ apiKeyId: defaultKey.id, weeklyLimitMicros: 1_000_000, enabled: true })).rejects.toThrow("selected workspace"))
 
-    await runInWorkspace(defaultWorkspace, () => recordGatewayUsage({ gatewayKeyId: "default-key", gatewayModelId: "shared/model", protocol: "openai-chat", startedAt: completedAt, status: 200, durationMs: 10, metrics: { input: 10, output: 5 } }))
-    await runInWorkspace(workspace, () => recordGatewayUsage({ gatewayKeyId: "research-key", gatewayModelId: "shared/model", protocol: "openai-chat", startedAt: completedAt, status: 200, durationMs: 10, metrics: { input: 20, output: 10 } }))
+    await runInWorkspace(defaultWorkspace, () => recordGatewayUsage({ gatewayKeyId: defaultKey.id, gatewayModelId: "shared/model", protocol: "openai-chat", startedAt: completedAt, status: 200, durationMs: 10, metrics: { input: 10, output: 5 } }))
+    await runInWorkspace(workspace, () => recordGatewayUsage({ gatewayKeyId: researchKey.id, gatewayModelId: "shared/model", protocol: "openai-chat", startedAt: completedAt, status: 200, durationMs: 10, metrics: { input: 20, output: 10 } }))
 
     const defaultDashboard = await runInWorkspace(defaultWorkspace, () => getDashboardPayload({ preset: "all" }))
     const researchDashboard = await runInWorkspace(workspace, () => getDashboardPayload({ preset: "all" }))
     expect(defaultDashboard.summary.tokens).toBe(15)
     expect(researchDashboard.summary.tokens).toBe(30)
+    expect(defaultDashboard.keys.map((key) => key.label)).toContain("Default usage")
+    expect(defaultDashboard.keys.map((key) => key.label)).not.toContain("Research usage")
+    expect(researchDashboard.keys.map((key) => key.label)).toContain("Research usage")
+    expect(researchDashboard.keys.map((key) => key.label)).not.toContain("Default usage")
 
     await renameWorkspace(workspace.id, "Research Lab")
     await deleteWorkspace(workspace.id, "Research Lab")
