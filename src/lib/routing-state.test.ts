@@ -72,6 +72,31 @@ describe("Redis routing state", () => {
       .toEqual({ ok: false, reason: "capacity", retryAfterSeconds: 12 })
   })
 
+  test("does not send assumed RPM or concurrency limits for Codex providers", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok", "a", "new"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+
+    await store.reserve({
+      providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false,
+      bypassCapacityLimits: true,
+    })
+
+    const args = redis.calls[0]?.args || []
+    expect(args[6]).toBe(1)
+    expect(args.slice(7, 11)).toEqual(["a", 0, 0, 0])
+    expect(redis.calls[0]?.script).toContain('local bypassCapacityLimits = ARGV[7] == "1"')
+  })
+
+  test("recognizes an upstream rate-limit cooldown separately from local capacity", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["upstream-rate-limited", "30"])
+    const store = new RedisRoutingStateStore(redis)
+
+    expect(await store.reserve({ providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false }))
+      .toEqual({ ok: false, reason: "upstream-rate-limited", retryAfterSeconds: 30 })
+  })
+
   test("protects hard affinity when its credential is unavailable", async () => {
     const redis = new FakeRedis()
     redis.responses.push(["hard-unavailable", "a", "8"])

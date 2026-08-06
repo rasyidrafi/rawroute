@@ -25,6 +25,8 @@ interface ReserveInput {
   providerId: string
   modelId: string
   credentials: ProviderApiKey[]
+  /** Codex OAuth providers do not expose reliable RPM/concurrency limits. */
+  bypassCapacityLimits?: boolean
   sessionKey?: string
   hardAffinity: boolean
   requiredCredentialId?: string
@@ -70,6 +72,7 @@ local hard = ARGV[3] == "1"
 local required = ARGV[4]
 local leaseId = ARGV[5]
 local leaseTtlMs = tonumber(ARGV[6])
+local bypassCapacityLimits = ARGV[7] == "1"
 local responseCredential = responseAffinity ~= "" and redis.call("GET", responseAffinity) or false
 if hard and responseAffinity ~= "" and required == "" and not responseCredential then
   return {"hard-missing"}
@@ -82,12 +85,16 @@ local bestPriority = nil
 local pinnedIndex = nil
 local retryAfter = nil
 local pinnedRetryAfter = nil
+local capacityBlocked = false
+local upstreamRateLimited = false
+local upstreamUnavailable = false
+local pinnedCooldownStatus = nil
 
 local redisTime = redis.call("TIME")
 local now = tonumber(redisTime[1]) * 1000 + math.floor(tonumber(redisTime[2]) / 1000)
 
 for index = 1, count do
-  local offset = 6 + ((index - 1) * 4)
+  local offset = 7 + ((index - 1) * 4)
   local id = ARGV[offset + 1]
   local rpmLimit = tonumber(ARGV[offset + 2])
   local concurrencyLimit = tonumber(ARGV[offset + 3])
@@ -98,34 +105,41 @@ for index = 1, count do
   local rpm = tonumber(redis.call("ZCARD", KEYS[keyOffset]) or "0")
   local inflight = tonumber(redis.call("ZCARD", KEYS[keyOffset + 1]) or "0")
   local cooldown = tonumber(redis.call("TTL", KEYS[keyOffset + 2]))
+  local cooldownStatus = cooldown > 0 and redis.call("GET", KEYS[keyOffset + 2]) or false
   local blocked = false
   local candidateRetry = 1
   if cooldown > 0 then
     blocked = true
+    if cooldownStatus == "429" then upstreamRateLimited = true else upstreamUnavailable = true end
     if cooldown > candidateRetry then candidateRetry = cooldown end
   end
-  if rpm >= rpmLimit then
+  if not bypassCapacityLimits and rpm >= rpmLimit then
     blocked = true
+    capacityBlocked = true
     local oldest = redis.call("ZRANGE", KEYS[keyOffset], 0, 0, "WITHSCORES")
     if oldest[2] ~= nil then
       local rpmRetry = math.ceil((tonumber(oldest[2]) + 60000 - now) / 1000)
       if rpmRetry > candidateRetry then candidateRetry = rpmRetry end
     end
   end
-  if inflight >= concurrencyLimit then
+  if not bypassCapacityLimits and inflight >= concurrencyLimit then
     blocked = true
+    capacityBlocked = true
     local oldestLease = redis.call("ZRANGE", KEYS[keyOffset + 1], 0, 0, "WITHSCORES")
     if oldestLease[2] ~= nil then
       local leaseRetry = math.ceil((tonumber(oldestLease[2]) - now) / 1000)
       if leaseRetry > candidateRetry then candidateRetry = leaseRetry end
     end
   end
-  local usable = cooldown <= 0 and rpm < rpmLimit and inflight < concurrencyLimit
+  local usable = cooldown <= 0 and (bypassCapacityLimits or (rpm < rpmLimit and inflight < concurrencyLimit))
   if blocked and (retryAfter == nil or candidateRetry < retryAfter) then retryAfter = candidateRetry end
-  if blocked and id == pinned then pinnedRetryAfter = candidateRetry end
+  if blocked and id == pinned then
+    pinnedRetryAfter = candidateRetry
+    if cooldown > 0 then pinnedCooldownStatus = cooldownStatus end
+  end
   if id == pinned and usable then pinnedIndex = index end
   if usable then
-    local load = math.max(rpm / rpmLimit, inflight / concurrencyLimit)
+    local load = bypassCapacityLimits and inflight or math.max(rpm / rpmLimit, inflight / concurrencyLimit)
     if bestScore == nil or load < bestScore or (load == bestScore and (bestPriority == nil or priority > bestPriority)) then
       bestScore = load; bestPriority = priority; bestIndex = index
     end
@@ -134,11 +148,18 @@ end
 
 local selected = pinnedIndex or bestIndex
 if pinned ~= false and pinned ~= nil and pinned ~= "" and pinnedIndex == nil and hard then
+  if pinnedCooldownStatus == "429" then return {"upstream-rate-limited", tostring(pinnedRetryAfter or 1)} end
+  if pinnedCooldownStatus ~= nil then return {"upstream-unavailable", tostring(pinnedRetryAfter or 1)} end
   return {"hard-unavailable", pinned, tostring(pinnedRetryAfter or 1)}
 end
-if selected == nil then return {"capacity", tostring(retryAfter or 1)} end
+if selected == nil then
+  if upstreamUnavailable then return {"upstream-unavailable", tostring(retryAfter or 1)} end
+  if upstreamRateLimited and not capacityBlocked then return {"upstream-rate-limited", tostring(retryAfter or 1)} end
+  if capacityBlocked then return {"capacity", tostring(retryAfter or 1)} end
+  return {"upstream-unavailable", tostring(retryAfter or 1)}
+end
 
-local budgetOffset = 6 + (count * 4)
+local budgetOffset = 7 + (count * 4)
 local budgetKey = KEYS[3 + (count * 3)]
 if ARGV[budgetOffset + 1] == "1" then
   local limit = tonumber(ARGV[budgetOffset + 2])
@@ -151,7 +172,7 @@ if ARGV[budgetOffset + 1] == "1" then
   redis.call("SET", budgetKey .. ":lease:" .. leaseId, tostring(reservation), "EX", budgetTtl)
 end
 
-local offset = 6 + ((selected - 1) * 4)
+local offset = 7 + ((selected - 1) * 4)
 local id = ARGV[offset + 1]
 local keyOffset = 3 + ((selected - 1) * 3)
 redis.call("ZADD", KEYS[keyOffset], now, leaseId)
@@ -294,14 +315,14 @@ export class RedisRoutingStateStore {
     const responseAffinityKey = input.responseId ? this.responseKey(input.providerId, input.responseId) : ""
     const keys = [affinityKey, responseAffinityKey]
     const leaseId = crypto.randomUUID()
-    const args: Array<string | number> = [this.affinityTtlSeconds, credentials.length, input.hardAffinity ? 1 : 0, input.requiredCredentialId || "", leaseId, this.inflightLeaseTtlSeconds * 1000]
+    const args: Array<string | number> = [this.affinityTtlSeconds, credentials.length, input.hardAffinity ? 1 : 0, input.requiredCredentialId || "", leaseId, this.inflightLeaseTtlSeconds * 1000, input.bypassCapacityLimits ? 1 : 0]
     for (const credential of credentials) {
       const credentialScope = `${scope}:${credential.id}`
       keys.push(`${this.prefix}:rpm:${credentialScope}`, `${this.prefix}:inflight:${credentialScope}`, `${this.prefix}:cooldown:${credentialScope}`)
       args.push(
         credential.id,
-        positiveInteger(credential.rpmLimit, this.defaultRpmLimit),
-        positiveInteger(credential.maxConcurrency, this.defaultMaxConcurrency),
+        input.bypassCapacityLimits ? 0 : positiveInteger(credential.rpmLimit, this.defaultRpmLimit),
+        input.bypassCapacityLimits ? 0 : positiveInteger(credential.maxConcurrency, this.defaultMaxConcurrency),
         Number.isFinite(credential.priority) ? Number(credential.priority) : 0,
       )
     }
@@ -317,6 +338,8 @@ export class RedisRoutingStateStore {
       return { ok: false as const, reason: "hard-affinity-unavailable" as const, credentialId: String(response[1]), retryAfterSeconds: Number(response[2]) || 1 }
     }
     if (response?.[0] === "budget") return { ok: false as const, reason: "budget" as const, retryAfterSeconds: Number(response[1]) || 1 }
+    if (response?.[0] === "upstream-rate-limited") return { ok: false as const, reason: "upstream-rate-limited" as const, retryAfterSeconds: Number(response[1]) || 1 }
+    if (response?.[0] === "upstream-unavailable") return { ok: false as const, reason: "upstream-unavailable" as const, retryAfterSeconds: Number(response[1]) || 1 }
     return { ok: false as const, reason: "capacity" as const, retryAfterSeconds: Number(response?.[1]) || 1 }
   }
 

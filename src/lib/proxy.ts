@@ -436,6 +436,7 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
         providerId: provider.id,
         modelId: gatewayModelId,
         credentials: providerApiKeys,
+        bypassCapacityLimits: provider.prefix === "codex" || providerApiKeys.some((apiKey) => apiKey.credentialKind === "codex-oauth"),
         sessionKey: routingSessionKey,
         hardAffinity: session?.hard || false,
         responseId: session?.responseId,
@@ -453,6 +454,12 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
         }
         if (reservation.reason === "budget") {
           return Response.json({ error: { message: "Weekly budget reservation unavailable." } }, { status: 429, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
+        }
+        if (reservation.reason === "upstream-rate-limited") {
+          return Response.json({ error: { message: "The upstream Codex provider is rate limited." } }, { status: 429, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
+        }
+        if (reservation.reason === "upstream-unavailable") {
+          return Response.json({ error: { message: "The upstream provider is temporarily unavailable." } }, { status: 503, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
         }
         const status = reservation.reason === "capacity" ? 429 : 503
         return Response.json({ error: { message: reservation.reason === "capacity"
