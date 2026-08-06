@@ -56,8 +56,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const [name, setName] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const [workspacePending, setWorkspacePending] = useState(false)
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
 
   function switchWorkspace(workspaceId: string) {
+    setWorkspaceMenuOpen(false)
     selectWorkspace(workspaceId)
     if (pathname.startsWith("/dashboard/providers/") && pathname !== "/dashboard/providers/codex") router.push("/dashboard/providers")
     else router.refresh()
@@ -107,7 +109,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <DropdownMenu>
+            <DropdownMenu open={workspaceMenuOpen} onOpenChange={setWorkspaceMenuOpen}>
               <DropdownMenuTrigger render={<SidebarMenuButton size="lg" tooltip="Switch workspace" />}>
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-slate-950 text-white"><RouteIcon className="size-4" /></div>
                 <div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">RawRoute</span><span className="truncate text-xs">{workspace.name}</span></div>

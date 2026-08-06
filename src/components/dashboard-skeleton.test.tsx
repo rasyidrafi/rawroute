@@ -17,12 +17,12 @@ test("dashboard loading state preserves the dashboard navigation shell", () => {
   expect(shell).toContain("<SiteHeader />")
 })
 
-test("model pricing loading state mirrors the pricing card layout", () => {
+test("model pricing loading state uses the shared dashboard content spacing", () => {
   const markup = renderToStaticMarkup(<DashboardContentSkeleton variant="model-pricing" />)
 
   expect(markup).toContain('aria-label="Loading model pricing"')
-  expect(markup).toContain('data-slot="card-header"')
-  expect(markup).toContain('data-slot="card-content"')
+  expect(markup).toContain("rounded-xl border bg-card p-6")
   expect(markup).toContain("minmax(14rem, 1.4fr)")
   expect(markup).not.toContain("xl:grid-cols-6")
+  expect(markup).not.toContain('data-slot="card-header"')
 })
