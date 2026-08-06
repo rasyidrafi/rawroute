@@ -55,6 +55,9 @@ const budgetCounterInflight = new Map<string, Promise<number>>()
 type BudgetCounterRow = { id: string; spentMicros?: number; lastUsedAt?: string }
 const budgetCounterListCache = new Map<string, TimedValue<BudgetCounterRow[]>>()
 const budgetCounterListInflight = new Map<string, Promise<BudgetCounterRow[]>>()
+type BudgetUsageValue = { spentMicros: number; lastUsedAt: string | null }
+const budgetUsageCache = new Map<string, TimedValue<Map<string, BudgetUsageValue>>>()
+const budgetUsageInflight = new Map<string, Promise<Map<string, BudgetUsageValue>>>()
 const bypassSessionCache = new Map<string, TimedValue<BudgetBypassSession | null>>()
 const bypassSessionInflight = new Map<string, Promise<BudgetBypassSession | undefined>>()
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
@@ -104,6 +107,8 @@ function invalidateBudgetReadCaches() {
   budgetCounterInflight.clear()
   budgetCounterListCache.clear()
   budgetCounterListInflight.clear()
+  budgetUsageCache.clear()
+  budgetUsageInflight.clear()
   bypassSessionCache.clear()
   bypassSessionInflight.clear()
   dashboardCache.clear()
@@ -299,6 +304,12 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
         lastUsedAt: event.completedAt,
       })
     }
+    // Match the in-memory dashboard behavior: a completed local write should
+    // make the next budget read see the new rollup immediately. Firestore
+    // workers rely on the shared dashboard TTL instead of clearing on every
+    // request.
+    budgetUsageCache.clear()
+    budgetUsageInflight.clear()
     dashboardCache.clear()
     return event
   }
@@ -750,6 +761,126 @@ async function listBudgetCounters(usageStart: string): Promise<BudgetCounterRow[
   return promise
 }
 
+function addBudgetUsage(map: Map<string, BudgetUsageValue>, rollup: UsageRollup) {
+  if (!rollup.gatewayKeyId) return
+  const current = map.get(rollup.gatewayKeyId) || { spentMicros: 0, lastUsedAt: null }
+  const lastUsedAt = rollup.lastEventAt && (!current.lastUsedAt || current.lastUsedAt < rollup.lastEventAt) ? rollup.lastEventAt : current.lastUsedAt
+  map.set(rollup.gatewayKeyId, { spentMicros: current.spentMicros + Number(rollup.costMicros || 0), lastUsedAt })
+}
+
+function addBudgetEvent(map: Map<string, BudgetUsageValue>, event: UsageEvent) {
+  if (event.status < 200 || event.status >= 300) return
+  const current = map.get(event.gatewayKeyId) || { spentMicros: 0, lastUsedAt: null }
+  const lastUsedAt = !current.lastUsedAt || current.lastUsedAt < event.completedAt ? event.completedAt : current.lastUsedAt
+  map.set(event.gatewayKeyId, { spentMicros: current.spentMicros + Number(event.costMicros || 0), lastUsedAt })
+}
+
+async function getBudgetUsage(window: BudgetWindow): Promise<Map<string, BudgetUsageValue>> {
+  const usageStartAt = await budgetUsageStart(window)
+  const cacheId = scopedKey(`${usageStartAt}:${window.end}`)
+  const now = Date.now()
+  const cached = budgetUsageCache.get(cacheId)
+  if (cached && cached.expiresAt > now) return cached.value
+  const existing = budgetUsageInflight.get(cacheId)
+  if (existing) return existing
+
+  const generation = budgetCacheGeneration
+  const start = new Date(usageStartAt)
+  const end = new Date(window.end)
+  const promise = (async () => {
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return new Map<string, BudgetUsageValue>()
+
+    const hourlyFrom = bucketStart(start, "hourly").toISOString()
+    const hourlyTo = nextBucketStart(end, "hourly").toISOString()
+    const dailyFrom = bucketStart(start, "daily").toISOString()
+    const dailyTo = nextBucketStart(end, "daily").toISOString()
+    const [hourly, daily] = await Promise.all([
+      listUsageRollups("hourly", hourlyFrom, hourlyTo),
+      listUsageRollups("daily", dailyFrom, dailyTo),
+    ])
+
+    const hourlyBoundary = dashboardBoundaryRanges(start, end, "hourly")
+    // Backfilled CCS data may have daily rollups but no usage-event documents.
+    // Keep a dimension-level fallback for those boundary buckets so an empty
+    // event query does not erase historical spend.
+    const dailyBoundaryRanges: Array<[Date, Date]> = []
+    const result = new Map<string, BudgetUsageValue>()
+    const hourlyDays = new Set<string>()
+    for (const rollup of hourly) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime)) continue
+      const bucketStartDate = new Date(bucketTime)
+      const overlapsWindow = nextBucketStart(bucketStartDate, "hourly") > start && bucketStartDate < end
+      if (rollup.gatewayKeyId && overlapsWindow) hourlyDays.add(`${rollup.gatewayKeyId}:${bucketStart(bucketStartDate, "daily").toISOString()}`)
+    }
+
+    // Historical backfills may intentionally contain daily rollups without
+    // hourly documents. Use those days only when hourly data does not exist
+    // for the same key/day, preventing daily+hourly double counting.
+    for (const rollup of daily) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
+      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
+      if (hourlyDays.has(dayKey)) continue
+      const dayStart = new Date(bucketTime)
+      const dayEnd = nextBucketStart(dayStart, "daily")
+      if (dayStart >= start && dayEnd <= end) addBudgetUsage(result, rollup)
+      else dailyBoundaryRanges.push([new Date(Math.max(start.getTime(), dayStart.getTime())), new Date(Math.min(end.getTime(), dayEnd.getTime()))])
+    }
+
+    const boundaryRanges = [...hourlyBoundary.ranges, ...dailyBoundaryRanges]
+      .sort((a, b) => a[0].getTime() - b[0].getTime())
+      .reduce<Array<[Date, Date]>>((ranges, current) => {
+        const previous = ranges[ranges.length - 1]
+        if (previous && current[0] <= previous[1]) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
+        else ranges.push(current)
+        return ranges
+      }, [])
+    const boundaryResults = await Promise.allSettled(boundaryRanges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
+    const boundaryDataAvailable = boundaryResults.every((entry) => entry.status === "fulfilled")
+    const boundaryEvents = boundaryResults.flatMap((entry) => entry.status === "fulfilled" ? entry.value : [])
+    const hourlyEventKeys = new Set(boundaryEvents.map((event) => `${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(new Date(event.completedAt), "hourly").toISOString()}`))
+    const dailyEventKeys = new Set(boundaryEvents.map((event) => `${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(new Date(event.completedAt), "daily").toISOString()}`))
+
+    for (const rollup of hourly) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime) || bucketTime < start.getTime() || bucketTime >= end.getTime()) continue
+      const hasBoundaryEvents = hourlyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${rollup.bucketStart}`)
+      if (hourlyBoundary.partialBucketStarts.has(rollup.bucketStart) && boundaryDataAvailable && hasBoundaryEvents) continue
+      addBudgetUsage(result, rollup)
+    }
+
+    for (const rollup of daily) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
+      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
+      if (hourlyDays.has(dayKey)) continue
+      const dayStart = new Date(bucketTime)
+      const dayEnd = nextBucketStart(dayStart, "daily")
+      if (dayStart >= start && dayEnd <= end) continue
+      const hasBoundaryEvents = dailyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${bucketStart(dayStart, "daily").toISOString()}`)
+      if (boundaryDataAvailable && hasBoundaryEvents) continue
+      addBudgetUsage(result, rollup)
+    }
+
+    if (boundaryDataAvailable) {
+      for (const event of boundaryEvents) addBudgetEvent(result, event)
+    }
+    return result
+  })().then((value) => {
+    if (generation === budgetCacheGeneration) budgetUsageCache.set(cacheId, { value, expiresAt: Date.now() + dashboardCacheTtlMs })
+    return value
+  }).finally(() => {
+    if (budgetUsageInflight.get(cacheId) === promise) budgetUsageInflight.delete(cacheId)
+  })
+  budgetUsageInflight.set(cacheId, promise)
+  return promise
+}
+
+async function budgetSpentMicros(apiKeyId: string, window: BudgetWindow) {
+  return (await getBudgetUsage(window)).get(apiKeyId)?.spentMicros || 0
+}
+
 export interface BudgetAdmission {
   key: string
   limitMicros: number
@@ -805,7 +936,7 @@ export async function getBudgetRequestState(
   if (!budget.enabled || window.bypassLimits) return { usageContext }
   if (!pricing) throw new BudgetDeniedError("This API key cannot call a model without configured pricing.", budgetRetryAfter(window))
 
-  const spentMicros = await budgetCounter(apiKeyId, usageStartAt)
+  const spentMicros = await budgetSpentMicros(apiKeyId, window)
   if (spentMicros >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
   return {
     usageContext,
@@ -840,26 +971,18 @@ async function loadBudgetRows(keys: Awaited<ReturnType<typeof listApiKeys>> = []
     currentWindow ? Promise.resolve(currentWindow) : getBudgetWindow(),
   ])
   const usageStartAt = await budgetUsageStart(window)
-  const counters = budgets.length ? await listBudgetCounters(usageStartAt) : []
-  const apiKeyByCounterId = new Map<string, string>()
-  for (const budget of budgets) apiKeyByCounterId.set(budgetCounterId(budget.apiKeyId, usageStartAt), budget.apiKeyId)
-
-  const countersByKey = new Map<string, { spentMicros: number; lastUsedAt?: string }>()
-  for (const counter of counters) {
-    const apiKeyId = apiKeyByCounterId.get(counter.id)
-    if (apiKeyId) countersByKey.set(apiKeyId, { spentMicros: Number(counter.spentMicros || 0), lastUsedAt: counter.lastUsedAt })
-  }
+  const usageByKey = budgets.length ? await getBudgetUsage(window) : new Map<string, BudgetUsageValue>()
   const keyNames = new Map(keys.map((key) => [key.id, key.name]))
   const rows = budgets.map((budget) => {
-    const counter = countersByKey.get(budget.apiKeyId)
+    const usage = usageByKey.get(budget.apiKeyId)
     return {
       ...budget,
-      spentMicros: counter?.spentMicros || 0,
+      spentMicros: usage?.spentMicros || 0,
       windowStart: window.start,
       windowEnd: window.end,
       usageStartAt,
       name: keyNames.get(budget.apiKeyId) || "Unknown",
-      lastUsedAt: counter?.lastUsedAt || null,
+      lastUsedAt: usage?.lastUsedAt || null,
     }
   })
   return { rows, window }
@@ -906,7 +1029,7 @@ async function resolveRange(query: DashboardQuery, currentBudgetWindow?: BudgetW
   if (query.preset === "custom" && query.from && query.to) return { label: "Custom range", from: zonedDateStringToDate(query.from, "00:00"), to: new Date(zonedDateStringToDate(query.to, "00:00").getTime() + 86400000 - 1) }
   return { label: "All time", from: new Date("2000-01-01T00:00:00.000Z"), to: now }
 }
-function bucketStart(date: Date, granularity: string) { if (granularity === "hourly") return startOfZonedHour(date); if (granularity === "monthly") return startOfZonedMonth(date); return startOfZonedDay(date) }
+function bucketStart(date: Date, granularity: string) { if (granularity === "hourly") return startOfZonedHour(date); if (granularity === "monthly") return startOfZonedMonth(date); if (granularity === "weekly") return mondayInAppTimeZone(date); return startOfZonedDay(date) }
 function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•".repeat(Math.max(4, key.length - 4))}` : `${key.slice(0, 7)}${"•".repeat(12)}${key.slice(-4)}` }
 function publicKeyLabel(id: string) { return `Key ${hash(id).slice(0, 6).toUpperCase()}` }
 
@@ -917,12 +1040,16 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const requestedGranularity = query.granularity && query.granularity !== "auto"
     ? query.granularity
     : span <= 2 * 86_400_000 ? "hourly" : span <= 45 * 86_400_000 ? "daily" : "monthly"
-  const granularity = requestedGranularity === "weekly" ? "daily" : requestedGranularity
+  const trendGranularity = requestedGranularity
+  // Firestore stores hourly/daily/monthly rollups. Weekly charts are derived
+  // from daily rows so the group selector changes the chart without changing
+  // the underlying usage totals or requiring another rollup collection.
+  const storageGranularity = trendGranularity === "weekly" ? "daily" : trendGranularity
   const toExclusive = new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1))
-  const boundary = dashboardBoundaryRanges(range.from, toExclusive, granularity)
+  const boundary = dashboardBoundaryRanges(range.from, toExclusive, storageGranularity)
 
   const rollupsPromise = listUsageRollups(
-    granularity as UsageRollup["granularity"],
+    storageGranularity as UsageRollup["granularity"],
     range.from.toISOString(),
     toExclusive.toISOString(),
   )
@@ -948,7 +1075,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   )
   const missingDimensionRanges = [...missingDimensionBucketStarts].map((bucket) => [
     new Date(Math.max(range.from.getTime(), Date.parse(bucket))),
-    new Date(Math.min(toExclusive.getTime(), nextBucketStart(new Date(bucket), granularity).getTime())),
+    new Date(Math.min(toExclusive.getTime(), nextBucketStart(new Date(bucket), storageGranularity).getTime())),
   ] as [Date, Date]).filter(([from, to]) => from < to)
   const missingDimensionEventsResult = missingDimensionRanges.length
     ? await Promise.allSettled(missingDimensionRanges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
@@ -977,17 +1104,19 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const rollupsToAggregate = exactBoundaryData
     ? rollups.filter((rollup) => !boundary.partialBucketStarts.has(rollup.bucketStart) && (!missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart)))
     : rollups.filter((rollup) => !missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart))
-  for (const rollup of [...rollupsToAggregate, ...replacementEvents.map((event) => rollupFromEvent(event, granularity as UsageRollup["granularity"]))]) {
+  const compactHourLabels = (query.preset === "today" || query.preset === "yesterday") && trendGranularity === "hourly"
+  for (const rollup of [...rollupsToAggregate, ...replacementEvents.map((event) => rollupFromEvent(event, storageGranularity as UsageRollup["granularity"]))]) {
     requestCount += rollup.requests
     totalTokens += rollup.totalTokens
     totalCostMicros += rollup.costMicros
     pricedRequests += rollup.pricedRequests || 0
     if (rollup.lastEventAt && (!lastEventAt || lastEventAt < rollup.lastEventAt)) lastEventAt = rollup.lastEventAt
 
-    let point = trend.get(rollup.bucketStart)
+    const trendBucket = bucketStart(new Date(rollup.bucketStart), trendGranularity).toISOString()
+    let point = trend.get(trendBucket)
     if (!point) {
-      point = { bucketStart: rollup.bucketStart, label: formatAppTrendBucket(rollup.bucketStart, granularity), requests: 0, tokens: 0, costMicros: 0 }
-      trend.set(rollup.bucketStart, point)
+      point = { bucketStart: trendBucket, label: formatAppTrendBucket(trendBucket, trendGranularity, compactHourLabels ? "hour" : undefined), requests: 0, tokens: 0, costMicros: 0 }
+      trend.set(trendBucket, point)
     }
     point.requests += rollup.requests
     point.tokens += rollup.totalTokens
@@ -995,6 +1124,21 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
 
     if (!rollup.gatewayKeyId || !rollup.gatewayModelId) continue
     addDimensions(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.requests, rollup.totalTokens, rollup.costMicros, rollup.lastEventAt)
+  }
+
+  // Keep empty periods on the chart. This makes the x-axis represent the
+  // selected window instead of the first/last period that happened to have
+  // traffic. For all-time views, begin at the first recorded bucket.
+  if (trend.size || query.preset !== "all") {
+    const existingBuckets = [...trend.keys()].sort()
+    const firstBucket = query.preset === "all"
+      ? new Date(existingBuckets[0])
+      : bucketStart(range.from, trendGranularity)
+    const lastBucket = bucketStart(new Date(toExclusive.getTime() - 1), trendGranularity)
+    for (let cursor = firstBucket; cursor <= lastBucket; cursor = nextBucketStart(cursor, trendGranularity)) {
+      const bucket = cursor.toISOString()
+      if (!trend.has(bucket)) trend.set(bucket, { bucketStart: bucket, label: formatAppTrendBucket(bucket, trendGranularity, compactHourLabels ? "hour" : undefined), requests: 0, tokens: 0, costMicros: 0 })
+    }
   }
 
   function addDimensions(keyId: string, modelId: string, requests: number, tokens: number, costMicros: number, lastUsedAt?: string) {
@@ -1049,7 +1193,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const unpricedRequests = Math.max(0, requestCount - pricedRequests)
   return {
     generatedAt: new Date().toISOString(),
-    range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity },
+    range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity: trendGranularity },
     summary: { requests: requestCount, tokens: totalTokens, costMicros: totalCostMicros, activeKeys: keyRows.size, pricedRequests, unpricedRequests },
     trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)),
     keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests),
@@ -1084,6 +1228,7 @@ function dashboardBoundaryRanges(from: Date, toExclusive: Date, granularity: str
 function nextBucketStart(value: Date, granularity: string) {
   if (granularity === "hourly") return addZonedDays(value, 1 / 24)
   if (granularity === "monthly") return addZonedMonths(value, 1)
+  if (granularity === "weekly") return addZonedDays(value, 7)
   return addZonedDays(value, 1)
 }
 

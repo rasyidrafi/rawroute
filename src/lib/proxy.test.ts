@@ -96,6 +96,25 @@ describe("proxy request", () => {
     expect(readLogs()[0]?.message).toMatch(/^DONE \d+ms TTFT:\d+ms$/)
   })
 
+  test("maps chat-style token limits for OpenAI Responses providers", async () => {
+    let captured: Record<string, unknown> | undefined
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body))
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    }) as unknown as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", max_tokens: 512 }),
+    }), "openai-responses")
+
+    expect(response.status).toBe(200)
+    expect(captured).toMatchObject({ model: "gpt-upstream", max_output_tokens: 512 })
+    expect(captured).not.toHaveProperty("max_tokens")
+    expect(captured).not.toHaveProperty("max_completion_tokens")
+  })
+
   test("forwards Codex OAuth requests as native Responses with account headers", async () => {
     await updateData((data) => {
       const provider = data.providers[0]

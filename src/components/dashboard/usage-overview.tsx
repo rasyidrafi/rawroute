@@ -12,10 +12,10 @@ import type { DashboardPayload, DashboardQuery } from "@/lib/types"
 import { formatAppDateTime } from "@/lib/timezone"
 import { DEFAULT_GRANULARITY, getGranularityOptions, getOptionLabel, getRangeLabel, PRESET_OPTIONS } from "@/components/dashboard/usage-utils"
 
-export function UsageOverview({ dashboard, loading, preset, setPreset, granularity, setGranularity, selectedRange, onRangeChange, onRefresh, publicView = false }: { dashboard: DashboardPayload | null; loading: boolean; preset: DashboardQuery["preset"]; setPreset: (value: DashboardQuery["preset"]) => void; granularity: NonNullable<DashboardQuery["granularity"]> | "auto"; setGranularity: (value: NonNullable<DashboardQuery["granularity"]> | "auto") => void; selectedRange: DateRange | undefined; onRangeChange: (range: DateRange | undefined) => void; onRefresh: () => void; publicView?: boolean }) {
+export function UsageOverview({ dashboard, loading, preset, setPreset, granularity, setGranularity, selectedRange, onRangeChange, onRefresh }: { dashboard: DashboardPayload | null; loading: boolean; preset: DashboardQuery["preset"]; setPreset: (value: DashboardQuery["preset"]) => void; granularity: NonNullable<DashboardQuery["granularity"]> | "auto"; setGranularity: (value: NonNullable<DashboardQuery["granularity"]> | "auto") => void; selectedRange: DateRange | undefined; onRangeChange: (range: DateRange | undefined) => void; onRefresh: () => void }) {
   const granularityOptions = getGranularityOptions(preset)
   const activeGranularity = granularityOptions.some((option) => option.value === granularity) ? granularity : DEFAULT_GRANULARITY
-  const presetOptions = publicView ? PRESET_OPTIONS.filter((option) => option.value !== "budget") : PRESET_OPTIONS
+  const presetOptions = PRESET_OPTIONS
   const presetLabel = getOptionLabel(presetOptions, preset)
   const granularityLabel = getOptionLabel(granularityOptions, activeGranularity)
 

@@ -86,6 +86,19 @@ function providerKeyFor(providerApiKeys: ProviderApiKey[], id: string) {
   return byId.get(id)
 }
 
+function normalizeResponsesRequest(payload: Record<string, unknown>) {
+  const normalized = { ...payload }
+  if (!Object.hasOwn(normalized, "max_output_tokens")) {
+    if (Object.hasOwn(normalized, "max_completion_tokens")) normalized.max_output_tokens = normalized.max_completion_tokens
+    else if (Object.hasOwn(normalized, "max_tokens")) normalized.max_output_tokens = normalized.max_tokens
+  }
+  // Responses APIs use max_output_tokens; forwarding either chat-completions
+  // spelling causes strict OpenAI-compatible upstreams to return HTTP 400.
+  delete normalized.max_tokens
+  delete normalized.max_completion_tokens
+  return normalized
+}
+
 async function readBoundedBody(request: Request, maximum: number) {
   const declared = request.headers.get("content-length")
   if (declared) {
@@ -547,7 +560,10 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
     const isCodexProvider = provider.prefix === "codex" || providerApiKey?.credentialKind === "codex-oauth"
     const isCodexOAuth = providerApiKey?.credentialKind === "codex-oauth"
     if (isCodexProvider) payload = normalizeCodexRequest(payload, model.upstreamModel, routingSessionKey)
-    else payload.model = model.upstreamModel
+    else {
+      if (modelProtocol === "openai-responses") payload = normalizeResponsesRequest(payload)
+      payload.model = model.upstreamModel
+    }
     const streamOptions = objectValue(payload.stream_options)
     if (modelProtocol === "openai-chat" && payload.stream === true) {
       const options = streamOptions || {}

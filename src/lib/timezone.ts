@@ -126,10 +126,13 @@ export function formatAppWindowDate(value: Date | string | number) {
   return dateFormatter("window", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
 }
 
-export function formatAppTrendBucket(value: Date | string | number, granularity: string) {
+export function formatAppTrendBucket(value: Date | string | number, granularity: string, labelMode?: "hour") {
   const date = toDate(value)
   const timeZone = configuredTimeZone()
-  if (granularity === "hourly") return dateFormatter("trend-hourly", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
+  if (granularity === "hourly") {
+    if (labelMode === "hour") return dateFormatter("trend-hour-only", DISPLAY_LOCALE, timeZone, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
+    return dateFormatter("trend-hourly", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date)
+  }
   if (granularity === "monthly") return dateFormatter("trend-monthly", DISPLAY_LOCALE, timeZone, { month: "short", year: "numeric" }).format(date)
   return dateFormatter("trend-daily", DISPLAY_LOCALE, timeZone, { month: "short", day: "numeric" }).format(date)
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest"
 
-import { addZonedDays, formatAppDateTime, getAppTimeZone, mondayInAppTimeZone, startOfZonedDay, zonedDateStringToDate } from "@/lib/timezone"
+import { addZonedDays, formatAppDateTime, formatAppTrendBucket, getAppTimeZone, mondayInAppTimeZone, startOfZonedDay, zonedDateStringToDate } from "@/lib/timezone"
 
 const originalTimezone = process.env.TIMEZONE
 const originalPublicTimezone = process.env.NEXT_PUBLIC_TIMEZONE
@@ -34,5 +34,11 @@ describe("application timezone", () => {
     expect(startOfZonedDay("2026-08-04T18:00:00.000Z").toISOString()).toBe("2026-08-04T17:00:00.000Z")
     expect(mondayInAppTimeZone("2026-08-05T00:00:00.000Z").toISOString()).toBe("2026-08-02T17:00:00.000Z")
     expect(addZonedDays("2026-08-03T17:00:00.000Z", 7).toISOString()).toBe("2026-08-10T17:00:00.000Z")
+  })
+
+  test("uses hour-only labels for hourly today and yesterday trends", () => {
+    delete process.env.NEXT_PUBLIC_TIMEZONE
+    delete process.env.TIMEZONE
+    expect(formatAppTrendBucket("2026-08-06T02:00:00.000Z", "hourly", "hour")).toBe("09:00")
   })
 })

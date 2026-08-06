@@ -9,7 +9,6 @@ const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", cu
 const subDollarCurrencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 3, maximumFractionDigits: 3 })
 const TOKEN_UNITS = ["", "K", "M", "B", "T"] as const
 
-export const DEFAULT_PRESET: DashboardQuery["preset"] = "budget"
 export const DEFAULT_GRANULARITY: NonNullable<DashboardQuery["granularity"]> = "auto"
 export const KEY_COLORS = [
   "var(--chart-1)",
@@ -88,7 +87,7 @@ export function getOptionLabel<T extends string>(options: ReadonlyArray<{ value:
 
 export function getGranularityOptions(preset: DashboardQuery["preset"]): Array<{ value: NonNullable<DashboardQuery["granularity"]> | "auto"; label: string }> {
   if (preset === "today" || preset === "yesterday") return [{ value: "auto", label: "Auto (hourly)" }, { value: "hourly", label: "Hourly" }]
-  if (preset === "month" || preset === "lastMonth") return [{ value: "auto", label: "Auto (daily)" }, { value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }]
+  if (preset === "month" || preset === "lastMonth" || preset === "week" || preset === "lastWeek" || preset === "budget") return [{ value: "auto", label: "Auto (daily)" }, { value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }]
   if (preset === "custom") return [{ value: "auto", label: "Automatic" }, { value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]
   if (preset === "year" || preset === "all") return [{ value: "auto", label: "Automatic" }, { value: "monthly", label: "Monthly" }]
   return [{ value: "auto", label: "Auto (daily)" }, { value: "daily", label: "Daily" }]

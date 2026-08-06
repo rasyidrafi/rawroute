@@ -3,11 +3,11 @@ import Link from "next/link"
 import { UsageView } from "@/components/dashboard/usage-view"
 import { PublicWorkspaceSelector } from "@/components/public-workspace-selector"
 import { getDashboardPayload } from "@/lib/analytics"
-import type { DashboardQuery } from "@/lib/types"
+import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-query"
 import { DEFAULT_WORKSPACE_ID, runInWorkspace } from "@/lib/workspace-context"
 import { listWorkspaces } from "@/lib/workspaces"
 
-const initialQuery: DashboardQuery = { preset: "today", granularity: "auto" }
+const initialQuery = DEFAULT_DASHBOARD_QUERY
 
 export const dynamic = "force-dynamic"
 

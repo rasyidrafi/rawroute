@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest"
+import { beforeEach, describe, expect, test, vi } from "vitest"
 
 import { checkBudget, getBudgetAdmission, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { createApiKey, _resetMemoryBackend } from "@/lib/store"
@@ -80,12 +80,104 @@ describe.sequential("usage analytics", () => {
     expect((await getBudgetWindow()).anchor).toBe("custom")
   })
 
+  test("recalculates budget usage from historical rollups for custom boundaries", async () => {
+    const key = await createApiKey("Historical budget")
+    const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
+      id,
+      gatewayKeyId: key.id,
+      gatewayModelId: "historical/model",
+      protocol: "openai-chat",
+      startedAt: completedAt,
+      completedAt,
+      status: 200,
+      durationMs: 1,
+      inputTokens: 1,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 1,
+      costMicros,
+      pricingConfidence: "exact",
+      usageAvailable: true,
+    })
+
+    await recordUsageEvent(event("old-day", "2026-08-07T12:00:00.000Z", 400), null)
+    await recordUsageEvent(event("before-start", "2026-08-08T09:00:00.000Z", 50), null)
+    await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
+    await recordUsageEvent(event("inside-complete-hour", "2026-08-08T10:00:00.000Z", 100), null)
+    await recordUsageEvent(event("inside-end-hour", "2026-08-08T17:30:00.000Z", 100), null)
+    await recordUsageEvent(event("after-end", "2026-08-08T18:00:00.000Z", 50), null)
+
+    await updateBudgetWindow({ anchor: "custom", start: "2026-08-07T09:30:00.000Z", end: "2026-08-09T17:45:00.000Z" })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(800)
+
+    await upsertModelPricing({ modelId: "historical-model", provider: "test", gatewayModelId: "historical/model", upstreamModel: "historical", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 700, enabled: true })
+    await expect(checkBudget(key.id, "historical/model")).rejects.toThrow("budget")
+
+    await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T10:00:00.000Z", end: "2026-08-08T18:00:00.000Z" })
+    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
+  })
+
   test("uses the budget window as an analytics range and preserves custom hours", async () => {
     await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:30:00.000Z", end: "2026-08-13T17:45:00.000Z" })
     const payload = await getDashboardPayload({ preset: "budget" })
     expect(payload.range.label).toBe("Budget window")
     expect(payload.range.from).toBe("2026-08-06T09:30:00.000Z")
     expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
+  })
+
+  test("keeps complete preset trend axes and supports weekly grouping", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
+    try {
+      const event = (id: string, completedAt: string): UsageEvent => ({
+        id,
+        gatewayKeyId: "trend-key",
+        gatewayModelId: "trend-model",
+        protocol: "openai-chat",
+        startedAt: completedAt,
+        completedAt,
+        status: 200,
+        durationMs: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 15,
+        costMicros: 100,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+      })
+      await recordUsageEvent(event("jan", "2026-01-15T03:00:00.000Z"))
+      await recordUsageEvent(event("july", "2026-07-15T03:00:00.000Z"))
+      await recordUsageEvent(event("last-week", "2026-07-27T03:00:00.000Z"))
+      await recordUsageEvent(event("this-week", "2026-08-03T03:00:00.000Z"))
+      await recordUsageEvent(event("today", "2026-08-06T02:00:00.000Z"))
+
+      const today = await getDashboardPayload({ preset: "today" })
+      expect(today.trend).toHaveLength(12)
+      expect(today.trend[0]).toMatchObject({ label: "00:00", requests: 0 })
+      expect(today.trend.at(-1)?.label).toBe("11:00")
+
+      expect((await getDashboardPayload({ preset: "yesterday" })).trend).toHaveLength(24)
+      expect((await getDashboardPayload({ preset: "week" })).trend).toHaveLength(4)
+      expect((await getDashboardPayload({ preset: "lastWeek" })).trend).toHaveLength(7)
+      expect((await getDashboardPayload({ preset: "month" })).trend).toHaveLength(6)
+      expect((await getDashboardPayload({ preset: "lastMonth" })).trend).toHaveLength(31)
+      expect((await getDashboardPayload({ preset: "year" })).trend).toHaveLength(8)
+
+      const allTime = await getDashboardPayload({ preset: "all" })
+      expect(allTime.trend).toHaveLength(8)
+      expect(allTime.trend[0]?.label).toContain("Jan")
+
+      const weekly = await getDashboardPayload({ preset: "month", granularity: "weekly" })
+      expect(weekly.range.granularity).toBe("weekly")
+      expect(weekly.trend).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test("calculates keys and models exactly inside partial budget-window buckets", async () => {
