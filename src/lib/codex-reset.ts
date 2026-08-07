@@ -1,14 +1,13 @@
-import { Redis } from "@upstash/redis"
-
 import { invalidateCodexUsageCache } from "@/lib/codex-usage"
 import { refreshCodexAccount } from "@/lib/codex"
+import { getLocalRedis } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
 import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
 const consumeUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 const locks = new Map<string, string>()
-let redisClient: Redis | undefined
+let redisClient: ReturnType<typeof getLocalRedis> | undefined
 
 type ResetLock = { key: string; token: string; redis: boolean }
 
@@ -20,12 +19,7 @@ return 0
 `
 
 function redis() {
-  if (redisClient) return redisClient
-  const url = process.env.UPSTASH_REDIS_REST_URL
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN
-  if (!url || !token) return undefined
-  redisClient = new Redis({ url, token })
-  return redisClient
+  return redisClient ||= getLocalRedis()
 }
 
 async function acquire(accountId: string): Promise<ResetLock | undefined> {
@@ -33,7 +27,7 @@ async function acquire(accountId: string): Promise<ResetLock | undefined> {
   const token = crypto.randomUUID()
   const client = redis()
   if (client) {
-    const acquired = (await client.set(key, token, { nx: true, ex: 60 })) === "OK"
+    const acquired = (await client.set(key, token, "EX", 60, "NX")) === "OK"
     return acquired ? { key, token, redis: true } : undefined
   }
   if (locks.has(key)) return undefined
@@ -47,7 +41,7 @@ async function release(lock: ResetLock) {
     return
   }
   const client = redis()
-  if (client) await client.eval(releaseLockScript, [lock.key], [lock.token]).catch(() => undefined)
+  if (client) await client.eval(releaseLockScript, 1, lock.key, lock.token).catch(() => undefined)
 }
 
 function numberValue(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0 }

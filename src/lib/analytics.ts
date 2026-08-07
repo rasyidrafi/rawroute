@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
-import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
-import { FieldPath, FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore"
+import { FieldPath, FieldValue, getLocalFirestore, type Firestore, type LocalQuery } from "@/lib/local-db"
 
 import { listApiKeys, listModels } from "@/lib/store"
 import { listCliProxyModels } from "@/lib/cliproxy-catalog"
@@ -12,7 +11,7 @@ import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone
 import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricing, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
 
-let firestore: Firestore | undefined
+let localDatabase: Firestore | undefined
 interface AnalyticsMemoryState {
   events: Map<string, UsageEvent>
   rollups: Map<string, UsageRollup>
@@ -52,7 +51,7 @@ const maximumBudgetContextLagMs = (
     positiveNumber(process.env.ROUTING_MAX_NON_STREAM_DURATION_SECONDS, 60),
   ) * 1_000
 ) + 10_000
-const analyticsReadConcurrency = positiveInteger(process.env.FIRESTORE_ANALYTICS_READ_CONCURRENCY, 8)
+const analyticsReadConcurrency = positiveInteger(process.env.DATABASE_ANALYTICS_READ_CONCURRENCY, 8)
 const defaultBudgetOutputTokens = positiveInteger(process.env.BUDGET_DEFAULT_OUTPUT_TOKENS, 4_096)
 const budgetInputBytesPerToken = positiveNumber(process.env.BUDGET_INPUT_BYTES_PER_TOKEN, 3)
 const budgetReservationSafetyMultiplier = positiveNumber(process.env.BUDGET_RESERVATION_SAFETY_PERCENT, 125) / 100
@@ -214,15 +213,9 @@ function invalidateLegacyPricingCaches() {
 }
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
-function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
+function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function db() {
-  if (firestore) return firestore
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replaceAll("\\n", "\n")
-  const app = getApps().length ? getApp() : initializeApp({ credential: projectId && clientEmail && privateKey ? cert({ projectId, clientEmail, privateKey }) : applicationDefault(), projectId })
-  firestore = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)")
-  return firestore
+  return localDatabase ||= getLocalFirestore()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
 function eventsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_usage_events`) : workspaceRef().collection("usageEvents") }
@@ -501,7 +494,7 @@ export async function listUsageRollups(granularity?: UsageRollup["granularity"],
     )
   }
 
-  let query = rollupsRef() as FirebaseFirestore.Query
+  let query = rollupsRef() as LocalQuery
   if (granularity) {
     // IDs begin with `${granularity}:${ISO bucket}`. The document-ID range avoids
     // downloading all historical rollups and requires no composite index.
@@ -1709,7 +1702,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)),
     keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests),
     models: [...modelRows.values()].sort((a, b) => b.requests - a.requests),
-    freshness: { source: isMemory() ? "memory" : "firestore", lastEventAt },
+    freshness: { source: isMemory() ? "memory" : "postgres", lastEventAt },
     pricingConfidence: { pricedRequests, unpricedRequests },
   }
 }

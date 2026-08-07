@@ -22,6 +22,12 @@
 # production
 /build
 
+# Local CLIProxyAPI credentials and runtime state
+/cliproxy/config.yaml
+/cliproxy/auths/
+/cliproxy/logs/
+/cliproxy/plugins/
+
 # misc
 .DS_Store
 .commandcode/

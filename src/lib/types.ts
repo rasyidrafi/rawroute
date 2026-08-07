@@ -61,7 +61,7 @@ export interface ProviderApiKey {
 export interface Model {
   id: string
   providerId: string
-  // The user-facing model name used by gateway requests; `id` is Firestore's document ID.
+  // The user-facing model name used by gateway requests; `id` is the document ID.
   gatewayModelId: string
   name: string
   upstreamModel: string
@@ -281,7 +281,7 @@ export interface DashboardPayload {
   trend: Array<{ bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>
   keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null; budget?: DashboardKeyBudget }>
   models: Array<{ model: string; requests: number; tokens: number; costMicros: number }>
-  freshness: { source: "firestore" | "memory"; lastEventAt: string | null }
+  freshness: { source: "postgres" | "memory"; lastEventAt: string | null }
   pricingConfidence: { pricedRequests: number; unpricedRequests: number }
 }
 

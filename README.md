@@ -22,7 +22,7 @@ Requirements: Docker and Docker Compose.
 cp .env.example .env.local
 cp cliproxy/config.example.yaml cliproxy/config.yaml
 # Put the same internal key in cliproxy/config.yaml and CLIPROXY_API_KEY.
-docker compose up --build
+docker compose --env-file .env.local up --build
 ```
 
 Compose pulls `eceasy/cli-proxy-api:latest` from Docker Hub by default. Set `CLI_PROXY_IMAGE` in `.env.local` to use another published Docker Hub or GCR image/tag.
@@ -50,7 +50,11 @@ npm run lint
 npm test
 npx tsc --noEmit
 npm run build
-docker compose config
+docker compose --env-file .env.local config
 ```
 
 For deployment, follow the handoff procedure in `AGENTS.md`; keep the live `rawroute` container on `:8080` serving traffic while the latest image is preflighted on `:18080`.
+
+The local Redis service is an intentionally empty runtime cache after cutover. Firestore migration imports only documents on or after `MIGRATION_SINCE` (default `2026-08-01T00:00:00.000Z`) and removes older local document rows; structural login/index documents without domain timestamps are retained.
+
+Before cutover, run `npm run migrate:local`, then `npm run firestore:backfill-api-key-indexes` and `npm run verify:local` with the migration-only Firestore credentials available as `SOURCE_*` variables. Run these commands while PostgreSQL is reachable from the migration process. The migration result is a source snapshot; freeze or retire any old Firestore writer immediately after cutover. Do not run the destructive historical-row cleanup against a live local instance unless the source and local write streams have been deliberately merged.

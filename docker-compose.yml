@@ -1,20 +1,108 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rawroute-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rawroute}
+      POSTGRES_USER: ${POSTGRES_USER:-rawroute}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - rawroute-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rawroute-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - rawroute-redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   rawroute:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: rawroute
-    env_file:
-      - ${RAWROUTE_ENV_FILE:-.env.local}
     environment:
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD}
+      DEFAULT_PROXY_API_KEY: ${DEFAULT_PROXY_API_KEY:?Set DEFAULT_PROXY_API_KEY}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY}
+      TIMEZONE: ${TIMEZONE:-UTC}
+      NEXT_PUBLIC_TIMEZONE: ${NEXT_PUBLIC_TIMEZONE:-UTC}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      DATABASE_COLLECTION_PREFIX: ${DATABASE_COLLECTION_PREFIX:-rawroute}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-20}
+      DATABASE_CHILD_READ_CONCURRENCY: ${DATABASE_CHILD_READ_CONCURRENCY:-16}
+      DATABASE_ANALYTICS_READ_CONCURRENCY: ${DATABASE_ANALYTICS_READ_CONCURRENCY:-8}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
+      ROUTING_CACHE_TTL_MS: ${ROUTING_CACHE_TTL_MS:-60000}
+      ROUTING_FULL_REFRESH_INTERVAL_MS: ${ROUTING_FULL_REFRESH_INTERVAL_MS:-900000}
+      API_KEY_CACHE_TTL_MS: ${API_KEY_CACHE_TTL_MS:-60000}
+      API_KEY_NEGATIVE_CACHE_TTL_MS: ${API_KEY_NEGATIVE_CACHE_TTL_MS:-10000}
+      API_KEY_INDEX_REPAIR_ON_MISS: ${API_KEY_INDEX_REPAIR_ON_MISS:-}
+      MAX_WORKSPACE_CACHE_ENTRIES: ${MAX_WORKSPACE_CACHE_ENTRIES:-256}
+      MAX_PROVIDER_SCOPED_CACHE_ENTRIES: ${MAX_PROVIDER_SCOPED_CACHE_ENTRIES:-256}
+      WORKSPACE_CACHE_TTL_MS: ${WORKSPACE_CACHE_TTL_MS:-60000}
+      WORKSPACE_NEGATIVE_CACHE_TTL_MS: ${WORKSPACE_NEGATIVE_CACHE_TTL_MS:-10000}
+      BUDGET_CACHE_TTL_MS: ${BUDGET_CACHE_TTL_MS:-60000}
+      BUDGET_COUNTER_CACHE_TTL_MS: ${BUDGET_COUNTER_CACHE_TTL_MS:-30000}
+      BUDGET_DEFAULT_OUTPUT_TOKENS: ${BUDGET_DEFAULT_OUTPUT_TOKENS:-4096}
+      BUDGET_INPUT_BYTES_PER_TOKEN: ${BUDGET_INPUT_BYTES_PER_TOKEN:-3}
+      BUDGET_RESERVATION_SAFETY_PERCENT: ${BUDGET_RESERVATION_SAFETY_PERCENT:-125}
+      DASHBOARD_CACHE_TTL_MS: ${DASHBOARD_CACHE_TTL_MS:-30000}
+      DASHBOARD_MAX_CUSTOM_RANGE_DAYS: ${DASHBOARD_MAX_CUSTOM_RANGE_DAYS:-3650}
+      DASHBOARD_MAX_HOURLY_RANGE_DAYS: ${DASHBOARD_MAX_HOURLY_RANGE_DAYS:-31}
+      DASHBOARD_MAX_DAILY_RANGE_DAYS: ${DASHBOARD_MAX_DAILY_RANGE_DAYS:-730}
+      DASHBOARD_MAX_WEEKLY_RANGE_DAYS: ${DASHBOARD_MAX_WEEKLY_RANGE_DAYS:-7300}
+      PUBLIC_DASHBOARD_MAX_CUSTOM_RANGE_DAYS: ${PUBLIC_DASHBOARD_MAX_CUSTOM_RANGE_DAYS:-366}
+      PRICING_CATALOG_CACHE_TTL_MS: ${PRICING_CATALOG_CACHE_TTL_MS:-60000}
+      PRICING_ADMIN_CACHE_TTL_MS: ${PRICING_ADMIN_CACHE_TTL_MS:-5000}
+      PRICING_JOBS_CACHE_TTL_MS: ${PRICING_JOBS_CACHE_TTL_MS:-2000}
+      CODEX_USAGE_LOCAL_CACHE_TTL_MS: ${CODEX_USAGE_LOCAL_CACHE_TTL_MS:-300000}
+      USAGE_ROLLUP_GRANULARITIES: ${USAGE_ROLLUP_GRANULARITIES:-hourly,daily}
+      ROUTING_MAX_STREAM_DURATION_SECONDS: ${ROUTING_MAX_STREAM_DURATION_SECONDS:-290}
+      ROUTING_MAX_NON_STREAM_DURATION_SECONDS: ${ROUTING_MAX_NON_STREAM_DURATION_SECONDS:-60}
+      CODEX_AUTH_BASE_URL: ${CODEX_AUTH_BASE_URL:-}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-}
+      CODEX_FEDRAMP: ${CODEX_FEDRAMP:-}
+      CODEX_OAUTH_CLIENT_ID: ${CODEX_OAUTH_CLIENT_ID:-}
+      CODEX_USAGE_URL: ${CODEX_USAGE_URL:-}
+      RAWROUTE_PUBLIC_URL: ${RAWROUTE_PUBLIC_URL:-http://localhost:8080}
       CLIPROXY_URL: http://cli-proxy-api:8317
       CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
       CLIPROXY_API_KEY: ${CLIPROXY_API_KEY:?Set CLIPROXY_API_KEY}
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       cli-proxy-api:
         condition: service_started
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
     restart: unless-stopped
 
   cli-proxy-api:
@@ -33,6 +121,10 @@ services:
       - ${CLI_PROXY_PLUGIN_PATH:-./cliproxy/plugins}:/CLIProxyAPI/plugins
     restart: unless-stopped
 
+volumes:
+  rawroute-postgres-data:
+  rawroute-redis-data:
+
 networks:
   default:
-    internal: true
+    name: rawroute

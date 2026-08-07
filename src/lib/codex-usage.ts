@@ -1,6 +1,5 @@
-import { Redis } from "@upstash/redis"
-
 import { refreshCodexAccount } from "@/lib/codex"
+import { getLocalRedis } from "@/lib/local-redis"
 import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
@@ -99,10 +98,22 @@ function getUsageUrl() {
 
 function getRedis(): UsageRedis {
   if (redisClient) return redisClient
-  const url = process.env.UPSTASH_REDIS_REST_URL
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN
-  if (!url || !token) throw new Error("Upstash Redis is not configured.")
-  const client: UsageRedis = new Redis({ url, token })
+  const local = getLocalRedis()
+  const client: UsageRedis = {
+    async get<T = unknown>(key: string) {
+      const value = await local.get(key)
+      if (value === null) return null
+      try { return JSON.parse(value) as T } catch { return value as T }
+    },
+    async set<T = unknown>(key: string, value: T, options: { ex?: number; nx?: boolean } = {}) {
+      const serialized = typeof value === "string" ? value : JSON.stringify(value)
+      if (options.ex !== undefined && options.nx) return local.set(key, serialized, "EX", options.ex, "NX")
+      if (options.ex !== undefined) return local.set(key, serialized, "EX", options.ex)
+      if (options.nx) return local.set(key, serialized, "NX")
+      return local.set(key, serialized)
+    },
+    async del(key: string) { return local.del(key) },
+  }
   redisClient = client
   return client
 }

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
-import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
-import { getFirestore, type Firestore } from "firebase-admin/firestore"
+import { getLocalFirestore, type Firestore } from "@/lib/local-db"
 
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
 import { listCliProxyModels } from "@/lib/cliproxy-catalog"
@@ -8,7 +7,7 @@ import { listModels, listProviders } from "@/lib/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
 import { currentWorkspaceId, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
 
-let firestore: Firestore | undefined
+let localDatabase: Firestore | undefined
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>
 type PricingCatalog = {
   groups: ModelPricingGroup[]
@@ -76,15 +75,9 @@ const pricingJobsTtlMs = positiveDuration(process.env.PRICING_JOBS_CACHE_TTL_MS,
 export function getModelPricingGeneration() { return workspaceState().pricingCacheGeneration }
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
-function prefix() { return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
+function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function db() {
-  if (firestore) return firestore
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replaceAll("\\n", "\n")
-  const app = getApps().length ? getApp() : initializeApp({ credential: projectId && clientEmail && privateKey ? cert({ projectId, clientEmail, privateKey }) : applicationDefault(), projectId })
-  firestore = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)")
-  return firestore
+  return localDatabase ||= getLocalFirestore()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
 function groupsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_groups`) : workspaceRef().collection("modelPricingGroups") }

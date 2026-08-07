@@ -1,6 +1,9 @@
+import { loadEnvConfig } from "@next/env"
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { getFirestore } from "firebase-admin/firestore"
 import { spawn } from "node:child_process"
+
+loadEnvConfig(process.cwd())
 
 const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT
 const clientEmail = process.env.FIREBASE_CLIENT_EMAIL

@@ -1,6 +1,5 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
-import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
-import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore"
+import { type DocumentData, type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type QuerySnapshot, type Transaction } from "@/lib/local-db"
 
 import { gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
@@ -15,8 +14,8 @@ const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_C
 const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 10_000
 const repairApiKeyIndexOnMiss = process.env.API_KEY_INDEX_REPAIR_ON_MISS === "1" || process.env.API_KEY_INDEX_REPAIR_ON_MISS?.toLowerCase() === "true"
 const apiKeyIndexReconciliationTtlMs = 30_000
-const configuredFirestoreReadConcurrency = Number(process.env.FIRESTORE_CHILD_READ_CONCURRENCY || 16)
-const firestoreChildReadConcurrency = Number.isSafeInteger(configuredFirestoreReadConcurrency) && configuredFirestoreReadConcurrency > 0 ? configuredFirestoreReadConcurrency : 16
+const configuredDatabaseReadConcurrency = Number(process.env.DATABASE_CHILD_READ_CONCURRENCY || 16)
+const databaseChildReadConcurrency = Number.isSafeInteger(configuredDatabaseReadConcurrency) && configuredDatabaseReadConcurrency > 0 ? configuredDatabaseReadConcurrency : 16
 const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
 const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
 const configuredMaximumProviderCacheEntries = Number(process.env.MAX_PROVIDER_SCOPED_CACHE_ENTRIES || 256)
@@ -467,10 +466,10 @@ async function cachedRead<T>(cache: ReadCache<T>, loader: () => Promise<T>): Pro
 }
 
 async function parallelMap<T, R>(items: readonly T[], mapper: (item: T) => Promise<R>): Promise<R[]> {
-  if (items.length <= firestoreChildReadConcurrency) return Promise.all(items.map(mapper))
+  if (items.length <= databaseChildReadConcurrency) return Promise.all(items.map(mapper))
   const output = new Array<R>(items.length)
   let nextIndex = 0
-  await Promise.all(Array.from({ length: firestoreChildReadConcurrency }, async () => {
+  await Promise.all(Array.from({ length: databaseChildReadConcurrency }, async () => {
     while (nextIndex < items.length) {
       const index = nextIndex++
       output[index] = await mapper(items[index])
@@ -686,50 +685,43 @@ function memoryApiKeyValueExists(hash: string) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// Firestore backend
+// PostgreSQL document backend
 // -------------------------------------------------------------------------------------------------
 
-let firestoreInstance: Firestore | undefined
+let localDatabase: Firestore | undefined
 
-export function getFirestoreInstance(): Firestore {
-  if (firestoreInstance) return firestoreInstance
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replaceAll("\\n", "\n")
-  const configuredServiceAccount = projectId && clientEmail && privateKey
-  const app = getApps().length ? getApp() : initializeApp({
-    credential: configuredServiceAccount ? cert({ projectId, clientEmail, privateKey }) : applicationDefault(),
-    projectId,
-  })
-  firestoreInstance = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)")
-  return firestoreInstance
+export function getLocalDatabase(): Firestore {
+  return localDatabase ||= getLocalFirestore()
 }
 
+/** Compatibility name retained for workspace modules while callers migrate to the local database name. */
+export const getFirestoreInstance = getLocalDatabase
+
 export function collectionPrefix() {
-  return (process.env.FIRESTORE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
+  return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
 }
 
 function metaRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_system`).doc("meta")
+  return getLocalDatabase().collection(`${collectionPrefix()}_system`).doc("meta")
 }
 
 function legacyMetaRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_system`).doc("state")
+  return getLocalDatabase().collection(`${collectionPrefix()}_system`).doc("state")
 }
 
 function workspaceRootRef(workspaceId = currentWorkspaceId()) {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).doc(workspaceId)
+  return getLocalDatabase().collection(`${collectionPrefix()}_workspaces`).doc(workspaceId)
 }
 
 function apiKeysRefForWorkspace(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode) {
   return workspaceId === DEFAULT_WORKSPACE_ID && (workspaceStorageMode === "legacy" || workspaceStorageMode === "dual")
-    ? getFirestoreInstance().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
+    ? getLocalDatabase().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
     : workspaceRootRef(workspaceId).collection("apiKeys")
 }
 
 function providersRef() {
   return usesLegacyWorkspaceStorage()
-    ? getFirestoreInstance().collection(collectionPrefix()).doc("providers").collection("providers")
+    ? getLocalDatabase().collection(collectionPrefix()).doc("providers").collection("providers")
     : workspaceRootRef().collection("providers")
 }
 
@@ -755,7 +747,7 @@ function modelRef(providerId: string, modelId: string) {
 
 function aliasesRef() {
   return usesLegacyWorkspaceStorage()
-    ? getFirestoreInstance().collection(collectionPrefix()).doc("aliases").collection("aliases")
+    ? getLocalDatabase().collection(collectionPrefix()).doc("aliases").collection("aliases")
     : workspaceRootRef().collection("aliases")
 }
 
@@ -772,11 +764,11 @@ function apiKeyRef(apiKeyId: string) {
 }
 
 function apiKeyIndexesRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_api_key_indexes`)
+  return getLocalDatabase().collection(`${collectionPrefix()}_api_key_indexes`)
 }
 
 function routingRevisionRef(workspaceId = currentWorkspaceId()) {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_routing_revisions`).doc(workspaceId)
+  return getLocalDatabase().collection(`${collectionPrefix()}_routing_revisions`).doc(workspaceId)
 }
 
 function bumpRoutingRevision(transaction: Transaction) {
@@ -799,7 +791,7 @@ async function firestoreWorkspaceScopes(): Promise<FirestoreWorkspaceScope[]> {
   const snapshot = await getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).get()
   const scopes = snapshot.docs.map((document) => ({
     id: document.id,
-    storageMode: indexedWorkspaceStorageMode(document.id, document.data().storageMode),
+    storageMode: indexedWorkspaceStorageMode(document.id, document.data()?.storageMode),
   }))
   if (!scopes.some((scope) => scope.id === DEFAULT_WORKSPACE_ID)) scopes.unshift({ id: DEFAULT_WORKSPACE_ID, storageMode: "legacy" })
   return scopes
@@ -862,7 +854,7 @@ function sameApiKeyIndex(left: ApiKeyIndexData | undefined, right: Required<ApiK
  * values, then writes only missing/stale index rows and removes orphaned rows.
  */
 export async function backfillApiKeyIndexes(options: { dryRun?: boolean; batchSize?: number } = {}): Promise<ApiKeyIndexBackfillResult> {
-  if (isMemoryBackend()) throw new Error("API key index backfill requires the Firestore storage backend.")
+  if (isMemoryBackend()) throw new Error("API key index backfill requires the PostgreSQL storage backend.")
   const batchSize = Math.min(400, Math.max(1, Math.trunc(options.batchSize || 400)))
   const dryRun = options.dryRun === true
   const scopes = await firestoreWorkspaceScopes()
@@ -1692,7 +1684,7 @@ async function firestoreReadMeta(): Promise<Meta> {
 async function firestoreMigrateCurrentDocuments(transaction: Transaction, meta: Meta): Promise<Meta> {
   const providerSnapshot = await transaction.get(providersRef())
   const gatewayKeySnapshot = await transaction.get(apiKeysRef())
-  const children: Array<{ providerId: string; keys: FirebaseFirestore.QuerySnapshot<DocumentData>; models: FirebaseFirestore.QuerySnapshot<DocumentData> }> = []
+  const children: Array<{ providerId: string; keys: QuerySnapshot<DocumentData>; models: QuerySnapshot<DocumentData> }> = []
   for (const provider of providerSnapshot.docs) {
     children.push({
       providerId: provider.id,

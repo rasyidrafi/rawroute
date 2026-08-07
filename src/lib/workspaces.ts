@@ -282,7 +282,7 @@ export async function deleteWorkspace(workspaceId: string, confirmation: unknown
     const batch = getFirestoreInstance().batch()
     let operations = 0
     for (const apiKey of apiKeys.docs.slice(offset, offset + 400)) {
-      const value = apiKey.data().key
+      const value = apiKey.data()?.key
       if (typeof value !== "string") continue
       const hash = apiKeyValueHash(value)
       hashes.push(hash)
