@@ -52,6 +52,7 @@ describe("Codex native request adapter", () => {
       temperature: 0.2,
       max_output_tokens: 10,
       max_tokens: 10,
+      reasoning_effort: "high",
       previous_response_id: "resp_1",
       tools: [],
     }, "gpt-5.4-codex", "session-1")).toEqual({
@@ -64,6 +65,7 @@ describe("Codex native request adapter", () => {
       prompt_cache_key: "session-1",
       tools: [],
       parallel_tool_calls: false,
+      reasoning: { effort: "high" },
     })
   })
 

@@ -1,13 +1,9 @@
+import { normalizeReasoningEffort } from "@/lib/request-normalization"
+
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
-}
-
-function safeEffort(value: unknown) {
-  if (typeof value !== "string") return undefined
-  const effort = value.trim()
-  return effort.length > 0 && effort.length <= 64 ? effort : undefined
 }
 
 function nestedValue(payload: Record<string, unknown>, path: string[]) {
@@ -32,7 +28,7 @@ const effortPaths = [
 
 export function extractReasoningEffort(payload: Record<string, unknown>) {
   const found = effortPaths.flatMap((path) => {
-    const effort = safeEffort(nestedValue(payload, [...path]))
+    const effort = normalizeReasoningEffort(nestedValue(payload, [...path]))
     return effort ? [{ path: path.join("."), effort }] : []
   })
   if (!found.length) return undefined

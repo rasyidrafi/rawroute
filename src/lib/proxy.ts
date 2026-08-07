@@ -7,6 +7,7 @@ import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
 import { extractReasoningEffort } from "@/lib/reasoning-effort"
 import { mergeRequestOverrides } from "@/lib/request-overrides"
+import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import { buildUpstreamUrl, resolveRoute } from "@/lib/routing"
 import { getRoutingStateStore } from "@/lib/routing-state"
 import { extractSessionIdentity } from "@/lib/session-routing"
@@ -84,19 +85,6 @@ function providerKeyFor(providerApiKeys: ProviderApiKey[], id: string) {
     providerKeyIndexCache.set(providerApiKeys, byId)
   }
   return byId.get(id)
-}
-
-function normalizeResponsesRequest(payload: Record<string, unknown>) {
-  const normalized = { ...payload }
-  if (!Object.hasOwn(normalized, "max_output_tokens")) {
-    if (Object.hasOwn(normalized, "max_completion_tokens")) normalized.max_output_tokens = normalized.max_completion_tokens
-    else if (Object.hasOwn(normalized, "max_tokens")) normalized.max_output_tokens = normalized.max_tokens
-  }
-  // Responses APIs use max_output_tokens; forwarding either chat-completions
-  // spelling causes strict OpenAI-compatible upstreams to return HTTP 400.
-  delete normalized.max_tokens
-  delete normalized.max_completion_tokens
-  return normalized
 }
 
 async function readBoundedBody(request: Request, maximum: number) {

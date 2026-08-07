@@ -1,7 +1,6 @@
-const removedFields = [
-  "max_output_tokens",
-  "max_completion_tokens",
-  "max_tokens",
+import { normalizeResponsesRequest } from "@/lib/request-normalization"
+
+const codexRemovedFields = [
   "temperature",
   "top_p",
   "truncation",
@@ -36,7 +35,7 @@ function normalizeInput(input: unknown) {
 }
 
 export function normalizeCodexRequest(payload: Record<string, unknown>, upstreamModel: string, sessionKey?: string) {
-  const normalized = { ...payload }
+  const normalized = normalizeResponsesRequest(payload, { dropOutputTokenLimit: true })
   normalized.model = upstreamModel
   normalized.stream = true
   normalized.store = false
@@ -44,7 +43,7 @@ export function normalizeCodexRequest(payload: Record<string, unknown>, upstream
   normalized.include = ["reasoning.encrypted_content"]
   normalized.instructions ??= ""
   normalized.input = normalizeInput(normalized.input)
-  for (const field of removedFields) delete normalized[field]
+  for (const field of codexRemovedFields) delete normalized[field]
   if (sessionKey && typeof normalized.prompt_cache_key !== "string") normalized.prompt_cache_key = sessionKey
   return normalized
 }

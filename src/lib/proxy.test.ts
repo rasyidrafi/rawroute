@@ -115,6 +115,24 @@ describe("proxy request", () => {
     expect(captured).not.toHaveProperty("max_completion_tokens")
   })
 
+  test("maps chat-style reasoning effort for OpenAI Responses providers", async () => {
+    let captured: Record<string, unknown> | undefined
+    globalThis.fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body))
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+    }) as unknown as typeof fetch
+
+    const response = await proxyRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+      body: JSON.stringify({ model: "cx/codex", input: "hello", reasoning_effort: "high" }),
+    }), "openai-responses")
+
+    expect(response.status).toBe(200)
+    expect(captured).toMatchObject({ model: "gpt-upstream", reasoning: { effort: "high" } })
+    expect(captured).not.toHaveProperty("reasoning_effort")
+  })
+
   test("forwards Codex OAuth requests as native Responses with account headers", async () => {
     await updateData((data) => {
       const provider = data.providers[0]
