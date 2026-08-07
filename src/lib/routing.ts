@@ -1,4 +1,4 @@
-import { cleanAliasId } from "@/lib/http"
+import { cleanId } from "@/lib/http"
 import { protocolPaths, type Model, type ModelAlias, type Protocol, type Provider } from "@/lib/types"
 
 const providerIndexCache = new WeakMap<Provider[], Map<string, Provider>>()
@@ -35,7 +35,7 @@ function aliasIndex(aliases: ModelAlias[]) {
   if (index) return index
   index = new Map()
   for (const alias of aliases) {
-    const normalized = cleanAliasId(alias.alias)
+    const normalized = cleanId(alias.alias)
     if (normalized && !index.has(normalized)) index.set(normalized, alias.targetModelId)
   }
   aliasIndexCache.set(aliases, index)
@@ -69,7 +69,7 @@ function resolvedAliasModels(aliases: ModelAlias[], models: Model[], modelsByGat
       if (!target) break
       model = modelsByGatewayId.get(target)
       if (model) break
-      const normalizedTarget = cleanAliasId(target)
+      const normalizedTarget = cleanId(target)
       if (!normalizedTarget) break
       current = normalizedTarget
     }
@@ -111,7 +111,7 @@ export function resolveRoute(
   const modelsByGatewayId = modelIndex(models)
   let model = modelsByGatewayId.get(requestedModel)
   if (!model && aliases.length) {
-    const normalized = cleanAliasId(requestedModel)
+    const normalized = cleanId(requestedModel)
     if (normalized) model = resolvedAliasModels(aliases, models, modelsByGatewayId).get(normalized)
   }
   if (!model) return { ok: false as const, status: 404, message: `Unknown or disabled model: ${requestedModel}` }

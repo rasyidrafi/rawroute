@@ -68,7 +68,7 @@ function workspaceState() {
   return state
 }
 
-const pricingCatalogTtlMs = positiveDuration(process.env.PRICING_CATALOG_CACHE_TTL_MS, 30_000)
+const pricingCatalogTtlMs = positiveDuration(process.env.PRICING_CATALOG_CACHE_TTL_MS, 60_000)
 const pricingAdminTtlMs = positiveDuration(process.env.PRICING_ADMIN_CACHE_TTL_MS, 5_000)
 const pricingJobsTtlMs = positiveDuration(process.env.PRICING_JOBS_CACHE_TTL_MS, 2_000)
 

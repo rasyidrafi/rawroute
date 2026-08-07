@@ -14,7 +14,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:firestore": "tsx scripts/firestore-smoke.ts"
+    "test:firestore": "tsx scripts/firestore-smoke.ts",
+    "firestore:backfill-api-key-indexes": "tsx scripts/backfill-api-key-indexes.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

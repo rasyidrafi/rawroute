@@ -48,7 +48,6 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const resolved = activeWorkspaces.find((entry) => entry.id === workspaceId) || activeWorkspaces.find((entry) => entry.isDefault) || fallbackWorkspace
     setApiWorkspaceId(resolved.id)
     if (resolved.id !== workspaceId) {
-      setWorkspaceId(resolved.id)
       window.localStorage.setItem("rawroute_workspace", resolved.id)
     }
   }, [data, workspaceId])

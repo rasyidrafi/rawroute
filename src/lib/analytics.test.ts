@@ -20,7 +20,7 @@ describe.sequential("usage analytics", () => {
     expect(payload.summary.tokens).toBe(105)
     expect(payload.summary.costMicros).toBe(84)
     expect(payload.summary.pricedRequests).toBe(1)
-    expect((await listUsageRollups()).map((rollup) => rollup.granularity).sort()).toEqual(["daily", "hourly", "monthly"])
+    expect((await listUsageRollups()).map((rollup) => rollup.granularity).sort()).toEqual(["daily", "hourly"])
   })
 
   test("public dashboard shows key names without exposing credentials", async () => {
@@ -171,6 +171,9 @@ describe.sequential("usage analytics", () => {
       const allTime = await getDashboardPayload({ preset: "all" })
       expect(allTime.trend).toHaveLength(8)
       expect(allTime.trend[0]?.label).toContain("Jan")
+
+      const protectedAllTime = await getDashboardPayload({ preset: "all", granularity: "hourly" })
+      expect(protectedAllTime.range.granularity).toBe("monthly")
 
       const weekly = await getDashboardPayload({ preset: "month", granularity: "weekly" })
       expect(weekly.range.granularity).toBe("weekly")

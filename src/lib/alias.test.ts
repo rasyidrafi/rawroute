@@ -36,12 +36,6 @@ describe("model aliases", () => {
     await expect(upsertAlias(aliasInput({ alias: "MY-COOL-MODEL" }))).rejects.toThrow("Alias is already in use.")
   })
 
-  test("preserves slash-delimited gateway IDs", async () => {
-    const saved = await upsertAlias(aliasInput({ alias: "CX/GPT-5.6-SOL" }))
-    expect(saved.alias).toBe("cx/gpt-5.6-sol")
-    expect((await listAliases())[0]?.alias).toBe("cx/gpt-5.6-sol")
-  })
-
   test("rejects an alias with an empty alias ID", async () => {
     await expect(upsertAlias(aliasInput({ alias: "   " }))).rejects.toThrow("Alias is required.")
   })

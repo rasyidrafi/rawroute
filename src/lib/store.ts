@@ -2,17 +2,18 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore"
 
-import { cleanAliasId, gatewayModelId, cleanId } from "@/lib/http"
+import { gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
 import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage, workspaceContext } from "@/lib/workspace-context"
 
-const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 30_000)
-const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 30_000
-const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 15_000)
-const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 15_000
-const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 2_000)
-const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 2_000
+const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
+const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 60_000
+const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 60_000)
+const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 60_000
+const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 10_000)
+const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 10_000
+const repairApiKeyIndexOnMiss = process.env.API_KEY_INDEX_REPAIR_ON_MISS === "1" || process.env.API_KEY_INDEX_REPAIR_ON_MISS?.toLowerCase() === "true"
 const apiKeyIndexReconciliationTtlMs = 30_000
 const configuredFirestoreReadConcurrency = Number(process.env.FIRESTORE_CHILD_READ_CONCURRENCY || 16)
 const firestoreChildReadConcurrency = Number.isSafeInteger(configuredFirestoreReadConcurrency) && configuredFirestoreReadConcurrency > 0 ? configuredFirestoreReadConcurrency : 16
@@ -20,6 +21,10 @@ const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_
 const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
 const configuredMaximumProviderCacheEntries = Number(process.env.MAX_PROVIDER_SCOPED_CACHE_ENTRIES || 256)
 const maximumProviderScopedCacheEntries = Number.isSafeInteger(configuredMaximumProviderCacheEntries) && configuredMaximumProviderCacheEntries > 0 ? configuredMaximumProviderCacheEntries : 256
+const configuredRoutingFullRefreshIntervalMs = Number(process.env.ROUTING_FULL_REFRESH_INTERVAL_MS || 15 * 60_000)
+const routingFullRefreshIntervalMs = Number.isFinite(configuredRoutingFullRefreshIntervalMs) && configuredRoutingFullRefreshIntervalMs >= 0
+  ? Math.max(cacheTtlMs, configuredRoutingFullRefreshIntervalMs)
+  : 15 * 60_000
 let metaCache: { data: Meta; expiresAt: number } | undefined
 let metaReadPromise: Promise<Meta> | undefined
 
@@ -36,6 +41,8 @@ interface WorkspaceCacheState {
   routingDataReadPromise?: Promise<RoutingData>
   catalogDataCache?: DataCache<CatalogData>
   catalogDataReadPromise?: Promise<CatalogData>
+  routingRevisionCache?: { value: string; expiresAt: number }
+  routingRevisionReadPromise?: Promise<string>
   providersCache: ReadCache<Provider[]>
   providerApiKeysCache: Map<string, ReadCache<ProviderApiKey[]>>
   allProviderApiKeysCache: ReadCache<ProviderApiKey[]>
@@ -426,7 +433,7 @@ export function isMemoryBackend() {
 
 type RoutingData = Pick<AppData, "sessionSecret" | "providers" | "providerApiKeys" | "models" | "aliases">
 type CatalogData = Pick<AppData, "providers" | "models" | "aliases">
-interface DataCache<T> { data: T; expiresAt: number }
+interface DataCache<T> { data: T; expiresAt: number; revision?: string; fullRefreshAt?: number }
 type CompatibilityCache = DataCache<AppData>
 
 function clearReadCache<T>(cache: ReadCache<T>) {
@@ -524,6 +531,8 @@ function invalidateCompatibilityCache() {
   state.routingDataReadPromise = undefined
   state.catalogDataCache = undefined
   state.catalogDataReadPromise = undefined
+  state.routingRevisionCache = undefined
+  state.routingRevisionReadPromise = undefined
   clearReadCache(state.providersCache)
   clearReadCache(state.allProviderApiKeysCache)
   clearReadCache(state.modelsCache)
@@ -571,7 +580,7 @@ function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) {
     throw new Error("Alias name must be between 1 and 80 characters.")
   }
-  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanAliasId(input.alias))) {
+  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanId(input.alias))) {
     throw new Error("Alias is required.")
   }
   if (input.targetModelId !== undefined && (typeof input.targetModelId !== "string" || !input.targetModelId.trim())) {
@@ -766,6 +775,17 @@ function apiKeyIndexesRef() {
   return getFirestoreInstance().collection(`${collectionPrefix()}_api_key_indexes`)
 }
 
+function routingRevisionRef(workspaceId = currentWorkspaceId()) {
+  return getFirestoreInstance().collection(`${collectionPrefix()}_routing_revisions`).doc(workspaceId)
+}
+
+function bumpRoutingRevision(transaction: Transaction) {
+  transaction.set(routingRevisionRef(), {
+    revision: FieldValue.increment(1),
+    updatedAt: new Date().toISOString(),
+  }, { merge: true })
+}
+
 function apiKeyIndexRef(hash: string) {
   return apiKeyIndexesRef().doc(hash)
 }
@@ -785,14 +805,21 @@ async function firestoreWorkspaceScopes(): Promise<FirestoreWorkspaceScope[]> {
   return scopes
 }
 
-async function firestoreReadApiKeyIndexCandidates(): Promise<Map<string, ApiKeyIndexCandidate | null>> {
-  const scopes = await firestoreWorkspaceScopes()
+interface ApiKeyIndexCandidatesResult {
+  candidates: Map<string, ApiKeyIndexCandidate | null>
+  scannedApiKeys: number
+}
+
+async function firestoreReadApiKeyIndexCandidates(scopes: FirestoreWorkspaceScope[] = []): Promise<ApiKeyIndexCandidatesResult> {
+  if (!scopes.length) scopes = await firestoreWorkspaceScopes()
   const snapshots = await parallelMap(scopes, async (scope) => ({
     scope,
     snapshot: await apiKeysRefForWorkspace(scope.id, scope.storageMode).get(),
   }))
   const candidates = new Map<string, ApiKeyIndexCandidate | null>()
+  let scannedApiKeys = 0
   for (const { scope, snapshot } of snapshots) {
+    scannedApiKeys += snapshot.size
     for (const document of snapshot.docs) {
       const apiKey = apiKeyFromSnapshot(document)
       if (typeof apiKey.key !== "string" || typeof apiKey.name !== "string" || typeof apiKey.createdAt !== "string") continue
@@ -807,7 +834,90 @@ async function firestoreReadApiKeyIndexCandidates(): Promise<Map<string, ApiKeyI
       }
     }
   }
-  return candidates
+  return { candidates, scannedApiKeys }
+}
+
+export interface ApiKeyIndexBackfillResult {
+  workspaceCount: number
+  scannedApiKeys: number
+  existingIndexes: number
+  writtenIndexes: number
+  deletedStaleIndexes: number
+  unchangedIndexes: number
+  duplicateValues: number
+  dryRun: boolean
+}
+
+function sameApiKeyIndex(left: ApiKeyIndexData | undefined, right: Required<ApiKeyIndexData>) {
+  return left?.workspaceId === right.workspaceId &&
+    indexedWorkspaceStorageMode(right.workspaceId, left?.workspaceStorageMode) === right.workspaceStorageMode &&
+    left?.apiKeyId === right.apiKeyId &&
+    left?.name === right.name &&
+    left?.createdAt === right.createdAt
+}
+
+/**
+ * One-time maintenance helper for deployments created before the global API-key
+ * index was complete. It scans every workspace once, refuses ambiguous duplicate
+ * values, then writes only missing/stale index rows and removes orphaned rows.
+ */
+export async function backfillApiKeyIndexes(options: { dryRun?: boolean; batchSize?: number } = {}): Promise<ApiKeyIndexBackfillResult> {
+  if (isMemoryBackend()) throw new Error("API key index backfill requires the Firestore storage backend.")
+  const batchSize = Math.min(400, Math.max(1, Math.trunc(options.batchSize || 400)))
+  const dryRun = options.dryRun === true
+  const scopes = await firestoreWorkspaceScopes()
+  const [{ candidates, scannedApiKeys }, existingSnapshot] = await Promise.all([
+    firestoreReadApiKeyIndexCandidates(scopes),
+    apiKeyIndexesRef().get(),
+  ])
+  const duplicateValues = [...candidates.values()].filter((candidate) => candidate === null).length
+  if (duplicateValues) {
+    throw new Error(`API key index backfill found ${duplicateValues} duplicate API key value(s). Resolve them before writing indexes.`)
+  }
+
+  const desired = new Map<string, Required<ApiKeyIndexData>>()
+  for (const [hash, candidate] of candidates) {
+    if (!candidate) continue
+    desired.set(hash, {
+      workspaceId: candidate.workspaceId,
+      workspaceStorageMode: candidate.workspaceStorageMode,
+      apiKeyId: candidate.apiKeyId,
+      name: candidate.name,
+      createdAt: candidate.createdAt,
+    })
+  }
+  const existing = new Map(existingSnapshot.docs.map((document) => [document.id, document.data() as ApiKeyIndexData]))
+  const writes: Array<{ type: "set"; hash: string; data: Required<ApiKeyIndexData> } | { type: "delete"; hash: string }> = []
+  let unchangedIndexes = 0
+  for (const [hash, data] of desired) {
+    if (sameApiKeyIndex(existing.get(hash), data)) unchangedIndexes += 1
+    else writes.push({ type: "set", hash, data })
+  }
+  for (const hash of existing.keys()) if (!desired.has(hash)) writes.push({ type: "delete", hash })
+
+  if (!dryRun) {
+    for (let offset = 0; offset < writes.length; offset += batchSize) {
+      const batch = getFirestoreInstance().batch()
+      for (const operation of writes.slice(offset, offset + batchSize)) {
+        const reference = apiKeyIndexRef(operation.hash)
+        if (operation.type === "set") batch.set(reference, operation.data)
+        else batch.delete(reference)
+      }
+      await batch.commit()
+    }
+    invalidateApiKeyLookupCache()
+  }
+
+  return {
+    workspaceCount: scopes.length,
+    scannedApiKeys,
+    existingIndexes: existing.size,
+    writtenIndexes: writes.filter((operation) => operation.type === "set").length,
+    deletedStaleIndexes: writes.filter((operation) => operation.type === "delete").length,
+    unchangedIndexes,
+    duplicateValues,
+    dryRun,
+  }
 }
 
 async function reconciledApiKeyIndexCandidates() {
@@ -816,7 +926,7 @@ async function reconciledApiKeyIndexCandidates() {
   if (apiKeyIndexReconciliationInflight) return apiKeyIndexReconciliationInflight
 
   const generation = apiKeyIndexReconciliationGeneration
-  const promise = firestoreReadApiKeyIndexCandidates().then((entries) => {
+  const promise = firestoreReadApiKeyIndexCandidates().then(({ candidates: entries }) => {
     if (generation === apiKeyIndexReconciliationGeneration) {
       apiKeyIndexReconciliationCache = { entries, expiresAt: Date.now() + apiKeyIndexReconciliationTtlMs }
     }
@@ -1197,16 +1307,99 @@ async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
 // Compatibility shim (preserved for proxy/auth/catalog)
 // -------------------------------------------------------------------------------------------------
 
+async function readRoutingRevisionFresh() {
+  if (isMemoryBackend()) return "0"
+  const snapshot = await routingRevisionRef().get()
+  const value = snapshot.exists ? snapshot.data()?.revision : 0
+  return Number.isFinite(Number(value)) ? String(value) : "0"
+}
+
+async function readRoutingRevisionCached() {
+  const state = workspaceCacheState()
+  const now = Date.now()
+  if (state.routingRevisionCache && state.routingRevisionCache.expiresAt > now) return state.routingRevisionCache.value
+  if (state.routingRevisionReadPromise) return state.routingRevisionReadPromise
+  const promise = readRoutingRevisionFresh().then((value) => {
+    state.routingRevisionCache = { value, expiresAt: Date.now() + cacheTtlMs }
+    return value
+  }).finally(() => {
+    if (state.routingRevisionReadPromise === promise) state.routingRevisionReadPromise = undefined
+  })
+  state.routingRevisionReadPromise = promise
+  return promise
+}
+
+function clearConfigurationSourceCaches(state: WorkspaceCacheState, includeMeta = false) {
+  clearReadCache(state.providersCache)
+  clearReadCache(state.allProviderApiKeysCache)
+  clearReadCache(state.modelsCache)
+  clearReadCache(state.aliasesCache)
+  clearReadCacheMap(state.providerApiKeysCache)
+  clearReadCacheMap(state.providerModelsCache)
+  if (includeMeta) {
+    metaGeneration += 1
+    metaCache = undefined
+    metaReadPromise = undefined
+  }
+}
+
+async function loadStableConfiguration<T>(loader: () => Promise<T>, includeMeta = false, initialRevision?: string) {
+  const state = workspaceCacheState()
+  let latestData: T | undefined
+  let latestRevision = "0"
+  let stable = false
+  // A revision read on both sides prevents a mutation that lands during the
+  // multi-query snapshot from being mistaken for a stable configuration.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const before = attempt === 0 && initialRevision !== undefined
+      ? initialRevision
+      : await readRoutingRevisionFresh()
+    clearConfigurationSourceCaches(state, includeMeta)
+    latestData = await loader()
+    const after = await readRoutingRevisionFresh()
+    latestRevision = after
+    if (before === after) {
+      stable = true
+      break
+    }
+  }
+  const cacheRevision = stable ? latestRevision : `unstable:${latestRevision}:${Date.now()}`
+  state.routingRevisionCache = { value: latestRevision, expiresAt: Date.now() + cacheTtlMs }
+  return { data: latestData!, revision: cacheRevision }
+}
+
+function reusableConfigurationCache<T>(cache: DataCache<T> | undefined, revision: string, now: number) {
+  if (!cache || cache.revision !== revision || (cache.fullRefreshAt || 0) <= now) return undefined
+  cache.expiresAt = now + cacheTtlMs
+  return cache.data
+}
+
+async function loadCatalogSource(): Promise<CatalogData> {
+  const [providers, models, aliases] = await Promise.all([listProviders(), listModels(), listAliases()])
+  return { providers, models, aliases }
+}
+
 async function readSharedCatalogData(): Promise<CatalogData> {
   const state = workspaceCacheState()
-  if (state.catalogDataCache && state.catalogDataCache.expiresAt > Date.now()) return state.catalogDataCache.data
+  const now = Date.now()
+  if (state.catalogDataCache && state.catalogDataCache.expiresAt > now) return state.catalogDataCache.data
+  if (state.routingDataCache && state.routingDataCache.expiresAt > now) {
+    const { providers, models, aliases } = state.routingDataCache.data
+    return { providers, models, aliases }
+  }
   if (!state.catalogDataReadPromise) {
     const generation = state.generation
-    const promise = Promise.all([listProviders(), listModels(), listAliases()]).then(([providers, models, aliases]) => {
-      const data: CatalogData = { providers, models, aliases }
-      if (generation === state.generation) state.catalogDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
-      return data
-    }).finally(() => {
+    const promise = (async () => {
+      const revision = await readRoutingRevisionCached()
+      const reused = reusableConfigurationCache(state.catalogDataCache, revision, Date.now())
+      if (reused) return reused
+      const loaded = await loadStableConfiguration(loadCatalogSource, false, revision)
+      const fullRefreshAt = Date.now() + routingFullRefreshIntervalMs
+      if (generation === state.generation) {
+        state.catalogDataCache = { data: loaded.data, revision: loaded.revision, expiresAt: Date.now() + cacheTtlMs, fullRefreshAt }
+      }
+      return loaded.data
+    })().finally(() => {
       if (state.catalogDataReadPromise === promise) state.catalogDataReadPromise = undefined
     })
     state.catalogDataReadPromise = promise
@@ -1216,14 +1409,31 @@ async function readSharedCatalogData(): Promise<CatalogData> {
 
 async function readSharedRoutingData(): Promise<RoutingData> {
   const state = workspaceCacheState()
-  if (state.routingDataCache && state.routingDataCache.expiresAt > Date.now()) return state.routingDataCache.data
+  const now = Date.now()
+  if (state.routingDataCache && state.routingDataCache.expiresAt > now) return state.routingDataCache.data
   if (!state.routingDataReadPromise) {
     const generation = state.generation
-    const promise = Promise.all([readSharedCatalogData(), listAllProviderApiKeys(), readSharedMeta()]).then(([catalog, providerApiKeys, meta]) => {
-      const data: RoutingData = { ...catalog, providerApiKeys, sessionSecret: meta.sessionSecret }
-      if (generation === state.generation) state.routingDataCache = { data, expiresAt: Date.now() + cacheTtlMs }
-      return data
-    }).finally(() => {
+    const promise = (async () => {
+      const revision = await readRoutingRevisionCached()
+      const reused = reusableConfigurationCache(state.routingDataCache, revision, Date.now())
+      if (reused) return reused
+      const loaded = await loadStableConfiguration(async () => {
+        const [catalog, providerApiKeys, meta] = await Promise.all([loadCatalogSource(), listAllProviderApiKeys(), readSharedMeta()])
+        return { ...catalog, providerApiKeys, sessionSecret: meta.sessionSecret } satisfies RoutingData
+      }, true, revision)
+      const fullRefreshAt = Date.now() + routingFullRefreshIntervalMs
+      if (generation === state.generation) {
+        state.routingDataCache = { data: loaded.data, revision: loaded.revision, expiresAt: Date.now() + cacheTtlMs, fullRefreshAt }
+        const { providers, models, aliases } = loaded.data
+        state.catalogDataCache = {
+          data: { providers, models, aliases },
+          revision: loaded.revision,
+          expiresAt: Date.now() + cacheTtlMs,
+          fullRefreshAt,
+        }
+      }
+      return loaded.data
+    })().finally(() => {
       if (state.routingDataReadPromise === promise) state.routingDataReadPromise = undefined
     })
     state.routingDataReadPromise = promise
@@ -1283,9 +1493,15 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
     const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
     const apiKeyId = indexData?.apiKeyId
     if (!apiKeyId) {
-      const candidates = await reconciledApiKeyIndexCandidates()
-      const candidate = candidates.get(hash)
-      const value = candidate ? await repairMissingApiKeyIndex(hash, normalized, candidate) : undefined
+      // A global cross-workspace scan on every unknown credential turns invalid
+      // traffic into a large number of billable reads. Legacy repair remains an
+      // explicit migration mode; normal authentication performs one index read.
+      let value: IndexedApiKey | undefined
+      if (repairApiKeyIndexOnMiss) {
+        const candidates = await reconciledApiKeyIndexCandidates()
+        const candidate = candidates.get(hash)
+        value = candidate ? await repairMissingApiKeyIndex(hash, normalized, candidate) : undefined
+      }
       if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
       return value
     }
@@ -1460,6 +1676,7 @@ async function firestoreReadMeta(): Promise<Meta> {
         transaction.set(keyRef, storedApiKey(migratedKey))
         transaction.set(apiKeyIndexRef(apiKeyValueHash(migratedKey.key)), apiKeyIndexDocument(migratedKey))
       }
+      bumpRoutingRevision(transaction)
       return meta
     }
     const meta = initialMeta()
@@ -1524,6 +1741,7 @@ async function firestoreMigrateCurrentDocuments(transaction: Transaction, meta: 
 
   const nextMeta: Meta = { ...meta, version: 4 }
   transaction.set(metaRef(), nextMeta)
+  bumpRoutingRevision(transaction)
   return nextMeta
 }
 
@@ -1533,8 +1751,10 @@ async function firestoreUpdateMeta(mutator: (meta: Meta) => void | Promise<void>
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("System metadata is missing.")
     const meta = snapshot.data() as Meta
+    const previousSessionSecret = meta.sessionSecret
     await mutator(meta)
     transaction.set(ref, stripUndefined(meta))
+    if (meta.sessionSecret !== previousSessionSecret) bumpRoutingRevision(transaction)
     return meta
   })
 }
@@ -1553,27 +1773,27 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
   const firestore = getFirestoreInstance()
   return firestore.runTransaction(async (transaction) => {
     const originalId = input.originalId
-    const allProviders = await transaction.get(providersRef())
-    for (const doc of allProviders.docs) {
-      const provider = doc.data() as Provider
-      if (provider.prefix === input.prefix && doc.id !== originalId) throw new Error("Provider prefix is already in use.")
-    }
     const existingSnapshot = originalId ? await transaction.get(providerRef(originalId)) : undefined
     const existing = existingSnapshot?.exists ? providerFromSnapshot(existingSnapshot) : undefined
     if (originalId && !existing) throw new Error("Provider not found.")
-    const existingModels = existing && input.prefix && existing.prefix !== input.prefix
+
+    const id = existing ? originalId! : providersRef().doc().id
+    const desiredPrefix = input.prefix || existing?.prefix || expected?.prefix || id
+    const prefixMatches = await transaction.get(providersRef().where("prefix", "==", desiredPrefix).limit(2))
+    if (prefixMatches.docs.some((document) => document.id !== originalId)) throw new Error("Provider prefix is already in use.")
+
+    const existingModels = existing && existing.prefix !== desiredPrefix
       ? await transaction.get(modelsRef(existing.id))
       : undefined
     const providerInput = { ...input }
     delete providerInput.originalId
     delete providerInput.id
-    const id = existing ? originalId! : providersRef().doc().id
     const provider: Provider = {
       ...(existing || expected || {}),
       ...providerInput,
       id,
       name: input.name || (existing?.name ?? ""),
-      prefix: input.prefix || (existing?.prefix ?? id),
+      prefix: desiredPrefix,
       baseUrl: input.baseUrl || (existing?.baseUrl ?? ""),
       protocol: input.protocol || existing?.protocol || "openai-chat",
       authType: input.authType || existing?.authType || "bearer",
@@ -1592,6 +1812,7 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
         transaction.set(modelRef(id, model.id), storedModel(model))
       }
     }
+    bumpRoutingRevision(transaction)
     return provider
   })
 }
@@ -1606,6 +1827,7 @@ async function firestoreDeleteProvider(providerId: string): Promise<void> {
     apiKeys.docs.forEach((doc) => transaction.delete(doc.ref))
     models.docs.forEach((doc) => transaction.delete(doc.ref))
     transaction.delete(providerRef(providerId))
+    bumpRoutingRevision(transaction)
   })
 }
 
@@ -1619,8 +1841,10 @@ async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: s
   await firestore.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(providerApiKeysRef(providerId))
     const ids = snapshot.docs.map((doc) => doc.id)
-    if (ids.length !== orderedIds.length || ids.some((id) => !orderedIds.includes(id))) throw new Error("API key order is out of date.")
+    const orderedIdSet = new Set(orderedIds)
+    if (ids.length !== orderedIdSet.size || ids.some((id) => !orderedIdSet.has(id))) throw new Error("API key order is out of date.")
     orderedIds.forEach((id, index) => transaction.update(providerApiKeyRef(providerId, id), { priority: orderedIds.length - index - 1 }))
+    bumpRoutingRevision(transaction)
   })
 }
 
@@ -1664,6 +1888,7 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
     } else if (existing.enabled !== apiKey.enabled) {
       transaction.update(providerRef(providerId), { enabledApiKeyCount: FieldValue.increment(apiKey.enabled ? 1 : -1) })
     }
+    bumpRoutingRevision(transaction)
     return apiKey
   })
 }
@@ -1680,6 +1905,7 @@ async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: strin
       apiKeyCount: FieldValue.increment(-1),
       enabledApiKeyCount: FieldValue.increment(apiKey.enabled ? -1 : 0),
     })
+    bumpRoutingRevision(transaction)
   })
 }
 
@@ -1702,19 +1928,15 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
   return firestore.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
-    const allModels = await transaction.get(modelsRef(providerId))
     const existingSnapshot = input.originalId ? await transaction.get(modelRef(providerId, input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? modelFromSnapshot(existingSnapshot, providerId) : undefined
     if (input.originalId && !existing) throw new Error("Model not found.")
     const gatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
     if (!input.name || !input.upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
-    for (const doc of allModels.docs) {
-      const data = doc.data() as Partial<Model>
-      const currentGatewayModelId = data.gatewayModelId || data.id || doc.id
-      if (currentGatewayModelId === gatewayModelId && doc.id !== input.originalId) {
-        throw new Error("Gateway model ID is already in use.")
-      }
-    }
+
+    const gatewayMatches = await transaction.get(modelsRef(providerId).where("gatewayModelId", "==", gatewayModelId).limit(2))
+    if (gatewayMatches.docs.some((document) => document.id !== input.originalId)) throw new Error("Gateway model ID is already in use.")
+
     const modelId = existing ? input.originalId! : modelsRef(providerId).doc().id
     const inputWithoutIds = { ...input }
     delete inputWithoutIds.id
@@ -1744,6 +1966,7 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     } else if (existing.enabled !== model.enabled) {
       transaction.update(providerRef(providerId), { enabledModelCount: FieldValue.increment(model.enabled ? 1 : -1) })
     }
+    bumpRoutingRevision(transaction)
     return model
   })
 }
@@ -1760,6 +1983,7 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
       modelCount: FieldValue.increment(-1),
       enabledModelCount: FieldValue.increment(model.enabled ? -1 : 0),
     })
+    bumpRoutingRevision(transaction)
   })
 }
 
@@ -1771,18 +1995,15 @@ async function firestoreListAliases(): Promise<ModelAlias[]> {
 async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
   const firestore = getFirestoreInstance()
   return firestore.runTransaction(async (transaction) => {
-    const allAliases = await transaction.get(aliasesRef())
     const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Alias not found.")
-    const normalizedAlias = cleanAliasId(input.alias || existing?.alias || "")
+    const normalizedAlias = cleanId(input.alias || existing?.alias || "")
     if (!normalizedAlias) throw new Error("Alias is required.")
-    for (const doc of allAliases.docs) {
-      const data = doc.data() as Partial<ModelAlias>
-      if (cleanAliasId(data.alias || doc.id) === normalizedAlias && doc.id !== input.originalId) {
-        throw new Error("Alias is already in use.")
-      }
-    }
+
+    const aliasMatches = await transaction.get(aliasesRef().where("alias", "==", normalizedAlias).limit(2))
+    if (aliasMatches.docs.some((document) => document.id !== input.originalId)) throw new Error("Alias is already in use.")
+
     const aliasId = existing ? input.originalId! : aliasesRef().doc().id
     const inputWithoutIds = { ...input }
     delete inputWithoutIds.id
@@ -1797,6 +2018,7 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(aliasRef(aliasId), storedAlias(alias))
+    bumpRoutingRevision(transaction)
     return alias
   })
 }
@@ -1808,6 +2030,7 @@ async function firestoreDeleteAlias(aliasId: string): Promise<void> {
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     transaction.delete(ref)
+    bumpRoutingRevision(transaction)
   })
 }
 
@@ -1816,28 +2039,33 @@ async function firestoreListApiKeys(): Promise<ApiKey[]> {
   return snapshot.docs.map(apiKeyFromSnapshot)
 }
 
+function isFirestoreAlreadyExistsError(error: unknown) {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 6 || code === "already-exists" || code === "ALREADY_EXISTS"
+}
+
 async function firestoreCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
   const normalizedCustomKey = customKey === undefined ? undefined : validateGatewayApiKeyValue(customKey)
-  if (normalizedCustomKey !== undefined) {
-    if (await findIndexedApiKeyByValue(normalizedCustomKey)) throw new ApiKeyConflictError()
-    if ((await reconciledApiKeyIndexCandidates()).has(apiKeyValueHash(normalizedCustomKey))) throw new ApiKeyConflictError()
-  }
   const firestore = getFirestoreInstance()
-  return firestore.runTransaction(async (transaction) => {
-    const apiKey = {
-      id: apiKeysRef().doc().id,
-      name,
-      key: normalizedCustomKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : normalizedCustomKey,
-      createdAt: new Date().toISOString(),
-    } satisfies ApiKey
-    const apiKeyRefValue = apiKeyRef(apiKey.id)
-    const requestedHash = apiKeyValueHash(apiKey.key)
-    const existingIndex = await transaction.get(apiKeyIndexRef(requestedHash))
-    if (existingIndex.exists) throw new ApiKeyConflictError()
-    transaction.create(apiKeyRefValue, storedApiKey(apiKey))
-    transaction.set(apiKeyIndexRef(requestedHash), apiKeyIndexDocument(apiKey))
+  const apiKey = {
+    id: apiKeysRef().doc().id,
+    name,
+    key: normalizedCustomKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : normalizedCustomKey,
+    createdAt: new Date().toISOString(),
+  } satisfies ApiKey
+  const requestedHash = apiKeyValueHash(apiKey.key)
+  const batch = firestore.batch()
+  // Create preconditions enforce global uniqueness atomically without a
+  // transaction retry loop, preflight lookup, or all-workspace scan.
+  batch.create(apiKeyRef(apiKey.id), storedApiKey(apiKey))
+  batch.create(apiKeyIndexRef(requestedHash), apiKeyIndexDocument(apiKey))
+  try {
+    await batch.commit()
     return apiKey
-  })
+  } catch (error) {
+    if (isFirestoreAlreadyExistsError(error)) throw new ApiKeyConflictError()
+    throw error
+  }
 }
 
 async function firestoreDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
@@ -2043,10 +2271,10 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
   const state = ensureMemorySeeded()
   const existing = input.originalId ? state.aliases.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Alias not found.")
-  const normalizedAlias = cleanAliasId(input.alias || existing?.alias || "")
+  const normalizedAlias = cleanId(input.alias || existing?.alias || "")
   if (!normalizedAlias) throw new Error("Alias is required.")
   for (const alias of state.aliases.values()) {
-    if (alias.id !== input.originalId && cleanAliasId(alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")
+    if (alias.id !== input.originalId && (alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")
   }
   const aliasId = existing ? input.originalId! : crypto.randomUUID()
   const inputWithoutIds = { ...input }

@@ -44,7 +44,7 @@ export function AliasForm({ alias, providers, models, onSave }: { alias: ModelAl
     <DialogHeader><DialogTitle>{alias ? "Edit alias" : "Add alias"}</DialogTitle><DialogDescription>Create a custom model ID that forwards to an existing gateway model.</DialogDescription></DialogHeader>
     <div className="grid gap-4 py-4">
       <div className="grid gap-4 sm:grid-cols-2">
-        <FormField label="Gateway ID"><Input name="alias" defaultValue={alias?.alias} placeholder="my-cool-model" pattern={"[a-z0-9._\\/\\-]+"} title="Lowercase letters, numbers, dots, underscores, dashes and slashes" required /></FormField>
+        <FormField label="Gateway ID"><Input name="alias" defaultValue={alias?.alias} placeholder="my-cool-model" pattern="[a-z0-9._-]+" title="Lowercase letters, numbers, dots, underscores and dashes" required /></FormField>
         <FormField label="Name"><Input name="name" defaultValue={alias?.name} placeholder="My Cool Model" maxLength={80} required /></FormField>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">

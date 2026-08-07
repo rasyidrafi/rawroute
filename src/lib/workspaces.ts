@@ -18,8 +18,8 @@ function configuredDuration(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
-const workspaceCacheTtlMs = configuredDuration(process.env.WORKSPACE_CACHE_TTL_MS, 30_000)
-const workspaceNegativeCacheTtlMs = configuredDuration(process.env.WORKSPACE_NEGATIVE_CACHE_TTL_MS, 2_000)
+const workspaceCacheTtlMs = configuredDuration(process.env.WORKSPACE_CACHE_TTL_MS, 60_000)
+const workspaceNegativeCacheTtlMs = configuredDuration(process.env.WORKSPACE_NEGATIVE_CACHE_TTL_MS, 10_000)
 const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
 const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
 const workspaceCache = new Map<string, WorkspaceCacheEntry>()
@@ -153,18 +153,37 @@ function compareWorkspaces(left: Workspace, right: Workspace) {
   return left.name.localeCompare(right.name, undefined, { sensitivity: "base", numeric: true })
 }
 
+const publicWorkspaceIdPattern = /^[A-Za-z0-9_-]{1,64}$/
+
+function cachedWorkspace(workspaceId: string) {
+  const cached = workspaceCache.get(workspaceId)
+  if (!cached || cached.expiresAt <= Date.now()) return undefined
+  workspaceCache.delete(workspaceId)
+  workspaceCache.set(workspaceId, cached)
+  return { hit: true as const, workspace: cached.value || undefined }
+}
+
+/**
+ * Resolve a workspace from the same bounded list exposed by the public UI.
+ * Random public IDs therefore share one list refresh instead of causing one
+ * Firestore document read per distinct miss.
+ */
+export async function getPublicWorkspace(workspaceId: string) {
+  if (!publicWorkspaceIdPattern.test(workspaceId)) return undefined
+  const cached = cachedWorkspace(workspaceId)
+  if (cached) return cached.workspace
+  if (workspaceId === DEFAULT_WORKSPACE_ID) return getWorkspace(workspaceId)
+  return (await listWorkspaces()).find((workspace) => workspace.id === workspaceId)
+}
+
 export async function getWorkspace(workspaceId: string) {
   if (isMemoryBackend()) {
     if (workspaceId === DEFAULT_WORKSPACE_ID) await ensureDefaultWorkspace()
     return memoryWorkspaces().get(workspaceId)
   }
 
-  const cached = workspaceCache.get(workspaceId)
-  if (cached && cached.expiresAt > Date.now()) {
-    workspaceCache.delete(workspaceId)
-    workspaceCache.set(workspaceId, cached)
-    return cached.value || undefined
-  }
+  const cached = cachedWorkspace(workspaceId)
+  if (cached) return cached.workspace
   const existing = workspaceReadInflight.get(workspaceId)
   if (existing) return existing
 

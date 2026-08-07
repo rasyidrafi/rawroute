@@ -229,6 +229,13 @@ export interface GatewayKeyBudget {
   windowStart: string
   windowEnd: string
   updatedAt: string
+  // Persisted reconciliation metadata lets new instances combine the live
+  // counter with pre-counter history without rescanning usage rollups.
+  baselineUsageStartAt?: string
+  baselineWindowEnd?: string
+  baselineRevision?: string
+  baselineOffsetMicros?: number
+  baselineLastUsedAt?: string | null
 }
 
 export type BudgetWindowAnchor = "codex" | "custom"
