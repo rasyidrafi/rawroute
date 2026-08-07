@@ -87,6 +87,12 @@ describe("alias routing", () => {
     expect(result.ok).toBe(true)
   })
 
+  test("resolves slash-delimited alias IDs without changing their gateway name", () => {
+    const slashAlias = { ...alias, alias: "cx/gpt-5.6-sol" }
+    const result = resolveRoute([provider], [model], [slashAlias], "CX/GPT-5.6-SOL", "openai-responses")
+    expect(result.ok).toBe(true)
+  })
+
   test("rejects an unknown alias", () => {
     const result = resolveRoute([provider], [model], [alias], "no-such-alias", "openai-responses")
     expect(result).toEqual({

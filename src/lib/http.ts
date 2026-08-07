@@ -6,6 +6,13 @@ export function cleanId(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
 }
 
+export function cleanAliasId(value: string) {
+  const parts = value.trim().toLowerCase().split("/")
+  const cleanedParts = parts.map((part) => cleanId(part))
+  if (cleanedParts.some((part) => !part)) return ""
+  return cleanedParts.join("/")
+}
+
 export function gatewayModelId(prefix: string, suffix: string) {
   const cleanSuffix = cleanId(suffix.includes("/") ? suffix.slice(suffix.lastIndexOf("/") + 1) : suffix)
   if (!cleanSuffix) throw new Error("Gateway model ID is required.")

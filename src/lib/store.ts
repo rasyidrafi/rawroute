@@ -2,7 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { applicationDefault, cert, getApp, getApps, initializeApp } from "firebase-admin/app"
 import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, getFirestore, type Transaction } from "firebase-admin/firestore"
 
-import { gatewayModelId, cleanId } from "@/lib/http"
+import { cleanAliasId, gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
 import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage, workspaceContext } from "@/lib/workspace-context"
@@ -571,7 +571,7 @@ function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) {
     throw new Error("Alias name must be between 1 and 80 characters.")
   }
-  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanId(input.alias))) {
+  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanAliasId(input.alias))) {
     throw new Error("Alias is required.")
   }
   if (input.targetModelId !== undefined && (typeof input.targetModelId !== "string" || !input.targetModelId.trim())) {
@@ -1775,11 +1775,11 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
     const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Alias not found.")
-    const normalizedAlias = cleanId(input.alias || existing?.alias || "")
+    const normalizedAlias = cleanAliasId(input.alias || existing?.alias || "")
     if (!normalizedAlias) throw new Error("Alias is required.")
     for (const doc of allAliases.docs) {
       const data = doc.data() as Partial<ModelAlias>
-      if ((data.alias || doc.id) === normalizedAlias && doc.id !== input.originalId) {
+      if (cleanAliasId(data.alias || doc.id) === normalizedAlias && doc.id !== input.originalId) {
         throw new Error("Alias is already in use.")
       }
     }
@@ -2043,10 +2043,10 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
   const state = ensureMemorySeeded()
   const existing = input.originalId ? state.aliases.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Alias not found.")
-  const normalizedAlias = cleanId(input.alias || existing?.alias || "")
+  const normalizedAlias = cleanAliasId(input.alias || existing?.alias || "")
   if (!normalizedAlias) throw new Error("Alias is required.")
   for (const alias of state.aliases.values()) {
-    if (alias.id !== input.originalId && (alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")
+    if (alias.id !== input.originalId && cleanAliasId(alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")
   }
   const aliasId = existing ? input.originalId! : crypto.randomUUID()
   const inputWithoutIds = { ...input }

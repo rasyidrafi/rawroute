@@ -16,6 +16,7 @@ test("alias form pairs gateway ID and name, then provider and model", () => {
   const form = readFileSync(new URL("./dashboard/alias-form.tsx", import.meta.url), "utf8")
 
   expect(form).toContain('label="Gateway ID"')
+  expect(form).toContain('pattern={"[a-z0-9._\\\\/\\\\-]+"}')
   expect(form).toContain('label="Name"')
   expect(form).toContain('label="Provider"')
   expect(form).toContain('label="Model"')

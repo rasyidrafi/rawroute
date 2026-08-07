@@ -35,13 +35,13 @@ export async function POST(request: Request) {
     const target = models.find((model) => (model.gatewayModelId || model.id) === targetModelId)
     if (!target) throw new Error("Target model not found.")
     if (!target.enabled) throw new Error("Target model is disabled.")
-    await upsertAlias({
+    const savedAlias = await upsertAlias({
       originalId: input.originalId,
       alias,
       name,
       targetModelId,
     })
-    writeLog("info", "admin", "Alias saved", { alias })
+    writeLog("info", "admin", "Alias saved", { alias: savedAlias.alias })
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Alias save failed", { error: error instanceof Error ? error.message : "Unknown error" })
