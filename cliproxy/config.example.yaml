@@ -1,0 +1,21 @@
+# Copy this file to cliproxy/config.yaml and set api-keys there.
+# The Compose network is the only network on which CLIProxyAPI is reachable.
+host: ""
+port: 8317
+
+remote-management:
+  allow-remote: true
+  # MANAGEMENT_PASSWORD from Compose is the management credential.
+  secret-key: ""
+  disable-control-panel: true
+  disable-auto-update-panel: true
+
+auth-dir: "~/.cli-proxy-api"
+api-keys:
+  - "replace-with-the-value-of-CLIPROXY_API_KEY"
+
+debug: false
+logging-to-file: true
+usage-statistics-enabled: true
+plugins:
+  enabled: false

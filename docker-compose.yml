@@ -1,0 +1,38 @@
+services:
+  rawroute:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rawroute
+    env_file:
+      - ${RAWROUTE_ENV_FILE:-.env.local}
+    environment:
+      CLIPROXY_URL: http://cli-proxy-api:8317
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
+      CLIPROXY_API_KEY: ${CLIPROXY_API_KEY:?Set CLIPROXY_API_KEY}
+    depends_on:
+      cli-proxy-api:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    pull_policy: always
+    container_name: cli-proxy-api
+    environment:
+      # This enables the internal Management API without publishing it.
+      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
+    expose:
+      - "8317"
+    volumes:
+      - ${CLI_PROXY_CONFIG_PATH:-./cliproxy/config.yaml}:/CLIProxyAPI/config.yaml
+      - ${CLI_PROXY_AUTH_PATH:-./cliproxy/auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_LOG_PATH:-./cliproxy/logs}:/CLIProxyAPI/logs
+      - ${CLI_PROXY_PLUGIN_PATH:-./cliproxy/plugins}:/CLIProxyAPI/plugins
+    restart: unless-stopped
+
+networks:
+  default:
+    internal: true

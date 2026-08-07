@@ -3,6 +3,7 @@ import { applicationDefault, cert, getApp, getApps, initializeApp } from "fireba
 import { getFirestore, type Firestore } from "firebase-admin/firestore"
 
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
+import { listCliProxyModels } from "@/lib/cliproxy-catalog"
 import { listModels, listProviders } from "@/lib/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
 import { currentWorkspaceId, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
@@ -125,6 +126,11 @@ function modelGroupKey(model: Model, providerPrefixes: Map<string, string>) {
 
 function modelGroupLabel(model: Model, providerPrefixes: Map<string, string>) {
   return model.name.trim() || modelGroupKey(model, providerPrefixes)
+}
+
+async function listPricingModels() {
+  const [models, cliProxyModels] = await Promise.all([listModels(), listCliProxyModels()])
+  return [...models, ...cliProxyModels.filter((candidate) => !models.some((model) => model.gatewayModelId === candidate.gatewayModelId))]
 }
 
 type CanonicalLinkInput = { id: string; source: PricingCanonicalSource; name?: string; provider?: string } | null
@@ -309,7 +315,7 @@ async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models
 }
 
 export async function syncModelPricingGroups() {
-  const [models, providers, existing] = await Promise.all([listModels(), listProviders(), readGroups()])
+  const [models, providers, existing] = await Promise.all([listPricingModels(), listProviders(), readGroups()])
   return reconcileModelPricingGroups(existing, models, providers)
 }
 
@@ -420,7 +426,7 @@ export async function getPricingAdminData() {
 }
 
 export async function createPricingGroup(name: string, modelIds: string[], canonical?: CanonicalLinkInput) {
-  const models = await listModels()
+  const models = await listPricingModels()
   const validIds = new Set(models.map((model) => model.id))
   const normalizedIds = [...new Set(modelIds)].filter((id) => validIds.has(id))
   const groups = await listPricingGroups()
@@ -438,7 +444,7 @@ export async function updatePricingGroup(groupId: string, modelIds: string[], ca
   const groups = await listPricingGroups()
   const current = groups.find((group) => group.id === groupId)
   if (!current) throw new Error("Pricing group not found.")
-  const [models, providers] = await Promise.all([listModels(), listProviders()])
+  const [models, providers] = await Promise.all([listPricingModels(), listProviders()])
   const providerPrefixes = new Map(providers.map((provider) => [provider.id, provider.prefix]))
   const validIds = new Set(models.map((model) => model.id))
   const normalizedIds = [...new Set(modelIds)].filter((id) => validIds.has(id))
@@ -555,7 +561,7 @@ async function loadPricingCatalog() {
   if (!state.pricingCatalogPromise) {
     const promise = (async () => {
       let generation = state.pricingCacheGeneration
-      const [initialGroups, versions, models, providers] = await Promise.all([readGroups(), readVersions(), listModels(), listProviders()])
+      const [initialGroups, versions, models, providers] = await Promise.all([readGroups(), readVersions(), listPricingModels(), listProviders()])
       let groups = initialGroups
       if (!groups.length) {
         groups = await reconcileModelPricingGroups(groups, models, providers)

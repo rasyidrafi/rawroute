@@ -1,7 +1,12 @@
 .git
 .next
 node_modules
+*.log
 .env*
+!.env.example
 *-firebase-adminsdk-*.json
 service-account*.json
 npm-debug.log*
+coverage
+playwright-report
+test-results

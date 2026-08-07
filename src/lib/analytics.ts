@@ -3,6 +3,7 @@ import { applicationDefault, cert, getApp, getApps, initializeApp } from "fireba
 import { FieldPath, FieldValue, getFirestore, type Firestore } from "firebase-admin/firestore"
 
 import { listApiKeys, listModels } from "@/lib/store"
+import { listCliProxyModels } from "@/lib/cliproxy-catalog"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
@@ -1283,6 +1284,74 @@ export async function getBudgetAdmission(
   return (await getBudgetRequestState(apiKeyId, gatewayModelId, providerModelId, payload, requestBodyBytes)).admission
 }
 
+export interface BudgetReservation {
+  id: string
+  amountMicros: number
+  usageStartAt: string
+}
+
+/**
+ * Reserve the RawRoute-owned budget before a request enters CLIProxyAPI.
+ * Provider rate limits and routing remain entirely outside this layer.
+ */
+export async function reserveBudgetAdmission(
+  apiKeyId: string,
+  admission: BudgetAdmission | undefined,
+  usageContext: BudgetUsageContext | undefined,
+) {
+  if (!admission || !usageContext || admission.reservationMicros <= 0) return undefined
+  const id = budgetCounterId(apiKeyId, usageContext.usageStartAt)
+  const now = new Date().toISOString()
+  const nextSpent = (current: number) => {
+    const committed = Math.max(current, admission.spentMicros)
+    if (committed + admission.reservationMicros > admission.limitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", admission.ttlSeconds)
+    return current + admission.reservationMicros
+  }
+
+  if (isMemory()) {
+    const current = Number(memoryState().budgetCounters.get(id)?.spentMicros || 0)
+    const spentMicros = nextSpent(current)
+    memoryState().budgetCounters.set(id, { spentMicros, lastUsedAt: now })
+    invalidateBudgetReadCaches()
+    return { id, amountMicros: admission.reservationMicros, usageStartAt: usageContext.usageStartAt } satisfies BudgetReservation
+  }
+
+  const reference = budgetCountersRef().doc(id)
+  await db().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference)
+    const current = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+    const spentMicros = nextSpent(current)
+    transaction.set(reference, {
+      apiKeyId,
+      usageStartAt: usageContext.usageStartAt,
+      windowEnd: usageContext.windowEnd,
+      spentMicros,
+      lastUsedAt: now,
+      updatedAt: now,
+    }, { merge: true })
+  })
+  invalidateBudgetReadCaches()
+  return { id, amountMicros: admission.reservationMicros, usageStartAt: usageContext.usageStartAt } satisfies BudgetReservation
+}
+
+export async function releaseBudgetReservation(reservation: BudgetReservation | undefined) {
+  if (!reservation) return
+  if (isMemory()) {
+    const current = memoryState().budgetCounters.get(reservation.id)
+    if (current) memoryState().budgetCounters.set(reservation.id, { ...current, spentMicros: Math.max(0, current.spentMicros - reservation.amountMicros) })
+    invalidateBudgetReadCaches()
+    return
+  }
+  const reference = budgetCountersRef().doc(reservation.id)
+  await db().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference)
+    if (!snapshot.exists) return
+    const current = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+    transaction.set(reference, { spentMicros: Math.max(0, current - reservation.amountMicros), updatedAt: new Date().toISOString() }, { merge: true })
+  })
+  invalidateBudgetReadCaches()
+}
+
 export async function checkBudget(apiKeyId: string, gatewayModelId: string, providerModelId?: string) {
   await getBudgetAdmission(apiKeyId, gatewayModelId, providerModelId)
 }
@@ -1845,7 +1914,8 @@ export async function repriceUsageForGroup(jobId: string) {
   const version = (await listPricingVersions(group.id)).find((entry) => entry.id === job.versionId)
   if (!version) throw new Error("Pricing version not found for repricing job.")
   const modelIds = new Set<string>(group.memberModelIds)
-  const groupModels = await listModels()
+  const [localModels, cliProxyModels] = await Promise.all([listModels(), listCliProxyModels()])
+  const groupModels = [...localModels, ...cliProxyModels.filter((candidate) => !localModels.some((model) => model.gatewayModelId === candidate.gatewayModelId))]
   const gatewayModelIds = new Set<string>(groupModels.filter((model) => modelIds.has(model.id)).map((model) => model.gatewayModelId))
   const [events, budgetContext] = await Promise.all([listUsageEventsForModels(modelIds, gatewayModelIds), repricingBudgetContext()])
   let currentJob = await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() }, job)

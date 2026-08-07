@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { extractUsageMetrics } from "@/lib/proxy"
+import { extractUsageMetrics } from "@/lib/usage-metrics"
 
 describe("usage metric extraction", () => {
   test("reads OpenAI Responses usage and cached input", () => {
