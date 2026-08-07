@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test } from "vitest"
 import { getDashboardPayload, listModelPricing, recordGatewayUsage, resetAnalyticsForTests, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { authenticateProxyKey } from "@/lib/auth"
 import { clearLogs, readLogs, writeLog } from "@/lib/logger"
-import { _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listProviders, upsertProvider } from "@/lib/store"
+import { _deleteMemoryApiKeyIndex, _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listProviders, upsertProvider } from "@/lib/store"
 import { runInWorkspace } from "@/lib/workspace-context"
 import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, renameWorkspace, resetWorkspacesForTests } from "@/lib/workspaces"
 
@@ -95,5 +95,30 @@ describe("workspace isolation", () => {
 
     await deleteWorkspace(workspace.id, workspace.name)
     await runInWorkspace(defaultWorkspace, () => createApiKey("Reused", "routing-secret"))
+  })
+
+  test("repairs a missing gateway-key index in legacy and scoped workspaces", async () => {
+    const defaultWorkspace = (await listWorkspaces())[0]
+    const workspace = await createWorkspace("Repair")
+    const defaultKey = await runInWorkspace(defaultWorkspace, () => createApiKey("Default repair", "default-repair-secret"))
+    const scopedKey = await runInWorkspace(workspace, () => createApiKey("Scoped repair", "scoped-repair-secret"))
+
+    _deleteMemoryApiKeyIndex(defaultKey.key)
+    _deleteMemoryApiKeyIndex(scopedKey.key)
+
+    await expect(createApiKey("Duplicate while index is missing", defaultKey.key)).rejects.toThrow("already in use")
+    await expect(findIndexedApiKeyByValue(defaultKey.key)).resolves.toMatchObject({
+      workspaceId: defaultWorkspace.id,
+      workspaceStorageMode: "legacy",
+      apiKey: { id: defaultKey.id, name: defaultKey.name, key: defaultKey.key },
+    })
+    await expect(findIndexedApiKeyByValue(scopedKey.key)).resolves.toMatchObject({
+      workspaceId: workspace.id,
+      workspaceStorageMode: "scoped",
+      apiKey: { id: scopedKey.id, name: scopedKey.name, key: scopedKey.key },
+    })
+
+    expect((await authenticateProxyKey(new Request("https://gateway.test/v1/models", { headers: { authorization: `Bearer ${defaultKey.key}` } })))?.workspace.id).toBe(defaultWorkspace.id)
+    expect((await authenticateProxyKey(new Request("https://gateway.test/v1/models", { headers: { authorization: `Bearer ${scopedKey.key}` } })))?.workspace.id).toBe(workspace.id)
   })
 })

@@ -66,6 +66,14 @@ describe("Codex OAuth", () => {
     _resetMemoryBackend()
   })
 
+  test("does not create the Codex provider while listing an empty workspace", async () => {
+    process.env.STORAGE_BACKEND = "memory"
+    _resetMemoryBackend()
+    expect(await listCodexAccounts()).toEqual({ provider: null, accounts: [] })
+    expect(await listProviders()).toEqual([])
+    _resetMemoryBackend()
+  })
+
   test("keeps the dedicated Codex provider isolated per workspace", async () => {
     process.env.STORAGE_BACKEND = "memory"
     _resetMemoryBackend()

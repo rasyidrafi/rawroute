@@ -209,6 +209,7 @@ export function ModelPricingView() {
   const { data, mutate, isValidating } = useSWR<PricingAdminData>("/api/admin/model-pricing", fetcher, {
     refreshInterval: (latest) => latest?.jobs.some((job) => job.status === "queued" || job.status === "running") ? 3000 : 0,
     refreshWhenHidden: false,
+    dedupingInterval: 2000,
   })
   const [pending, setPending] = useState(false)
   const [groupDialog, setGroupDialog] = useState<string | "new">()

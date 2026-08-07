@@ -33,7 +33,7 @@ export function ConsoleLog() {
   const [level, setLevel] = useState<LogLevel | "all">("all")
   const [clearing, setClearing] = useState(false)
   const [clearOpen, setClearOpen] = useState(false)
-  const { data, error, isLoading, isValidating, mutate } = useSWR("/api/admin/logs", fetchLogs, { refreshInterval: live ? 3000 : 0, revalidateOnFocus: false })
+  const { data, error, isLoading, isValidating, mutate } = useSWR("/api/admin/logs", fetchLogs, { refreshInterval: live ? 3000 : 0, revalidateOnFocus: false, dedupingInterval: 2000 })
   const logs = useMemo(() => {
     const normalizedQuery = query.toLowerCase()
     return (data?.logs || []).filter((entry) => (level === "all" || entry.level === level) && formatLog(entry).toLowerCase().includes(normalizedQuery))

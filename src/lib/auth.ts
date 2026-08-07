@@ -52,7 +52,7 @@ export async function requireAdmin() {
 }
 
 export async function requireAdminWorkspace(request: Request): Promise<Workspace> {
-  ;(await requireAdmin())()
+  if (!(await isAuthenticated())) throw new Error("UNAUTHORIZED")
   const workspaceId = request.headers.get("x-rawroute-workspace-id")?.trim()
   if (!workspaceId) throw new Error("WORKSPACE_REQUIRED")
   const workspace = await getWorkspace(workspaceId)
@@ -69,6 +69,9 @@ export async function authenticateProxyKey(request: Request) {
   if (!supplied) return undefined
   const indexed = await findIndexedApiKeyByValue(supplied)
   if (!indexed) return undefined
+  // The index avoids reading the API-key document, while the bounded workspace
+  // cache preserves the active/deleting check without adding a Firestore read
+  // to warm proxy authentications.
   const workspace = await getWorkspace(indexed.workspaceId)
   if (!workspace || workspace.status !== "active") return undefined
   enterWorkspace(workspace)

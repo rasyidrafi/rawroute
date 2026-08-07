@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, test } from "vitest"
+import { beforeEach, describe, expect, test, vi } from "vitest"
 
 import { getPricingAdminData, getPricingForModelAt, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
-import { getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
+import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { _resetMemoryBackend, createApiKey, upsertModel, upsertProvider } from "@/lib/store"
 import type { Provider, UsageEvent } from "@/lib/types"
 
@@ -31,6 +31,21 @@ describe("model pricing catalog", () => {
     expect(group?.memberModelIds.sort()).toEqual([first.id, second.id].sort())
     expect(nestedGroup?.memberModelIds.sort()).toEqual([nested.id, nestedSibling.id].sort())
     expect(groups.find((entry) => entry.memberModelIds.includes(deeper.id))).toMatchObject({ name: "Laguna" })
+  })
+
+  test("does not rewrite unchanged fixed groups during synchronization", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-06T00:00:00.000Z"))
+    try {
+      const providerEntry = await upsertProvider(provider("cx"))
+      await upsertModel(providerEntry.id, { id: "stable", name: "Stable", gatewayModelId: "cx/stable", upstreamModel: "stable" })
+      const first = (await syncModelPricingGroups()).find((group) => group.name === "Stable")!
+      vi.advanceTimersByTime(60_000)
+      const second = (await syncModelPricingGroups()).find((group) => group.id === first.id)!
+      expect(second.updatedAt).toBe(first.updatedAt)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test("supports fixed-group exclusions and context-aware versions", async () => {
@@ -90,6 +105,7 @@ describe("model pricing catalog", () => {
     const historical: UsageEvent = { id: "historical", gatewayKeyId: key.id, providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: completedAt, completedAt, status: 200, durationMs: 1, inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 100, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: true }
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
     await recordUsageEvent(historical)
+    const admissionBeforeRepricing = await getBudgetAdmission(key.id, model.gatewayModelId, model.id)
     const replacement = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
     await repriceUsageForGroup(replacement.job!.id)
 
@@ -98,6 +114,8 @@ describe("model pricing catalog", () => {
     expect((await listUsageRollups("hourly")).reduce((total, rollup) => total + rollup.costMicros, 0)).toBe(200)
     expect((await getDashboardPayload({ preset: "all" })).summary.costMicros).toBe(200)
     expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
+    const admissionAfterRepricing = await getBudgetAdmission(key.id, model.gatewayModelId, model.id)
+    expect(admissionAfterRepricing?.key).not.toBe(admissionBeforeRepricing?.key)
   })
 
   test("keeps requests without recorded usage unpriced during repricing", async () => {

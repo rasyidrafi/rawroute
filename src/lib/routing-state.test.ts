@@ -48,7 +48,7 @@ describe("Redis routing state", () => {
       responseId: "resp-1",
       hardAffinity: true,
     })).toEqual({ ok: false, reason: "hard-response-missing", retryAfterSeconds: 1 })
-    expect(redis.calls[0]?.keys[1]).toBe("test:response:default:provider:resp-1")
+    expect(redis.calls[0]?.keys).toContain("test:response:default:provider:resp-1")
     expect(redis.calls[0]?.script).toContain('redis.call("TIME")')
   })
 
@@ -64,37 +64,34 @@ describe("Redis routing state", () => {
     expect(script).not.toContain('INCR", KEYS[keyOffset + 1]')
   })
 
+  test("omits unused affinity, response, and budget keys from reservations", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok", "a", "new"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    await store.reserve({ providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false })
+
+    expect(redis.calls[0]?.keys).toHaveLength(keys.length * 3)
+    expect(redis.calls[0]?.keys).not.toContain("")
+  })
+
+  test("shares capacity keys across models while keeping session affinity model-scoped", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok", "a", "new"], ["ok", "a", "new"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    await store.reserve({ providerId: "provider", modelId: "model-a", credentials: keys, sessionKey: "session", hardAffinity: false })
+    await store.reserve({ providerId: "provider", modelId: "model-b", credentials: keys, sessionKey: "session", hardAffinity: false })
+
+    expect(redis.calls[0]?.keys.slice(0, keys.length * 3)).toEqual(redis.calls[1]?.keys.slice(0, keys.length * 3))
+    expect(redis.calls[0]?.keys.at(-1)).toBe("test:affinity:default:provider:model-a:session")
+    expect(redis.calls[1]?.keys.at(-1)).toBe("test:affinity:default:provider:model-b:session")
+  })
+
   test("returns a retryable capacity error instead of using process-local fallback", async () => {
     const redis = new FakeRedis()
     redis.responses.push(["capacity", "12"])
     const store = new RedisRoutingStateStore(redis)
     expect(await store.reserve({ providerId: "provider", modelId: "model", credentials: keys, sessionKey: "new", hardAffinity: false }))
       .toEqual({ ok: false, reason: "capacity", retryAfterSeconds: 12 })
-  })
-
-  test("does not send assumed RPM or concurrency limits for Codex providers", async () => {
-    const redis = new FakeRedis()
-    redis.responses.push(["ok", "a", "new"])
-    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
-
-    await store.reserve({
-      providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false,
-      bypassCapacityLimits: true,
-    })
-
-    const args = redis.calls[0]?.args || []
-    expect(args[6]).toBe(1)
-    expect(args.slice(7, 11)).toEqual(["a", 0, 0, 0])
-    expect(redis.calls[0]?.script).toContain('local bypassCapacityLimits = ARGV[7] == "1"')
-  })
-
-  test("recognizes an upstream rate-limit cooldown separately from local capacity", async () => {
-    const redis = new FakeRedis()
-    redis.responses.push(["upstream-rate-limited", "30"])
-    const store = new RedisRoutingStateStore(redis)
-
-    expect(await store.reserve({ providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false }))
-      .toEqual({ ok: false, reason: "upstream-rate-limited", retryAfterSeconds: 30 })
   })
 
   test("protects hard affinity when its credential is unavailable", async () => {
@@ -113,7 +110,7 @@ describe("Redis routing state", () => {
       providerId: "provider", modelId: "model", credentials: keys, hardAffinity: false,
       budget: { key: "test:budget:key", limitMicros: 100, spentMicros: 10, reservationMicros: 20, ttlSeconds: 60 },
     })
-    expect(result).toMatchObject({ ok: true, budget: { reservationMicros: 20 } })
+    expect(result).toMatchObject({ ok: true, credentialId: "a" })
     expect(redis.calls[0]?.keys).toContain("test:budget:key")
     expect(redis.calls[0]?.script).toContain("current + reservation > limit")
   })
@@ -122,19 +119,28 @@ describe("Redis routing state", () => {
     const redis = new FakeRedis()
     redis.responses.push(["ok"])
     const store = new RedisRoutingStateStore(redis)
-    await store.release({ providerId: "provider", modelId: "model", credentialId: "a", leaseId: "lease-a", status: 429, retryAfterSeconds: 30 })
-    expect(redis.calls[0]?.keys.join(" ")).toContain("provider:model:a")
+    await store.release({ providerId: "provider", credentialId: "a", leaseId: "lease-a", status: 429, retryAfterSeconds: 30 })
+    expect(redis.calls[0]?.keys.join(" ")).toContain("default:provider:a")
+    expect(redis.calls[0]?.keys.join(" ")).not.toContain("provider:model:a")
     expect(redis.calls[0]?.args).toContain(30)
-    expect(redis.calls[0]?.script).toContain('ZREM", KEYS[1], ARGV[4]')
+    expect(redis.calls[0]?.script).toContain('ZREM", KEYS[1], leaseId')
   })
 
   test("uses upstream retry timing for server failures too", async () => {
     const redis = new FakeRedis()
     redis.responses.push(["ok"])
     const store = new RedisRoutingStateStore(redis)
-    await store.release({ providerId: "provider", modelId: "model", credentialId: "a", leaseId: "lease-a", status: 503, retryAfterSeconds: 27 })
+    await store.release({ providerId: "provider", credentialId: "a", leaseId: "lease-a", status: 503, retryAfterSeconds: 27 })
     expect(redis.calls[0]?.args).toContain(27)
-    expect(redis.calls[0]?.script).toContain('tostring(status), "EX", tonumber(ARGV[2])')
+    expect(redis.calls[0]?.script).toContain('tostring(status), "EX", retryAfter')
+  })
+
+  test("sends only the inflight key on a successful release without a budget", async () => {
+    const redis = new FakeRedis()
+    redis.responses.push(["ok"])
+    const store = new RedisRoutingStateStore(redis, { prefix: "test" })
+    await store.release({ providerId: "provider", credentialId: "a", leaseId: "lease-a", status: 200 })
+    expect(redis.calls[0]?.keys).toEqual(["test:inflight:default:provider:a"])
   })
 
   test("settles an atomic budget reservation with exact cost", async () => {
@@ -144,6 +150,7 @@ describe("Redis routing state", () => {
     await store.settleBudget({ key: "test:budget:key", leaseId: "lease-a", actualMicros: 7, ttlSeconds: 60 })
     expect(redis.calls[0]?.keys).toEqual(["test:budget:key", "test:budget:key:lease:lease-a"])
     expect(redis.calls[0]?.args).toEqual([7, 60])
+    expect(redis.calls[0]?.script).toContain('if not reservedRaw then return {"already-settled"} end')
   })
 
   test("uses the budget window TTL when releasing an authenticated route", async () => {
@@ -152,20 +159,18 @@ describe("Redis routing state", () => {
     const store = new RedisRoutingStateStore(redis, { prefix: "test" })
     await store.release({
       providerId: "provider",
-      modelId: "model",
       credentialId: "a",
       leaseId: "lease-a",
       status: 200,
-      budget: { key: "test:budget:key", reservationMicros: 1, actualMicros: 7, ttlSeconds: 4_321 },
+      budget: { key: "test:budget:key", actualMicros: 7, ttlSeconds: 4_321 },
     })
     expect(redis.calls[0]?.keys).toEqual([
-      "test:inflight:default:provider:model:a",
-      "test:rpm:default:provider:model:a",
-      "test:cooldown:default:provider:model:a",
+      "test:inflight:default:provider:a",
       "test:budget:key",
       "test:budget:key:lease:lease-a",
     ])
     expect(redis.calls[0]?.args.slice(-2)).toEqual([7, 4_321])
+    expect(redis.calls[0]?.script).toContain('if reservedRaw then')
   })
 
   test("maps multiple response IDs in one Redis script", async () => {

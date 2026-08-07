@@ -4,8 +4,8 @@ import { type DocumentData, type DocumentSnapshot, type Firestore, FieldValue, g
 
 import { gatewayModelId, cleanId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
-import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey } from "@/lib/types"
-import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
+import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
+import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage, workspaceContext } from "@/lib/workspace-context"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 30_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 30_000
@@ -13,6 +13,13 @@ const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 15
 const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 15_000
 const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 2_000)
 const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 2_000
+const apiKeyIndexReconciliationTtlMs = 30_000
+const configuredFirestoreReadConcurrency = Number(process.env.FIRESTORE_CHILD_READ_CONCURRENCY || 16)
+const firestoreChildReadConcurrency = Number.isSafeInteger(configuredFirestoreReadConcurrency) && configuredFirestoreReadConcurrency > 0 ? configuredFirestoreReadConcurrency : 16
+const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
+const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
+const configuredMaximumProviderCacheEntries = Number(process.env.MAX_PROVIDER_SCOPED_CACHE_ENTRIES || 256)
+const maximumProviderScopedCacheEntries = Number.isSafeInteger(configuredMaximumProviderCacheEntries) && configuredMaximumProviderCacheEntries > 0 ? configuredMaximumProviderCacheEntries : 256
 let metaCache: { data: Meta; expiresAt: number } | undefined
 let metaReadPromise: Promise<Meta> | undefined
 
@@ -44,27 +51,48 @@ const workspaceCacheStates = new Map<string, WorkspaceCacheState>()
 
 function workspaceCacheState() {
   const key = currentWorkspaceId()
-  let state = workspaceCacheStates.get(key)
-  if (!state) {
-    state = {
-      providersCache: { expiresAt: 0 },
-      providerApiKeysCache: new Map(),
-      allProviderApiKeysCache: { expiresAt: 0 },
-      providerModelsCache: new Map(),
-      modelsCache: { expiresAt: 0 },
-      aliasesCache: { expiresAt: 0 },
-      apiKeysCache: { expiresAt: 0 },
-      generation: 0,
-    }
-    workspaceCacheStates.set(key, state)
+  const cached = workspaceCacheStates.get(key)
+  if (cached) {
+    // Refresh insertion order so the bound behaves as a small LRU cache.
+    workspaceCacheStates.delete(key)
+    workspaceCacheStates.set(key, cached)
+    return cached
   }
+
+  while (workspaceCacheStates.size >= maximumWorkspaceCacheEntries) {
+    const oldest = workspaceCacheStates.keys().next().value
+    if (oldest === undefined) break
+    workspaceCacheStates.delete(oldest)
+  }
+  const state: WorkspaceCacheState = {
+    providersCache: { expiresAt: 0 },
+    providerApiKeysCache: new Map(),
+    allProviderApiKeysCache: { expiresAt: 0 },
+    providerModelsCache: new Map(),
+    modelsCache: { expiresAt: 0 },
+    aliasesCache: { expiresAt: 0 },
+    apiKeysCache: { expiresAt: 0 },
+    generation: 0,
+  }
+  workspaceCacheStates.set(key, state)
   return state
 }
 
-interface IndexedApiKey { workspaceId: string; apiKey: ApiKey }
+interface IndexedApiKey { workspaceId: string; workspaceStorageMode: WorkspaceStorageMode; apiKey: ApiKey }
+
+interface ApiKeyIndexCandidate {
+  workspaceId: string
+  workspaceStorageMode: WorkspaceStorageMode
+  apiKeyId: string
+  name: string
+  createdAt: string
+}
 
 const apiKeyLookupCache = new Map<string, { value: IndexedApiKey | null; expiresAt: number }>()
 const apiKeyLookupInflight = new Map<string, Promise<IndexedApiKey | undefined>>()
+let apiKeyIndexReconciliationCache: { entries: Map<string, ApiKeyIndexCandidate | null>; expiresAt: number } | undefined
+let apiKeyIndexReconciliationInflight: Promise<Map<string, ApiKeyIndexCandidate | null>> | undefined
+let apiKeyIndexReconciliationGeneration = 0
 const maximumApiKeyLookupEntries = 512
 let apiKeyLookupGeneration = 0
 let metaGeneration = 0
@@ -351,13 +379,39 @@ function storedApiKey(apiKey: ApiKey) {
 
 interface ApiKeyIndexData {
   workspaceId?: string
+  workspaceStorageMode?: WorkspaceStorageMode
   apiKeyId?: string
   name?: string
   createdAt?: string
 }
 
+function apiKeyIndexDocumentForWorkspace(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode, apiKey: ApiKey): Required<ApiKeyIndexData> {
+  return {
+    workspaceId,
+    workspaceStorageMode,
+    apiKeyId: apiKey.id,
+    name: apiKey.name,
+    createdAt: apiKey.createdAt,
+  }
+}
+
 function apiKeyIndexDocument(apiKey: ApiKey): Required<ApiKeyIndexData> {
-  return { workspaceId: currentWorkspaceId(), apiKeyId: apiKey.id, name: apiKey.name, createdAt: apiKey.createdAt }
+  return apiKeyIndexDocumentForWorkspace(currentWorkspaceId(), workspaceContext().storageMode, apiKey)
+}
+
+function apiKeyIndexCandidate(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode, apiKey: ApiKey): ApiKeyIndexCandidate {
+  return {
+    workspaceId,
+    workspaceStorageMode,
+    apiKeyId: apiKey.id,
+    name: apiKey.name,
+    createdAt: apiKey.createdAt,
+  }
+}
+
+function indexedWorkspaceStorageMode(workspaceId: string, value: unknown): WorkspaceStorageMode {
+  if (value === "legacy" || value === "dual" || value === "scoped-mirror" || value === "scoped") return value
+  return workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped"
 }
 
 function storedAlias(alias: ModelAlias) {
@@ -405,12 +459,33 @@ async function cachedRead<T>(cache: ReadCache<T>, loader: () => Promise<T>): Pro
   return promise
 }
 
+async function parallelMap<T, R>(items: readonly T[], mapper: (item: T) => Promise<R>): Promise<R[]> {
+  if (items.length <= firestoreChildReadConcurrency) return Promise.all(items.map(mapper))
+  const output = new Array<R>(items.length)
+  let nextIndex = 0
+  await Promise.all(Array.from({ length: firestoreChildReadConcurrency }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      output[index] = await mapper(items[index])
+    }
+  }))
+  return output
+}
+
 function providerScopedCache<T>(cache: Map<string, ReadCache<T>>, providerId: string) {
-  let entry = cache.get(providerId)
-  if (!entry) {
-    entry = { expiresAt: 0 }
-    cache.set(providerId, entry)
+  const cached = cache.get(providerId)
+  if (cached) {
+    cache.delete(providerId)
+    cache.set(providerId, cached)
+    return cached
   }
+  while (cache.size >= maximumProviderScopedCacheEntries) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+  const entry: ReadCache<T> = { expiresAt: 0 }
+  cache.set(providerId, entry)
   return entry
 }
 
@@ -422,8 +497,20 @@ function cacheApiKeyLookup(hash: string, value: IndexedApiKey | undefined) {
   apiKeyLookupCache.set(hash, { value: value || null, expiresAt: Date.now() + (value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs) })
 }
 
-function invalidateApiKeyLookupCache() {
+function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
+  // Advance the generation so an already-running lookup cannot repopulate a
+  // value that was changed while its Firestore read was in flight.
   apiKeyLookupGeneration += 1
+  apiKeyIndexReconciliationGeneration += 1
+  apiKeyIndexReconciliationCache = undefined
+  apiKeyIndexReconciliationInflight = undefined
+  if (hashes) {
+    for (const hash of hashes) {
+      apiKeyLookupCache.delete(hash)
+      apiKeyLookupInflight.delete(hash)
+    }
+    return
+  }
   apiKeyLookupCache.clear()
   apiKeyLookupInflight.clear()
 }
@@ -445,7 +532,11 @@ function invalidateCompatibilityCache() {
   clearReadCacheMap(state.providerApiKeysCache)
   clearReadCacheMap(state.providerModelsCache)
   state.apiKeyHashIndex = undefined
-  invalidateApiKeyLookupCache()
+}
+
+function invalidateGatewayApiKeyCaches(hashes?: Iterable<string>) {
+  invalidateCompatibilityCache()
+  invalidateApiKeyLookupCache(hashes)
 }
 
 function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { originalId?: string }) {
@@ -552,6 +643,39 @@ function memoryApiKeyOwner(hash: string) {
   return undefined
 }
 
+function memoryFindApiKeyByHash(hash: string) {
+  const indexedOwner = memoryApiKeyOwner(hash)
+  if (indexedOwner) {
+    const indexedApiKey = memoryRoot().states.get(indexedOwner.workspaceId)?.apiKeys.get(indexedOwner.apiKeyId)
+    if (indexedApiKey && apiKeyValueHash(indexedApiKey.key) === hash) {
+      return { workspaceId: indexedOwner.workspaceId, apiKey: indexedApiKey }
+    }
+    memoryRoot().states.get(indexedOwner.workspaceId)?.apiKeyIndexes.delete(hash)
+  }
+
+  let found: { workspaceId: string; apiKey: ApiKey } | undefined
+  for (const [workspaceId, state] of memoryRoot().states) {
+    for (const apiKey of state.apiKeys.values()) {
+      if (apiKeyValueHash(apiKey.key) !== hash) continue
+      if (found) return undefined
+      found = { workspaceId, apiKey }
+    }
+  }
+  if (!found) return undefined
+  memoryRoot().states.get(found.workspaceId)?.apiKeyIndexes.set(hash, found.apiKey.id)
+  return found
+}
+
+function memoryApiKeyValueExists(hash: string) {
+  if (memoryFindApiKeyByHash(hash)) return true
+  for (const state of memoryRoot().states.values()) {
+    for (const apiKey of state.apiKeys.values()) {
+      if (apiKeyValueHash(apiKey.key) === hash) return true
+    }
+  }
+  return false
+}
+
 // -------------------------------------------------------------------------------------------------
 // Firestore backend
 // -------------------------------------------------------------------------------------------------
@@ -584,8 +708,14 @@ function legacyMetaRef() {
   return getFirestoreInstance().collection(`${collectionPrefix()}_system`).doc("state")
 }
 
-function workspaceRootRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).doc(currentWorkspaceId())
+function workspaceRootRef(workspaceId = currentWorkspaceId()) {
+  return getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).doc(workspaceId)
+}
+
+function apiKeysRefForWorkspace(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode) {
+  return workspaceId === DEFAULT_WORKSPACE_ID && (workspaceStorageMode === "legacy" || workspaceStorageMode === "dual")
+    ? getFirestoreInstance().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
+    : workspaceRootRef(workspaceId).collection("apiKeys")
 }
 
 function providersRef() {
@@ -625,9 +755,7 @@ function aliasRef(aliasId: string) {
 }
 
 function apiKeysRef() {
-  return usesLegacyWorkspaceStorage()
-    ? getFirestoreInstance().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
-    : workspaceRootRef().collection("apiKeys")
+  return apiKeysRefForWorkspace(currentWorkspaceId(), workspaceContext().storageMode)
 }
 
 function apiKeyRef(apiKeyId: string) {
@@ -640,6 +768,115 @@ function apiKeyIndexesRef() {
 
 function apiKeyIndexRef(hash: string) {
   return apiKeyIndexesRef().doc(hash)
+}
+
+interface FirestoreWorkspaceScope {
+  id: string
+  storageMode: WorkspaceStorageMode
+}
+
+async function firestoreWorkspaceScopes(): Promise<FirestoreWorkspaceScope[]> {
+  const snapshot = await getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).get()
+  const scopes = snapshot.docs.map((document) => ({
+    id: document.id,
+    storageMode: indexedWorkspaceStorageMode(document.id, document.data().storageMode),
+  }))
+  if (!scopes.some((scope) => scope.id === DEFAULT_WORKSPACE_ID)) scopes.unshift({ id: DEFAULT_WORKSPACE_ID, storageMode: "legacy" })
+  return scopes
+}
+
+async function firestoreReadApiKeyIndexCandidates(): Promise<Map<string, ApiKeyIndexCandidate | null>> {
+  const scopes = await firestoreWorkspaceScopes()
+  const snapshots = await parallelMap(scopes, async (scope) => ({
+    scope,
+    snapshot: await apiKeysRefForWorkspace(scope.id, scope.storageMode).get(),
+  }))
+  const candidates = new Map<string, ApiKeyIndexCandidate | null>()
+  for (const { scope, snapshot } of snapshots) {
+    for (const document of snapshot.docs) {
+      const apiKey = apiKeyFromSnapshot(document)
+      if (typeof apiKey.key !== "string" || typeof apiKey.name !== "string" || typeof apiKey.createdAt !== "string") continue
+      const hash = apiKeyValueHash(apiKey.key)
+      const candidate = apiKeyIndexCandidate(scope.id, scope.storageMode, apiKey)
+      if (candidates.has(hash)) {
+        // A duplicate value violates the global uniqueness invariant. Keep it
+        // unresolved instead of letting a repair choose an arbitrary tenant.
+        candidates.set(hash, null)
+      } else {
+        candidates.set(hash, candidate)
+      }
+    }
+  }
+  return candidates
+}
+
+async function reconciledApiKeyIndexCandidates() {
+  const now = Date.now()
+  if (apiKeyIndexReconciliationCache && apiKeyIndexReconciliationCache.expiresAt > now) return apiKeyIndexReconciliationCache.entries
+  if (apiKeyIndexReconciliationInflight) return apiKeyIndexReconciliationInflight
+
+  const generation = apiKeyIndexReconciliationGeneration
+  const promise = firestoreReadApiKeyIndexCandidates().then((entries) => {
+    if (generation === apiKeyIndexReconciliationGeneration) {
+      apiKeyIndexReconciliationCache = { entries, expiresAt: Date.now() + apiKeyIndexReconciliationTtlMs }
+    }
+    return entries
+  }).finally(() => {
+    if (apiKeyIndexReconciliationInflight === promise) apiKeyIndexReconciliationInflight = undefined
+  })
+  apiKeyIndexReconciliationInflight = promise
+  return promise
+}
+
+function indexedApiKeyFromCandidate(candidate: ApiKeyIndexCandidate, normalized: string): IndexedApiKey {
+  return {
+    workspaceId: candidate.workspaceId,
+    workspaceStorageMode: candidate.workspaceStorageMode,
+    apiKey: {
+      id: candidate.apiKeyId,
+      name: candidate.name,
+      key: normalized,
+      createdAt: candidate.createdAt,
+    },
+  }
+}
+
+async function repairMissingApiKeyIndex(hash: string, normalized: string, candidate: ApiKeyIndexCandidate): Promise<IndexedApiKey | undefined> {
+  const repaired = await getFirestoreInstance().runTransaction(async (transaction) => {
+    const indexRef = apiKeyIndexRef(hash)
+    const indexSnapshot = await transaction.get(indexRef)
+    const existing = indexSnapshot.exists ? indexSnapshot.data() as ApiKeyIndexData : undefined
+    if (existing?.apiKeyId && (existing.apiKeyId !== candidate.apiKeyId || (existing.workspaceId && existing.workspaceId !== candidate.workspaceId))) {
+      return { kind: "existing" as const, data: existing }
+    }
+
+    const keyRef = apiKeysRefForWorkspace(candidate.workspaceId, candidate.workspaceStorageMode).doc(candidate.apiKeyId)
+    const keySnapshot = await transaction.get(keyRef)
+    if (!keySnapshot.exists) return { kind: "missing" as const }
+    const apiKey = apiKeyFromSnapshot(keySnapshot)
+    if (typeof apiKey.key !== "string" || apiKeyValueHash(apiKey.key) !== hash) return { kind: "missing" as const }
+    const indexDocument = apiKeyIndexDocumentForWorkspace(candidate.workspaceId, candidate.workspaceStorageMode, apiKey)
+    if (indexSnapshot.exists) transaction.set(indexRef, indexDocument)
+    else transaction.create(indexRef, indexDocument)
+    return { kind: "repaired" as const, value: indexedApiKeyFromCandidate(apiKeyIndexCandidate(candidate.workspaceId, candidate.workspaceStorageMode, apiKey), normalized) }
+  })
+
+  if (repaired.kind === "repaired") return repaired.value
+  if (repaired.kind !== "existing") return undefined
+  const existing = repaired.data
+  const apiKeyId = existing.apiKeyId
+  if (!apiKeyId) return undefined
+  const workspaceId = existing.workspaceId || DEFAULT_WORKSPACE_ID
+  const workspaceStorageMode = indexedWorkspaceStorageMode(workspaceId, existing.workspaceStorageMode)
+  if (typeof existing.name === "string" && typeof existing.createdAt === "string") {
+    return { workspaceId, workspaceStorageMode, apiKey: { id: apiKeyId, name: existing.name, key: normalized, createdAt: existing.createdAt } }
+  }
+  const snapshot = await apiKeysRefForWorkspace(workspaceId, workspaceStorageMode).doc(apiKeyId).get()
+  if (!snapshot.exists) return undefined
+  const apiKey = apiKeyFromSnapshot(snapshot)
+  return typeof apiKey.key === "string" && apiKeyValueHash(apiKey.key) === hash
+    ? { workspaceId, workspaceStorageMode, apiKey: { ...apiKey, key: normalized } }
+    : undefined
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -874,7 +1111,7 @@ export async function listApiKeys(): Promise<ApiKey[]> {
 
 export async function createApiKey(name: string, customKey?: string): Promise<ApiKey> {
   const apiKey = isMemoryBackend() ? memoryCreateApiKey(name, customKey) : await firestoreCreateApiKey(name, customKey)
-  invalidateCompatibilityCache()
+  invalidateGatewayApiKeyCaches([apiKeyValueHash(apiKey.key)])
   return apiKey
 }
 
@@ -888,7 +1125,7 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
     if (!existing) throw new Error("API key not found.")
     const updated = { ...existing, name: normalizedName }
     state.apiKeys.set(apiKeyId, updated)
-    invalidateCompatibilityCache()
+    invalidateGatewayApiKeyCaches([apiKeyValueHash(updated.key)])
     return updated
   }
   const firestore = getFirestoreInstance()
@@ -901,7 +1138,7 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
     transaction.set(apiKeyIndexRef(apiKeyValueHash(updated.key)), apiKeyIndexDocument(updated), { merge: true })
     return updated
   })
-  invalidateCompatibilityCache()
+  invalidateGatewayApiKeyCaches([apiKeyValueHash(updated.key)])
   return updated
 }
 
@@ -913,43 +1150,47 @@ export async function _setApiKey(apiKey: ApiKey): Promise<void> {
     const hash = apiKeyValueHash(normalized)
     const owner = memoryApiKeyOwner(hash)
     if (owner && (owner.workspaceId !== currentWorkspaceId() || owner.apiKeyId !== apiKey.id)) throw new ApiKeyConflictError()
-    if (previous) state.apiKeyIndexes.delete(apiKeyValueHash(previous.key))
+    const previousHash = previous ? apiKeyValueHash(previous.key) : undefined
+    if (previousHash && previousHash !== hash) state.apiKeyIndexes.delete(previousHash)
     state.apiKeys.set(apiKey.id, { ...apiKey, key: normalized })
     state.apiKeyIndexes.set(hash, apiKey.id)
-    invalidateCompatibilityCache()
+    invalidateGatewayApiKeyCaches(previousHash && previousHash !== hash ? [previousHash, hash] : [hash])
     return
   }
   const firestore = getFirestoreInstance()
-  await firestore.runTransaction(async (transaction) => {
+  const hashes = await firestore.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKey.id)
     const previousSnapshot = await transaction.get(ref)
     const normalized = normalizeApiKeyValue(apiKey.key)
-    const indexRef = apiKeyIndexRef(apiKeyValueHash(normalized))
+    const hash = apiKeyValueHash(normalized)
+    const indexRef = apiKeyIndexRef(hash)
     const indexSnapshot = await transaction.get(indexRef)
     const owner = indexSnapshot.data() as ApiKeyIndexData | undefined
     if (indexSnapshot.exists && (owner?.workspaceId || DEFAULT_WORKSPACE_ID) !== currentWorkspaceId()) throw new ApiKeyConflictError()
     if (indexSnapshot.exists && owner?.apiKeyId !== apiKey.id) throw new ApiKeyConflictError()
     const next = { ...apiKey, key: normalized }
+    let previousHash: string | undefined
     if (previousSnapshot.exists) {
       const previous = apiKeyFromSnapshot(previousSnapshot)
-      transaction.delete(apiKeyIndexRef(apiKeyValueHash(previous.key)))
+      const previousHashValue = apiKeyValueHash(previous.key)
+      previousHash = previousHashValue
+      if (previousHashValue !== hash) transaction.delete(apiKeyIndexRef(previousHashValue))
     }
     transaction.set(ref, storedApiKey(next))
     transaction.set(indexRef, apiKeyIndexDocument(next))
+    return previousHash && previousHash !== hash ? [previousHash, hash] : [hash]
   })
-  invalidateCompatibilityCache()
+  invalidateGatewayApiKeyCaches(hashes)
 }
 
 export async function deleteApiKey(apiKeyId: string): Promise<void> {
-  if (isMemoryBackend()) memoryDeleteApiKey(apiKeyId)
-  else await firestoreDeleteApiKey(apiKeyId)
-  invalidateCompatibilityCache()
+  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId) : await firestoreDeleteApiKey(apiKeyId)
+  invalidateGatewayApiKeyCaches(hash ? [hash] : [])
 }
 
 async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
-  if (isMemoryBackend()) memoryDeleteApiKey(apiKeyId, false)
-  else await firestoreDeleteApiKeyWithInvariant(apiKeyId, false)
-  invalidateCompatibilityCache()
+  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId, false) : await firestoreDeleteApiKeyWithInvariant(apiKeyId, false)
+  invalidateGatewayApiKeyCaches(hash ? [hash] : [])
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1025,10 +1266,10 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
   const normalized = normalizeApiKeyValue(value)
   if (!normalized) return undefined
   if (isMemoryBackend()) {
-    const owner = memoryApiKeyOwner(apiKeyValueHash(normalized))
-    if (!owner) return undefined
-    const apiKey = memoryRoot().states.get(owner.workspaceId)?.apiKeys.get(owner.apiKeyId)
-    return apiKey ? { workspaceId: owner.workspaceId, apiKey } : undefined
+    const found = memoryFindApiKeyByHash(apiKeyValueHash(normalized))
+    return found
+      ? { workspaceId: found.workspaceId, workspaceStorageMode: indexedWorkspaceStorageMode(found.workspaceId, undefined), apiKey: { ...found.apiKey, key: normalized } }
+      : undefined
   }
   const hash = apiKeyValueHash(normalized)
   const cached = apiKeyLookupCache.get(hash)
@@ -1042,21 +1283,37 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
     const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
     const apiKeyId = indexData?.apiKeyId
     if (!apiKeyId) {
-      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, undefined)
-      return undefined
+      const candidates = await reconciledApiKeyIndexCandidates()
+      const candidate = candidates.get(hash)
+      const value = candidate ? await repairMissingApiKeyIndex(hash, normalized, candidate) : undefined
+      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+      return value
     }
     const workspaceId = indexData.workspaceId || DEFAULT_WORKSPACE_ID
-    const snapshot = await runInWorkspace({ id: workspaceId, storageMode: workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped" }, () => apiKeyRef(apiKeyId).get())
+    const workspaceStorageMode = indexedWorkspaceStorageMode(workspaceId, indexData.workspaceStorageMode)
+    if (typeof indexData.name === "string" && typeof indexData.createdAt === "string") {
+      const value = { workspaceId, workspaceStorageMode, apiKey: { id: apiKeyId, name: indexData.name, key: normalized, createdAt: indexData.createdAt } }
+      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+      return value
+    }
+
+    // Older index rows did not contain all authentication metadata. Pay the
+    // second document read once, then self-heal the index for subsequent hits.
+    const snapshot = await apiKeysRefForWorkspace(workspaceId, workspaceStorageMode).doc(apiKeyId).get()
     const apiKey = snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
-    const value = apiKey ? { workspaceId, apiKey } : undefined
+    const value = apiKey && typeof apiKey.key === "string" && apiKeyValueHash(apiKey.key) === hash
+      ? { workspaceId, workspaceStorageMode, apiKey: { ...apiKey, key: normalized } }
+      : undefined
     if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
-    if (apiKey && generation === apiKeyLookupGeneration) {
-      void runInWorkspace({ id: workspaceId, storageMode: workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped" }, () => apiKeyIndexRef(hash).set(apiKeyIndexDocument(apiKey), { merge: true })).catch(() => undefined)
-    } else if (!apiKey && generation === apiKeyLookupGeneration) {
+    if (value && generation === apiKeyLookupGeneration) {
+      void runInWorkspace({ id: workspaceId, storageMode: workspaceStorageMode }, () => apiKeyIndexRef(hash).set(apiKeyIndexDocument(value.apiKey), { merge: true })).catch(() => undefined)
+    } else if (!value && generation === apiKeyLookupGeneration) {
       void apiKeyIndexRef(hash).delete().catch(() => undefined)
     }
     return value
-  })().finally(() => apiKeyLookupInflight.delete(hash))
+  })().finally(() => {
+    if (apiKeyLookupInflight.get(hash) === promise) apiKeyLookupInflight.delete(hash)
+  })
   apiKeyLookupInflight.set(hash, promise)
   return promise
 }
@@ -1368,15 +1625,12 @@ async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: s
 }
 
 async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
-  const snapshot = await getFirestoreInstance().collectionGroup("apiKeys").get()
-  const providerCollectionPath = providersRef().path
-  const apiKeys: ProviderApiKey[] = []
-  for (const document of snapshot.docs) {
-    const provider = document.ref.parent.parent
-    if (!provider || provider.parent.path !== providerCollectionPath) continue
-    apiKeys.push(providerApiKeyFromSnapshot(document, provider.id))
-  }
-  return apiKeys
+  const providers = (await listProviders()).filter((provider) => provider.apiKeyCount !== 0)
+  const snapshots = await parallelMap(providers, async (provider) => ({
+    providerId: provider.id,
+    snapshot: await providerApiKeysRef(provider.id).get(),
+  }))
+  return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => providerApiKeyFromSnapshot(document, providerId)))
 }
 
 async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
@@ -1430,15 +1684,12 @@ async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: strin
 }
 
 async function firestoreListModels(): Promise<Model[]> {
-  const snapshot = await getFirestoreInstance().collectionGroup("models").get()
-  const providerCollectionPath = providersRef().path
-  const models: Model[] = []
-  for (const document of snapshot.docs) {
-    const provider = document.ref.parent.parent
-    if (!provider || provider.parent.path !== providerCollectionPath) continue
-    models.push(modelFromSnapshot(document, provider.id))
-  }
-  return models
+  const providers = (await listProviders()).filter((provider) => provider.modelCount !== 0)
+  const snapshots = await parallelMap(providers, async (provider) => ({
+    providerId: provider.id,
+    snapshot: await modelsRef(provider.id).get(),
+  }))
+  return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => modelFromSnapshot(document, providerId)))
 }
 
 async function firestoreListProviderModels(providerId: string): Promise<Model[]> {
@@ -1566,12 +1817,17 @@ async function firestoreListApiKeys(): Promise<ApiKey[]> {
 }
 
 async function firestoreCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
+  const normalizedCustomKey = customKey === undefined ? undefined : validateGatewayApiKeyValue(customKey)
+  if (normalizedCustomKey !== undefined) {
+    if (await findIndexedApiKeyByValue(normalizedCustomKey)) throw new ApiKeyConflictError()
+    if ((await reconciledApiKeyIndexCandidates()).has(apiKeyValueHash(normalizedCustomKey))) throw new ApiKeyConflictError()
+  }
   const firestore = getFirestoreInstance()
   return firestore.runTransaction(async (transaction) => {
     const apiKey = {
       id: apiKeysRef().doc().id,
       name,
-      key: customKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : validateGatewayApiKeyValue(customKey),
+      key: normalizedCustomKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : normalizedCustomKey,
       createdAt: new Date().toISOString(),
     } satisfies ApiKey
     const apiKeyRefValue = apiKeyRef(apiKey.id)
@@ -1584,20 +1840,22 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
   })
 }
 
-async function firestoreDeleteApiKey(apiKeyId: string): Promise<void> {
+async function firestoreDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
   return firestoreDeleteApiKeyWithInvariant(apiKeyId, false)
 }
 
-async function firestoreDeleteApiKeyWithInvariant(apiKeyId: string, enforceAtLeastOne: boolean): Promise<void> {
+async function firestoreDeleteApiKeyWithInvariant(apiKeyId: string, enforceAtLeastOne: boolean): Promise<string | undefined> {
   const firestore = getFirestoreInstance()
-  await firestore.runTransaction(async (transaction) => {
+  return firestore.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const target = await transaction.get(ref)
-    if (!target.exists) return
+    if (!target.exists) return undefined
     void enforceAtLeastOne
     const apiKey = apiKeyFromSnapshot(target)
+    const hash = apiKeyValueHash(apiKey.key)
     transaction.delete(ref)
-    transaction.delete(apiKeyIndexRef(apiKeyValueHash(apiKey.key)))
+    transaction.delete(apiKeyIndexRef(hash))
+    return hash
   })
 }
 
@@ -1823,26 +2081,36 @@ function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
     createdAt: new Date().toISOString(),
   }
   const hash = apiKeyValueHash(apiKey.key)
-  if (memoryApiKeyOwner(hash)) throw new ApiKeyConflictError()
+  if (memoryApiKeyValueExists(hash)) throw new ApiKeyConflictError()
   state.apiKeys.set(apiKey.id, apiKey)
   state.apiKeyIndexes.set(hash, apiKey.id)
   workspaceCacheState().compatibilityCache = undefined
   return apiKey
 }
 
-function memoryDeleteApiKey(apiKeyId: string, enforceAtLeastOne = false): void {
+function memoryDeleteApiKey(apiKeyId: string, enforceAtLeastOne = false): string | undefined {
   const state = ensureMemorySeeded()
-  if (!state.apiKeys.has(apiKeyId)) return
+  if (!state.apiKeys.has(apiKeyId)) return undefined
   void enforceAtLeastOne
   const apiKey = state.apiKeys.get(apiKeyId)
   state.apiKeys.delete(apiKeyId)
-  if (apiKey) state.apiKeyIndexes.delete(apiKeyValueHash(apiKey.key))
+  const hash = apiKey ? apiKeyValueHash(apiKey.key) : undefined
+  if (hash) state.apiKeyIndexes.delete(hash)
   workspaceCacheState().compatibilityCache = undefined
+  return hash
 }
 
 // Test-only accessor for memory backend snapshots.
 export function _memorySnapshot() {
   return memorySnapshot(ensureMemorySeeded())
+}
+
+// Test-only accessor for simulating a legacy key document whose global index
+// row was never written.
+export function _deleteMemoryApiKeyIndex(value: string) {
+  const hash = apiKeyValueHash(value)
+  for (const state of memoryRoot().states.values()) state.apiKeyIndexes.delete(hash)
+  invalidateApiKeyLookupCache([hash])
 }
 
 export function _resetMemoryBackend() {
@@ -1855,11 +2123,13 @@ export function _resetMemoryBackend() {
 
 export function _deleteMemoryWorkspace(workspaceId: string) {
   if (workspaceId === DEFAULT_WORKSPACE_ID) throw new Error("Default workspace cannot be deleted.")
+  const state = memoryRoot().states.get(workspaceId)
+  const hashes = state ? [...state.apiKeys.values()].map((apiKey) => apiKeyValueHash(apiKey.key)) : []
   memoryRoot().states.delete(workspaceId)
   workspaceCacheStates.delete(workspaceId)
-  invalidateApiKeyLookupCache()
+  invalidateApiKeyLookupCache(hashes)
 }
 
-export function _invalidateApiKeyLookupCache() {
-  invalidateApiKeyLookupCache()
+export function _invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
+  invalidateApiKeyLookupCache(hashes)
 }

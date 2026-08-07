@@ -10,9 +10,11 @@ const CACHE_RETENTION_SECONDS = 24 * 60 * 60
 const REFRESH_LOCK_TTL_SECONDS = 30
 const CACHE_PREFIX = "rawroute:codex-usage:v1"
 const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
-const configuredLocalCacheTtlMs = Number(process.env.CODEX_USAGE_LOCAL_CACHE_TTL_MS || 30_000)
-const localCacheTtlMs = Number.isFinite(configuredLocalCacheTtlMs) && configuredLocalCacheTtlMs >= 0 ? configuredLocalCacheTtlMs : 30_000
+const configuredLocalCacheTtlMs = Number(process.env.CODEX_USAGE_LOCAL_CACHE_TTL_MS || CODEX_USAGE_CACHE_TTL_SECONDS * 1000)
+const localCacheTtlMs = Number.isFinite(configuredLocalCacheTtlMs) && configuredLocalCacheTtlMs >= 0 ? configuredLocalCacheTtlMs : CODEX_USAGE_CACHE_TTL_SECONDS * 1000
 const maximumLocalCacheEntries = 128
+const configuredMaximumWorkspaceEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
+const maximumWorkspaceEntries = Number.isSafeInteger(configuredMaximumWorkspaceEntries) && configuredMaximumWorkspaceEntries > 0 ? configuredMaximumWorkspaceEntries : 256
 
 export interface CodexQuotaWindow {
   usedPercent: number
@@ -49,10 +51,15 @@ let redisClient: UsageRedis | undefined
 let now = () => Date.now()
 const localUsageCache = new Map<string, { result: CodexUsageResult; expiresAt: number }>()
 const usageInflight = new Map<string, Promise<CodexUsageResult>>()
-let localCacheGeneration = 0
+const localCacheGenerations = new Map<string, number>()
+let localCacheResetGeneration = 0
 
-function setLocalUsageCache(accountId: string, result: CodexUsageResult) {
-  accountId = `${currentWorkspaceId()}:${accountId}`
+function localCacheGeneration(workspaceId: string) {
+  return localCacheGenerations.get(workspaceId) || 0
+}
+
+function setLocalUsageCache(workspaceId: string, accountId: string, result: CodexUsageResult) {
+  accountId = `${workspaceId}:${accountId}`
   if (localCacheTtlMs <= 0) return
   if (!localUsageCache.has(accountId) && localUsageCache.size >= maximumLocalCacheEntries) {
     const oldest = localUsageCache.keys().next().value
@@ -61,14 +68,27 @@ function setLocalUsageCache(accountId: string, result: CodexUsageResult) {
   localUsageCache.set(accountId, { result, expiresAt: now() + localCacheTtlMs })
 }
 
-function clearLocalUsageCache(accountId?: string) {
-  localCacheGeneration += 1
+function clearWorkspaceLocalUsageCache(accountId?: string) {
+  const workspaceId = currentWorkspaceId()
+  if (!localCacheGenerations.has(workspaceId) && localCacheGenerations.size >= maximumWorkspaceEntries) {
+    const oldest = localCacheGenerations.keys().next().value
+    if (oldest !== undefined) localCacheGenerations.delete(oldest)
+  }
+  localCacheGenerations.set(workspaceId, localCacheGeneration(workspaceId) + 1)
   if (accountId) {
-    accountId = `${currentWorkspaceId()}:${accountId}`
-    localUsageCache.delete(accountId)
-    usageInflight.delete(accountId)
+    const key = `${workspaceId}:${accountId}`
+    localUsageCache.delete(key)
+    usageInflight.delete(key)
     return
   }
+  const prefix = `${workspaceId}:`
+  for (const key of localUsageCache.keys()) if (key.startsWith(prefix)) localUsageCache.delete(key)
+  for (const key of usageInflight.keys()) if (key.startsWith(prefix)) usageInflight.delete(key)
+}
+
+function resetLocalUsageCache() {
+  localCacheResetGeneration += 1
+  localCacheGenerations.clear()
   localUsageCache.clear()
   usageInflight.clear()
 }
@@ -305,9 +325,11 @@ export async function getCodexUsageForAccount(
 
   const existing = usageInflight.get(localKey)
   if (existing) return existing
-  const generation = localCacheGeneration
+  const workspaceId = currentWorkspaceId()
+  const resetGeneration = localCacheResetGeneration
+  const generation = localCacheGeneration(workspaceId)
   const promise = loadCodexUsageForAccount(account, fetchImpl).then((result) => {
-    if (generation === localCacheGeneration) setLocalUsageCache(account.id, result)
+    if (resetGeneration === localCacheResetGeneration && generation === localCacheGeneration(workspaceId)) setLocalUsageCache(workspaceId, account.id, result)
     return result
   }).finally(() => {
     if (usageInflight.get(localKey) === promise) usageInflight.delete(localKey)
@@ -318,16 +340,16 @@ export async function getCodexUsageForAccount(
 
 export function setCodexUsageRedisForTests(redis?: UsageRedis) {
   redisClient = redis
-  clearLocalUsageCache()
+  resetLocalUsageCache()
 }
 
 export function setCodexUsageClockForTests(clock?: () => number) {
   now = clock || (() => Date.now())
-  clearLocalUsageCache()
+  resetLocalUsageCache()
 }
 
 export async function invalidateCodexUsageCache(accountId: string) {
-  clearLocalUsageCache(accountId)
+  clearWorkspaceLocalUsageCache(accountId)
   try {
     const redis = getRedis()
     if (redis.del) await redis.del(cacheKey(accountId))

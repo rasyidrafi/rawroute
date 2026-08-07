@@ -272,7 +272,10 @@ export async function refreshCodexAccount(account: ProviderApiKey, force = false
 }
 
 export async function listCodexAccounts() {
-  const provider = await ensureCodexProvider()
+  // Read-only views must not create Firestore documents. The dedicated
+  // provider is provisioned only when the first account is actually saved.
+  const provider = (await listProviders()).find((entry) => entry.prefix === CODEX_PROVIDER_PREFIX)
+  if (!provider) return { provider: null, accounts: [] as ProviderApiKey[] }
   const accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth")
   return { provider, accounts }
 }

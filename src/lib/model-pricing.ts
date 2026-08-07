@@ -39,13 +39,31 @@ interface PricingWorkspaceState {
   pricingJobsGeneration: number
 }
 declare global { var __rawroutePricingMemory: Map<string, PricingWorkspaceState> | undefined }
+const configuredMaximumPricingWorkspaceEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
+const maximumPricingWorkspaceEntries = Number.isSafeInteger(configuredMaximumPricingWorkspaceEntries) && configuredMaximumPricingWorkspaceEntries > 0 ? configuredMaximumPricingWorkspaceEntries : 256
 function workspaceStates() { return globalThis.__rawroutePricingMemory ||= new Map<string, PricingWorkspaceState>() }
 function workspaceState() {
   const workspaceId = currentWorkspaceId()
-  let state = workspaceStates().get(workspaceId)
+  const states = workspaceStates()
+  let state = states.get(workspaceId)
+  if (state && !isMemory()) {
+    states.delete(workspaceId)
+    states.set(workspaceId, state)
+  }
   if (!state) {
+    if (!isMemory()) {
+      while (states.size >= maximumPricingWorkspaceEntries) {
+        const evictable = [...states].find(([, candidate]) => candidate.runningJobs.size === 0
+          && !candidate.pricingCatalogPromise
+          && !candidate.pricingAdminPromise
+          && !candidate.pricingJobsPromise
+          && !candidate.legacyMigrationPromise)
+        if (!evictable) break
+        states.delete(evictable[0])
+      }
+    }
     state = { groups: new Map(), versions: new Map(), jobs: new Map(), runningJobs: new Set(), legacyMigrationComplete: false, pricingCacheGeneration: 0, pricingAdminGeneration: 0, pricingJobsGeneration: 0 }
-    workspaceStates().set(workspaceId, state)
+    states.set(workspaceId, state)
   }
   return state
 }
@@ -149,31 +167,40 @@ async function readGroups() {
   return snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as ModelPricingGroup))
 }
 
-async function readVersions() {
-  if (isMemory()) return [...workspaceState().versions.values()]
-  const snapshot = await versionsRef().get()
+async function readVersions(groupId?: string) {
+  if (isMemory()) {
+    const versions = [...workspaceState().versions.values()]
+    return groupId ? versions.filter((version) => version.groupId === groupId) : versions
+  }
+  const reference = groupId ? versionsRef().where("groupId", "==", groupId) : versionsRef()
+  const snapshot = await reference.get()
   return snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id } as ModelPricingVersion))
 }
 
-async function writeGroup(group: ModelPricingGroup) {
-  if (isMemory()) workspaceState().groups.set(group.id, group)
-  else await groupsRef().doc(group.id).set(group)
-  invalidatePricingCatalog()
-}
-
-async function writeGroups(groups: ModelPricingGroup[]) {
-  if (!groups.length) return
+async function writeGroupChanges(groups: ModelPricingGroup[], deleteIds: string[] = []) {
+  if (!groups.length && !deleteIds.length) return
   if (isMemory()) {
     for (const group of groups) workspaceState().groups.set(group.id, group)
+    for (const id of deleteIds) workspaceState().groups.delete(id)
   } else {
-    for (let offset = 0; offset < groups.length; offset += 450) {
+    const operations: Array<{ type: "set"; group: ModelPricingGroup } | { type: "delete"; id: string }> = [
+      ...groups.map((group) => ({ type: "set" as const, group })),
+      ...deleteIds.map((id) => ({ type: "delete" as const, id })),
+    ]
+    for (let offset = 0; offset < operations.length; offset += 450) {
       const batch = db().batch()
-      for (const group of groups.slice(offset, offset + 450)) batch.set(groupsRef().doc(group.id), group)
+      for (const operation of operations.slice(offset, offset + 450)) {
+        if (operation.type === "set") batch.set(groupsRef().doc(operation.group.id), operation.group)
+        else batch.delete(groupsRef().doc(operation.id))
+      }
       await batch.commit()
     }
   }
   invalidatePricingCatalog()
 }
+
+async function writeGroup(group: ModelPricingGroup) { return writeGroupChanges([group]) }
+async function writeGroups(groups: ModelPricingGroup[]) { return writeGroupChanges(groups) }
 
 async function writeVersion(version: ModelPricingVersion) {
   if (isMemory()) workspaceState().versions.set(version.id, version)
@@ -195,16 +222,44 @@ async function writeVersions(versions: ModelPricingVersion[]) {
   invalidatePricingCatalog()
 }
 
-export async function syncModelPricingGroups() {
-  const [models, providers] = await Promise.all([listModels(), listProviders()])
+function sameStringMembers(left: string[] | undefined, right: string[] | undefined) {
+  const leftValues = left || []
+  const rightValues = right || []
+  if (leftValues.length !== rightValues.length) return false
+  const members = new Set(leftValues)
+  if (members.size !== leftValues.length) return false
+  for (const value of rightValues) if (!members.has(value)) return false
+  return true
+}
+
+function samePricingGroupDefinition(left: ModelPricingGroup, right: ModelPricingGroup) {
+  return left.id === right.id
+    && left.name === right.name
+    && left.kind === right.kind
+    && left.groupKey === right.groupKey
+    && left.createdAt === right.createdAt
+    && left.canonicalModelId === right.canonicalModelId
+    && left.canonicalSource === right.canonicalSource
+    && left.canonicalModelName === right.canonicalModelName
+    && left.canonicalProvider === right.canonicalProvider
+    && sameStringMembers(left.memberModelIds, right.memberModelIds)
+    && sameStringMembers(left.excludedModelIds, right.excludedModelIds)
+    && sameStringMembers(left.addedModelIds, right.addedModelIds)
+}
+
+async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models: Model[], providers: ProviderRows) {
   const providerPrefixes = new Map(providers.map((provider) => [provider.id, provider.prefix]))
-  const existing = await readGroups()
   const existingById = new Map<string, ModelPricingGroup>(existing.map((group) => [group.id, group]))
-  const customAssigned = new Set(existing.filter((group) => group.kind === "custom").flatMap((group) => group.memberModelIds))
+  const nextById = new Map(existingById)
+  const customAssigned = new Set<string>()
   const fixedAddedOwner = new Map<string, string>()
-  for (const group of existing.filter((entry) => entry.kind === "fixed")) {
-    for (const modelId of group.addedModelIds || []) {
-      if (!fixedAddedOwner.has(modelId)) fixedAddedOwner.set(modelId, group.id)
+  for (const group of existing) {
+    if (group.kind === "custom") {
+      for (const modelId of group.memberModelIds) customAssigned.add(modelId)
+    } else {
+      for (const modelId of group.addedModelIds || []) {
+        if (!fixedAddedOwner.has(modelId)) fixedAddedOwner.set(modelId, group.id)
+      }
     }
   }
   const grouped = new Map<string, Model[]>()
@@ -229,7 +284,7 @@ export async function syncModelPricingGroups() {
     ])].filter((modelId) => availableIds.has(modelId))
     const excludedIds = new Set(excluded)
     const memberModelIds = [...groupedModels.map((model) => model.id).filter((modelId) => !excludedIds.has(modelId)), ...addedModelIds]
-    writes.push({
+    const candidate: ModelPricingGroup = {
       ...current,
       id,
       name: current?.name?.trim() || modelGroupLabel(groupedModels[0], providerPrefixes),
@@ -239,16 +294,28 @@ export async function syncModelPricingGroups() {
       excludedModelIds: excluded,
       addedModelIds,
       createdAt: current?.createdAt || now,
-      updatedAt: now,
-    })
+      updatedAt: current?.updatedAt || now,
+    }
+    if (current && samePricingGroupDefinition(current, candidate)) {
+      nextById.set(id, current)
+      continue
+    }
+    candidate.updatedAt = now
+    nextById.set(id, candidate)
+    writes.push(candidate)
   }
   await writeGroups(writes)
-  return readGroups()
+  return [...nextById.values()]
+}
+
+export async function syncModelPricingGroups() {
+  const [models, providers, existing] = await Promise.all([listModels(), listProviders(), readGroups()])
+  return reconcileModelPricingGroups(existing, models, providers)
 }
 
 export async function listPricingGroups() { return (await readGroups()).sort((a, b) => a.name.localeCompare(b.name)) }
 export async function listPricingVersions(groupId?: string) {
-  return (await readVersions()).filter((version) => !groupId || version.groupId === groupId).sort((a, b) => a.effectiveAt.localeCompare(b.effectiveAt))
+  return (await readVersions(groupId)).filter((version) => !groupId || version.groupId === groupId).sort((a, b) => a.effectiveAt.localeCompare(b.effectiveAt))
 }
 
 export function activePricingVersion(versions: ModelPricingVersion[], at = new Date()) {
@@ -357,7 +424,8 @@ export async function createPricingGroup(name: string, modelIds: string[], canon
   const validIds = new Set(models.map((model) => model.id))
   const normalizedIds = [...new Set(modelIds)].filter((id) => validIds.has(id))
   const groups = await listPricingGroups()
-  const assigned = new Set(groups.flatMap((group) => group.memberModelIds))
+  const assigned = new Set<string>()
+  for (const group of groups) for (const modelId of group.memberModelIds) assigned.add(modelId)
   if (normalizedIds.some((id) => assigned.has(id))) throw new Error("A model can belong to only one pricing group.")
   const now = new Date().toISOString()
   const group = applyCanonicalLink({ id: crypto.randomUUID(), name: name.trim() || models.find((model) => model.id === normalizedIds[0])?.name || "", kind: "custom", memberModelIds: normalizedIds, excludedModelIds: [], createdAt: now, updatedAt: now }, canonical)
@@ -374,31 +442,48 @@ export async function updatePricingGroup(groupId: string, modelIds: string[], ca
   const providerPrefixes = new Map(providers.map((provider) => [provider.id, provider.prefix]))
   const validIds = new Set(models.map((model) => model.id))
   const normalizedIds = [...new Set(modelIds)].filter((id) => validIds.has(id))
-  const otherAssigned = new Set(groups.filter((group) => group.id !== groupId).flatMap((group) => group.memberModelIds))
+  const normalizedIdSet = new Set(normalizedIds)
+  const otherAssigned = new Set<string>()
+  for (const group of groups) {
+    if (group.id === groupId) continue
+    for (const modelId of group.memberModelIds) otherAssigned.add(modelId)
+  }
   if (normalizedIds.some((id) => otherAssigned.has(id))) throw new Error("A model can belong to only one pricing group.")
+
+  const naturalIdsByGroup = new Map<string, Set<string>>()
+  for (const model of models) {
+    const naturalGroupId = stableGroupId(modelGroupKey(model, providerPrefixes))
+    let ids = naturalIdsByGroup.get(naturalGroupId)
+    if (!ids) naturalIdsByGroup.set(naturalGroupId, ids = new Set())
+    ids.add(model.id)
+  }
   const now = new Date().toISOString()
   const naturalIds = current.kind === "fixed"
-    ? new Set(models.filter((model) => modelGroupKey(model, providerPrefixes) === current.groupKey).map((model) => model.id))
+    ? naturalIdsByGroup.get(current.id) || new Set<string>()
     : new Set<string>()
   const addedModelIds = current.kind === "fixed" ? normalizedIds.filter((id) => !naturalIds.has(id)) : []
-  const excludedModelIds = current.kind === "fixed" ? [...naturalIds].filter((id) => !normalizedIds.includes(id)) : []
-  const next = applyCanonicalLink({
+  const excludedModelIds = current.kind === "fixed" ? [...naturalIds].filter((id) => !normalizedIdSet.has(id)) : []
+  const candidate = applyCanonicalLink({
     ...current,
     name: name?.trim() || current.name,
     memberModelIds: normalizedIds,
     excludedModelIds,
     ...(current.kind === "fixed" ? { addedModelIds } : {}),
-    updatedAt: now,
+    updatedAt: current.updatedAt,
   }, canonical)
+  const next = samePricingGroupDefinition(current, candidate) ? current : { ...candidate, updatedAt: now }
+  const writes: ModelPricingGroup[] = next === current ? [] : [next]
 
   // A removed manual assignment can return to its natural fixed group.
-  const releasedIds = new Set(current.memberModelIds.filter((id) => !normalizedIds.includes(id)))
-  for (const fixed of groups.filter((entry) => entry.kind === "fixed" && entry.id !== groupId)) {
-    const natural = new Set(models.filter((model) => modelGroupKey(model, providerPrefixes) === fixed.groupKey).map((model) => model.id))
+  const releasedIds = new Set(current.memberModelIds.filter((id) => !normalizedIdSet.has(id)))
+  for (const fixed of groups) {
+    if (fixed.kind !== "fixed" || fixed.id === groupId) continue
+    const natural = naturalIdsByGroup.get(fixed.id)
+    if (!natural) continue
     const nextExcluded = fixed.excludedModelIds.filter((id) => !(releasedIds.has(id) && natural.has(id)))
-    if (nextExcluded.length !== fixed.excludedModelIds.length) await writeGroup({ ...fixed, excludedModelIds: nextExcluded, updatedAt: now })
+    if (nextExcluded.length !== fixed.excludedModelIds.length) writes.push({ ...fixed, excludedModelIds: nextExcluded, updatedAt: now })
   }
-  await writeGroup(next)
+  await writeGroups(writes)
   return next
 }
 
@@ -407,14 +492,15 @@ export async function deletePricingGroup(groupId: string) {
   const group = groups.find((entry) => entry.id === groupId)
   if (!group) return
   if (group.kind === "fixed") throw new Error("Fixed pricing groups cannot be deleted.")
-  if (isMemory()) workspaceState().groups.delete(groupId)
-  else await groupsRef().doc(groupId).delete()
-  invalidatePricingCatalog()
   const released = new Set(group.memberModelIds)
-  for (const fixed of groups.filter((entry) => entry.kind === "fixed")) {
-    const excludedModelIds = fixed.excludedModelIds.filter((modelId) => released.has(modelId) ? false : true)
-    if (excludedModelIds.length !== fixed.excludedModelIds.length) await writeGroup({ ...fixed, excludedModelIds, updatedAt: new Date().toISOString() })
+  const now = new Date().toISOString()
+  const writes: ModelPricingGroup[] = []
+  for (const fixed of groups) {
+    if (fixed.kind !== "fixed") continue
+    const excludedModelIds = fixed.excludedModelIds.filter((modelId) => !released.has(modelId))
+    if (excludedModelIds.length !== fixed.excludedModelIds.length) writes.push({ ...fixed, excludedModelIds, updatedAt: now })
   }
+  await writeGroupChanges(writes, [groupId])
 }
 
 export async function savePricingVersion(input: { groupId: string; rates: PricingRates; contextTiers: PricingContextTier[]; mode: "new" | "replace" }) {
@@ -469,12 +555,12 @@ async function loadPricingCatalog() {
   if (!state.pricingCatalogPromise) {
     const promise = (async () => {
       let generation = state.pricingCacheGeneration
-      let groups = await readGroups()
+      const [initialGroups, versions, models, providers] = await Promise.all([readGroups(), readVersions(), listModels(), listProviders()])
+      let groups = initialGroups
       if (!groups.length) {
-        groups = await syncModelPricingGroups()
+        groups = await reconcileModelPricingGroups(groups, models, providers)
         generation = state.pricingCacheGeneration
       }
-      const [versions, models, providers] = await Promise.all([readVersions(), listModels(), listProviders()])
       return { catalog: indexPricingCatalog(groups, versions, models, providers), generation }
     })().then(({ catalog, generation }) => {
       if (generation === state.pricingCacheGeneration) state.pricingCatalogCache = { ...catalog, expiresAt: Date.now() + pricingCatalogTtlMs }
@@ -506,7 +592,12 @@ async function listPricingJobs() {
 }
 
 export async function getPricingJob(jobId: string) {
-  if (isMemory()) return workspaceState().jobs.get(jobId)
+  const state = workspaceState()
+  if (isMemory()) return state.jobs.get(jobId)
+  if (state.pricingJobsCache && state.pricingJobsCache.expiresAt > Date.now()) {
+    const cached = state.pricingJobsCache.value.find((job) => job.id === jobId)
+    if (cached) return cached
+  }
   const snapshot = await jobsRef().doc(jobId).get()
   return snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as PricingJob : undefined
 }
@@ -524,8 +615,8 @@ async function createPricingJob(groupId: string, versionId: string) {
   return job
 }
 
-export async function updatePricingJob(jobId: string, update: Partial<PricingJob>) {
-  const current = await getPricingJob(jobId)
+export async function updatePricingJob(jobId: string, update: Partial<PricingJob>, knownCurrent?: PricingJob) {
+  const current = knownCurrent?.id === jobId ? knownCurrent : await getPricingJob(jobId)
   if (!current) return
   const next = { ...current, ...update, updatedAt: new Date().toISOString() }
   await writeJob(next)

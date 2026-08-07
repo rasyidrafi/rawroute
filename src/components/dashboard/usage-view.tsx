@@ -43,7 +43,10 @@ export function UsageView({ initial, publicView = false, workspaceId }: { initia
     activeRequest.current = controller
     startTransition(async () => {
       try {
-        const payload = await apiFetch<DashboardPayload>(`${endpoint}?${params.toString()}`, { signal: controller.signal })
+        const payload = await apiFetch<DashboardPayload>(`${endpoint}?${params.toString()}`, {
+          signal: controller.signal,
+          cache: publicView ? "default" : "no-store",
+        })
         if (activeRequest.current === controller) setDashboard(payload)
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return

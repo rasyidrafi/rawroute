@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     const workspace = await getWorkspace(workspaceId)
     if (!workspace || workspace.status !== "active") return Response.json({ error: { message: "Workspace not found." } }, { status: 404 })
     const payload = await runInWorkspace(workspace, () => getDashboardPayload(parseDashboardQuery(url.searchParams), true))
-    return Response.json(payload, { headers: { "cache-control": "public, max-age=5, s-maxage=5, stale-while-revalidate=30" } })
+    return Response.json(payload, { headers: { "cache-control": "public, max-age=15, s-maxage=15, stale-while-revalidate=60" } })
   } catch {
     return Response.json({ error: { message: "Public dashboard data is unavailable." } }, { status: 503, headers: { "cache-control": "no-store" } })
   }

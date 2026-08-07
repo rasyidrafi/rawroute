@@ -436,7 +436,6 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
         providerId: provider.id,
         modelId: gatewayModelId,
         credentials: providerApiKeys,
-        bypassCapacityLimits: provider.prefix === "codex" || providerApiKeys.some((apiKey) => apiKey.credentialKind === "codex-oauth"),
         sessionKey: routingSessionKey,
         hardAffinity: session?.hard || false,
         responseId: session?.responseId,
@@ -455,12 +454,6 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
         if (reservation.reason === "budget") {
           return Response.json({ error: { message: "Weekly budget reservation unavailable." } }, { status: 429, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
         }
-        if (reservation.reason === "upstream-rate-limited") {
-          return Response.json({ error: { message: "The upstream Codex provider is rate limited." } }, { status: 429, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
-        }
-        if (reservation.reason === "upstream-unavailable") {
-          return Response.json({ error: { message: "The upstream provider is temporarily unavailable." } }, { status: 503, headers: { "retry-after": String(reservation.retryAfterSeconds) } })
-        }
         const status = reservation.reason === "capacity" ? 429 : 503
         return Response.json({ error: { message: reservation.reason === "capacity"
           ? "All provider API keys are currently at capacity."
@@ -473,11 +466,10 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
       if (!providerApiKey) {
         await routingStore.release({
           providerId: provider.id,
-          modelId: gatewayModelId,
           credentialId: reservation.credentialId,
           leaseId: reservation.leaseId,
           status: 502,
-          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
+          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, actualMicros: 0, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
         }).catch(() => undefined)
         return jsonError("The selected provider API key is unavailable.", 503)
       }
@@ -488,11 +480,10 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
       } catch (error) {
         await routingStore.release({
           providerId: provider.id,
-          modelId: gatewayModelId,
           credentialId: providerApiKey.id,
           leaseId: routingLeaseId,
           status: 503,
-          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros: 0, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
+          ...(budgetAdmission ? { budget: { key: budgetAdmission.key, actualMicros: 0, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
         }).catch(() => undefined)
         return jsonError(error instanceof Error ? error.message : "Codex account refresh failed.", 503)
       }
@@ -538,12 +529,11 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
     }
     return routingStore.release({
       providerId: provider.id,
-      modelId: gatewayModelId,
       credentialId: providerApiKey.id,
       leaseId: routingLeaseId,
       status,
       retryAfterSeconds,
-      ...(budgetAdmission && budgetLeaseId ? { budget: { key: budgetAdmission.key, reservationMicros: budgetAdmission.reservationMicros, actualMicros, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
+      ...(budgetAdmission && budgetLeaseId ? { budget: { key: budgetAdmission.key, actualMicros, ttlSeconds: budgetAdmission.ttlSeconds } } : {}),
     })
   }
   const releaseOnce = (status: number, retryAfterSeconds?: number, actualMicros = 0) => {
@@ -605,32 +595,37 @@ async function proxyAuthenticatedRequest(request: Request, requestedProtocol: Pr
     request.signal.addEventListener("abort", clientAbortListener, { once: true })
     if (request.signal.aborted) clientAbortListener()
     if (request.signal.aborted) throw new Error("Request aborted")
+    const maximumRequestMs = maximumRoutingRequestMs(payload.stream === true)
     requestTimeout = setTimeout(() => {
       upstreamController.abort(new Error("Maximum routing request duration exceeded"))
       void safeRelease(502)
-    }, maximumRoutingRequestMs(payload.stream === true))
+    }, maximumRequestMs)
     if (typeof requestTimeout === "object" && requestTimeout !== null && "unref" in requestTimeout) (requestTimeout as { unref(): void }).unref()
     if (routingStore && providerApiKey && routingLeaseId) {
-      let renewing = false
-      leaseRenewalTimer = setInterval(() => {
-        if (renewing) return
-        renewing = true
-        void routingStore?.renew({
-          providerId: provider.id,
-          modelId: gatewayModelId,
-          credentialId: providerApiKey!.id,
-          leaseId: routingLeaseId!,
-        }).then((renewed) => {
-          if (!renewed) {
-            writeLog("warn", "gateway", "Routing lease disappeared before completion", { provider: provider.name, model: gatewayModelId })
-            upstreamController.abort(new Error("Routing lease expired"))
-            void safeRelease(502)
-          }
-        }).catch((error) => {
-          writeLog("warn", "gateway", "Unable to renew routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
-        }).finally(() => { renewing = false })
-      }, routingStore.leaseRenewalIntervalMs())
-      if (typeof leaseRenewalTimer === "object" && leaseRenewalTimer !== null && "unref" in leaseRenewalTimer) (leaseRenewalTimer as { unref(): void }).unref()
+      const renewalIntervalMs = routingStore.leaseRenewalIntervalMs()
+      // Avoid allocating a timer for the common case where the request timeout
+      // is shorter than the first possible renewal tick.
+      if (maximumRequestMs > renewalIntervalMs) {
+        let renewing = false
+        leaseRenewalTimer = setInterval(() => {
+          if (renewing) return
+          renewing = true
+          void routingStore?.renew({
+            providerId: provider.id,
+            credentialId: providerApiKey!.id,
+            leaseId: routingLeaseId!,
+          }).then((renewed) => {
+            if (!renewed) {
+              writeLog("warn", "gateway", "Routing lease disappeared before completion", { provider: provider.name, model: gatewayModelId })
+              upstreamController.abort(new Error("Routing lease expired"))
+              void safeRelease(502)
+            }
+          }).catch((error) => {
+            writeLog("warn", "gateway", "Unable to renew routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
+          }).finally(() => { renewing = false })
+        }, renewalIntervalMs)
+        if (typeof leaseRenewalTimer === "object" && leaseRenewalTimer !== null && "unref" in leaseRenewalTimer) (leaseRenewalTimer as { unref(): void }).unref()
+      }
     }
     writeLog("info", "gateway", requestSummary(provider.name, gatewayModelId, model.upstreamModel, modelProtocol, account, payload, reasoningEffort))
     const upstreamPath = isCodexOAuth ? (model.upstreamPath || "/responses") : (model.upstreamPath || protocolPaths[modelProtocol])

@@ -38,13 +38,14 @@ const pricingInflight = new Map<string, Promise<ResolvedModelPricing | undefined
 const pricingCacheTtlMs = 30_000
 const legacyPricingCaches = new Map<string, TimedValue<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }>>()
 const legacyPricingInflights = new Map<string, Promise<{ byProviderModelId: Map<string, ModelPricing>; byGatewayModelId: Map<string, ModelPricing> }>>()
-let legacyPricingGeneration = 0
+const legacyPricingGenerations = new Map<string, number>()
 
 interface TimedValue<T> { value: T; expiresAt: number }
 
-const budgetCacheTtlMs = positiveDuration(process.env.BUDGET_CACHE_TTL_MS, 5_000)
+const budgetCacheTtlMs = positiveDuration(process.env.BUDGET_CACHE_TTL_MS, 30_000)
 const budgetCounterCacheTtlMs = positiveDuration(process.env.BUDGET_COUNTER_CACHE_TTL_MS, 15_000)
-const dashboardCacheTtlMs = positiveDuration(process.env.DASHBOARD_CACHE_TTL_MS, 5_000)
+const dashboardCacheTtlMs = positiveDuration(process.env.DASHBOARD_CACHE_TTL_MS, 15_000)
+const analyticsReadConcurrency = positiveInteger(process.env.FIRESTORE_ANALYTICS_READ_CONCURRENCY, 8)
 const defaultBudgetOutputTokens = positiveInteger(process.env.BUDGET_DEFAULT_OUTPUT_TOKENS, 4_096)
 const budgetInputBytesPerToken = positiveNumber(process.env.BUDGET_INPUT_BYTES_PER_TOKEN, 3)
 const budgetReservationSafetyMultiplier = positiveNumber(process.env.BUDGET_RESERVATION_SAFETY_PERCENT, 125) / 100
@@ -56,17 +57,21 @@ type BudgetCounterRow = { id: string; spentMicros?: number; lastUsedAt?: string 
 const budgetCounterListCache = new Map<string, TimedValue<BudgetCounterRow[]>>()
 const budgetCounterListInflight = new Map<string, Promise<BudgetCounterRow[]>>()
 type BudgetUsageValue = { spentMicros: number; lastUsedAt: string | null }
+type BudgetCounterBaseline = { offsetMicros: number; lastUsedAt: string | null; expiresAt: number }
+const budgetCounterBaselineCache = new Map<string, BudgetCounterBaseline>()
 const budgetUsageCache = new Map<string, TimedValue<Map<string, BudgetUsageValue>>>()
 const budgetUsageInflight = new Map<string, Promise<Map<string, BudgetUsageValue>>>()
 const bypassSessionCache = new Map<string, TimedValue<BudgetBypassSession | null>>()
 const bypassSessionInflight = new Map<string, Promise<BudgetBypassSession | undefined>>()
+const bypassSessionListCache = new Map<string, TimedValue<BudgetBypassSession[]>>()
+const bypassSessionListInflight = new Map<string, Promise<BudgetBypassSession[]>>()
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
 const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
 const budgetsCaches = new Map<string, TimedValue<GatewayKeyBudget[]>>()
 const budgetsInflights = new Map<string, Promise<GatewayKeyBudget[]>>()
 const budgetWindowCaches = new Map<string, TimedValue<BudgetWindow>>()
 const budgetWindowInflights = new Map<string, Promise<BudgetWindow>>()
-let budgetCacheGeneration = 0
+const budgetCacheGenerations = new Map<string, number>()
 
 function positiveDuration(value: string | undefined, fallback: number) {
   const parsed = Number(value)
@@ -91,36 +96,114 @@ function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1
   cache.set(key, value)
 }
 
+async function parallelMap<T, R>(items: readonly T[], mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  if (items.length <= analyticsReadConcurrency) return Promise.all(items.map(mapper))
+  const output = new Array<R>(items.length)
+  let nextIndex = 0
+  await Promise.all(Array.from({ length: analyticsReadConcurrency }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++
+      output[index] = await mapper(items[index], index)
+    }
+  }))
+  return output
+}
+
+async function settledParallelMap<T, R>(items: readonly T[], mapper: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  return parallelMap(items, async (item, index) => {
+    try { return { status: "fulfilled", value: await mapper(item, index) } as const }
+    catch (reason) { return { status: "rejected", reason } as const }
+  })
+}
+
+function mergeDateRanges(ranges: ReadonlyArray<readonly [Date, Date]>): Array<[Date, Date]> {
+  const sorted = ranges
+    .filter(([from, to]) => from < to)
+    .map(([from, to]) => [new Date(from.getTime()), new Date(to.getTime())] as [Date, Date])
+    .sort((left, right) => left[0].getTime() - right[0].getTime())
+  const merged: Array<[Date, Date]> = []
+  for (const current of sorted) {
+    const previous = merged[merged.length - 1]
+    if (previous && current[0] <= previous[1]) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
+    else merged.push(current)
+  }
+  return merged
+}
+
+function subtractDateRanges(ranges: ReadonlyArray<readonly [Date, Date]>, covered: ReadonlyArray<readonly [Date, Date]>) {
+  const coverage = mergeDateRanges(covered)
+  const result: Array<[Date, Date]> = []
+  for (const [from, to] of mergeDateRanges(ranges)) {
+    let cursor = from.getTime()
+    const end = to.getTime()
+    for (const [coveredFrom, coveredTo] of coverage) {
+      if (coveredTo.getTime() <= cursor) continue
+      if (coveredFrom.getTime() >= end) break
+      if (coveredFrom.getTime() > cursor) result.push([new Date(cursor), new Date(Math.min(end, coveredFrom.getTime()))])
+      cursor = Math.max(cursor, coveredTo.getTime())
+      if (cursor >= end) break
+    }
+    if (cursor < end) result.push([new Date(cursor), new Date(end)])
+  }
+  return result
+}
+
+function uniqueUsageEvents(batches: Iterable<Iterable<UsageEvent>>) {
+  const unique = new Map<string, UsageEvent>()
+  for (const batch of batches) {
+    for (const event of batch) unique.set(event.id, event)
+  }
+  return [...unique.values()]
+}
+
 function scopedKey(key: string) {
   return `${currentWorkspaceId()}:${key}`
 }
 
+function workspaceGeneration(generations: Map<string, number>, workspaceId = currentWorkspaceId()) {
+  return generations.get(workspaceId) || 0
+}
+
+function advanceWorkspaceGeneration(generations: Map<string, number>, workspaceId: string) {
+  generations.set(workspaceId, workspaceGeneration(generations, workspaceId) + 1)
+}
+
+function clearWorkspaceEntries<T>(cache: Map<string, T>, workspaceId: string) {
+  const prefix = `${workspaceId}:`
+  for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key)
+}
+
 function invalidateBudgetReadCaches() {
-  budgetCacheGeneration += 1
-  budgetsCaches.delete(currentWorkspaceId())
-  budgetsInflights.delete(currentWorkspaceId())
-  budgetWindowCaches.delete(currentWorkspaceId())
-  budgetWindowInflights.delete(currentWorkspaceId())
-  budgetConfigCache.clear()
-  budgetConfigInflight.clear()
-  budgetCounterCache.clear()
-  budgetCounterInflight.clear()
-  budgetCounterListCache.clear()
-  budgetCounterListInflight.clear()
-  budgetUsageCache.clear()
-  budgetUsageInflight.clear()
-  bypassSessionCache.clear()
-  bypassSessionInflight.clear()
-  dashboardCache.clear()
-  dashboardInflight.clear()
+  const workspaceId = currentWorkspaceId()
+  advanceWorkspaceGeneration(budgetCacheGenerations, workspaceId)
+  budgetsCaches.delete(workspaceId)
+  budgetsInflights.delete(workspaceId)
+  budgetWindowCaches.delete(workspaceId)
+  budgetWindowInflights.delete(workspaceId)
+  clearWorkspaceEntries(budgetConfigCache, workspaceId)
+  clearWorkspaceEntries(budgetConfigInflight, workspaceId)
+  clearWorkspaceEntries(budgetCounterCache, workspaceId)
+  clearWorkspaceEntries(budgetCounterInflight, workspaceId)
+  clearWorkspaceEntries(budgetCounterListCache, workspaceId)
+  clearWorkspaceEntries(budgetCounterListInflight, workspaceId)
+  clearWorkspaceEntries(budgetCounterBaselineCache, workspaceId)
+  clearWorkspaceEntries(budgetUsageCache, workspaceId)
+  clearWorkspaceEntries(budgetUsageInflight, workspaceId)
+  clearWorkspaceEntries(bypassSessionCache, workspaceId)
+  clearWorkspaceEntries(bypassSessionInflight, workspaceId)
+  clearWorkspaceEntries(bypassSessionListCache, workspaceId)
+  clearWorkspaceEntries(bypassSessionListInflight, workspaceId)
+  clearWorkspaceEntries(dashboardCache, workspaceId)
+  clearWorkspaceEntries(dashboardInflight, workspaceId)
 }
 
 function invalidateLegacyPricingCaches() {
-  legacyPricingGeneration += 1
-  legacyPricingCaches.delete(currentWorkspaceId())
-  legacyPricingInflights.delete(currentWorkspaceId())
-  pricingCache.clear()
-  pricingInflight.clear()
+  const workspaceId = currentWorkspaceId()
+  advanceWorkspaceGeneration(legacyPricingGenerations, workspaceId)
+  legacyPricingCaches.delete(workspaceId)
+  legacyPricingInflights.delete(workspaceId)
+  clearWorkspaceEntries(pricingCache, workspaceId)
+  clearWorkspaceEntries(pricingInflight, workspaceId)
 }
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
@@ -145,6 +228,11 @@ function windowRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
 function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
 function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
+function budgetCounterBaselineId(budget: GatewayKeyBudget, usageStart: string, windowEnd: string) { return scopedKey(`${budget.apiKeyId}:${budget.updatedAt}:${usageStart}:${windowEnd}`) }
+function budgetCounterBaselineExpiresAt(windowEnd: string) {
+  const parsedEnd = Date.parse(windowEnd)
+  return Number.isFinite(parsedEnd) ? Math.max(Date.now() + budgetCounterCacheTtlMs, parsedEnd + 60_000) : Date.now() + 60 * 60_000
+}
 function budgetRetryAfter(window: BudgetWindow) { return Math.max(1, Math.ceil((Date.parse(window.end) - Date.now()) / 1000)) }
 function advanceExpiredWindow(window: BudgetWindow, now = Date.now()) {
   let start = Date.parse(window.start)
@@ -161,16 +249,17 @@ async function budgetUsageStart(window: BudgetWindow) {
   if (!window.bypassLimits || !window.bypassSessionId) return window.start
   if (isMemory()) return memoryState().bypassSessions.get(window.bypassSessionId)?.startedAt || window.start
   const sessionId = window.bypassSessionId
+  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(sessionId)
   const cached = bypassSessionCache.get(cacheId)
   if (cached && cached.expiresAt > Date.now()) return cached.value?.startedAt || window.start
   const existing = bypassSessionInflight.get(cacheId)
   if (existing) return (await existing)?.startedAt || window.start
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = bypassSessionsRef().doc(sessionId).get().then((snapshot) => {
     const session = snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as BudgetBypassSession : undefined
-    if (generation === budgetCacheGeneration) boundedSet(bypassSessionCache, cacheId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(bypassSessionCache, cacheId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
     return session
   }).finally(() => {
     if (bypassSessionInflight.get(cacheId) === promise) bypassSessionInflight.delete(cacheId)
@@ -182,10 +271,11 @@ async function budgetUsageStart(window: BudgetWindow) {
 async function budgetConfig(apiKeyId: string) {
   if (isMemory()) return memoryState().budgets.get(apiKeyId)
   const now = Date.now()
+  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(apiKeyId)
   const cached = budgetConfigCache.get(cacheId)
   if (cached && cached.expiresAt > now) return cached.value || undefined
-  const budgetsCache = budgetsCaches.get(currentWorkspaceId())
+  const budgetsCache = budgetsCaches.get(workspaceId)
   if (budgetsCache && budgetsCache.expiresAt > now) {
     const budget = budgetsCache.value.find((entry) => entry.apiKeyId === apiKeyId)
     boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: budgetsCache.expiresAt })
@@ -194,10 +284,10 @@ async function budgetConfig(apiKeyId: string) {
   const existing = budgetConfigInflight.get(cacheId)
   if (existing) return existing
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = budgetsRef().doc(apiKeyId).get().then((snapshot) => {
     const budget = snapshot.exists ? { ...snapshot.data(), apiKeyId: snapshot.id } as GatewayKeyBudget : undefined
-    if (generation === budgetCacheGeneration) boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
     return budget
   }).finally(() => {
     if (budgetConfigInflight.get(cacheId) === promise) budgetConfigInflight.delete(cacheId)
@@ -209,16 +299,17 @@ async function budgetConfig(apiKeyId: string) {
 async function budgetCounter(apiKeyId: string, usageStart: string) {
   const id = budgetCounterId(apiKeyId, usageStart)
   if (isMemory()) return memoryState().budgetCounters.get(id)?.spentMicros || 0
+  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(id)
   const cached = budgetCounterCache.get(cacheId)
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = budgetCounterInflight.get(cacheId)
   if (existing) return existing
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = budgetCountersRef().doc(id).get().then((snapshot) => {
     const spentMicros = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
-    if (generation === budgetCacheGeneration) boundedSet(budgetCounterCache, cacheId, { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetCounterCache, cacheId, { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
     return spentMicros
   }).finally(() => {
     if (budgetCounterInflight.get(cacheId) === promise) budgetCounterInflight.delete(cacheId)
@@ -308,9 +399,10 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
     // make the next budget read see the new rollup immediately. Firestore
     // workers rely on the shared dashboard TTL instead of clearing on every
     // request.
-    budgetUsageCache.clear()
-    budgetUsageInflight.clear()
-    dashboardCache.clear()
+    const workspaceId = currentWorkspaceId()
+    clearWorkspaceEntries(budgetUsageCache, workspaceId)
+    clearWorkspaceEntries(budgetUsageInflight, workspaceId)
+    clearWorkspaceEntries(dashboardCache, workspaceId)
     return event
   }
 
@@ -472,12 +564,15 @@ async function listUsageEventsForModels(providerModelIds: Set<string>, gatewayMo
 
   const queryChunks = <T,>(values: T[]) => Array.from({ length: Math.ceil(values.length / 30) }, (_, index) => values.slice(index * 30, index * 30 + 30))
   const queries = [
-    ...queryChunks([...providerModelIds]).map((ids) => eventsRef().where("providerModelId", "in", ids).get()),
-    ...queryChunks([...gatewayModelIds]).map((ids) => eventsRef().where("gatewayModelId", "in", ids).get()),
+    ...queryChunks([...providerModelIds]).map((ids) => eventsRef().where("providerModelId", "in", ids)),
+    ...queryChunks([...gatewayModelIds]).map((ids) => eventsRef().where("gatewayModelId", "in", ids)),
   ]
-  const snapshots = await Promise.all(queries)
-  return [...new Map(snapshots.flatMap((snapshot) => snapshot.docs).map((document) => [document.id, document.data() as UsageEvent])).values()]
-    .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+  const snapshots = await parallelMap(queries, (query) => query.get())
+  const unique = new Map<string, UsageEvent>()
+  for (const snapshot of snapshots) {
+    for (const document of snapshot.docs) unique.set(document.id, document.data() as UsageEvent)
+  }
+  return [...unique.values()].sort((a, b) => a.completedAt.localeCompare(b.completedAt))
 }
 
 export async function listModelPricing() {
@@ -502,7 +597,7 @@ async function legacyPricingIndex() {
   if (legacyPricingCache && legacyPricingCache.expiresAt > Date.now()) return legacyPricingCache.value
   const existingInflight = legacyPricingInflights.get(workspaceId)
   if (existingInflight) return existingInflight
-  const generation = legacyPricingGeneration
+  const generation = workspaceGeneration(legacyPricingGenerations, workspaceId)
   const promise = listModelPricing().then((entries) => {
     const byProviderModelId = new Map<string, ModelPricing>()
     const byGatewayModelId = new Map<string, ModelPricing>()
@@ -512,7 +607,7 @@ async function legacyPricingIndex() {
       if (!byGatewayModelId.has(pricing.gatewayModelId)) byGatewayModelId.set(pricing.gatewayModelId, pricing)
     }
     const value = { byProviderModelId, byGatewayModelId }
-    if (generation === legacyPricingGeneration) legacyPricingCaches.set(workspaceId, { value, expiresAt: Date.now() + pricingCacheTtlMs })
+    if (generation === workspaceGeneration(legacyPricingGenerations, workspaceId)) boundedSet(legacyPricingCaches, workspaceId, { value, expiresAt: Date.now() + pricingCacheTtlMs }, 128)
     return value
   }).finally(() => {
     if (legacyPricingInflights.get(workspaceId) === promise) legacyPricingInflights.delete(workspaceId)
@@ -522,12 +617,13 @@ async function legacyPricingIndex() {
 }
 
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {
+  const workspaceId = currentWorkspaceId()
   const key = scopedKey(`${gatewayModelId}:${providerModelId || ""}`)
   const modelGeneration = getModelPricingGeneration()
-  const legacyGeneration = legacyPricingGeneration
+  const legacyGeneration = workspaceGeneration(legacyPricingGenerations, workspaceId)
   const cached = pricingCache.get(key)
   if (cached && cached.expiresAt > Date.now() && cached.modelPricingGeneration === modelGeneration && cached.legacyPricingGeneration === legacyGeneration) return cached.value
-  const inflightKey = `${modelGeneration}:${legacyGeneration}:${key}`
+  const inflightKey = scopedKey(`${modelGeneration}:${legacyGeneration}:${gatewayModelId}:${providerModelId || ""}`)
   const existing = pricingInflight.get(inflightKey)
   if (existing) return existing
   const promise = (async () => {
@@ -541,11 +637,13 @@ export async function getPricingForModel(gatewayModelId: string, providerModelId
       const legacy = await legacyPricingIndex()
       value = (providerModelId ? legacy.byProviderModelId.get(providerModelId) : undefined) || legacy.byGatewayModelId.get(gatewayModelId)
     }
-    if (modelGeneration === getModelPricingGeneration() && legacyGeneration === legacyPricingGeneration) {
+    if (modelGeneration === getModelPricingGeneration() && legacyGeneration === workspaceGeneration(legacyPricingGenerations, workspaceId)) {
       boundedSet(pricingCache, key, { value, expiresAt: Date.now() + pricingCacheTtlMs, modelPricingGeneration: modelGeneration, legacyPricingGeneration: legacyGeneration })
     }
     return value
-  })().finally(() => pricingInflight.delete(inflightKey))
+  })().finally(() => {
+    if (pricingInflight.get(inflightKey) === promise) pricingInflight.delete(inflightKey)
+  })
   pricingInflight.set(inflightKey, promise)
   return promise
 }
@@ -567,12 +665,12 @@ export async function listBudgets(): Promise<GatewayKeyBudget[]> {
   const budgetsInflight = budgetsInflights.get(workspaceId)
   if (budgetsInflight) return budgetsInflight
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = budgetsRef().get().then((snapshot) => {
     const budgets = snapshot.docs.map((document) => ({ ...document.data(), apiKeyId: document.id } as GatewayKeyBudget))
-    if (generation === budgetCacheGeneration) {
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
       const expiresAt = Date.now() + budgetCacheTtlMs
-      budgetsCaches.set(workspaceId, { value: budgets, expiresAt })
+      boundedSet(budgetsCaches, workspaceId, { value: budgets, expiresAt }, 256)
       for (const budget of budgets) boundedSet(budgetConfigCache, scopedKey(budget.apiKeyId), { value: budget, expiresAt })
     }
     return budgets
@@ -587,8 +685,27 @@ export async function listBudgetBypassSessions(limit = 50, currentWindow?: Budge
   const window = currentWindow || await getBudgetWindow()
   if (window.bypassLimits && !window.bypassSessionId) await setBudgetBypassEnabled(true)
   if (isMemory()) return [...memoryState().bypassSessions.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit)
-  const snapshot = await bypassSessionsRef().orderBy("startedAt", "desc").limit(limit).get()
-  return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as BudgetBypassSession))
+
+  const workspaceId = currentWorkspaceId()
+  const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)))
+  const cacheId = scopedKey(`bypass-list:${boundedLimit}`)
+  const cached = bypassSessionListCache.get(cacheId)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = bypassSessionListInflight.get(cacheId)
+  if (existing) return existing
+
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const promise = bypassSessionsRef().orderBy("startedAt", "desc").limit(boundedLimit).get().then((snapshot) => {
+    const sessions = snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as BudgetBypassSession))
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+      boundedSet(bypassSessionListCache, cacheId, { value: sessions, expiresAt: Date.now() + budgetCacheTtlMs }, 32)
+    }
+    return sessions
+  }).finally(() => {
+    if (bypassSessionListInflight.get(cacheId) === promise) bypassSessionListInflight.delete(cacheId)
+  })
+  bypassSessionListInflight.set(cacheId, promise)
+  return promise
 }
 
 export async function getBudgetWindow(): Promise<BudgetWindow> {
@@ -609,7 +726,7 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
   const budgetWindowInflight = budgetWindowInflights.get(workspaceId)
   if (budgetWindowInflight) return budgetWindowInflight
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = (async () => {
     const ref = windowRef()
     const snapshot = await ref.get()
@@ -628,7 +745,7 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     })
     return result
   })().then((window) => {
-    if (generation === budgetCacheGeneration) budgetWindowCaches.set(workspaceId, { value: window, expiresAt: Date.now() + budgetCacheTtlMs })
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetWindowCaches, workspaceId, { value: window, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
     return window
   }).finally(() => {
     if (budgetWindowInflights.get(workspaceId) === promise) budgetWindowInflights.delete(workspaceId)
@@ -667,7 +784,7 @@ export async function updateBudgetWindow(input: Partial<BudgetWindow> & { anchor
   if (isMemory()) memoryState().window = next
   else await windowRef().set(next)
   invalidateBudgetReadCaches()
-  if (!isMemory()) budgetWindowCaches.set(currentWorkspaceId(), { value: next, expiresAt: Date.now() + budgetCacheTtlMs })
+  if (!isMemory()) boundedSet(budgetWindowCaches, currentWorkspaceId(), { value: next, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
   return next
 }
 
@@ -722,7 +839,7 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
     result = { window: next, session: enabled ? session : null }
   })
   invalidateBudgetReadCaches()
-  budgetWindowCaches.set(currentWorkspaceId(), { value: result.window, expiresAt: Date.now() + budgetCacheTtlMs })
+  boundedSet(budgetWindowCaches, currentWorkspaceId(), { value: result.window, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
   return result
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
@@ -743,16 +860,17 @@ export async function deleteBudget(apiKeyId: string) {
 async function listBudgetCounters(usageStart: string): Promise<BudgetCounterRow[]> {
   if (isMemory()) return [...memoryState().budgetCounters.entries()].map(([id, value]) => ({ id, ...value }))
   const now = Date.now()
+  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(usageStart)
   const cached = budgetCounterListCache.get(cacheId)
   if (cached && cached.expiresAt > now) return cached.value
   const existing = budgetCounterListInflight.get(cacheId)
   if (existing) return existing
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = budgetCountersRef().where("usageStartAt", "==", usageStart).get().then((snapshot) => {
     const rows = snapshot.docs.map((document) => ({ id: document.id, ...(document.data() as Omit<BudgetCounterRow, "id">) }))
-    if (generation === budgetCacheGeneration) boundedSet(budgetCounterListCache, cacheId, { value: rows, expiresAt: Date.now() + budgetCacheTtlMs }, 8)
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetCounterListCache, cacheId, { value: rows, expiresAt: Date.now() + budgetCounterCacheTtlMs }, 8)
     return rows
   }).finally(() => {
     if (budgetCounterListInflight.get(cacheId) === promise) budgetCounterListInflight.delete(cacheId)
@@ -775,144 +893,9 @@ function addBudgetEvent(map: Map<string, BudgetUsageValue>, event: UsageEvent) {
   map.set(event.gatewayKeyId, { spentMicros: current.spentMicros + Number(event.costMicros || 0), lastUsedAt })
 }
 
-interface HybridUsageData {
-  rollups: UsageRollup[]
-  boundaryEvents: UsageEvent[]
-}
-
-function rollupDayStart(rollup: UsageRollup) {
-  return bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
-}
-
-function rollupIsFullyInside(rollup: UsageRollup, from: Date, to: Date) {
-  const start = new Date(rollup.bucketStart)
-  const end = nextBucketStart(start, rollup.granularity)
-  return start >= from && end <= to
-}
-
-function mergeUsageRanges(ranges: Array<[Date, Date]>) {
-  return ranges
-    .filter(([from, to]) => from < to)
-    .sort(([left], [right]) => left.getTime() - right.getTime())
-    .reduce<Array<[Date, Date]>>((merged, current) => {
-      const previous = merged.at(-1)
-      if (previous && current[0] <= previous[1]) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
-      else merged.push(current)
-      return merged
-    }, [])
-}
-
-/**
- * Select one rollup resolution for each local calendar day. Daily and hourly
- * rollups are both retained for fast charts, but they are not additive: a
- * live day can have both resolutions for the same traffic. Completed days use
- * daily rollups; the active day uses hourly rollups. Partial boundary buckets
- * are replaced with metadata-only usage events when those events exist.
- */
-async function getHybridUsageData(from: Date, to: Date): Promise<HybridUsageData> {
-  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || to <= from) return { rollups: [], boundaryEvents: [] }
-
-  const now = new Date()
-  const activeDayStart = startOfZonedDay(now)
-  const dailyFrom = bucketStart(from, "daily").toISOString()
-  const dailyTo = nextBucketStart(to, "daily").toISOString()
-  const hourlyFrom = bucketStart(from, "hourly").toISOString()
-  const hourlyTo = nextBucketStart(to, "hourly").toISOString()
-  const [daily, hourly] = await Promise.all([
-    listUsageRollups("daily", dailyFrom, dailyTo),
-    listUsageRollups("hourly", hourlyFrom, hourlyTo),
-  ])
-
-  const dailyByDay = new Map<string, UsageRollup[]>()
-  const hourlyByDay = new Map<string, UsageRollup[]>()
-  for (const rollup of daily) {
-    const day = rollupDayStart(rollup)
-    const rows = dailyByDay.get(day) || []
-    rows.push(rollup)
-    dailyByDay.set(day, rows)
-  }
-  for (const rollup of hourly) {
-    const day = rollupDayStart(rollup)
-    const rows = hourlyByDay.get(day) || []
-    rows.push(rollup)
-    hourlyByDay.set(day, rows)
-  }
-
-  const selected: UsageRollup[] = []
-  const boundaryRanges: Array<[Date, Date]> = []
-  const firstDay = bucketStart(from, "daily")
-  const lastDay = bucketStart(new Date(to.getTime() - 1), "daily")
-  for (let day = firstDay; day <= lastDay; day = nextBucketStart(day, "daily")) {
-    const dayEnd = nextBucketStart(day, "daily")
-    const overlaps = dayEnd > from && day < to
-    if (!overlaps) continue
-
-    const isActiveDay = day <= activeDayStart && activeDayStart < dayEnd
-    const fullyInside = day >= from && dayEnd <= to
-    let resolution: UsageRollup["granularity"] = isActiveDay || !fullyInside ? "hourly" : "daily"
-    let candidates = resolution === "hourly" ? hourlyByDay.get(day.toISOString()) || [] : dailyByDay.get(day.toISOString()) || []
-
-    // A historical import may contain daily data without hourly data. Keep
-    // that data usable for the active day rather than reporting zero, while
-    // still refusing to use a full daily bucket for a partial boundary day.
-    if (!candidates.length && resolution === "hourly" && isActiveDay) {
-      resolution = "daily"
-      candidates = dailyByDay.get(day.toISOString()) || []
-    }
-    if (!candidates.length && resolution === "daily") {
-      resolution = "hourly"
-      candidates = hourlyByDay.get(day.toISOString()) || []
-    }
-
-    const effectiveTo = isActiveDay ? new Date(Math.min(to.getTime(), now.getTime())) : to
-    for (const rollup of candidates) {
-      if (rollupIsFullyInside(rollup, from, effectiveTo)) selected.push(rollup)
-    }
-
-    if (resolution === "hourly") {
-      if (day < from && bucketStart(from, "hourly") < from) {
-        const firstHourEnd = nextBucketStart(bucketStart(from, "hourly"), "hourly")
-        boundaryRanges.push([from, new Date(Math.min(to.getTime(), firstHourEnd.getTime()))])
-      }
-      if (dayEnd > to && bucketStart(to, "hourly") < to) {
-        const lastHourStart = bucketStart(to, "hourly")
-        boundaryRanges.push([new Date(Math.max(from.getTime(), lastHourStart.getTime())), to])
-      }
-      if (isActiveDay) {
-        const activeTo = new Date(Math.min(to.getTime(), now.getTime()))
-        const activeHourStart = bucketStart(activeTo, "hourly")
-        if (activeHourStart < activeTo) boundaryRanges.push([activeHourStart, activeTo])
-      }
-    } else if (!fullyInside) {
-      boundaryRanges.push([new Date(Math.max(from.getTime(), day.getTime())), new Date(Math.min(to.getTime(), dayEnd.getTime()))])
-    }
-  }
-
-  const mergedRanges = mergeUsageRanges(boundaryRanges)
-  const boundaryResults = await Promise.allSettled(mergedRanges.map(([rangeFrom, rangeTo]) => listUsageEvents(rangeFrom.toISOString(), rangeTo.toISOString())))
-  const boundaryEvents = [...new Map(
-    boundaryResults.flatMap((result) => result.status === "fulfilled" ? result.value : []).map((event) => [event.id, event]),
-  ).values()]
-  const selectedIds = new Set(selected.map((rollup) => rollup.id))
-  for (let index = 0; index < mergedRanges.length; index++) {
-    const [rangeFrom, rangeTo] = mergedRanges[index]
-    const result = boundaryResults[index]
-    const rangeEndsAtNow = rangeTo.getTime() === Math.min(to.getTime(), now.getTime())
-    if (!rangeEndsAtNow || result.status !== "fulfilled" || result.value.length) continue
-    for (const rollup of hourly) {
-      const rollupStart = new Date(rollup.bucketStart)
-      const rollupEnd = nextBucketStart(rollupStart, "hourly")
-      if (rollupStart < rangeTo && rollupEnd > rangeFrom && !selectedIds.has(rollup.id)) {
-        selected.push(rollup)
-        selectedIds.add(rollup.id)
-      }
-    }
-  }
-  return { rollups: selected, boundaryEvents }
-}
-
 async function getBudgetUsage(window: BudgetWindow): Promise<Map<string, BudgetUsageValue>> {
   const usageStartAt = await budgetUsageStart(window)
+  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(`${usageStartAt}:${window.end}`)
   const now = Date.now()
   const cached = budgetUsageCache.get(cacheId)
@@ -920,18 +903,89 @@ async function getBudgetUsage(window: BudgetWindow): Promise<Map<string, BudgetU
   const existing = budgetUsageInflight.get(cacheId)
   if (existing) return existing
 
-  const generation = budgetCacheGeneration
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const start = new Date(usageStartAt)
   const end = new Date(window.end)
   const promise = (async () => {
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return new Map<string, BudgetUsageValue>()
-    const data = await getHybridUsageData(start, end)
+
+    const hourlyFrom = bucketStart(start, "hourly").toISOString()
+    const hourlyTo = nextBucketStart(end, "hourly").toISOString()
+    const dailyFrom = bucketStart(start, "daily").toISOString()
+    const dailyTo = nextBucketStart(end, "daily").toISOString()
+    const [hourly, daily] = await Promise.all([
+      listUsageRollups("hourly", hourlyFrom, hourlyTo),
+      listUsageRollups("daily", dailyFrom, dailyTo),
+    ])
+
+    const hourlyBoundary = dashboardBoundaryRanges(start, end, "hourly")
+    // Backfilled CCS data may have daily rollups but no usage-event documents.
+    // Keep a dimension-level fallback for those boundary buckets so an empty
+    // event query does not erase historical spend.
+    const dailyBoundaryRanges: Array<[Date, Date]> = []
     const result = new Map<string, BudgetUsageValue>()
-    for (const rollup of data.rollups) addBudgetUsage(result, rollup)
-    for (const event of data.boundaryEvents) addBudgetEvent(result, event)
+    const hourlyDays = new Set<string>()
+    for (const rollup of hourly) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime)) continue
+      const bucketStartDate = new Date(bucketTime)
+      const overlapsWindow = nextBucketStart(bucketStartDate, "hourly") > start && bucketStartDate < end
+      if (rollup.gatewayKeyId && overlapsWindow) hourlyDays.add(`${rollup.gatewayKeyId}:${bucketStart(bucketStartDate, "daily").toISOString()}`)
+    }
+
+    // Historical backfills may intentionally contain daily rollups without
+    // hourly documents. Use those days only when hourly data does not exist
+    // for the same key/day, preventing daily+hourly double counting.
+    for (const rollup of daily) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
+      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
+      if (hourlyDays.has(dayKey)) continue
+      const dayStart = new Date(bucketTime)
+      const dayEnd = nextBucketStart(dayStart, "daily")
+      if (dayStart >= start && dayEnd <= end) addBudgetUsage(result, rollup)
+      else dailyBoundaryRanges.push([new Date(Math.max(start.getTime(), dayStart.getTime())), new Date(Math.min(end.getTime(), dayEnd.getTime()))])
+    }
+
+    const boundaryRanges = mergeDateRanges([...hourlyBoundary.ranges, ...dailyBoundaryRanges])
+    const boundaryResults = await settledParallelMap(boundaryRanges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
+    const boundaryDataAvailable = boundaryResults.every((entry) => entry.status === "fulfilled")
+    const boundaryEvents = uniqueUsageEvents(boundaryResults.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []))
+    const hourlyEventKeys = new Set<string>()
+    const dailyEventKeys = new Set<string>()
+    for (const event of boundaryEvents) {
+      const completedAt = new Date(event.completedAt)
+      hourlyEventKeys.add(`${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(completedAt, "hourly").toISOString()}`)
+      dailyEventKeys.add(`${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(completedAt, "daily").toISOString()}`)
+    }
+
+    for (const rollup of hourly) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime) || bucketTime < start.getTime() || bucketTime >= end.getTime()) continue
+      const hasBoundaryEvents = hourlyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${rollup.bucketStart}`)
+      if (hourlyBoundary.partialBucketStarts.has(rollup.bucketStart) && boundaryDataAvailable && hasBoundaryEvents) continue
+      addBudgetUsage(result, rollup)
+    }
+
+    for (const rollup of daily) {
+      const bucketTime = Date.parse(rollup.bucketStart)
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
+      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
+      if (hourlyDays.has(dayKey)) continue
+      const dayStart = new Date(bucketTime)
+      const dayEnd = nextBucketStart(dayStart, "daily")
+      if (dayStart >= start && dayEnd <= end) continue
+      const hasBoundaryEvents = dailyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${bucketStart(dayStart, "daily").toISOString()}`)
+      if (boundaryDataAvailable && hasBoundaryEvents) continue
+      addBudgetUsage(result, rollup)
+    }
+
+    if (boundaryDataAvailable) {
+      for (const event of boundaryEvents) addBudgetEvent(result, event)
+    }
     return result
   })().then((value) => {
-    if (generation === budgetCacheGeneration) budgetUsageCache.set(cacheId, { value, expiresAt: Date.now() + dashboardCacheTtlMs })
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetUsageCache, cacheId, { value, expiresAt: Date.now() + dashboardCacheTtlMs }, 128)
     return value
   }).finally(() => {
     if (budgetUsageInflight.get(cacheId) === promise) budgetUsageInflight.delete(cacheId)
@@ -940,8 +994,33 @@ async function getBudgetUsage(window: BudgetWindow): Promise<Map<string, BudgetU
   return promise
 }
 
-async function budgetSpentMicros(apiKeyId: string, window: BudgetWindow) {
-  return (await getBudgetUsage(window)).get(apiKeyId)?.spentMicros || 0
+function setBudgetCounterBaseline(budget: GatewayKeyBudget, usageStart: string, window: BudgetWindow, counterSpentMicros: number, usage?: BudgetUsageValue) {
+  const baseline: BudgetCounterBaseline = {
+    offsetMicros: Number(usage?.spentMicros || 0) - counterSpentMicros,
+    lastUsedAt: usage?.lastUsedAt || null,
+    expiresAt: budgetCounterBaselineExpiresAt(window.end),
+  }
+  boundedSet(budgetCounterBaselineCache, budgetCounterBaselineId(budget, usageStart, window.end), baseline)
+  return baseline
+}
+
+function getBudgetCounterBaseline(budget: GatewayKeyBudget, usageStart: string, window: BudgetWindow) {
+  const key = budgetCounterBaselineId(budget, usageStart, window.end)
+  const baseline = budgetCounterBaselineCache.get(key)
+  if (baseline && baseline.expiresAt > Date.now()) return baseline
+  if (baseline) budgetCounterBaselineCache.delete(key)
+  return undefined
+}
+
+async function budgetSpentMicros(budget: GatewayKeyBudget, window: BudgetWindow, usageStart: string) {
+  const counterPromise = budgetCounter(budget.apiKeyId, usageStart)
+  const cachedBaseline = getBudgetCounterBaseline(budget, usageStart, window)
+  if (cachedBaseline) return Math.max(0, await counterPromise + cachedBaseline.offsetMicros)
+
+  const [counterSpentMicros, usageByKey] = await Promise.all([counterPromise, getBudgetUsage(window)])
+  const usage = usageByKey.get(budget.apiKeyId)
+  setBudgetCounterBaseline(budget, usageStart, window, counterSpentMicros, usage)
+  return Math.max(0, Number(usage?.spentMicros || 0))
 }
 
 export interface BudgetAdmission {
@@ -999,13 +1078,13 @@ export async function getBudgetRequestState(
   if (!budget.enabled || window.bypassLimits) return { usageContext }
   if (!pricing) throw new BudgetDeniedError("This API key cannot call a model without configured pricing.", budgetRetryAfter(window))
 
-  const spentMicros = await budgetSpentMicros(apiKeyId, window)
+  const spentMicros = await budgetSpentMicros(budget, window, usageStartAt)
   if (spentMicros >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
   return {
     usageContext,
     pricing,
     admission: {
-      key: `rawroute:budget:${currentWorkspaceId()}:${budgetCounterId(apiKeyId, usageStartAt)}`,
+      key: `rawroute:budget:${currentWorkspaceId()}:${budgetCounterId(apiKeyId, usageStartAt)}:${hash(`${budget.updatedAt || ""}:${window.updatedAt || ""}`).slice(0, 16)}`,
       limitMicros: budget.weeklyLimitMicros,
       spentMicros,
       reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes),
@@ -1028,24 +1107,38 @@ export async function checkBudget(apiKeyId: string, gatewayModelId: string, prov
   await getBudgetAdmission(apiKeyId, gatewayModelId, providerModelId)
 }
 
-async function loadBudgetRows(keys: Awaited<ReturnType<typeof listApiKeys>> = [], currentWindow?: BudgetWindow) {
-  const [budgets, window] = await Promise.all([
-    listBudgets(),
-    currentWindow ? Promise.resolve(currentWindow) : getBudgetWindow(),
-  ])
+async function loadBudgetRows(
+  keys: Awaited<ReturnType<typeof listApiKeys>> = [],
+  currentWindow?: BudgetWindow,
+  currentBudgets?: GatewayKeyBudget[],
+) {
+  const budgets = currentBudgets || await listBudgets()
+  if (!budgets.length) return { rows: [], window: currentWindow }
+  const window = currentWindow || await getBudgetWindow()
   const usageStartAt = await budgetUsageStart(window)
-  const usageByKey = budgets.length ? await getBudgetUsage(window) : new Map<string, BudgetUsageValue>()
+  const counters = budgets.length ? await listBudgetCounters(usageStartAt) : []
+  const countersById = new Map(counters.map((counter) => [counter.id, counter]))
+  const needsReconciliation = budgets.some((budget) => !getBudgetCounterBaseline(budget, usageStartAt, window))
+  const usageByKey = needsReconciliation ? await getBudgetUsage(window) : undefined
   const keyNames = new Map(keys.map((key) => [key.id, key.name]))
   const rows = budgets.map((budget) => {
-    const usage = usageByKey.get(budget.apiKeyId)
+    const counter = countersById.get(budgetCounterId(budget.apiKeyId, usageStartAt))
+    const counterSpentMicros = Number(counter?.spentMicros || 0)
+    const usage = usageByKey?.get(budget.apiKeyId)
+    const baseline = getBudgetCounterBaseline(budget, usageStartAt, window)
+      || setBudgetCounterBaseline(budget, usageStartAt, window, counterSpentMicros, usage)
+    const counterLastUsedAt = counter?.lastUsedAt || null
+    const lastUsedAt = baseline.lastUsedAt && (!counterLastUsedAt || baseline.lastUsedAt > counterLastUsedAt)
+      ? baseline.lastUsedAt
+      : counterLastUsedAt
     return {
       ...budget,
-      spentMicros: usage?.spentMicros || 0,
+      spentMicros: Math.max(0, counterSpentMicros + baseline.offsetMicros),
       windowStart: window.start,
       windowEnd: window.end,
       usageStartAt,
       name: keyNames.get(budget.apiKeyId) || "Unknown",
-      lastUsedAt: usage?.lastUsedAt || null,
+      lastUsedAt,
     }
   })
   return { rows, window }
@@ -1097,8 +1190,9 @@ function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•
 function publicKeyLabel(id: string) { return `Key ${hash(id).slice(0, 6).toUpperCase()}` }
 
 async function buildDashboardPayload(query: DashboardQuery, publicView: boolean): Promise<DashboardPayload> {
-  const budgetWindowPromise = getBudgetWindow()
-  const range = await resolveRange(query, query.preset === "budget" ? await budgetWindowPromise : undefined)
+  const budgetsPromise = listBudgets()
+  const budgetWindowPromise = query.preset === "budget" ? getBudgetWindow() : undefined
+  const range = await resolveRange(query, budgetWindowPromise ? await budgetWindowPromise : undefined)
   const span = range.to.getTime() - range.from.getTime()
   const requestedGranularity = query.granularity && query.granularity !== "auto"
     ? query.granularity
@@ -1111,22 +1205,21 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const toExclusive = new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1))
   const boundary = dashboardBoundaryRanges(range.from, toExclusive, storageGranularity)
 
-  const hybridUsagePromise = query.preset === "budget" ? getHybridUsageData(range.from, range.to) : undefined
-  const rollupsPromise = hybridUsagePromise
-    ? hybridUsagePromise.then((data) => data.rollups)
-    : listUsageRollups(
-      storageGranularity as UsageRollup["granularity"],
-      range.from.toISOString(),
-      toExclusive.toISOString(),
-    )
-  const boundaryEventsPromise = hybridUsagePromise
-    ? hybridUsagePromise.then((data) => data.boundaryEvents)
-    : boundary.ranges.length
-      ? Promise.all(boundary.ranges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
-        .then((batches) => [...new Map(batches.flat().map((event) => [event.id, event])).values()])
-      : Promise.resolve([] as UsageEvent[])
+  const rollupsPromise = listUsageRollups(
+    storageGranularity as UsageRollup["granularity"],
+    range.from.toISOString(),
+    toExclusive.toISOString(),
+  )
+  const boundaryEventsPromise = boundary.ranges.length
+    ? parallelMap(boundary.ranges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
+      .then(uniqueUsageEvents)
+    : Promise.resolve([] as UsageEvent[])
   const keysPromise = listApiKeys()
-  const budgetDataPromise = budgetWindowPromise.then((window) => loadBudgetRows([], window))
+  const budgetDataPromise = budgetsPromise.then(async (budgets) => {
+    if (!budgets.length) return { rows: [], window: budgetWindowPromise ? await budgetWindowPromise : undefined }
+    const window = budgetWindowPromise ? await budgetWindowPromise : await getBudgetWindow()
+    return loadBudgetRows([], window, budgets)
+  })
   const [rollupsResult, boundaryEventsResult, keysResult, budgetResult] = await Promise.allSettled([
     rollupsPromise,
     boundaryEventsPromise,
@@ -1136,25 +1229,30 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const rollups = rollupsResult.status === "fulfilled" ? rollupsResult.value : []
   const boundaryEvents = boundaryEventsResult.status === "fulfilled" ? boundaryEventsResult.value : []
   const exactBoundaryData = boundaryEventsResult.status === "fulfilled"
-  const missingDimensionBucketStarts = new Set(
-    rollups
-      .filter((rollup) => !rollup.gatewayKeyId || !rollup.gatewayModelId)
-      .map((rollup) => rollup.bucketStart),
+  const missingDimensionBucketStarts = new Set<string>()
+  for (const rollup of rollups) {
+    if (!rollup.gatewayKeyId || !rollup.gatewayModelId) missingDimensionBucketStarts.add(rollup.bucketStart)
+  }
+  const missingDimensionCandidates: Array<[Date, Date]> = []
+  for (const bucket of missingDimensionBucketStarts) {
+    const bucketDate = new Date(bucket)
+    missingDimensionCandidates.push([
+      new Date(Math.max(range.from.getTime(), bucketDate.getTime())),
+      new Date(Math.min(toExclusive.getTime(), nextBucketStart(bucketDate, storageGranularity).getTime())),
+    ])
+  }
+  const missingDimensionRanges = subtractDateRanges(
+    missingDimensionCandidates,
+    exactBoundaryData ? boundary.ranges : [],
   )
-  const missingDimensionRanges = [...missingDimensionBucketStarts].map((bucket) => [
-    new Date(Math.max(range.from.getTime(), Date.parse(bucket))),
-    new Date(Math.min(toExclusive.getTime(), nextBucketStart(new Date(bucket), storageGranularity).getTime())),
-  ] as [Date, Date]).filter(([from, to]) => from < to)
   const missingDimensionEventsResult = missingDimensionRanges.length
-    ? await Promise.allSettled(missingDimensionRanges.map(([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
+    ? await settledParallelMap(missingDimensionRanges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
     : []
   const missingDimensionData = missingDimensionRanges.length === 0 || missingDimensionEventsResult.every((result) => result.status === "fulfilled")
   const missingDimensionEvents = missingDimensionData
-    ? missingDimensionEventsResult.flatMap((result) => result.status === "fulfilled" ? result.value : [])
+    ? uniqueUsageEvents(missingDimensionEventsResult.flatMap((result) => result.status === "fulfilled" ? [result.value] : []))
     : []
-  const replacementEvents = hybridUsagePromise
-    ? boundaryEvents
-    : [...new Map([...boundaryEvents, ...missingDimensionEvents].map((event) => [event.id, event])).values()]
+  const replacementEvents = uniqueUsageEvents([boundaryEvents, missingDimensionEvents])
   const keys = keysResult.status === "fulfilled" ? keysResult.value : []
   const budgetRows = budgetResult.status === "fulfilled" ? budgetResult.value.rows : []
   const budgetWindow = budgetResult.status === "fulfilled" ? budgetResult.value.window : undefined
@@ -1171,31 +1269,63 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   let pricedRequests = 0
   let lastEventAt: string | null = null
 
-  const rollupsToAggregate = hybridUsagePromise
-    ? rollups
-    : exactBoundaryData
-      ? rollups.filter((rollup) => !boundary.partialBucketStarts.has(rollup.bucketStart) && (!missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart)))
-      : rollups.filter((rollup) => !missingDimensionData || !missingDimensionBucketStarts.has(rollup.bucketStart))
   const compactHourLabels = (query.preset === "today" || query.preset === "yesterday") && trendGranularity === "hourly"
-  for (const rollup of [...rollupsToAggregate, ...replacementEvents.map((event) => rollupFromEvent(event, storageGranularity as UsageRollup["granularity"]))]) {
-    requestCount += rollup.requests
-    totalTokens += rollup.totalTokens
-    totalCostMicros += rollup.costMicros
-    pricedRequests += rollup.pricedRequests || 0
-    if (rollup.lastEventAt && (!lastEventAt || lastEventAt < rollup.lastEventAt)) lastEventAt = rollup.lastEventAt
+  function aggregateUsageRow(row: {
+    bucketStart: string
+    requests: number
+    totalTokens: number
+    costMicros: number
+    pricedRequests: number
+    lastEventAt?: string
+    gatewayKeyId?: string
+    gatewayModelId?: string
+  }) {
+    requestCount += row.requests
+    totalTokens += row.totalTokens
+    totalCostMicros += row.costMicros
+    pricedRequests += row.pricedRequests
+    if (row.lastEventAt && (!lastEventAt || lastEventAt < row.lastEventAt)) lastEventAt = row.lastEventAt
 
-    const trendBucket = bucketStart(new Date(rollup.bucketStart), trendGranularity).toISOString()
+    const trendBucket = bucketStart(new Date(row.bucketStart), trendGranularity).toISOString()
     let point = trend.get(trendBucket)
     if (!point) {
       point = { bucketStart: trendBucket, label: formatAppTrendBucket(trendBucket, trendGranularity, compactHourLabels ? "hour" : undefined), requests: 0, tokens: 0, costMicros: 0 }
       trend.set(trendBucket, point)
     }
-    point.requests += rollup.requests
-    point.tokens += rollup.totalTokens
-    point.costMicros += rollup.costMicros
+    point.requests += row.requests
+    point.tokens += row.totalTokens
+    point.costMicros += row.costMicros
 
-    if (!rollup.gatewayKeyId || !rollup.gatewayModelId) continue
-    addDimensions(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.requests, rollup.totalTokens, rollup.costMicros, rollup.lastEventAt)
+    if (row.gatewayKeyId && row.gatewayModelId) {
+      addDimensions(row.gatewayKeyId, row.gatewayModelId, row.requests, row.totalTokens, row.costMicros, row.lastEventAt)
+    }
+  }
+
+  for (const rollup of rollups) {
+    if (exactBoundaryData && boundary.partialBucketStarts.has(rollup.bucketStart)) continue
+    if (missingDimensionData && missingDimensionBucketStarts.has(rollup.bucketStart)) continue
+    aggregateUsageRow({
+      bucketStart: rollup.bucketStart,
+      requests: rollup.requests,
+      totalTokens: rollup.totalTokens,
+      costMicros: rollup.costMicros,
+      pricedRequests: rollup.pricedRequests || 0,
+      lastEventAt: rollup.lastEventAt,
+      gatewayKeyId: rollup.gatewayKeyId,
+      gatewayModelId: rollup.gatewayModelId,
+    })
+  }
+  for (const event of replacementEvents) {
+    aggregateUsageRow({
+      bucketStart: bucketStart(new Date(event.completedAt), storageGranularity).toISOString(),
+      requests: 1,
+      totalTokens: event.totalTokens,
+      costMicros: event.costMicros,
+      pricedRequests: event.pricingConfidence === "exact" ? 1 : 0,
+      lastEventAt: event.completedAt,
+      gatewayKeyId: event.gatewayKeyId,
+      gatewayModelId: event.gatewayModelId,
+    })
   }
 
   // Keep empty periods on the chart. This makes the x-axis represent the
@@ -1289,12 +1419,7 @@ function dashboardBoundaryRanges(from: Date, toExclusive: Date, granularity: str
   if (!startAligned) ranges.push([from, new Date(Math.min(toExclusive.getTime(), nextBucketStart(startBucket, granularity).getTime()))])
   if (!endAligned) ranges.push([new Date(Math.max(from.getTime(), endBucket.getTime())), toExclusive])
 
-  const merged = ranges.sort((a, b) => a[0].getTime() - b[0].getTime()).reduce<Array<[Date, Date]>>((result, current) => {
-    const previous = result[result.length - 1]
-    if (previous && current[0].getTime() <= previous[1].getTime()) previous[1] = new Date(Math.max(previous[1].getTime(), current[1].getTime()))
-    else result.push(current)
-    return result
-  }, [])
+  const merged = mergeDateRanges(ranges)
   const partialBucketStarts = new Set<string>()
   if (!startAligned) partialBucketStarts.add(startBucket.toISOString())
   if (!endAligned) partialBucketStarts.add(endBucket.toISOString())
@@ -1308,32 +1433,20 @@ function nextBucketStart(value: Date, granularity: string) {
   return addZonedDays(value, 1)
 }
 
-function rollupFromEvent(event: UsageEvent, granularity: UsageRollup["granularity"]): UsageRollup {
-  const bucket = bucketStart(new Date(event.completedAt), granularity).toISOString()
-  return {
-    ...emptyRollup(`boundary:${event.id}`, granularity, bucket, event),
-    requests: 1,
-    inputTokens: event.inputTokens,
-    outputTokens: event.outputTokens,
-    cacheReadTokens: event.cacheReadTokens,
-    cacheCreationTokens: event.cacheCreationTokens,
-    totalTokens: event.totalTokens,
-    costMicros: event.costMicros,
-    pricedRequests: event.pricingConfidence === "exact" ? 1 : 0,
-    unpricedRequests: event.pricingConfidence === "exact" ? 0 : 1,
-  }
-}
-
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
   if (isMemory()) return buildDashboardPayload(query, publicView)
+  const workspaceId = currentWorkspaceId()
   const cacheKey = scopedKey(JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto"]))
   const cached = dashboardCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = dashboardInflight.get(cacheKey)
   if (existing) return existing
 
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = buildDashboardPayload(query, publicView).then((payload) => {
-    boundedSet(dashboardCache, cacheKey, { value: payload, expiresAt: Date.now() + dashboardCacheTtlMs }, 32)
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+      boundedSet(dashboardCache, cacheKey, { value: payload, expiresAt: Date.now() + dashboardCacheTtlMs }, 32)
+    }
     return payload
   }).finally(() => {
     if (dashboardInflight.get(cacheKey) === promise) dashboardInflight.delete(cacheKey)
@@ -1358,6 +1471,7 @@ type RepricingBudgetContext = {
   budgetIds: Set<string>
   usageStart: string
   windowEnd: string
+  window: BudgetWindow
 }
 
 function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingVersion): RepricedEvent {
@@ -1389,7 +1503,16 @@ async function repricingBudgetContext(): Promise<RepricingBudgetContext | null> 
   const budgets = await listBudgets()
   if (!budgets.length) return null
   const window = await getBudgetWindow()
-  return { budgetIds: new Set(budgets.map((budget) => budget.apiKeyId)), usageStart: await budgetUsageStart(window), windowEnd: window.end }
+  return { budgetIds: new Set(budgets.map((budget) => budget.apiKeyId)), usageStart: await budgetUsageStart(window), windowEnd: window.end, window }
+}
+
+async function bumpBudgetStateRevision(context: RepricingBudgetContext | null) {
+  if (!context) return
+  const previousUpdatedAt = Date.parse(context.window.updatedAt)
+  const nextUpdatedAt = new Date(Math.max(Date.now(), Number.isFinite(previousUpdatedAt) ? previousUpdatedAt + 1 : 0)).toISOString()
+  const next = { ...context.window, updatedAt: nextUpdatedAt }
+  if (isMemory()) memoryState().window = next
+  else await windowRef().set(next)
 }
 
 function countsForRepricingBudget(event: UsageEvent, context: RepricingBudgetContext | null) {
@@ -1475,18 +1598,52 @@ export async function repriceUsageForGroup(jobId: string) {
   if (!group) throw new Error("Pricing group not found for repricing job.")
   const version = (await listPricingVersions(group.id)).find((entry) => entry.id === job.versionId)
   if (!version) throw new Error("Pricing version not found for repricing job.")
-  const modelIds = new Set(group.memberModelIds)
+  const modelIds = new Set<string>(group.memberModelIds)
   const groupModels = await listModels()
-  const gatewayModelIds = new Set(groupModels.filter((model) => modelIds.has(model.id)).map((model) => model.gatewayModelId))
+  const gatewayModelIds = new Set<string>(groupModels.filter((model) => modelIds.has(model.id)).map((model) => model.gatewayModelId))
   const [events, budgetContext] = await Promise.all([listUsageEventsForModels(modelIds, gatewayModelIds), repricingBudgetContext()])
-  await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() })
+  let currentJob = await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() }, job)
+  if (!currentJob) return
   for (let index = 0; index < events.length; index += 100) {
     const chunk = events.slice(index, index + 100)
     await applyRepricingChunk(chunk.map((event) => repriceEvent(event, group.id, version)), budgetContext)
-    await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) })
+    currentJob = await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) }, currentJob)
+    if (!currentJob) return
   }
+  // Redis budget aggregates are versioned by the budget/window timestamps.
+  // Repricing changes persisted spend, so advance the shared revision once to
+  // force the next reservation to initialize from the reconciled counter.
+  await bumpBudgetStateRevision(budgetContext)
   invalidateBudgetReadCaches()
-  return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() })
+  return updatePricingJob(jobId, { status: "completed", processedEvents: events.length, completedAt: new Date().toISOString() }, currentJob)
 }
 
-export function resetAnalyticsForTests() { memoryStates().clear(); invalidateLegacyPricingCaches(); invalidateBudgetReadCaches(); resetModelPricingForTests() }
+export function resetAnalyticsForTests() {
+  memoryStates().clear()
+  pricingCache.clear()
+  pricingInflight.clear()
+  legacyPricingCaches.clear()
+  legacyPricingInflights.clear()
+  legacyPricingGenerations.clear()
+  budgetConfigCache.clear()
+  budgetConfigInflight.clear()
+  budgetCounterCache.clear()
+  budgetCounterInflight.clear()
+  budgetCounterListCache.clear()
+  budgetCounterListInflight.clear()
+  budgetCounterBaselineCache.clear()
+  budgetUsageCache.clear()
+  budgetUsageInflight.clear()
+  bypassSessionCache.clear()
+  bypassSessionInflight.clear()
+  bypassSessionListCache.clear()
+  bypassSessionListInflight.clear()
+  dashboardCache.clear()
+  dashboardInflight.clear()
+  budgetsCaches.clear()
+  budgetsInflights.clear()
+  budgetWindowCaches.clear()
+  budgetWindowInflights.clear()
+  budgetCacheGenerations.clear()
+  resetModelPricingForTests()
+}

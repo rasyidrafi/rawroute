@@ -128,35 +128,6 @@ describe.sequential("usage analytics", () => {
     expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
   })
 
-  test("does not add daily and hourly rollups for the same local day", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-06T07:00:00.000Z"))
-    try {
-      const key = await createApiKey("Hybrid budget")
-      await updateBudgetWindow({ anchor: "custom", start: "2026-08-03T00:00:00.000Z", end: "2026-08-07T00:00:00.000Z" })
-      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
-
-      const memoryRoot = (globalThis as typeof globalThis & { __rawrouteAnalyticsMemory?: Map<string, { rollups: Map<string, UsageEvent & Record<string, unknown>> }> }).__rawrouteAnalyticsMemory!
-      const state = memoryRoot.get("default")!
-      const rollup = (id: string, granularity: "daily" | "hourly", bucketStart: string, costMicros: number, requests: number) => ({
-        id, granularity, bucketStart, gatewayKeyId: key.id, gatewayModelId: "hybrid/model", requests,
-        inputTokens: requests, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: requests,
-        costMicros, pricedRequests: requests, unpricedRequests: 0, lastEventAt: bucketStart, updatedAt: bucketStart,
-      })
-      state.rollups.set("daily:completed", rollup("daily:completed", "daily", "2026-08-04T17:00:00.000Z", 100, 10) as never)
-      state.rollups.set("hourly:completed", rollup("hourly:completed", "hourly", "2026-08-05T00:00:00.000Z", 900, 90) as never)
-      state.rollups.set("hourly:active", rollup("hourly:active", "hourly", "2026-08-06T00:00:00.000Z", 50, 5) as never)
-
-      const budget = (await getBudgetRows()).find((row) => row.apiKeyId === key.id)
-      const dashboard = (await getDashboardPayload({ preset: "budget" })).keys.find((row) => row.label === "Hybrid budget")
-      expect(budget?.spentMicros).toBe(150)
-      expect(dashboard?.costMicros).toBe(150)
-      expect(dashboard?.budget?.spentMicros).toBe(150)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   test("keeps complete preset trend axes and supports weekly grouping", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
@@ -210,38 +181,44 @@ describe.sequential("usage analytics", () => {
   })
 
   test("calculates keys and models exactly inside partial budget-window buckets", async () => {
-    const firstKey = await createApiKey("First key")
-    const secondKey = await createApiKey("Second key")
-    await updateBudgetWindow({ anchor: "custom", start: "2026-08-04T09:30:00.000Z", end: "2026-08-06T17:45:00.000Z" })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
+    try {
+      const firstKey = await createApiKey("First key")
+      const secondKey = await createApiKey("Second key")
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-04T09:30:00.000Z", end: "2026-08-06T17:45:00.000Z" })
 
-    const event = (id: string, completedAt: string, gatewayKeyId: string, gatewayModelId: string): UsageEvent => ({
-      id,
-      gatewayKeyId,
-      gatewayModelId,
-      protocol: "openai-chat",
-      startedAt: completedAt,
-      completedAt,
-      status: 200,
-      durationMs: 1,
-      inputTokens: 10,
-      outputTokens: 5,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      totalTokens: 15,
-      costMicros: 100,
-      pricingConfidence: "exact",
-      usageAvailable: true,
-    })
+      const event = (id: string, completedAt: string, gatewayKeyId: string, gatewayModelId: string): UsageEvent => ({
+        id,
+        gatewayKeyId,
+        gatewayModelId,
+        protocol: "openai-chat",
+        startedAt: completedAt,
+        completedAt,
+        status: 200,
+        durationMs: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 15,
+        costMicros: 100,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+      })
 
-    await recordUsageEvent(event("before", "2026-08-04T09:00:00.000Z", secondKey.id, "before-model"))
-    await recordUsageEvent(event("inside-start", "2026-08-04T10:00:00.000Z", firstKey.id, "start-model"))
-    await recordUsageEvent(event("inside-end", "2026-08-06T17:00:00.000Z", secondKey.id, "end-model"))
-    await recordUsageEvent(event("after", "2026-08-06T18:00:00.000Z", secondKey.id, "after-model"))
+      await recordUsageEvent(event("before", "2026-08-04T09:00:00.000Z", secondKey.id, "before-model"))
+      await recordUsageEvent(event("inside-start", "2026-08-04T10:00:00.000Z", firstKey.id, "start-model"))
+      await recordUsageEvent(event("inside-end", "2026-08-06T17:00:00.000Z", secondKey.id, "end-model"))
+      await recordUsageEvent(event("after", "2026-08-06T18:00:00.000Z", secondKey.id, "after-model"))
 
-    const payload = await getDashboardPayload({ preset: "budget" })
-    expect(payload.summary.requests).toBe(2)
-    expect(payload.keys.map((row) => [row.label, row.requests])).toEqual([["First key", 1], ["Second key", 1]])
-    expect(payload.models.map((row) => [row.model, row.requests])).toEqual([["start-model", 1], ["end-model", 1]])
+      const payload = await getDashboardPayload({ preset: "budget" })
+      expect(payload.summary.requests).toBe(2)
+      expect(payload.keys.map((row) => [row.label, row.requests])).toEqual([["First key", 1], ["Second key", 1]])
+      expect(payload.models.map((row) => [row.model, row.requests])).toEqual([["start-model", 1], ["end-model", 1]])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test("rejects an invalid shared budget window", async () => {

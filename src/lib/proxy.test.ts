@@ -8,19 +8,17 @@ import { _resetMemoryBackend, readData, updateData } from "@/lib/store"
 const originalFetch = globalThis.fetch
 
 class ProxyTestRedis implements RoutingRedis {
-  calls: Array<{ script: string; keys: string[]; args: Array<string | number> }> = []
   affinity = new Map<string, string>()
   responseMappings = new Map<string, string>()
   failBookkeeping = false
 
   async eval(script: string, keys: string[], args: Array<string | number>) {
-    this.calls.push({ script, keys, args })
     if (script.includes("local affinity")) {
       const hard = String(args[2]) === "1"
       const responseCredential = keys[1] ? this.responseMappings.get(keys[1]) : undefined
       if (hard && keys[1] && !responseCredential) return ["hard-missing"]
       const pinned = this.affinity.get(keys[0])
-      const selected = responseCredential || pinned || testProviderKeyId || String(args[7] || "provider-key")
+      const selected = responseCredential || pinned || testProviderKeyId || String(args[6] || "provider-key")
       this.affinity.set(keys[0], selected)
       return ["ok", selected, responseCredential || pinned ? "sticky" : "new"]
     }
@@ -150,9 +148,6 @@ describe("proxy request", () => {
     expect(captured.url).toBe("https://chatgpt.com/backend-api/codex/responses")
     expect(captured.body).toMatchObject({ model: "gpt-5.4-codex", stream: true, store: false, include: ["reasoning.encrypted_content"], instructions: "" })
     expect(captured.body?.temperature).toBeUndefined()
-    const reservation = testRedis.calls.find((call) => call.script.includes("local affinity"))
-    expect(reservation?.args[6]).toBe(1)
-    expect(reservation?.args.slice(7, 11)).toEqual([testProviderKeyId, 0, 0, 0])
     expect(captured.headers?.get("authorization")).toBe("Bearer codex-access")
     expect(captured.headers?.get("chatgpt-account-id")).toBe("acct-1")
     expect(captured.headers?.get("originator")).toBe("codex_cli_rs")

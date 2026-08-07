@@ -7,8 +7,17 @@ import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
 const consumeUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
-const locks = new Set<string>()
+const locks = new Map<string, string>()
 let redisClient: Redis | undefined
+
+type ResetLock = { key: string; token: string; redis: boolean }
+
+const releaseLockScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0
+`
 
 function redis() {
   if (redisClient) return redisClient
@@ -19,20 +28,26 @@ function redis() {
   return redisClient
 }
 
-async function acquire(accountId: string) {
-  accountId = `${currentWorkspaceId()}:${accountId}`
+async function acquire(accountId: string): Promise<ResetLock | undefined> {
+  const key = `rawroute:codex-reset-lock:${currentWorkspaceId()}:${accountId}`
+  const token = crypto.randomUUID()
   const client = redis()
-  if (client) return (await client.set(`rawroute:codex-reset-lock:${accountId}`, "1", { nx: true, ex: 60 })) === "OK"
-  if (locks.has(accountId)) return false
-  locks.add(accountId)
-  return true
+  if (client) {
+    const acquired = (await client.set(key, token, { nx: true, ex: 60 })) === "OK"
+    return acquired ? { key, token, redis: true } : undefined
+  }
+  if (locks.has(key)) return undefined
+  locks.set(key, token)
+  return { key, token, redis: false }
 }
 
-async function release(accountId: string) {
-  accountId = `${currentWorkspaceId()}:${accountId}`
-  locks.delete(accountId)
+async function release(lock: ResetLock) {
+  if (!lock.redis) {
+    if (locks.get(lock.key) === lock.token) locks.delete(lock.key)
+    return
+  }
   const client = redis()
-  if (client) await client.del(`rawroute:codex-reset-lock:${accountId}`).catch(() => undefined)
+  if (client) await client.eval(releaseLockScript, [lock.key], [lock.token]).catch(() => undefined)
 }
 
 function numberValue(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0 }
@@ -41,7 +56,8 @@ function objectValue(value: unknown) { return value && typeof value === "object"
 export async function redeemCodexReset(account: ProviderApiKey, confirmation: string, fetchImpl: typeof fetch = fetch) {
   if (account.credentialKind !== "codex-oauth") throw new Error("Codex reset credits are only available for OAuth accounts.")
   if (!confirmation.toLowerCase().includes("use my codex reset")) throw new Error("Confirmation must contain: use my codex reset")
-  if (!(await acquire(account.id))) throw new Error("A reset redemption is already in progress for this account.")
+  const lock = await acquire(account.id)
+  if (!lock) throw new Error("A reset redemption is already in progress for this account.")
   const redeemRequestId = crypto.randomUUID()
   try {
     const current = await refreshCodexAccount(account, true)
@@ -62,5 +78,5 @@ export async function redeemCodexReset(account: ProviderApiKey, confirmation: st
     await invalidateCodexUsageCache(current.id)
     writeLog("info", "admin", "Codex reset credit redeemed", { accountId: current.id, redeemRequestId })
     return { ok: true, redeemRequestId, status: response.status, message: "Codex reset credit redeemed." }
-  } finally { await release(account.id) }
+  } finally { await release(lock) }
 }
