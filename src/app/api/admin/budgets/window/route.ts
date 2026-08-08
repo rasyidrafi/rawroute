@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
 import { getBudgetWindow, updateBudgetWindow } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 
 
 export async function GET() {
@@ -17,8 +18,11 @@ export async function PATCH(request: Request) {
   if ((start && !Number.isFinite(start.getTime())) || (end && !Number.isFinite(end.getTime())) || (start && end && end <= start)) return jsonError("Invalid budget window.", 400)
   if (anchor === "codex" && body?.codexAccountId !== undefined && typeof body.codexAccountId !== "string") return jsonError("A valid Codex account is required.", 400)
   try {
-    return Response.json({ window: await updateBudgetWindow({ ...(anchor ? { anchor } : {}), ...(typeof body?.codexAccountId === "string" ? { codexAccountId: body.codexAccountId } : {}), ...(start ? { start: start.toISOString() } : {}), ...(end ? { end: end.toISOString() } : {}) }) })
+    const window = await updateBudgetWindow({ ...(anchor ? { anchor } : {}), ...(typeof body?.codexAccountId === "string" ? { codexAccountId: body.codexAccountId } : {}), ...(start ? { start: start.toISOString() } : {}), ...(end ? { end: end.toISOString() } : {}) })
+    writeLog("info", "admin", "Budget window updated", { anchor: window.anchor })
+    return Response.json({ window })
   } catch (error) {
+    writeLog("error", "admin", "Budget window update failed", { error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update budget window.", 400)
   }
 }

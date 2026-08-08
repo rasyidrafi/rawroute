@@ -1,6 +1,7 @@
 import { cliproxyManagement } from "@/lib/cliproxy"
 import { isAuthenticated } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 
 export async function GET(request: Request) {
   if (!(await isAuthenticated())) return jsonError("Unauthorized", 401)
@@ -12,6 +13,6 @@ export async function DELETE() {
   if (!(await isAuthenticated())) return jsonError("Unauthorized", 401)
   const response = await cliproxyManagement("/v0/management/logs", { method: "DELETE" })
   if (!response.ok) return jsonError("CLIProxy logs could not be cleared.", response.status)
+  writeLog("info", "admin", "CLIProxy logs cleared")
   return Response.json({ ok: true })
 }
-

@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
 import { codexDeviceRedirectUri, exchangeCodexAuthorizationCode, pollCodexDeviceCode, saveCodexAccount } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 
 
 export async function POST(request: Request) {
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
     if (result.status === "pending") return Response.json({ status: "pending" }, { status: 202 })
     const token = await exchangeCodexAuthorizationCode(result.code, result.verifier, codexDeviceRedirectUri())
     const saved = await saveCodexAccount(token, typeof body?.name === "string" ? body.name : undefined)
+    writeLog("info", "admin", "Codex account authorized", { accountId: saved.account.id })
     return Response.json({ status: "authorized", account: {
       id: saved.account.id,
       name: saved.account.name,
@@ -23,6 +25,7 @@ export async function POST(request: Request) {
       providerId: saved.provider.id,
     } })
   } catch (error) {
+    writeLog("error", "admin", "Codex device login failed", { error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to finish Codex device login.", 502)
   }
 }

@@ -1,6 +1,7 @@
 import { cliproxyManagementJson } from "@/lib/cliproxy"
 import { isAuthenticated } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 
 const endpoints: Record<string, string> = {
   anthropic: "anthropic-auth-url",
@@ -28,5 +29,6 @@ export async function GET(request: Request, context: { params: Promise<{ provide
   if (!endpoint) return jsonError("Unsupported CLIProxy login provider.", 400)
   const { response, data } = await cliproxyManagementJson(`/v0/management/${endpoint}`)
   if (!response.ok) return jsonError("CLIProxy login could not be started.", response.status)
+  writeLog("info", "admin", "CLIProxy OAuth login started", { provider })
   return Response.json(data && typeof data === "object" ? { ...data as Record<string, unknown>, url: rewriteCallbackUrl((data as Record<string, unknown>).url, provider, request) } : { status: "ok" })
 }

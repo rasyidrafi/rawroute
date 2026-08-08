@@ -1,8 +1,10 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { BudgetDeniedError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { listCliProxyCatalog } from "@/lib/cliproxy-catalog"
+import { writeLog } from "@/lib/logger"
+import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
-import { listAliases, listModels } from "@/lib/store"
+import { listAliases, listModels, listProviders } from "@/lib/store"
 import type { Protocol } from "@/lib/types"
 import { runInWorkspace } from "@/lib/workspace-context"
 
@@ -29,6 +31,90 @@ function estimateRequest(body: unknown) {
   const outputTokens = typeof outputValue === "number" && Number.isFinite(outputValue) && outputValue > 0 ? Math.floor(outputValue) : 4_096
   const model = typeof value.model === "string" ? value.model : "unknown"
   return { model, inputTokens, outputTokens }
+}
+
+function objectValue(value: unknown) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function arrayLength(value: unknown) {
+  return Array.isArray(value) ? value.length : 0
+}
+
+function requestItemCount(payload: Record<string, unknown>, protocol: Protocol) {
+  const keys = protocol === "openai-responses" ? ["input", "messages"] : ["messages", "input", "contents"]
+  for (const key of keys) {
+    const value = payload[key]
+    if (Array.isArray(value)) return value.length
+  }
+  return protocol === "openai-responses" && typeof payload.input === "string" ? 1 : 0
+}
+
+function requestToolCount(payload: Record<string, unknown>) {
+  const direct = Math.max(arrayLength(payload.tools), arrayLength(payload.functions))
+  if (direct) return direct
+  for (const key of ["request", "extra_body"]) {
+    const nested = objectValue(payload[key])
+    if (!nested) continue
+    const nestedCount = Math.max(arrayLength(nested.tools), arrayLength(nested.functions))
+    if (nestedCount) return nestedCount
+  }
+  return 0
+}
+
+function nestedValue(payload: Record<string, unknown>, path: string[]) {
+  let current: unknown = payload
+  for (const key of path) {
+    current = objectValue(current)?.[key]
+    if (current === undefined) return undefined
+  }
+  return current
+}
+
+function extractReasoningEffort(payload: Record<string, unknown>) {
+  const paths = [
+    ["reasoning", "effort"],
+    ["reasoning_effort"],
+    ["output_config", "effort"],
+    ["thinking", "effort"],
+    ["thinking_config", "thinking_level"],
+    ["google", "thinking_config", "thinking_level"],
+    ["extra_body", "google", "thinking_config", "thinking_level"],
+    ["generationConfig", "thinkingConfig", "thinkingLevel"],
+  ]
+  const found = paths.flatMap((path) => {
+    const value = nestedValue(payload, path)
+    if (typeof value !== "string" || !value.trim() || value.trim().length > 64) return []
+    return [{ path: path.join("."), effort: value.trim() }]
+  })
+  if (!found.length) return undefined
+  const unique = new Set(found.map(({ effort }) => effort))
+  return unique.size === 1 ? found[0].effort : found.map(({ path, effort }) => `${path}:${effort}`).join(", ")
+}
+
+function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, protocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {
+  const parts = [
+    `POST PROVIDER:${provider}`,
+    `MODEL:${gatewayModel} -> ${upstreamModel}`,
+    `FMT:${protocol}`,
+    `ACC:${account}`,
+  ]
+  if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
+  parts.push(`MSG:${requestItemCount(payload, protocol)}`)
+  const toolCount = requestToolCount(payload)
+  if (toolCount) parts.push(`TOOL:${toolCount}`)
+  return parts.join(" ")
+}
+
+function completionSummary(durationMs: number, ttftMs: number | undefined, usage: UsageMetrics | undefined) {
+  const parts = [`DONE ${durationMs}ms`]
+  if (ttftMs !== undefined) parts.push(`TTFT:${ttftMs}ms`)
+  if (usage) {
+    if (usage.input !== undefined) parts.push(`IN:${usage.input}`)
+    if (usage.cached !== undefined) parts.push(`(CACHE ↻${usage.cached})`)
+    if (usage.output !== undefined) parts.push(`OUT:${usage.output}`)
+  }
+  return parts.join(" ")
 }
 
 function baseUrl() {
@@ -103,8 +189,11 @@ async function actualResponseUsage(response: Response) {
 
 interface ResolvedGatewayModel {
   forwardedModel: string
+  upstreamModel: string
   pricingGatewayModelId: string
   providerModelId?: string
+  providerId?: string
+  providerName?: string
 }
 
 function mergeAvailableModels(models: Awaited<ReturnType<typeof listModels>>, catalogModels: Awaited<ReturnType<typeof listCliProxyCatalog>>["models"]) {
@@ -114,7 +203,7 @@ function mergeAvailableModels(models: Awaited<ReturnType<typeof listModels>>, ca
 
 async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel> {
   try {
-    const [aliases, models, cliProxyCatalog] = await Promise.all([listAliases(), listModels(), listCliProxyCatalog()])
+    const [aliases, models, providers, cliProxyCatalog] = await Promise.all([listAliases(), listModels(), listProviders(), listCliProxyCatalog()])
     const availableModels = mergeAvailableModels(models, cliProxyCatalog.models)
     const alias = aliases.find((entry) => entry.alias === model)
     const target = alias
@@ -124,23 +213,30 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
           const suffixMatches = availableModels.filter((entry) => entry.upstreamModel === model || (entry.gatewayModelId || entry.id).endsWith(`/${model}`))
           return suffixMatches.length === 1 ? suffixMatches[0] : undefined
         })()
-    if (!target) return { forwardedModel: alias?.targetModelId || model, pricingGatewayModelId: alias?.targetModelId || model }
+    if (!target) return { forwardedModel: alias?.targetModelId || model, upstreamModel: alias?.targetModelId || model, pricingGatewayModelId: alias?.targetModelId || model }
+    const provider = providers.find((entry) => entry.id === target.providerId) || cliProxyCatalog.providers.find((entry) => entry.id === target.providerId)
+    const upstreamModel = target.upstreamModel || target.gatewayModelId || model
     return {
-      forwardedModel: alias ? target.upstreamModel || target.gatewayModelId || model : model,
+      forwardedModel: alias ? upstreamModel : model,
+      upstreamModel,
       pricingGatewayModelId: target.gatewayModelId || target.id,
       providerModelId: target.id,
+      providerId: target.providerId,
+      providerName: provider?.name,
     }
   } catch {
-    return { forwardedModel: model, pricingGatewayModelId: model }
+    return { forwardedModel: model, upstreamModel: model, pricingGatewayModelId: model }
   }
 }
 
-async function rewriteModel(body: Uint8Array, forwardedModel: string, model: string) {
-  if (forwardedModel === model) return body
+async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string) {
+  const shouldNormalizeResponses = protocolForPath(path) === "openai-responses"
+  if (forwardedModel === model && !shouldNormalizeResponses) return body
   try {
     const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
-    payload.model = forwardedModel
-    return new TextEncoder().encode(JSON.stringify(payload))
+    if (forwardedModel !== model) payload.model = forwardedModel
+    const normalized = shouldNormalizeResponses ? normalizeResponsesRequest(payload) : payload
+    return new TextEncoder().encode(JSON.stringify(normalized))
   } catch {
     return body
   }
@@ -174,6 +270,7 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
   let buffer = ""
   let usage: UsageMetrics | undefined
   let completedNormally = false
+  let firstByteAt: number | undefined
   const configuredTimeout = Number(process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || 290) * 1_000 + 10_000
   const readTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 300_000
   const deadline = Date.now() + readTimeoutMs
@@ -209,6 +306,7 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
         completedNormally = true
         break
       }
+      firstByteAt ??= Date.now()
       buffer += decoder.decode(next.value, { stream: true })
       const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() || ""
@@ -221,16 +319,27 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
   }
   buffer += decoder.decode()
   for (const line of buffer.split(/\r?\n/)) consumeLine(line)
-  return { usage, completedNormally }
+  return { usage, completedNormally, firstByteAt }
 }
 
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
   const authenticated = await authenticateProxyKey(request)
-  if (!authenticated) return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
+  if (!authenticated) {
+    writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: protocolForPath(path) })
+    return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
+  }
   return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey))
 }
 
-async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string }) {
+async function releaseBudgetReservationWithLog(reservation: BudgetReservation | undefined) {
+  try {
+    await releaseBudgetReservation(reservation)
+  } catch (error) {
+    writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
+  }
+}
+
+async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }) {
   const supplied = suppliedGatewayKey(request)
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
@@ -245,7 +354,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   try { parsed = JSON.parse(new TextDecoder().decode(body)) } catch { parsed = {} }
   const estimate = estimateRequest(parsed)
   const resolvedModel = await resolveGatewayModel(estimate.model)
-  const forwardedBody = await rewriteModel(body, resolvedModel.forwardedModel, estimate.model)
+  const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path)
   let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   let reservation: BudgetReservation | undefined
   try {
@@ -256,16 +365,29 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
       body.byteLength,
     )
-    reservation = await reserveBudgetAdmission(apiKey.id, budgetState.admission, budgetState.usageContext)
   } catch (error) {
     if (error instanceof BudgetDeniedError) {
       return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds) } })
     }
+    writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json" } })
+  }
+
+  try {
+    reservation = await reserveBudgetAdmission(apiKey.id, budgetState.admission, budgetState.usageContext)
+  } catch (error) {
+    writeLog("error", "gateway", "Shared budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
     return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json" } })
   }
 
   const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
-  const startedAt = new Date().toISOString()
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
+  const protocol = protocolForPath(path)
+  const payload = objectValue(parsed) || {}
+  const provider = resolvedModel.providerName || resolvedModel.providerId || "CLIProxyAPI"
+  const account = apiKey.name || "CLIProxyAPI"
+  writeLog("info", "gateway", requestSummary(provider, resolvedModel.pricingGatewayModelId, resolvedModel.upstreamModel, protocol, account, payload, extractReasoningEffort(payload)))
   let response: Response
   try {
     response = await proxyToCliProxy(request, path, {
@@ -273,8 +395,9 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" },
     })
   } catch (error) {
-    await releaseBudgetReservation(reservation).catch(() => undefined)
-    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol: protocolForPath(path), startedAt, status: 502, response: undefined, budgetState }, reservation).catch((recordingError) => console.error("RawRoute usage recording failed after upstream error", recordingError))
+    await releaseBudgetReservationWithLog(reservation)
+    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState }, reservation).catch(() => undefined)
+    writeLog("error", "gateway", "Upstream request failed", { provider, model: resolvedModel.pricingGatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     throw error
   }
   if (response.ok && response.body && response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
@@ -283,18 +406,23 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     void (async () => {
       try {
         const collected = await collectStreamUsage(monitor)
-        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol: protocolForPath(path), startedAt, status: collected.completedNormally ? response.status : 502, response: collected.usage, budgetState }, reservation)
+        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: collected.completedNormally ? response.status : 502, response: collected.usage, budgetState }, reservation)
+          .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
+        writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage))
       } catch (recordingError) {
-        console.error("RawRoute streamed usage recording failed", recordingError)
+        writeLog("warn", "gateway", "Unable to calculate usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" })
       } finally {
-        await releaseBudgetReservation(reservation).catch(() => undefined)
+        await releaseBudgetReservationWithLog(reservation)
       }
     })()
     return trackedResponse
   }
   const usage = await actualResponseUsage(response)
-  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol: protocolForPath(path), startedAt, status: response.status, response: usage, budgetState }, reservation).catch((recordingError) => console.error("RawRoute usage recording failed", recordingError))
-  await releaseBudgetReservation(reservation).catch(() => undefined)
+  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState }, reservation)
+    .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
+  if (response.ok) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, undefined, usage))
+  else writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`)
+  await releaseBudgetReservationWithLog(reservation)
   return response
 }
 

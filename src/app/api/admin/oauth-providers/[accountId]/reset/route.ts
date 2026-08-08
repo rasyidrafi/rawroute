@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth"
 import { redeemCodexReset } from "@/lib/codex-reset"
 import { listCodexAccounts } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 
 
 export async function POST(request: Request, context: { params: Promise<{ accountId: string }> }) {
@@ -11,6 +12,10 @@ export async function POST(request: Request, context: { params: Promise<{ accoun
   const result = await listCodexAccounts()
   const account = result.accounts.find((entry) => entry.id === accountId)
   if (!account) return jsonError("Codex account not found.", 404)
-  try { return Response.json(await redeemCodexReset(account, typeof body?.confirmation === "string" ? body.confirmation : "")) }
-  catch (error) { return jsonError(error instanceof Error ? error.message : "Unable to redeem Codex reset credit.", 400) }
+  try {
+    return Response.json(await redeemCodexReset(account, typeof body?.confirmation === "string" ? body.confirmation : ""))
+  } catch (error) {
+    writeLog("error", "admin", "Codex reset credit redemption failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
+    return jsonError(error instanceof Error ? error.message : "Unable to redeem Codex reset credit.", 400)
+  }
 }

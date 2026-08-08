@@ -1,5 +1,6 @@
 import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 import { reorderProviderApiKeys } from "@/lib/store"
 
 
@@ -12,8 +13,10 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   }
   try {
     await reorderProviderApiKeys(providerId, body.orderedIds)
+    writeLog("info", "admin", "Provider API keys reordered", { providerId, count: body.orderedIds.length })
     return Response.json({ ok: true })
   } catch (error) {
+    writeLog("error", "admin", "Provider API key reorder failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to reorder provider API keys.", 400)
   }
 }

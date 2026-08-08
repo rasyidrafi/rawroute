@@ -5,6 +5,7 @@ import { upsertModelPricing } from "@/lib/analytics"
 import { findModelsDevCanonicalModel, searchModelsDevCanonicalModels } from "@/lib/models-dev"
 import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricingJob, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 import type { PricingCanonicalSource } from "@/lib/types"
 import { runInWorkspace, workspaceContext } from "@/lib/workspace-context"
 
@@ -43,10 +44,27 @@ export async function POST(request: Request) {
       ? null
       : undefined
   try {
-    if (action === "sync") return Response.json({ groups: await syncModelPricingGroups() })
-    if (action === "create-group") return Response.json({ group: await createPricingGroup(String(body?.name || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical) })
-    if (action === "update-group") return Response.json({ group: await updatePricingGroup(String(body?.groupId || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical, typeof body?.name === "string" ? body.name : undefined) })
-    if (action === "delete-group") { await deletePricingGroup(String(body?.groupId || "")); return Response.json({ ok: true }) }
+    if (action === "sync") {
+      const groups = await syncModelPricingGroups()
+      writeLog("info", "admin", "Model pricing groups synced", { count: groups.length })
+      return Response.json({ groups })
+    }
+    if (action === "create-group") {
+      const group = await createPricingGroup(String(body?.name || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical)
+      writeLog("info", "admin", "Model pricing group created", { groupId: group.id })
+      return Response.json({ group })
+    }
+    if (action === "update-group") {
+      const group = await updatePricingGroup(String(body?.groupId || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical, typeof body?.name === "string" ? body.name : undefined)
+      writeLog("info", "admin", "Model pricing group updated", { groupId: group.id })
+      return Response.json({ group })
+    }
+    if (action === "delete-group") {
+      const groupId = String(body?.groupId || "")
+      await deletePricingGroup(groupId)
+      writeLog("info", "admin", "Model pricing group deleted", { groupId })
+      return Response.json({ ok: true })
+    }
     if (action === "save-version") {
       const rates = {
         inputMicrosPerMillion: Number(body?.inputMicrosPerMillion),
@@ -64,9 +82,11 @@ export async function POST(request: Request) {
         const workspace = workspaceContext()
         after(() => runInWorkspace(workspace, () => runPricingJob(job.id)))
       }
+      writeLog("info", "admin", "Model pricing version saved", { groupId: result.version.groupId, versionId: result.version.id })
       return Response.json(result)
     }
   } catch (error) {
+    writeLog("error", "admin", "Model pricing update failed", { action, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update model pricing.", 400)
   }
   const text = (key: string) => typeof body?.[key] === "string" ? String(body[key]).trim() : ""
@@ -74,6 +94,11 @@ export async function POST(request: Request) {
   const modelId = text("modelId")
   if (!modelId || !text("gatewayModelId") || !text("upstreamModel") || !Number.isSafeInteger(number("inputMicrosPerMillion")) || !Number.isSafeInteger(number("outputMicrosPerMillion"))) return jsonError("Model and integer token rates are required.", 400)
   try {
-    return Response.json({ pricing: await upsertModelPricing({ modelId, provider: text("provider"), gatewayModelId: text("gatewayModelId"), upstreamModel: text("upstreamModel"), inputMicrosPerMillion: number("inputMicrosPerMillion"), outputMicrosPerMillion: number("outputMicrosPerMillion"), cacheReadMicrosPerMillion: Number.isSafeInteger(number("cacheReadMicrosPerMillion")) ? number("cacheReadMicrosPerMillion") : 0, cacheCreationMicrosPerMillion: Number.isSafeInteger(number("cacheCreationMicrosPerMillion")) ? number("cacheCreationMicrosPerMillion") : 0, enabled: body?.enabled !== false }) })
-  } catch (error) { return jsonError(error instanceof Error ? error.message : "Unable to save model pricing.", 400) }
+    const pricing = await upsertModelPricing({ modelId, provider: text("provider"), gatewayModelId: text("gatewayModelId"), upstreamModel: text("upstreamModel"), inputMicrosPerMillion: number("inputMicrosPerMillion"), outputMicrosPerMillion: number("outputMicrosPerMillion"), cacheReadMicrosPerMillion: Number.isSafeInteger(number("cacheReadMicrosPerMillion")) ? number("cacheReadMicrosPerMillion") : 0, cacheCreationMicrosPerMillion: Number.isSafeInteger(number("cacheCreationMicrosPerMillion")) ? number("cacheCreationMicrosPerMillion") : 0, enabled: body?.enabled !== false })
+    writeLog("info", "admin", "Model pricing saved", { modelId })
+    return Response.json({ pricing })
+  } catch (error) {
+    writeLog("error", "admin", "Model pricing save failed", { modelId, error: error instanceof Error ? error.message : "Unknown error" })
+    return jsonError(error instanceof Error ? error.message : "Unable to save model pricing.", 400)
+  }
 }

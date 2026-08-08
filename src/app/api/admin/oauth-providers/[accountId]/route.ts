@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth"
 import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
 import { listCodexAccounts } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 import { deleteProviderApiKey, upsertProviderApiKey } from "@/lib/store"
 
 
@@ -35,8 +36,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
     })
     invalidateCodexCliProxySync()
     await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
+    writeLog("info", "admin", "Codex account updated", { accountId })
     return Response.json({ ok: true })
   } catch (error) {
+    writeLog("error", "admin", "Codex account update failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update Codex account.", 400)
   }
 }
@@ -46,8 +49,14 @@ export async function DELETE(_request: Request, context: { params: Promise<{ acc
   const { accountId } = await context.params
   const result = await listCodexAccounts()
   if (!result.provider || !result.accounts.some((entry) => entry.id === accountId)) return jsonError("Codex account not found.", 404)
-  await deleteProviderApiKey(result.provider.id, accountId)
-  invalidateCodexCliProxySync()
-  await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
-  return Response.json({ ok: true })
+  try {
+    await deleteProviderApiKey(result.provider.id, accountId)
+    invalidateCodexCliProxySync()
+    await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
+    writeLog("info", "admin", "Codex account deleted", { accountId })
+    return Response.json({ ok: true })
+  } catch (error) {
+    writeLog("error", "admin", "Codex account delete failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
+    return jsonError(error instanceof Error ? error.message : "Unable to delete Codex account.", 400)
+  }
 }

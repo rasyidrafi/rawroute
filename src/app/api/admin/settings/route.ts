@@ -1,6 +1,7 @@
 import { cliproxyManagementJson, redactSecrets } from "@/lib/cliproxy"
 import { isAuthenticated } from "@/lib/auth"
 import { errorMessage, jsonError } from "@/lib/http"
+import { writeLog } from "@/lib/logger"
 
 const editable: Record<string, string> = {
   debug: "debug",
@@ -36,8 +37,15 @@ export async function PATCH(request: Request) {
       const endpoint = editable[key]
       if (!endpoint) continue
       const { response } = await cliproxyManagementJson(`/v0/management/${endpoint}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) })
-      if (!response.ok) return jsonError(`CLIProxy setting ${key} could not be updated.`, response.status)
+      if (!response.ok) {
+        writeLog("warn", "admin", "CLIProxy setting update failed", { setting: key, status: response.status })
+        return jsonError(`CLIProxy setting ${key} could not be updated.`, response.status)
+      }
     }
+    writeLog("info", "admin", "CLIProxy settings updated", { count: Object.keys(body).length })
     return Response.json({ ok: true })
-  } catch (error) { return jsonError(errorMessage(error, "CLIProxy settings could not be updated."), 502) }
+  } catch (error) {
+    writeLog("error", "admin", "CLIProxy settings update failed", { error: errorMessage(error, "Unknown error") })
+    return jsonError(errorMessage(error, "CLIProxy settings could not be updated."), 502)
+  }
 }
