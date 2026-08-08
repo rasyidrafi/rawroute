@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getLocalFirestore, type Firestore, type LocalQuery } from "@/lib/local-db"
 
-import { listApiKeys, listModels } from "@/lib/store"
+import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "@/lib/store"
 import { listCliProxyModels } from "@/lib/cliproxy-catalog"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
@@ -53,8 +53,10 @@ const maximumBudgetContextLagMs = (
 ) + 10_000
 const analyticsReadConcurrency = positiveInteger(process.env.DATABASE_ANALYTICS_READ_CONCURRENCY, 8)
 const defaultBudgetOutputTokens = positiveInteger(process.env.BUDGET_DEFAULT_OUTPUT_TOKENS, 4_096)
+const defaultPredictedOutputTokens = positiveInteger(process.env.BUDGET_PREDICTED_OUTPUT_TOKENS, Math.min(defaultBudgetOutputTokens, 1_024))
 const budgetInputBytesPerToken = positiveNumber(process.env.BUDGET_INPUT_BYTES_PER_TOKEN, 3)
 const budgetReservationSafetyMultiplier = positiveNumber(process.env.BUDGET_RESERVATION_SAFETY_PERCENT, 125) / 100
+const usagePredictionSamples = new Map<string, number[]>()
 const budgetConfigCache = new Map<string, TimedValue<GatewayKeyBudget | null>>()
 const budgetConfigInflight = new Map<string, Promise<GatewayKeyBudget | undefined>>()
 const budgetCounterCache = new Map<string, TimedValue<number>>()
@@ -73,11 +75,31 @@ const bypassSessionListCache = new Map<string, TimedValue<BudgetBypassSession[]>
 const bypassSessionListInflight = new Map<string, Promise<BudgetBypassSession[]>>()
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
 const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
+const dashboardModelLabelCache = new Map<string, TimedValue<Map<string, string>>>()
+const dashboardModelLabelInflight = new Map<string, Promise<Map<string, string>>>()
 const budgetsCaches = new Map<string, TimedValue<GatewayKeyBudget[]>>()
 const budgetsInflights = new Map<string, Promise<GatewayKeyBudget[]>>()
 const budgetWindowCaches = new Map<string, TimedValue<BudgetWindow>>()
 const budgetWindowInflights = new Map<string, Promise<BudgetWindow>>()
 const budgetCacheGenerations = new Map<string, number>()
+
+const dashboardPerformanceLogging = process.env.DASHBOARD_PERF_LOG === "1"
+
+function dashboardPerf(message: string) {
+  if (dashboardPerformanceLogging) console.info(`[dashboard-perf] ${message}`)
+}
+
+function dashboardTimed<T>(label: string, promise: Promise<T>) {
+  if (!dashboardPerformanceLogging) return promise
+  const startedAt = performance.now()
+  return promise.then((value) => {
+    dashboardPerf(`${label} ${(performance.now() - startedAt).toFixed(1)}ms`)
+    return value
+  }, (error) => {
+    dashboardPerf(`${label} failed ${(performance.now() - startedAt).toFixed(1)}ms`)
+    throw error
+  })
+}
 
 function positiveDuration(value: string | undefined, fallback: number) {
   const parsed = Number(value)
@@ -92,6 +114,27 @@ function positiveInteger(value: string | undefined, fallback: number) {
 function positiveNumber(value: string | undefined, fallback: number) {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function usagePredictionKey(gatewayModelId: string, providerModelId?: string) {
+  return `${currentWorkspaceId()}\u0000${gatewayModelId}\u0000${providerModelId || ""}`
+}
+
+function rememberUsagePrediction(event: UsageEvent) {
+  if (event.status < 200 || event.status >= 300 || event.pricingConfidence !== "exact" || event.usageCompleteness === "partial" || event.usageCompleteness === "missing") return
+  if (!Number.isSafeInteger(event.outputTokens) || event.outputTokens <= 0) return
+  const key = usagePredictionKey(event.gatewayModelId, event.providerModelId)
+  const samples = usagePredictionSamples.get(key) || []
+  samples.push(event.outputTokens)
+  if (samples.length > 256) samples.splice(0, samples.length - 256)
+  usagePredictionSamples.set(key, samples)
+}
+
+function median(values: number[]) {
+  const sorted = values.filter((value) => Number.isSafeInteger(value) && value > 0).sort((left, right) => left - right)
+  if (!sorted.length) return 0
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
 }
 
 function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1_024) {
@@ -311,7 +354,7 @@ async function budgetCounter(apiKeyId: string, usageStart: string) {
 
   const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = budgetCountersRef().doc(id).get().then((snapshot) => {
-    const spentMicros = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+    const spentMicros = safeUsageInteger((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros)
     if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetCounterCache, cacheId, { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
     return spentMicros
   }).finally(() => {
@@ -329,7 +372,7 @@ function emptyRollup(id: string, granularity: UsageRollup["granularity"], bucket
   return {
     id, granularity, bucketStart, gatewayKeyId: event.gatewayKeyId, gatewayModelId: event.gatewayModelId,
     requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0,
-    costMicros: 0, pricedRequests: 0, unpricedRequests: 0, lastEventAt: event.completedAt, updatedAt: new Date().toISOString(),
+    costMicros: 0, pricedRequests: 0, unpricedRequests: 0, failedRequests: 0, lastEventAt: event.completedAt, updatedAt: new Date().toISOString(),
   }
 }
 
@@ -374,6 +417,7 @@ async function usageBudgetContext(event: UsageEvent) {
 }
 
 export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: BudgetUsageContext | null) {
+  rememberUsagePrediction(event)
   const context = budgetUsageContext === undefined ? await usageBudgetContext(event) : budgetUsageContext
   const completedAtMs = Date.parse(event.completedAt)
   const countForBudget = Boolean(
@@ -385,6 +429,8 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
   const counterId = countForBudget && context ? budgetCounterId(event.gatewayKeyId, context.usageStartAt) : undefined
   const completedDate = new Date(event.completedAt)
   const updatedAt = new Date().toISOString()
+  const countsAsPricedRequest = event.status >= 200 && event.status < 300 && event.pricingConfidence === "exact"
+  const countsAsUnpricedRequest = event.status >= 200 && event.status < 300 && event.pricingConfidence !== "exact"
 
   if (isMemory()) {
     const memory = memoryState()
@@ -403,8 +449,9 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
         cacheCreationTokens: current.cacheCreationTokens + event.cacheCreationTokens,
         totalTokens: current.totalTokens + event.totalTokens,
         costMicros: current.costMicros + event.costMicros,
-        pricedRequests: (current.pricedRequests || 0) + (event.pricingConfidence === "exact" ? 1 : 0),
-        unpricedRequests: (current.unpricedRequests || 0) + (event.pricingConfidence === "exact" ? 0 : 1),
+        pricedRequests: (current.pricedRequests || 0) + (countsAsPricedRequest ? 1 : 0),
+        unpricedRequests: (current.unpricedRequests || 0) + (countsAsUnpricedRequest ? 1 : 0),
+        failedRequests: (current.failedRequests || 0) + (event.status >= 200 && event.status < 300 ? 0 : 1),
         lastEventAt: !current.lastEventAt || current.lastEventAt < event.completedAt ? event.completedAt : current.lastEventAt,
         updatedAt,
       })
@@ -441,9 +488,10 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
       cacheCreationTokens: FieldValue.increment(event.cacheCreationTokens),
       totalTokens: FieldValue.increment(event.totalTokens),
       costMicros: FieldValue.increment(event.costMicros),
-      pricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 1 : 0),
-      unpricedRequests: FieldValue.increment(event.pricingConfidence === "exact" ? 0 : 1),
-      lastEventAt: event.completedAt,
+      pricedRequests: FieldValue.increment(countsAsPricedRequest ? 1 : 0),
+      unpricedRequests: FieldValue.increment(countsAsUnpricedRequest ? 1 : 0),
+      failedRequests: FieldValue.increment(event.status >= 200 && event.status < 300 ? 0 : 1),
+      lastEventAt: FieldValue.maximum(event.completedAt),
       updatedAt,
     }, { merge: true })
   }
@@ -453,7 +501,7 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
       usageStartAt: context.usageStartAt,
       windowEnd: context.windowEnd,
       spentMicros: FieldValue.increment(event.costMicros),
-      lastUsedAt: event.completedAt,
+      lastUsedAt: FieldValue.maximum(event.completedAt),
       updatedAt,
     }, { merge: true })
   }
@@ -538,9 +586,15 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     catch { pricing = undefined }
   }
   const calculated = calculateCostMicros(normalized, pricing)
-  const assumedCostMicros = calculated.pricingConfidence !== "exact" && pricing && Number.isSafeInteger(input.assumedCostMicros) && Number(input.assumedCostMicros) > 0
+  const suppliedAssumption = calculated.pricingConfidence !== "exact" && pricing && Number.isSafeInteger(input.assumedCostMicros) && Number(input.assumedCostMicros) > 0
     ? Number(input.assumedCostMicros)
     : undefined
+  // A partial response gives us a useful lower-bound calculation. The request
+  // admission estimate is conservative, so settle to the larger of the two
+  // instead of replacing a known partial cost with a smaller guess.
+  const assumedCostMicros = suppliedAssumption === undefined
+    ? undefined
+    : Math.max(calculated.costMicros, suppliedAssumption)
   return {
     id: input.id || crypto.randomUUID(),
     gatewayKeyId: input.gatewayKeyId,
@@ -556,6 +610,12 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     ...normalized,
     costMicros: assumedCostMicros ?? calculated.costMicros,
     pricingConfidence: assumedCostMicros !== undefined ? "assumed" : calculated.pricingConfidence,
+    usageCompleteness: normalized.usageCompleteness,
+    ...(assumedCostMicros !== undefined
+      ? { costSource: "reservation" as const }
+      : pricing && calculated.pricingConfidence !== "unpriced"
+        ? { costSource: "configured-pricing" as const }
+        : {}),
     ...(pricing && "pricingGroupId" in pricing && pricing.pricingGroupId ? { pricingGroupId: pricing.pricingGroupId } : {}),
     ...(pricing && "pricingVersionId" in pricing && pricing.pricingVersionId ? { pricingVersionId: pricing.pricingVersionId } : {}),
     ...(calculated.pricingContextTier ? { pricingContextTier: calculated.pricingContextTier } : {}),
@@ -571,28 +631,8 @@ export async function listUsageEvents(from?: string, to?: string): Promise<Usage
   const end = to ? Date.parse(to) : Infinity
   if (isMemory()) return [...memoryState().events.values()].filter((event) => Date.parse(event.completedAt) >= start && Date.parse(event.completedAt) < end)
     .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
-  const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<", to || new Date().toISOString()).get()
+  const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<", to || new Date().toISOString()).withoutDefaultOrder().get()
   return snapshot.docs.map((document) => document.data() as UsageEvent).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
-}
-
-async function listUsageEventsForModels(providerModelIds: Set<string>, gatewayModelIds: Set<string>) {
-  if (isMemory()) {
-    return [...memoryState().events.values()].filter((event) =>
-      Boolean(event.providerModelId && providerModelIds.has(event.providerModelId)) || gatewayModelIds.has(event.gatewayModelId),
-    ).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
-  }
-
-  const queryChunks = <T,>(values: T[]) => Array.from({ length: Math.ceil(values.length / 30) }, (_, index) => values.slice(index * 30, index * 30 + 30))
-  const queries = [
-    ...queryChunks([...providerModelIds]).map((ids) => eventsRef().where("providerModelId", "in", ids)),
-    ...queryChunks([...gatewayModelIds]).map((ids) => eventsRef().where("gatewayModelId", "in", ids)),
-  ]
-  const snapshots = await parallelMap(queries, (query) => query.get())
-  const unique = new Map<string, UsageEvent>()
-  for (const snapshot of snapshots) {
-    for (const document of snapshot.docs) unique.set(document.id, document.data() as UsageEvent)
-  }
-  return [...unique.values()].sort((a, b) => a.completedAt.localeCompare(b.completedAt))
 }
 
 export async function listModelPricing() {
@@ -668,6 +708,9 @@ export async function getPricingForModel(gatewayModelId: string, providerModelId
   return promise
 }
 export async function upsertModelPricing(input: Omit<ModelPricing, "id" | "updatedAt"> & { id?: string }) {
+  for (const rate of [input.inputMicrosPerMillion, input.outputMicrosPerMillion, input.cacheReadMicrosPerMillion, input.cacheCreationMicrosPerMillion]) {
+    if (!Number.isSafeInteger(rate) || rate < 0) throw new Error("Pricing rates must be non-negative integers in micros per million tokens.")
+  }
   const pricing: ModelPricing = { ...input, id: input.id || crypto.randomUUID(), updatedAt: new Date().toISOString() }
   if (isMemory()) memoryState().pricing.set(pricing.id, pricing)
   else await pricingRef().doc(pricing.id).set(pricing)
@@ -863,6 +906,7 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
   return result
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
+  if (!Number.isSafeInteger(input.weeklyLimitMicros) || input.weeklyLimitMicros <= 0) throw new Error("Weekly budget must be a positive safe integer in micros.")
   if (!(await listApiKeys()).some((apiKey) => apiKey.id === input.apiKeyId)) throw new Error("API key not found in the selected workspace.")
   const window = await getBudgetWindow()
   const budget: GatewayKeyBudget = {
@@ -911,14 +955,87 @@ function addBudgetUsage(map: Map<string, BudgetUsageValue>, rollup: UsageRollup)
   if (!rollup.gatewayKeyId) return
   const current = map.get(rollup.gatewayKeyId) || { spentMicros: 0, lastUsedAt: null }
   const lastUsedAt = rollup.lastEventAt && (!current.lastUsedAt || current.lastUsedAt < rollup.lastEventAt) ? rollup.lastEventAt : current.lastUsedAt
-  map.set(rollup.gatewayKeyId, { spentMicros: current.spentMicros + Number(rollup.costMicros || 0), lastUsedAt })
+  map.set(rollup.gatewayKeyId, { spentMicros: current.spentMicros + safeUsageInteger(rollup.costMicros), lastUsedAt })
 }
 
 function addBudgetEvent(map: Map<string, BudgetUsageValue>, event: UsageEvent) {
   if (event.status < 200 || event.status >= 300) return
   const current = map.get(event.gatewayKeyId) || { spentMicros: 0, lastUsedAt: null }
   const lastUsedAt = !current.lastUsedAt || current.lastUsedAt < event.completedAt ? event.completedAt : current.lastUsedAt
-  map.set(event.gatewayKeyId, { spentMicros: current.spentMicros + Number(event.costMicros || 0), lastUsedAt })
+  map.set(event.gatewayKeyId, { spentMicros: current.spentMicros + safeUsageInteger(event.costMicros), lastUsedAt })
+}
+
+function safeUsageInteger(value: unknown) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(Number.MAX_SAFE_INTEGER, Math.round(parsed)) : 0
+}
+
+/**
+ * Unlimited Mode is a session boundary, not a calendar bucket. For that
+ * window the event ledger is the canonical source: calendar rollups include
+ * traffic before the session started and proportional scaling can otherwise
+ * erase a busy boundary minute. Rollups remain a guarded fallback for a key
+ * that has aggregate-only usage but no successful event documents at all.
+ */
+async function getBypassBudgetUsage(start: Date, end: Date) {
+  const [events, hourly, daily] = await Promise.all([
+    listUsageEvents(start.toISOString(), end.toISOString()),
+    listUsageRollups("hourly", bucketStart(start, "hourly").toISOString(), nextBucketStart(end, "hourly").toISOString()),
+    listUsageRollups("daily", bucketStart(start, "daily").toISOString(), nextBucketStart(end, "daily").toISOString()),
+  ])
+  const result = new Map<string, BudgetUsageValue>()
+  const eventHourlyDimensions = new Set<string>()
+  const eventDailyDimensions = new Set<string>()
+  const eventHourlyKeyBuckets = new Set<string>()
+  const eventDailyKeyBuckets = new Set<string>()
+  for (const event of events) {
+    if (event.status < 200 || event.status >= 300) continue
+    const completedAt = new Date(event.completedAt)
+    const hourlyBucket = bucketStart(completedAt, "hourly").toISOString()
+    const dailyBucket = bucketStart(completedAt, "daily").toISOString()
+    eventHourlyDimensions.add(usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, hourlyBucket))
+    eventDailyDimensions.add(usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, dailyBucket))
+    eventHourlyKeyBuckets.add(`${event.gatewayKeyId}:${hourlyBucket}`)
+    eventDailyKeyBuckets.add(`${event.gatewayKeyId}:${dailyBucket}`)
+    addBudgetEvent(result, event)
+  }
+
+  // A migrated aggregate has no event identity to reconcile. Only use it when
+  // its key/model/bucket has no successful event records, and prefer hourly
+  // rows so a daily aggregate cannot be added on top of the same usage.
+  const fallbackHourlyGroups = new Set<string>()
+  const fallbackHourlyKeyDays = new Set<string>()
+  const eligibleFallback = (rollup: UsageRollup) => {
+    if (!rollup.gatewayKeyId) return false
+    const bucketStartMs = Date.parse(rollup.bucketStart)
+    const bucketEndMs = nextBucketStart(new Date(bucketStartMs), rollup.granularity).getTime()
+    const lastEventMs = rollup.lastEventAt ? Date.parse(rollup.lastEventAt) : NaN
+    const bucket = rollup.granularity === "hourly"
+      ? bucketStart(new Date(rollup.bucketStart), "hourly").toISOString()
+      : bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
+    const dimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, bucket)
+    const hasEvent = rollup.granularity === "hourly"
+      ? (rollup.gatewayModelId ? eventHourlyDimensions.has(dimension) : eventHourlyKeyBuckets.has(`${rollup.gatewayKeyId}:${bucket}`))
+      : (rollup.gatewayModelId ? eventDailyDimensions.has(dimension) : eventDailyKeyBuckets.has(`${rollup.gatewayKeyId}:${bucket}`))
+    return Number.isFinite(bucketStartMs) && Number.isFinite(lastEventMs) &&
+      bucketEndMs > start.getTime() && bucketStartMs < end.getTime() &&
+      lastEventMs >= start.getTime() && lastEventMs < end.getTime() && !hasEvent
+  }
+  for (const rollup of hourly) {
+    if (!eligibleFallback(rollup)) continue
+    addBudgetUsage(result, scaleUsageRollupToRange(rollup, start, end))
+    const day = bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
+    fallbackHourlyKeyDays.add(`${rollup.gatewayKeyId}:${day}`)
+    if (rollup.gatewayModelId) fallbackHourlyGroups.add(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${day}`)
+  }
+  for (const rollup of daily) {
+    if (!eligibleFallback(rollup)) continue
+    const day = bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
+    const group = `${rollup.gatewayKeyId}:${rollup.gatewayModelId || ""}:${day}`
+    if (rollup.gatewayModelId ? fallbackHourlyGroups.has(group) : fallbackHourlyKeyDays.has(`${rollup.gatewayKeyId}:${day}`)) continue
+    addBudgetUsage(result, scaleUsageRollupToRange(rollup, start, end))
+  }
+  return result
 }
 
 async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promise<Map<string, BudgetUsageValue>> {
@@ -938,15 +1055,56 @@ async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promis
   const end = new Date(window.end)
   const promise = (async () => {
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) return new Map<string, BudgetUsageValue>()
+    if (window.bypassLimits) return getBypassBudgetUsage(start, end)
 
     const hourlyFrom = bucketStart(start, "hourly").toISOString()
     const hourlyTo = nextBucketStart(end, "hourly").toISOString()
     const dailyFrom = bucketStart(start, "daily").toISOString()
     const dailyTo = nextBucketStart(end, "daily").toISOString()
-    const [hourly, daily] = await Promise.all([
-      listUsageRollups("hourly", hourlyFrom, hourlyTo),
-      listUsageRollups("daily", dailyFrom, dailyTo),
+    const [hourly, daily, fullEventsResult] = await Promise.all([
+      dashboardTimed("budget.hourly-rollups", listUsageRollups("hourly", hourlyFrom, hourlyTo)),
+      dashboardTimed("budget.daily-rollups", listUsageRollups("daily", dailyFrom, dailyTo)),
+      dashboardTimed("budget.events", listUsageEvents(start.toISOString(), end.toISOString()).then((events) => ({ events, ok: true as const })).catch(() => ({ events: [] as UsageEvent[], ok: false as const }))),
     ])
+    const fullEvents = fullEventsResult.events
+    const allEventCountsByKey = new Map<string, number>()
+    const hourlyStatsByKey = new Map<string, { requests: number; hasBackfill: boolean }>()
+    const dailyStatsByKey = new Map<string, { requests: number; hasBackfill: boolean }>()
+    for (const event of fullEvents) allEventCountsByKey.set(event.gatewayKeyId, (allEventCountsByKey.get(event.gatewayKeyId) || 0) + 1)
+    for (const rollup of hourly) {
+      if (!rollup.gatewayKeyId) continue
+      const bucketTime = Date.parse(rollup.bucketStart)
+      const bucketEnd = Number.isFinite(bucketTime) ? nextBucketStart(new Date(bucketTime), "hourly").getTime() : NaN
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || bucketEnd <= start.getTime()) continue
+      const current = hourlyStatsByKey.get(rollup.gatewayKeyId) || { requests: 0, hasBackfill: false }
+      current.requests += Math.max(0, Number(rollup.requests || 0))
+      current.hasBackfill ||= Boolean(rollup.backfillSource)
+      hourlyStatsByKey.set(rollup.gatewayKeyId, current)
+    }
+    for (const rollup of daily) {
+      if (!rollup.gatewayKeyId) continue
+      const bucketTime = Date.parse(rollup.bucketStart)
+      const bucketEnd = Number.isFinite(bucketTime) ? nextBucketStart(new Date(bucketTime), "daily").getTime() : NaN
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || bucketEnd <= start.getTime()) continue
+      const current = dailyStatsByKey.get(rollup.gatewayKeyId) || { requests: 0, hasBackfill: false }
+      current.requests += Math.max(0, Number(rollup.requests || 0))
+      current.hasBackfill ||= Boolean(rollup.backfillSource)
+      dailyStatsByKey.set(rollup.gatewayKeyId, current)
+    }
+    const canonicalEventKeys = new Set<string>()
+    if (fullEventsResult.ok) {
+      const candidateKeys = new Set([...allEventCountsByKey.keys(), ...hourlyStatsByKey.keys(), ...dailyStatsByKey.keys()])
+      for (const key of candidateKeys) {
+        const hourlyStats = hourlyStatsByKey.get(key)
+        const rollupStats = hourlyStats || dailyStatsByKey.get(key)
+        const eventCount = allEventCountsByKey.get(key) || 0
+        // A pure runtime key whose rollup request count matches the event
+        // ledger is safe to read directly from events, including partial
+        // calendar boundaries. Mixed aggregate/runtime keys stay on the
+        // dimension-aware fallback below.
+        if (!rollupStats || (!rollupStats.hasBackfill && rollupStats.requests === eventCount && eventCount > 0)) canonicalEventKeys.add(key)
+      }
+    }
 
     const hourlyBoundary = dashboardBoundaryRanges(start, end, "hourly")
     // Backfilled CCS data may have daily rollups but no usage-event documents.
@@ -954,64 +1112,217 @@ async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promis
     // event query does not erase historical spend.
     const dailyBoundaryRanges: Array<[Date, Date]> = []
     const result = new Map<string, BudgetUsageValue>()
-    const hourlyDays = new Set<string>()
+    const hourlyRequestTotals = new Map<string, number>()
+    const hourlyRequestTotalsByKeyDay = new Map<string, number>()
+    const hourlyRequestTotalsByDay = new Map<string, number>()
+    const hourlyRequestTotalsByKeyDayFull = new Map<string, number>()
+    const hourlyRowsByDimension = new Set<string>()
+    const hourlyRowsByBucket = new Set<string>()
     for (const rollup of hourly) {
       const bucketTime = Date.parse(rollup.bucketStart)
       if (!Number.isFinite(bucketTime)) continue
       const bucketStartDate = new Date(bucketTime)
+      if (rollup.gatewayKeyId) {
+        const day = bucketStart(bucketStartDate, "daily").toISOString()
+        const dimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, day)
+        const keyDay = `${rollup.gatewayKeyId}:${day}`
+        const requests = Math.max(0, Number(rollup.requests || 0))
+        hourlyRequestTotalsByDay.set(dimension, (hourlyRequestTotalsByDay.get(dimension) || 0) + requests)
+        hourlyRequestTotalsByKeyDayFull.set(keyDay, (hourlyRequestTotalsByKeyDayFull.get(keyDay) || 0) + requests)
+      }
       const overlapsWindow = nextBucketStart(bucketStartDate, "hourly") > start && bucketStartDate < end
-      if (rollup.gatewayKeyId && overlapsWindow) hourlyDays.add(`${rollup.gatewayKeyId}:${bucketStart(bucketStartDate, "daily").toISOString()}`)
+      if (rollup.gatewayKeyId && overlapsWindow) {
+        const day = bucketStart(bucketStartDate, "daily").toISOString()
+        const dimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, day)
+        const keyDay = `${rollup.gatewayKeyId}:${day}`
+        hourlyRequestTotals.set(dimension, (hourlyRequestTotals.get(dimension) || 0) + Math.max(0, Number(rollup.requests || 0)))
+        hourlyRequestTotalsByKeyDay.set(keyDay, (hourlyRequestTotalsByKeyDay.get(keyDay) || 0) + Math.max(0, Number(rollup.requests || 0)))
+        if (rollup.gatewayModelId) hourlyRowsByDimension.add(usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.bucketStart))
+        else hourlyRowsByBucket.add(`${rollup.gatewayKeyId}:${rollup.bucketStart}`)
+      }
     }
 
-    // Historical backfills may intentionally contain daily rollups without
-    // hourly documents. Use those days only when hourly data does not exist
-    // for the same key/day, preventing daily+hourly double counting.
+    const completeHourlyDimensions = new Set<string>()
+    const completeHourlyBuckets = new Set<string>()
+    const fallbackDailyDimensions = new Set<string>()
+    const fallbackDailyBuckets = new Set<string>()
+    // Prefer hourly data only when it covers the same request count as the
+    // daily row. Merely having one hourly document is not proof of complete
+    // coverage; otherwise a partial hourly backfill silently undercounts.
     for (const rollup of daily) {
       const bucketTime = Date.parse(rollup.bucketStart)
       if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
-      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
-      if (hourlyDays.has(dayKey)) continue
       const dayStart = new Date(bucketTime)
       const dayEnd = nextBucketStart(dayStart, "daily")
-      if (dayStart >= start && dayEnd <= end) addBudgetUsage(result, rollup)
-      else dailyBoundaryRanges.push([new Date(Math.max(start.getTime(), dayStart.getTime())), new Date(Math.min(end.getTime(), dayEnd.getTime()))])
+      if (dayEnd.getTime() <= start.getTime()) continue
+      const day = bucketStart(dayStart, "daily").toISOString()
+      const dimensionKey = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, day)
+      const dayKey = `${rollup.gatewayKeyId}:${day}`
+      const hourlyRequests = rollup.gatewayModelId
+        ? hourlyRequestTotalsByDay.get(dimensionKey) || 0
+        : hourlyRequestTotalsByKeyDayFull.get(dayKey) || 0
+      const dailyRequests = Math.max(0, Number(rollup.requests || 0))
+      const hourlyCoversWholeDay = dailyRequests > 0 && hourlyRequests === dailyRequests
+      const fullDay = dayStart >= start && dayEnd <= end
+      if (fullDay && hourlyCoversWholeDay) {
+        if (rollup.gatewayModelId) completeHourlyDimensions.add(dimensionKey)
+        else completeHourlyBuckets.add(dayKey)
+      } else if (!hourlyCoversWholeDay) {
+        if (rollup.gatewayModelId) fallbackDailyDimensions.add(dimensionKey)
+        else fallbackDailyBuckets.add(dayKey)
+      }
+      if (!fullDay) {
+        dailyBoundaryRanges.push([new Date(Math.max(start.getTime(), dayStart.getTime())), new Date(Math.min(end.getTime(), dayEnd.getTime()))])
+      }
     }
 
     const boundaryRanges = mergeDateRanges([...hourlyBoundary.ranges, ...dailyBoundaryRanges])
-    const boundaryResults = await settledParallelMap(boundaryRanges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
+    const boundaryResults = await dashboardTimed("budget.boundary-events", settledParallelMap(boundaryRanges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString())))
     const boundaryDataAvailable = boundaryResults.every((entry) => entry.status === "fulfilled")
     const boundaryEvents = uniqueUsageEvents(boundaryResults.flatMap((entry) => entry.status === "fulfilled" ? [entry.value] : []))
-    const hourlyEventKeys = new Set<string>()
-    const dailyEventKeys = new Set<string>()
+    const hourlyEventCounts = new Map<string, number>()
+    const dailyEventCounts = new Map<string, number>()
+    const hourlyEventBucketCounts = new Map<string, number>()
+    const dailyEventBucketCounts = new Map<string, number>()
     for (const event of boundaryEvents) {
       const completedAt = new Date(event.completedAt)
-      hourlyEventKeys.add(`${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(completedAt, "hourly").toISOString()}`)
-      dailyEventKeys.add(`${event.gatewayKeyId}:${event.gatewayModelId}:${bucketStart(completedAt, "daily").toISOString()}`)
+      const hourlyKey = usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, bucketStart(completedAt, "hourly").toISOString())
+      const dailyKey = usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, bucketStart(completedAt, "daily").toISOString())
+      hourlyEventCounts.set(hourlyKey, (hourlyEventCounts.get(hourlyKey) || 0) + 1)
+      dailyEventCounts.set(dailyKey, (dailyEventCounts.get(dailyKey) || 0) + 1)
+      const hourlyBucket = `${event.gatewayKeyId}:${bucketStart(completedAt, "hourly").toISOString()}`
+      const dailyBucket = `${event.gatewayKeyId}:${bucketStart(completedAt, "daily").toISOString()}`
+      hourlyEventBucketCounts.set(hourlyBucket, (hourlyEventBucketCounts.get(hourlyBucket) || 0) + 1)
+      dailyEventBucketCounts.set(dailyBucket, (dailyEventBucketCounts.get(dailyBucket) || 0) + 1)
+    }
+
+    type BoundaryResolution = "replace" | "preserve" | "zero"
+    const hourlyBoundaryDimensions = new Map<string, BoundaryResolution>()
+    const hourlyBoundaryBuckets = new Map<string, BoundaryResolution>()
+    const dailyBoundaryDimensions = new Map<string, BoundaryResolution>()
+    const dailyBoundaryBuckets = new Map<string, BoundaryResolution>()
+    const boundaryResolution = (rollup: UsageRollup, eventCount: number): BoundaryResolution => {
+      const requestCount = Math.max(0, Number(rollup.requests || 0))
+      // For a runtime rollup, events are the only exact source for a partial
+      // time slice. The slice can contain fewer events than the full bucket
+      // because traffic before the range start is intentionally excluded.
+      if (!rollup.backfillSource) {
+        if (eventCount > 0) return "replace"
+        return "zero"
+      }
+      if (eventCount === requestCount && requestCount > 0) return "replace"
+      // A runtime rollup is written with one event per request. An empty,
+      // successful boundary query therefore proves zero traffic in the slice.
+      // Aggregate-only backfills do not have that proof and must be estimated.
+      if (!rollup.backfillSource && eventCount === 0) return "zero"
+      return "preserve"
+    }
+    for (const rollup of hourly) {
+      if (!hourlyBoundary.partialBucketStarts.has(rollup.bucketStart)) continue
+      const dimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.bucketStart)
+      const eventCount = rollup.gatewayModelId
+        ? hourlyEventCounts.get(dimension) || 0
+        : hourlyEventBucketCounts.get(`${rollup.gatewayKeyId}:${rollup.bucketStart}`) || 0
+      const resolution = boundaryDataAvailable ? boundaryResolution(rollup, eventCount) : "preserve"
+      if (rollup.gatewayKeyId && rollup.gatewayModelId) hourlyBoundaryDimensions.set(dimension, resolution)
+      else if (rollup.gatewayKeyId) hourlyBoundaryBuckets.set(`${rollup.gatewayKeyId}:${rollup.bucketStart}`, resolution)
+    }
+    for (const rollup of daily) {
+      const bucket = bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
+      if (!dailyBoundaryRanges.some(([from, to]) => new Date(bucket).getTime() < to.getTime() && new Date(nextBucketStart(new Date(bucket), "daily")).getTime() > from.getTime())) continue
+      const dimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, bucket)
+      const eventCount = rollup.gatewayModelId
+        ? dailyEventCounts.get(dimension) || 0
+        : dailyEventBucketCounts.get(`${rollup.gatewayKeyId}:${bucket}`) || 0
+      const resolution = boundaryDataAvailable ? boundaryResolution(rollup, eventCount) : "preserve"
+      if (rollup.gatewayKeyId && rollup.gatewayModelId) dailyBoundaryDimensions.set(dimension, resolution)
+      else if (rollup.gatewayKeyId) dailyBoundaryBuckets.set(`${rollup.gatewayKeyId}:${bucket}`, resolution)
     }
 
     for (const rollup of hourly) {
       const bucketTime = Date.parse(rollup.bucketStart)
-      if (!Number.isFinite(bucketTime) || bucketTime < start.getTime() || bucketTime >= end.getTime()) continue
-      const hasBoundaryEvents = hourlyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${rollup.bucketStart}`)
-      if (hourlyBoundary.partialBucketStarts.has(rollup.bucketStart) && boundaryDataAvailable && hasBoundaryEvents) continue
-      addBudgetUsage(result, rollup)
+      const bucketEnd = Number.isFinite(bucketTime) ? nextBucketStart(new Date(bucketTime), "hourly").getTime() : NaN
+      if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || bucketEnd <= start.getTime()) continue
+      if (rollup.gatewayKeyId && canonicalEventKeys.has(rollup.gatewayKeyId)) continue
+      const hourlyDimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.bucketStart)
+      const hourlyDay = bucketStart(new Date(rollup.bucketStart), "daily").toISOString()
+      const hourlyDayKey = `${rollup.gatewayKeyId}:${hourlyDay}`
+      const hourlyDayDimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, hourlyDay)
+      if (fallbackDailyDimensions.has(hourlyDayDimension) || fallbackDailyBuckets.has(hourlyDayKey)) continue
+      const resolution = rollup.gatewayKeyId && rollup.gatewayModelId
+        ? hourlyBoundaryDimensions.get(hourlyDimension)
+        : hourlyBoundaryBuckets.get(`${rollup.gatewayKeyId}:${rollup.bucketStart}`)
+      if (hourlyBoundary.partialBucketStarts.has(rollup.bucketStart) && boundaryDataAvailable && (resolution === "replace" || resolution === "zero")) continue
+      addBudgetUsage(
+        result,
+        hourlyBoundary.partialBucketStarts.has(rollup.bucketStart)
+          ? scaleUsageRollupToRange(rollup, start, end)
+          : rollup,
+      )
     }
 
     for (const rollup of daily) {
       const bucketTime = Date.parse(rollup.bucketStart)
       if (!Number.isFinite(bucketTime) || bucketTime >= end.getTime() || !rollup.gatewayKeyId) continue
-      const dayKey = `${rollup.gatewayKeyId}:${bucketStart(new Date(bucketTime), "daily").toISOString()}`
-      if (hourlyDays.has(dayKey)) continue
+      if (canonicalEventKeys.has(rollup.gatewayKeyId)) continue
       const dayStart = new Date(bucketTime)
       const dayEnd = nextBucketStart(dayStart, "daily")
-      if (dayStart >= start && dayEnd <= end) continue
-      const hasBoundaryEvents = dailyEventKeys.has(`${rollup.gatewayKeyId}:${rollup.gatewayModelId}:${bucketStart(dayStart, "daily").toISOString()}`)
-      if (boundaryDataAvailable && hasBoundaryEvents) continue
-      addBudgetUsage(result, rollup)
+      const dailyBucket = bucketStart(dayStart, "daily").toISOString()
+      const dailyDimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, dailyBucket)
+      const dailyDayKey = `${rollup.gatewayKeyId}:${dailyBucket}`
+      const fullDay = dayStart >= start && dayEnd <= end
+      const hasHourlyForDimension = rollup.gatewayModelId
+        ? hourlyRequestTotals.has(dailyDimension)
+        : hourlyRequestTotalsByKeyDay.has(dailyDayKey)
+      const fallbackDaily = rollup.gatewayModelId
+        ? fallbackDailyDimensions.has(dailyDimension)
+        : fallbackDailyBuckets.has(dailyDayKey)
+      if (fallbackDaily) {
+        const resolution = rollup.gatewayKeyId && rollup.gatewayModelId
+          ? dailyBoundaryDimensions.get(dailyDimension)
+          : dailyBoundaryBuckets.get(`${rollup.gatewayKeyId}:${dailyBucket}`)
+        if (boundaryDataAvailable && (resolution === "replace" || resolution === "zero")) continue
+        addBudgetUsage(result, fullDay ? rollup : scaleUsageRollupToRange(rollup, start, end))
+        continue
+      }
+      if (fullDay) {
+        if (rollup.gatewayModelId ? completeHourlyDimensions.has(dailyDimension) : completeHourlyBuckets.has(dailyDayKey)) continue
+        addBudgetUsage(result, rollup)
+        continue
+      }
+      // When a partial day has hourly rows, use that higher-resolution slice
+      // and do not add the overlapping daily estimate as well.
+      if (hasHourlyForDimension) continue
+      const resolution = rollup.gatewayKeyId && rollup.gatewayModelId
+        ? dailyBoundaryDimensions.get(dailyDimension)
+        : dailyBoundaryBuckets.get(`${rollup.gatewayKeyId}:${dailyBucket}`)
+      if (boundaryDataAvailable && (resolution === "replace" || resolution === "zero")) continue
+      addBudgetUsage(result, scaleUsageRollupToRange(rollup, start, end))
     }
 
     if (boundaryDataAvailable) {
-      for (const event of boundaryEvents) addBudgetEvent(result, event)
+      for (const event of boundaryEvents) {
+        if (canonicalEventKeys.has(event.gatewayKeyId)) continue
+        const completedAt = new Date(event.completedAt)
+        const hourlyBucket = bucketStart(completedAt, "hourly").toISOString()
+        const dailyBucket = bucketStart(completedAt, "daily").toISOString()
+        const hourlyDimension = usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, hourlyBucket)
+        const dailyDimension = usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, dailyBucket)
+        const hourlyResolution = hourlyBoundaryDimensions.get(hourlyDimension) || hourlyBoundaryBuckets.get(`${event.gatewayKeyId}:${hourlyBucket}`)
+        const dailyResolution = dailyBoundaryDimensions.get(dailyDimension) || dailyBoundaryBuckets.get(`${event.gatewayKeyId}:${dailyBucket}`)
+        // A full hourly rollup has already contributed this event's bucket;
+        // only boundary-hour replacements should add the event itself. This
+        // prevents a daily boundary replacement from double-counting an event
+        // that sits in a complete hourly bucket.
+        const hasHourlyAggregate = hourlyRowsByDimension.has(hourlyDimension) || hourlyRowsByBucket.has(`${event.gatewayKeyId}:${hourlyBucket}`)
+        if (hasHourlyAggregate && !hourlyResolution) continue
+        const resolution = hourlyResolution || dailyResolution
+        if (resolution === "preserve" || resolution === "zero") continue
+        addBudgetEvent(result, event)
+      }
+    }
+    for (const event of fullEvents) {
+      if (canonicalEventKeys.has(event.gatewayKeyId)) addBudgetEvent(result, event)
     }
     return result
   })().then((value) => {
@@ -1163,22 +1474,41 @@ async function budgetCounterFresh(apiKeyId: string, usageStart: string) {
   const id = budgetCounterId(apiKeyId, usageStart)
   if (isMemory()) return memoryState().budgetCounters.get(id)?.spentMicros || 0
   const snapshot = await budgetCountersRef().doc(id).get()
-  const spentMicros = Number((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros || 0)
+  const spentMicros = safeUsageInteger((snapshot.data() as { spentMicros?: number } | undefined)?.spentMicros)
   boundedSet(budgetCounterCache, scopedKey(id), { value: spentMicros, expiresAt: Date.now() + budgetCounterCacheTtlMs })
   return spentMicros
 }
 
 async function budgetSpentMicros(budget: GatewayKeyBudget, window: BudgetWindow, usageStart: string) {
+  // Unlimited Mode has a session-specific event-time boundary. Historical
+  // migration/reconciliation can make the durable counter or its old baseline
+  // stale, so the display and post-session accounting must use reconciled
+  // usage for this window instead of carrying an ingestion-era offset.
+  if (window.bypassLimits) {
+    const usage = await getBudgetUsage(window)
+    return Math.max(0, Number(usage.get(budget.apiKeyId)?.spentMicros || 0))
+  }
+  // A migrated counter can lag the event/rollup ledger, while reservations
+  // can be ahead of it. Use the ledger as the lower bound and retain the raw
+  // counter (plus any known baseline offset) as the reservation-aware bound.
+  // This keeps admission accurate after migration without allowing concurrent
+  // reservations to spend against a stale lower counter.
+  const reconciledUsage = await getBudgetUsage(window).catch(() => undefined)
+  const reconciledSpent = safeUsageInteger(reconciledUsage?.get(budget.apiKeyId)?.spentMicros)
   const cachedBaseline = getBudgetCounterBaseline(budget, usageStart, window, true)
-  if (cachedBaseline) return Math.max(0, await budgetCounter(budget.apiKeyId, usageStart) + cachedBaseline.offsetMicros)
+  if (cachedBaseline) {
+    const counterSpent = await budgetCounter(budget.apiKeyId, usageStart)
+    const baselineSpent = Math.max(0, counterSpent + safeUsageInteger(cachedBaseline.offsetMicros))
+    return Math.max(reconciledSpent, baselineSpent)
+  }
 
   // A fresh counter -> usage -> counter sequence detects whether a concurrent
   // atomic usage batch crossed the reconciliation. Only a stable sequence is
   // reusable; an unstable one is returned conservatively and retried soon.
   const counterBefore = await budgetCounterFresh(budget.apiKeyId, usageStart)
-  const usage = (await getBudgetUsage(window, true)).get(budget.apiKeyId)
+  const usage = (reconciledUsage || await getBudgetUsage(window, true).catch(() => undefined))?.get(budget.apiKeyId)
   const counterAfter = await budgetCounterFresh(budget.apiKeyId, usageStart)
-  const usageMicros = Number(usage?.spentMicros || 0)
+  const usageMicros = safeUsageInteger(usage?.spentMicros)
   const { baseline, canPersist } = reconciledBudgetCounterBaseline(budget, window, counterBefore, counterAfter, usage)
   const cacheId = budgetCounterBaselineId(budget, usageStart, window)
   boundedSet(budgetCounterBaselineCache, cacheId, baseline)
@@ -1193,7 +1523,7 @@ async function budgetSpentMicros(budget: GatewayKeyBudget, window: BudgetWindow,
       boundedSet(budgetCounterBaselineCache, cacheId, baseline)
     }
   }
-  if (baseline.stable) return Math.max(0, counterAfter + baseline.offsetMicros)
+  if (baseline.stable) return Math.max(usageMicros, counterAfter + baseline.offsetMicros)
   return Math.max(0, usageMicros, counterAfter + Math.max(0, usageMicros - counterBefore))
 }
 
@@ -1223,14 +1553,35 @@ function estimateReservationMicros(
   const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
   const estimatedInputTokens = Math.ceil(inputBytes / budgetInputBytesPerToken)
   const usage = normalizeUsageMetrics({ input: estimatedInputTokens, output: outputLimit })
-  const estimatedCost = Math.ceil(calculateCostMicros(usage, pricing).costMicros * budgetReservationSafetyMultiplier)
+  const estimatedCost = Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(calculateCostMicros(usage, pricing).costMicros * budgetReservationSafetyMultiplier))
   return Math.min(limitMicros, Math.max(1, estimatedCost))
+}
+
+function estimateExpectedCostMicros(
+  payload: Record<string, unknown> | undefined,
+  pricing: Parameters<typeof calculateCostMicros>[1],
+  gatewayModelId: string,
+  providerModelId?: string,
+  requestBodyBytes?: number,
+) {
+  const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
+  const estimatedInputTokens = Math.max(1, Math.ceil(inputBytes / budgetInputBytesPerToken))
+  const outputLimit = requestOutputLimit(payload)
+  const historicalOutput = median(usagePredictionSamples.get(usagePredictionKey(gatewayModelId, providerModelId)) || [])
+  const expectedOutputTokens = outputLimit
+    ? Math.min(outputLimit, historicalOutput || defaultPredictedOutputTokens)
+    : historicalOutput || defaultPredictedOutputTokens
+  const usage = normalizeUsageMetrics({ input: estimatedInputTokens, output: expectedOutputTokens })
+  return Math.max(1, calculateCostMicros(usage, pricing).costMicros)
 }
 
 export interface BudgetRequestState {
   admission?: BudgetAdmission
   usageContext?: BudgetUsageContext
   pricing?: ResolvedModelPricing
+  /** Conservative request estimate used to settle successful responses whose
+   * provider did not return complete usage metadata. */
+  estimatedCostMicros?: number
 }
 
 export async function getBudgetRequestState(
@@ -1241,15 +1592,20 @@ export async function getBudgetRequestState(
   requestBodyBytes?: number,
 ): Promise<BudgetRequestState> {
   const budget = await budgetConfig(apiKeyId)
-  if (!budget) return {}
+  // Pricing is needed for usage accounting even when a key has no RawRoute
+  // budget. A budget is an admission policy, not a prerequisite for billing.
+  let pricing: ResolvedModelPricing | undefined
+  try { pricing = await getPricingForModel(gatewayModelId, providerModelId) }
+  catch { pricing = undefined }
+  const estimatedCostMicros = pricing
+    ? estimateExpectedCostMicros(payload, pricing, gatewayModelId, providerModelId, requestBodyBytes)
+    : undefined
+  if (!budget) return { pricing, estimatedCostMicros }
 
   const window = await getBudgetWindow()
-  const [usageStartAt, pricing] = await Promise.all([
-    budgetUsageStart(window),
-    budget.enabled && !window.bypassLimits ? getPricingForModel(gatewayModelId, providerModelId) : Promise.resolve(undefined),
-  ])
+  const usageStartAt = await budgetUsageStart(window)
   const usageContext = { usageStartAt, windowEnd: window.end } satisfies BudgetUsageContext
-  if (!budget.enabled || window.bypassLimits) return { usageContext }
+  if (!budget.enabled || window.bypassLimits) return { usageContext, pricing, estimatedCostMicros }
   if (!pricing) throw new BudgetDeniedError("This API key cannot call a model without configured pricing.", budgetRetryAfter(window))
 
   const spentMicros = await budgetSpentMicros(budget, window, usageStartAt)
@@ -1264,6 +1620,7 @@ export async function getBudgetRequestState(
       reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes),
       ttlSeconds: budgetRetryAfter(window) + 60,
     },
+    estimatedCostMicros,
   }
 }
 
@@ -1298,7 +1655,11 @@ export async function reserveBudgetAdmission(
   const nextSpent = (current: number) => {
     const committed = Math.max(current, admission.spentMicros)
     if (committed + admission.reservationMicros > admission.limitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", admission.ttlSeconds)
-    return current + admission.reservationMicros
+    // `current` may be a raw counter while `admission.spentMicros` includes a
+    // reconciled historical baseline. Persist the baseline plus this
+    // reservation so concurrent transactions cannot repeatedly spend against
+    // the same stale raw counter.
+    return committed + admission.reservationMicros
   }
 
   if (isMemory()) {
@@ -1353,13 +1714,34 @@ async function loadBudgetRows(
   keys: Awaited<ReturnType<typeof listApiKeys>> = [],
   currentWindow?: BudgetWindow,
   currentBudgets?: GatewayKeyBudget[],
+  options: { freshUsage?: boolean } = {},
 ) {
   const budgets = currentBudgets || await listBudgets()
   if (!budgets.length) return { rows: [], window: currentWindow }
   const window = currentWindow || await getBudgetWindow()
   const usageStartAt = await budgetUsageStart(window)
+  if (window.bypassLimits) {
+    const usageByKey = await getBudgetUsage(window)
+    const keyNames = new Map(keys.map((key) => [key.id, key.name]))
+    return {
+      rows: budgets.map((budget) => {
+        const usage = usageByKey.get(budget.apiKeyId)
+        return {
+          ...budget,
+          spentMicros: Math.max(0, Number(usage?.spentMicros || 0)),
+          windowStart: window.start,
+          windowEnd: window.end,
+          usageStartAt,
+          name: keyNames.get(budget.apiKeyId) || "Unknown",
+          lastUsedAt: usage?.lastUsedAt || null,
+        }
+      }),
+      window,
+    }
+  }
   const baselinesByKey = new Map<string, BudgetCounterBaseline>()
   const missingBaselines: GatewayKeyBudget[] = []
+  let usageByKey: Map<string, BudgetUsageValue> | undefined
   for (const budget of budgets) {
     const baseline = getBudgetCounterBaseline(budget, usageStartAt, window, true)
     if (baseline) baselinesByKey.set(budget.apiKeyId, baseline)
@@ -1370,7 +1752,7 @@ async function loadBudgetRows(
   const reconciledSpentByKey = new Map<string, number>()
   if (missingBaselines.length) {
     const countersBefore = await listBudgetCounters(usageStartAt, true)
-    const usageByKey = await getBudgetUsage(window, true)
+    usageByKey = await getBudgetUsage(window, options.freshUsage === true)
     const countersAfter = await listBudgetCounters(usageStartAt, true)
     const beforeById = new Map(countersBefore.map((counter) => [counter.id, counter]))
     const afterById = new Map(countersAfter.map((counter) => [counter.id, counter]))
@@ -1405,6 +1787,12 @@ async function loadBudgetRows(
     counters = countersAfter
   } else {
     counters = await listBudgetCounters(usageStartAt)
+    // A durable baseline is an admission-cache optimization, not a source of
+    // truth for the usage screen. Read the reconciled ledger even when the
+    // baseline is stable so imported/backfilled rollups cannot hide newer
+    // event-level usage. If a read is temporarily unavailable, retain the
+    // counter-based result rather than breaking the dashboard.
+    usageByKey = await getBudgetUsage(window, options.freshUsage === true).catch(() => undefined)
   }
 
   const countersById = new Map(counters.map((counter) => [counter.id, counter]))
@@ -1414,12 +1802,15 @@ async function loadBudgetRows(
     const counterSpentMicros = Number(counter?.spentMicros || 0)
     const baseline = baselinesByKey.get(budget.apiKeyId) || setBudgetCounterBaseline(budget, usageStartAt, window, counterSpentMicros)
     const counterLastUsedAt = counter?.lastUsedAt || null
-    const lastUsedAt = baseline.lastUsedAt && (!counterLastUsedAt || baseline.lastUsedAt > counterLastUsedAt)
+    const ledgerUsage = usageByKey?.get(budget.apiKeyId)
+    const lastUsedAt = ledgerUsage?.lastUsedAt || (baseline.lastUsedAt && (!counterLastUsedAt || baseline.lastUsedAt > counterLastUsedAt)
       ? baseline.lastUsedAt
-      : counterLastUsedAt
+      : counterLastUsedAt)
     return {
       ...budget,
-      spentMicros: reconciledSpentByKey.get(budget.apiKeyId) ?? Math.max(0, counterSpentMicros + baseline.offsetMicros),
+      spentMicros: ledgerUsage
+        ? safeUsageInteger(ledgerUsage.spentMicros)
+        : reconciledSpentByKey.get(budget.apiKeyId) ?? Math.max(0, counterSpentMicros + baseline.offsetMicros),
       windowStart: window.start,
       windowEnd: window.end,
       usageStartAt,
@@ -1437,7 +1828,7 @@ export async function getBudgetAdminData() {
     listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
   ])
   const [{ rows }, bypassSessions] = await Promise.all([
-    loadBudgetRows(keys, window),
+    loadBudgetRows(keys, window, undefined, { freshUsage: true }),
     listBudgetBypassSessions(50, window),
   ])
   return {
@@ -1451,7 +1842,7 @@ export async function getBudgetAdminData() {
 
 export async function getBudgetRows() {
   const [keys, window] = await Promise.all([listApiKeys(), getBudgetWindow()])
-  return (await loadBudgetRows(keys, window)).rows
+  return (await loadBudgetRows(keys, window, undefined, { freshUsage: true })).rows
 }
 
 const maximumHourlyDashboardSpanMs = positiveDuration(process.env.DASHBOARD_MAX_HOURLY_RANGE_DAYS, 31) * 86_400_000
@@ -1489,12 +1880,69 @@ async function resolveRange(query: DashboardQuery, currentBudgetWindow?: BudgetW
 }
 function bucketStart(date: Date, granularity: string) { if (granularity === "hourly") return startOfZonedHour(date); if (granularity === "monthly") return startOfZonedMonth(date); if (granularity === "weekly") return mondayInAppTimeZone(date); return startOfZonedDay(date) }
 function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•".repeat(Math.max(4, key.length - 4))}` : `${key.slice(0, 7)}${"•".repeat(12)}${key.slice(-4)}` }
-function publicKeyLabel(id: string) { return `Key ${hash(id).slice(0, 6).toUpperCase()}` }
+function publicKeyName(key: { name?: string } | undefined, keyId: string, indexedNames: ReadonlyMap<string, string>) {
+  return key?.name?.trim() || indexedNames.get(keyId)?.trim() || keyId
+}
+
+async function loadDashboardModelLabels() {
+  const workspaceId = currentWorkspaceId()
+  const cached = dashboardModelLabelCache.get(workspaceId)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = dashboardModelLabelInflight.get(workspaceId)
+  if (existing) return existing
+
+  const promise = (async () => {
+    const [groups, models, aliases, cliProxyModels] = await Promise.all([
+      dashboardTimed("labels.groups", listPricingGroups()),
+      dashboardTimed("labels.models", listModels()),
+      dashboardTimed("labels.aliases", listAliases()),
+      dashboardTimed("labels.cliproxy", listCliProxyModels()),
+    ])
+    const allModels = new Map<string, typeof models[number]>()
+    for (const model of [...models, ...cliProxyModels]) {
+      if (!allModels.has(model.id)) allModels.set(model.id, model)
+    }
+    const groupByMemberId = new Map<string, string>()
+    for (const group of groups) {
+      const label = group.name.trim()
+      if (!label) continue
+      for (const modelId of group.memberModelIds) groupByMemberId.set(modelId, label)
+    }
+
+    const labelsByGatewayModel = new Map<string, string>()
+    const upstreamLabels = new Map<string, Set<string>>()
+    for (const model of allModels.values()) {
+      const label = groupByMemberId.get(model.id) || groupByMemberId.get(model.gatewayModelId)
+      if (!label) continue
+      labelsByGatewayModel.set(model.gatewayModelId, label)
+      const upstreamModel = model.upstreamModel.trim()
+      if (!upstreamModel) continue
+      const labels = upstreamLabels.get(upstreamModel) || new Set<string>()
+      labels.add(label)
+      upstreamLabels.set(upstreamModel, labels)
+    }
+    for (const [upstreamModel, labels] of upstreamLabels) {
+      if (labels.size === 1) labelsByGatewayModel.set(upstreamModel, [...labels][0])
+    }
+    for (const alias of aliases) {
+      const label = labelsByGatewayModel.get(alias.targetModelId)
+      if (label) labelsByGatewayModel.set(alias.alias, label)
+    }
+    dashboardModelLabelCache.set(workspaceId, { value: labelsByGatewayModel, expiresAt: Date.now() + dashboardCacheTtlMs })
+    return labelsByGatewayModel
+  })().finally(() => {
+    if (dashboardModelLabelInflight.get(workspaceId) === promise) dashboardModelLabelInflight.delete(workspaceId)
+  })
+  dashboardModelLabelInflight.set(workspaceId, promise)
+  return promise
+}
 
 async function buildDashboardPayload(query: DashboardQuery, publicView: boolean): Promise<DashboardPayload> {
-  const budgetsPromise = listBudgets()
-  const budgetWindowPromise = query.preset === "budget" ? getBudgetWindow() : undefined
-  const range = await resolveRange(query, budgetWindowPromise ? await budgetWindowPromise : undefined)
+  const buildStartedAt = performance.now()
+  dashboardPerf(`start workspace=${currentWorkspaceId()} preset=${query.preset || "all"} granularity=${query.granularity || "auto"}`)
+  const budgetsPromise = dashboardTimed("budgets", listBudgets())
+  const budgetWindowPromise = query.preset === "budget" ? dashboardTimed("budget-window", getBudgetWindow()) : undefined
+  const range = await dashboardTimed("range", resolveRange(query, budgetWindowPromise ? await budgetWindowPromise : undefined))
   const span = Math.max(0, range.to.getTime() - range.from.getTime())
   const trendGranularity = effectiveDashboardGranularity(query.granularity, span)
   // Weekly charts are derived from daily rows. Long-range monthly charts also
@@ -1503,27 +1951,36 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const toExclusive = new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1))
   const boundary = dashboardBoundaryRanges(range.from, toExclusive, storageGranularity)
 
-  const rollupsPromise = listUsageRollups(
+  const rollupsPromise = dashboardTimed("rollups", listUsageRollups(
     storageGranularity as UsageRollup["granularity"],
-    range.from.toISOString(),
-    toExclusive.toISOString(),
-  )
+    // Query whole calendar buckets around the range. The selected range can
+    // begin inside a daily/hourly bucket; querying from the raw timestamp
+    // silently drops that leading bucket before boundary reconciliation can
+    // prorate it or replace it with event-level data.
+    bucketStart(range.from, storageGranularity).toISOString(),
+    nextBucketStart(bucketStart(new Date(toExclusive.getTime() - 1), storageGranularity), storageGranularity).toISOString(),
+  ))
   const boundaryEventsPromise = boundary.ranges.length
-    ? parallelMap(boundary.ranges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
-      .then(uniqueUsageEvents)
+    ? dashboardTimed("boundary-events", parallelMap(boundary.ranges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
+      .then(uniqueUsageEvents))
     : Promise.resolve([] as UsageEvent[])
-  const keysPromise = listApiKeys()
-  const budgetDataPromise = budgetsPromise.then(async (budgets) => {
+  const keysPromise = dashboardTimed("keys", listApiKeys())
+  const indexedKeyNamesPromise = publicView ? dashboardTimed("indexed-key-names", listIndexedApiKeyNames()) : Promise.resolve(new Map<string, string>())
+  const modelLabelsPromise = dashboardTimed("model-labels", loadDashboardModelLabels())
+  const budgetDataPromise = dashboardTimed("budget-data", budgetsPromise.then(async (budgets) => {
     if (!budgets.length) return { rows: [], window: budgetWindowPromise ? await budgetWindowPromise : undefined }
     const window = budgetWindowPromise ? await budgetWindowPromise : await getBudgetWindow()
     return loadBudgetRows([], window, budgets)
-  })
-  const [rollupsResult, boundaryEventsResult, keysResult, budgetResult] = await Promise.allSettled([
+  }))
+  const [rollupsResult, boundaryEventsResult, keysResult, indexedKeyNamesResult, modelLabelsResult, budgetResult] = await Promise.allSettled([
     rollupsPromise,
     boundaryEventsPromise,
     keysPromise,
+    indexedKeyNamesPromise,
+    modelLabelsPromise,
     budgetDataPromise,
   ])
+  dashboardPerf(`reads complete rollups=${rollupsResult.status === "fulfilled" ? rollupsResult.value.length : 0} boundary=${boundaryEventsResult.status === "fulfilled" ? boundaryEventsResult.value.length : 0} elapsed=${(performance.now() - buildStartedAt).toFixed(1)}ms`)
   const rollups = rollupsResult.status === "fulfilled" ? rollupsResult.value : []
   const boundaryEvents = boundaryEventsResult.status === "fulfilled" ? boundaryEventsResult.value : []
   const exactBoundaryData = boundaryEventsResult.status === "fulfilled"
@@ -1550,8 +2007,57 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const missingDimensionEvents = missingDimensionData
     ? uniqueUsageEvents(missingDimensionEventsResult.flatMap((result) => result.status === "fulfilled" ? [result.value] : []))
     : []
-  const replacementEvents = uniqueUsageEvents([boundaryEvents, missingDimensionEvents])
+  const replacementCandidates = uniqueUsageEvents([boundaryEvents, missingDimensionEvents])
+  const eventCountsByDimension = new Map<string, number>()
+  const eventCountsByKeyBucket = new Map<string, number>()
+  for (const event of replacementCandidates) {
+    const bucket = usageEventBucketKey(event, storageGranularity as UsageRollup["granularity"])
+    const dimension = usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, bucket)
+    eventCountsByDimension.set(dimension, (eventCountsByDimension.get(dimension) || 0) + 1)
+    const keyBucket = `${event.gatewayKeyId}:${bucket}`
+    eventCountsByKeyBucket.set(keyBucket, (eventCountsByKeyBucket.get(keyBucket) || 0) + 1)
+  }
+  const candidateDimensions = new Set<string>()
+  const candidateKeyBuckets = new Set<string>()
+  const replacementDimensions = new Set<string>()
+  const replacementKeyBuckets = new Set<string>()
+  for (const rollup of rollups) {
+    const partial = boundary.partialBucketStarts.has(rollup.bucketStart)
+    const missingDimension = missingDimensionBucketStarts.has(rollup.bucketStart)
+    if (!partial && !(missingDimensionData && missingDimension)) continue
+    if (rollup.gatewayKeyId && rollup.gatewayModelId) {
+      const dimension = usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.bucketStart)
+      candidateDimensions.add(dimension)
+      const eventCount = eventCountsByDimension.get(dimension) || 0
+      const completeEvents = eventCount === Math.max(0, Number(rollup.requests || 0)) && Number(rollup.requests || 0) > 0
+      // Runtime writes have a corresponding event document. For a partial
+      // bucket, the rollup request count also includes traffic before the
+      // selected range, so any successfully queried runtime event slice is
+      // authoritative even when its count is smaller than the full rollup.
+      // Backfill aggregates may intentionally have no event documents.
+      if (completeEvents || !rollup.backfillSource) replacementDimensions.add(dimension)
+    } else {
+      // A rollup without a model is still scoped to its API key. Never let a
+      // different key's events prove coverage or suppress its replacement.
+      if (!rollup.gatewayKeyId) continue
+      const keyBucket = `${rollup.gatewayKeyId}:${rollup.bucketStart}`
+      candidateKeyBuckets.add(keyBucket)
+      if ((eventCountsByKeyBucket.get(keyBucket) === Math.max(0, Number(rollup.requests || 0)) && Number(rollup.requests || 0) > 0) || !rollup.backfillSource) replacementKeyBuckets.add(keyBucket)
+    }
+  }
+  const replacementEvents = replacementCandidates.filter((event) => {
+    const bucket = usageEventBucketKey(event, storageGranularity as UsageRollup["granularity"])
+    const dimension = usageDimensionKey(event.gatewayKeyId, event.gatewayModelId, bucket)
+    const keyBucket = `${event.gatewayKeyId}:${bucket}`
+    if (replacementDimensions.has(dimension) || replacementKeyBuckets.has(keyBucket)) return true
+    // Keep events for buckets without a corresponding aggregate row. They are
+    // the only available data in that case; suppress only events belonging to
+    // a candidate rollup whose coverage was proven incomplete.
+    return !candidateDimensions.has(dimension) && !candidateKeyBuckets.has(keyBucket)
+  })
   const keys = keysResult.status === "fulfilled" ? keysResult.value : []
+  const indexedKeyNames = indexedKeyNamesResult.status === "fulfilled" ? indexedKeyNamesResult.value : new Map<string, string>()
+  const modelLabels = modelLabelsResult.status === "fulfilled" ? modelLabelsResult.value : new Map<string, string>()
   const budgetRows = budgetResult.status === "fulfilled" ? budgetResult.value.rows : []
   const budgetWindow = budgetResult.status === "fulfilled" ? budgetResult.value.window : undefined
 
@@ -1565,6 +2071,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   let totalTokens = 0
   let totalCostMicros = 0
   let pricedRequests = 0
+  let failedRequests = 0
   let lastEventAt: string | null = null
 
   const compactHourLabels = (query.preset === "today" || query.preset === "yesterday") && trendGranularity === "hourly"
@@ -1574,14 +2081,21 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     totalTokens: number
     costMicros: number
     pricedRequests: number
+    failedRequests: number
     lastEventAt?: string
     gatewayKeyId?: string
     gatewayModelId?: string
   }) {
-    requestCount += row.requests
-    totalTokens += row.totalTokens
-    totalCostMicros += row.costMicros
-    pricedRequests += row.pricedRequests
+    const requests = safeUsageInteger(row.requests)
+    const totalTokensForRow = safeUsageInteger(row.totalTokens)
+    const costMicrosForRow = safeUsageInteger(row.costMicros)
+    const pricedRequestsForRow = Math.min(requests, safeUsageInteger(row.pricedRequests))
+    const failedRequestsForRow = Math.min(requests, safeUsageInteger(row.failedRequests))
+    requestCount += requests
+    totalTokens += totalTokensForRow
+    totalCostMicros += costMicrosForRow
+    pricedRequests += pricedRequestsForRow
+    failedRequests += failedRequestsForRow
     if (row.lastEventAt && (!lastEventAt || lastEventAt < row.lastEventAt)) lastEventAt = row.lastEventAt
 
     const trendBucket = bucketStart(new Date(row.bucketStart), trendGranularity).toISOString()
@@ -1590,27 +2104,35 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
       point = { bucketStart: trendBucket, label: formatAppTrendBucket(trendBucket, trendGranularity, compactHourLabels ? "hour" : undefined), requests: 0, tokens: 0, costMicros: 0 }
       trend.set(trendBucket, point)
     }
-    point.requests += row.requests
-    point.tokens += row.totalTokens
-    point.costMicros += row.costMicros
+    point.requests += requests
+    point.tokens += totalTokensForRow
+    point.costMicros += costMicrosForRow
 
     if (row.gatewayKeyId && row.gatewayModelId) {
-      addDimensions(row.gatewayKeyId, row.gatewayModelId, row.requests, row.totalTokens, row.costMicros, row.lastEventAt)
+      addDimensions(row.gatewayKeyId, row.gatewayModelId, requests, totalTokensForRow, costMicrosForRow, row.lastEventAt)
     }
   }
 
   for (const rollup of rollups) {
-    if (exactBoundaryData && boundary.partialBucketStarts.has(rollup.bucketStart)) continue
-    if (missingDimensionData && missingDimensionBucketStarts.has(rollup.bucketStart)) continue
+    const partial = boundary.partialBucketStarts.has(rollup.bucketStart)
+    const missingDimension = missingDimensionData && missingDimensionBucketStarts.has(rollup.bucketStart)
+    const completeDimensionEvents = rollup.gatewayKeyId && rollup.gatewayModelId
+      ? replacementDimensions.has(usageDimensionKey(rollup.gatewayKeyId, rollup.gatewayModelId, rollup.bucketStart))
+      : rollup.gatewayKeyId ? replacementKeyBuckets.has(`${rollup.gatewayKeyId}:${rollup.bucketStart}`) : false
+    if ((partial || missingDimension) && completeDimensionEvents) continue
+    const scaled = partial
+      ? scaleUsageRollupToRange(rollup, range.from, toExclusive)
+      : rollup
     aggregateUsageRow({
-      bucketStart: rollup.bucketStart,
-      requests: rollup.requests,
-      totalTokens: rollup.totalTokens,
-      costMicros: rollup.costMicros,
-      pricedRequests: rollup.pricedRequests || 0,
-      lastEventAt: rollup.lastEventAt,
-      gatewayKeyId: rollup.gatewayKeyId,
-      gatewayModelId: rollup.gatewayModelId,
+      bucketStart: scaled.bucketStart,
+      requests: scaled.requests,
+      totalTokens: scaled.totalTokens,
+      costMicros: scaled.costMicros,
+      pricedRequests: scaled.pricedRequests || 0,
+      failedRequests: Math.max(safeUsageInteger(scaled.failedRequests), Array.isArray(scaled.excludedEventIds) ? scaled.excludedEventIds.length : 0),
+      lastEventAt: scaled.lastEventAt,
+      gatewayKeyId: scaled.gatewayKeyId,
+      gatewayModelId: scaled.gatewayModelId,
     })
   }
   for (const event of replacementEvents) {
@@ -1619,7 +2141,8 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
       requests: 1,
       totalTokens: event.totalTokens,
       costMicros: event.costMicros,
-      pricedRequests: event.pricingConfidence === "exact" ? 1 : 0,
+      pricedRequests: event.status >= 200 && event.status < 300 && event.pricingConfidence === "exact" ? 1 : 0,
+      failedRequests: event.status >= 200 && event.status < 300 ? 0 : 1,
       lastEventAt: event.completedAt,
       gatewayKeyId: event.gatewayKeyId,
       gatewayModelId: event.gatewayModelId,
@@ -1646,12 +2169,14 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   }
 
   function addDimensions(keyId: string, modelId: string, requests: number, tokens: number, costMicros: number, lastUsedAt?: string) {
+    const displayModel = modelLabels.get(modelId) || modelId
     let row = keyRows.get(keyId)
     if (!row) {
       const key = keyMap.get(keyId)
+      const displayName = publicView ? publicKeyName(key, keyId, indexedKeyNames) : key?.name?.trim() || keyId
       row = {
-        id: publicView ? publicKeyLabel(keyId) : keyId,
-        label: key?.name || publicKeyLabel(keyId),
+        id: publicView ? displayName : keyId,
+        label: displayName,
         maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"),
         requests: 0,
         tokens: 0,
@@ -1665,13 +2190,13 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     row.requests += requests
     row.tokens += tokens
     row.costMicros += costMicros
-    modelsByKey.get(keyId)?.add(modelId)
+    modelsByKey.get(keyId)?.add(displayModel)
     if (lastUsedAt && (!row.lastUsed || row.lastUsed < lastUsedAt)) row.lastUsed = lastUsedAt
 
-    let model = modelRows.get(modelId)
+    let model = modelRows.get(displayModel)
     if (!model) {
-      model = { model: modelId, requests: 0, tokens: 0, costMicros: 0 }
-      modelRows.set(modelId, model)
+      model = { model: displayModel, requests: 0, tokens: 0, costMicros: 0 }
+      modelRows.set(displayModel, model)
     }
     model.requests += requests
     model.tokens += tokens
@@ -1679,7 +2204,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   }
 
   for (const [keyId, row] of keyRows) {
-    row.models = [...(modelsByKey.get(keyId) || [])]
+    row.models = [...(modelsByKey.get(keyId) || [])].sort((left, right) => left.localeCompare(right))
     const budget = budgetMap.get(keyId)
     if (!budget || !budgetWindow) continue
     row.budget = {
@@ -1694,14 +2219,17 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     }
   }
 
-  const unpricedRequests = Math.max(0, requestCount - pricedRequests)
+  // Failed requests remain part of request volume, but they are not pricing
+  // failures. Exclude them from the estimated/unknown count explicitly.
+  const unpricedRequests = Math.max(0, requestCount - pricedRequests - failedRequests)
+  dashboardPerf(`assembled keys=${keyRows.size} models=${modelRows.size} requests=${requestCount} elapsed=${(performance.now() - buildStartedAt).toFixed(1)}ms`)
   return {
     generatedAt: new Date().toISOString(),
     range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity: trendGranularity },
     summary: { requests: requestCount, tokens: totalTokens, costMicros: totalCostMicros, activeKeys: keyRows.size, pricedRequests, unpricedRequests },
     trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)),
     keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests),
-    models: [...modelRows.values()].sort((a, b) => b.requests - a.requests),
+    models: [...modelRows.values()].sort((a, b) => b.costMicros - a.costMicros || b.requests - a.requests),
     freshness: { source: isMemory() ? "memory" : "postgres", lastEventAt },
     pricingConfidence: { pricedRequests, unpricedRequests },
   }
@@ -1731,6 +2259,60 @@ function nextBucketStart(value: Date, granularity: string) {
   return addZonedDays(value, 1)
 }
 
+function scaleUsageRollupToRange(rollup: UsageRollup, from: Date, to: Date): UsageRollup {
+  const lastEventMs = rollup.lastEventAt ? Date.parse(rollup.lastEventAt) : NaN
+  if (Number.isFinite(lastEventMs) && lastEventMs < from.getTime()) {
+    return {
+      ...rollup,
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 0,
+      costMicros: 0,
+      pricedRequests: 0,
+      unpricedRequests: 0,
+      failedRequests: 0,
+    }
+  }
+  const bucketFrom = new Date(rollup.bucketStart)
+  const bucketTo = nextBucketStart(bucketFrom, rollup.granularity)
+  const bucketDuration = bucketTo.getTime() - bucketFrom.getTime()
+  if (!Number.isFinite(bucketDuration) || bucketDuration <= 0) return rollup
+  const overlap = Math.max(0, Math.min(to.getTime(), bucketTo.getTime()) - Math.max(from.getTime(), bucketFrom.getTime()))
+  if (overlap <= 0 || overlap >= bucketDuration) return rollup
+  const ratio = overlap / bucketDuration
+  const scaled = (value: unknown) => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed > 0
+      ? Math.min(Number.MAX_SAFE_INTEGER, Math.round(parsed * ratio))
+      : 0
+  }
+  const requests = scaled(rollup.requests)
+  return {
+    ...rollup,
+    requests,
+    inputTokens: scaled(rollup.inputTokens),
+    outputTokens: scaled(rollup.outputTokens),
+    cacheReadTokens: scaled(rollup.cacheReadTokens),
+    cacheCreationTokens: scaled(rollup.cacheCreationTokens),
+    totalTokens: scaled(rollup.totalTokens),
+    costMicros: scaled(rollup.costMicros),
+    pricedRequests: Math.min(requests, scaled(rollup.pricedRequests)),
+    unpricedRequests: Math.min(requests, scaled(rollup.unpricedRequests)),
+    failedRequests: Math.min(requests, scaled(rollup.failedRequests)),
+  }
+}
+
+function usageEventBucketKey(event: UsageEvent, granularity: UsageRollup["granularity"]) {
+  return bucketStart(new Date(event.completedAt), granularity).toISOString()
+}
+
+function usageDimensionKey(gatewayKeyId: unknown, gatewayModelId: unknown, bucket: string) {
+  return `${gatewayKeyId || ""}:${gatewayModelId || ""}:${bucket}`
+}
+
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
   if (isMemory()) return buildDashboardPayload(query, publicView)
   const workspaceId = currentWorkspaceId()
@@ -1754,7 +2336,7 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
 }
 
 export function redactPublicDashboard(payload: DashboardPayload): DashboardPayload {
-  return { ...payload, keys: payload.keys.map((key) => ({ ...key, id: publicKeyLabel(key.id), maskedKey: "hidden" })) }
+  return { ...payload, keys: payload.keys.map((key) => ({ ...key, id: key.label, label: key.label, maskedKey: "hidden" })) }
 }
 
 type RepricedEvent = {
@@ -1773,14 +2355,33 @@ type RepricingBudgetContext = {
 }
 
 function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingVersion): RepricedEvent {
-  const hasUsage = event.usageAvailable === true || (event.usageAvailable !== false && [event.inputTokens, event.outputTokens, event.cacheReadTokens, event.cacheCreationTokens].some((value) => value > 0))
-  const normalized = normalizeUsageMetrics(hasUsage ? { input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens } : undefined)
+  // Old documents do not reliably preserve whether a zero token side was
+  // absent or genuinely zero. Only an explicit complete marker (or an event
+  // already marked exact by the original provider calculation) is safe to
+  // recalculate; otherwise preserve its source-recorded amount.
+  const completeUsage = event.usageCompleteness === "complete" || (event.usageCompleteness === undefined && event.pricingConfidence === "exact")
+  if (!completeUsage) {
+    // Historical aggregate/source records often contain numeric placeholders
+    // for missing token sides. Do not promote those values to an exact bill or
+    // overwrite a source-recorded cost during a later pricing sync.
+    return {
+      before: event,
+      // Keep the catalog association for the admin view, but preserve the
+      // source cost because no token-complete recalculation occurred.
+      after: { ...event, pricingGroupId: groupId, pricingVersionId: version.id },
+      costDelta: 0,
+      pricedDelta: 0,
+      unpricedDelta: 0,
+    }
+  }
+  const normalized = normalizeUsageMetrics({ input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens })
   const calculated = calculateCostMicros(normalized, version)
   const after: UsageEvent = {
     ...event,
     ...normalized,
     costMicros: calculated.costMicros,
     pricingConfidence: calculated.pricingConfidence,
+    costSource: calculated.pricingConfidence === "unpriced" ? event.costSource : "configured-pricing",
     pricingGroupId: groupId,
     pricingVersionId: version.id,
   }
@@ -1910,7 +2511,19 @@ export async function repriceUsageForGroup(jobId: string) {
   const [localModels, cliProxyModels] = await Promise.all([listModels(), listCliProxyModels()])
   const groupModels = [...localModels, ...cliProxyModels.filter((candidate) => !localModels.some((model) => model.gatewayModelId === candidate.gatewayModelId))]
   const gatewayModelIds = new Set<string>(groupModels.filter((model) => modelIds.has(model.id)).map((model) => model.gatewayModelId))
-  const [events, budgetContext] = await Promise.all([listUsageEventsForModels(modelIds, gatewayModelIds), repricingBudgetContext()])
+  const suffixOwners = new Map<string, string>()
+  for (const gatewayModelId of gatewayModelIds) {
+    const suffix = gatewayModelId.split("/").at(-1)
+    if (!suffix) continue
+    suffixOwners.set(suffix, suffixOwners.has(suffix) ? "" : gatewayModelId)
+  }
+  const eventsPromise = listUsageEvents().then((allEvents) => allEvents.filter((event) => {
+    if (event.providerModelId && modelIds.has(event.providerModelId)) return true
+    if (gatewayModelIds.has(event.gatewayModelId)) return true
+    const suffixOwner = suffixOwners.get(event.gatewayModelId)
+    return Boolean(suffixOwner)
+  }))
+  const [events, budgetContext] = await Promise.all([eventsPromise, repricingBudgetContext()])
   let currentJob = await updatePricingJob(jobId, { status: "running", totalEvents: events.length, processedEvents: 0, startedAt: new Date().toISOString() }, job)
   if (!currentJob) return
   for (let index = 0; index < events.length; index += 100) {
@@ -1929,6 +2542,7 @@ export async function repriceUsageForGroup(jobId: string) {
 
 export function resetAnalyticsForTests() {
   memoryStates().clear()
+  usagePredictionSamples.clear()
   pricingCache.clear()
   pricingInflight.clear()
   legacyPricingCaches.clear()
@@ -1949,6 +2563,8 @@ export function resetAnalyticsForTests() {
   bypassSessionListInflight.clear()
   dashboardCache.clear()
   dashboardInflight.clear()
+  dashboardModelLabelCache.clear()
+  dashboardModelLabelInflight.clear()
   budgetsCaches.clear()
   budgetsInflights.clear()
   budgetWindowCaches.clear()

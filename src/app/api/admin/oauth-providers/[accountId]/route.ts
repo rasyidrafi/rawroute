@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
+import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
 import { listCodexAccounts } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
 import { deleteProviderApiKey, upsertProviderApiKey } from "@/lib/store"
@@ -32,6 +33,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
       maxConcurrency: positiveInteger(body?.maxConcurrency, account.maxConcurrency, "Maximum concurrency"),
       priority: account.priority,
     })
+    invalidateCodexCliProxySync()
+    await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
     return Response.json({ ok: true })
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Unable to update Codex account.", 400)
@@ -44,5 +47,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ acc
   const result = await listCodexAccounts()
   if (!result.provider || !result.accounts.some((entry) => entry.id === accountId)) return jsonError("Codex account not found.", 404)
   await deleteProviderApiKey(result.provider.id, accountId)
+  invalidateCodexCliProxySync()
+  await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
   return Response.json({ ok: true })
 }

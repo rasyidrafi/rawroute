@@ -19,3 +19,11 @@ test("public usage starts on the budget window", () => {
   expect(usageView).not.toContain("publicView ? \"today\" : DEFAULT_PRESET")
   expect(overview).not.toContain('PRESET_OPTIONS.filter((option) => option.value !== "budget")')
 })
+
+test("dashboard routes require a session and login redirects signed-in users", () => {
+  const layout = readFileSync(new URL("../../app/dashboard/layout.tsx", import.meta.url), "utf8")
+  const login = readFileSync(new URL("../../app/login/page.tsx", import.meta.url), "utf8")
+
+  expect(layout).toContain('if (!(await isAuthenticated())) redirect("/login")')
+  expect(login).toContain('if (await isAuthenticated()) redirect("/dashboard")')
+})

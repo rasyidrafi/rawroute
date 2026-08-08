@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { extractUsageMetrics } from "@/lib/usage-metrics"
+import { calculateCostMicros, extractUsageMetrics, normalizeUsageMetrics } from "@/lib/usage-metrics"
 
 describe("usage metric extraction", () => {
   test("reads OpenAI Responses usage and cached input", () => {
@@ -30,7 +30,7 @@ describe("usage metric extraction", () => {
         prompt_tokens_details: { cached_tokens: 320000, cache_write_tokens: 1000 },
         completion_tokens: 1349,
       },
-    })).toEqual({ input: 348533, output: 1349, cached: 320000 })
+    })).toEqual({ input: 348533, output: 1349, cached: 320000, cacheCreation: 1000 })
   })
 
   test("combines Anthropic uncached, cache-read, and cache-created input", () => {
@@ -74,5 +74,26 @@ describe("usage metric extraction", () => {
   test("keeps partial usage instead of inventing missing totals", () => {
     expect(extractUsageMetrics({ usage: { output_tokens: 42 } })).toEqual({ output: 42 })
     expect(extractUsageMetrics({ usage: { total_tokens: 42 } })).toBeUndefined()
+  })
+
+  test("does not call partial token usage exact", () => {
+    const normalized = normalizeUsageMetrics({ input: 100 })
+    expect(calculateCostMicros(normalized, {
+      inputMicrosPerMillion: 1_000_000,
+      outputMicrosPerMillion: 2_000_000,
+      cacheReadMicrosPerMillion: 0,
+      cacheCreationMicrosPerMillion: 0,
+    })).toMatchObject({ costMicros: 100, pricingConfidence: "assumed" })
+  })
+
+  test("sanitizes negative and overflowing provider counts", () => {
+    const normalized = normalizeUsageMetrics({ input: -4, output: Number.MAX_VALUE })
+    expect(normalized).toMatchObject({ inputTokens: 0, outputTokens: Number.MAX_SAFE_INTEGER, usageCompleteness: "partial" })
+    expect(calculateCostMicros(normalized, {
+      inputMicrosPerMillion: 1_000_000,
+      outputMicrosPerMillion: 1_000_000,
+      cacheReadMicrosPerMillion: 0,
+      cacheCreationMicrosPerMillion: 0,
+    }).costMicros).toBe(Number.MAX_SAFE_INTEGER)
   })
 })

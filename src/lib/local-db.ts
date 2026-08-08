@@ -10,6 +10,7 @@ export type DocumentData = Record<string, unknown>
 type FieldPathToken = { readonly kind: "document-id" }
 type FieldOperation =
   | { readonly kind: "increment"; readonly amount: number }
+  | { readonly kind: "maximum"; readonly value: number | string }
   | { readonly kind: "delete" }
   | { readonly kind: "server-timestamp" }
   | { readonly kind: "array-union"; readonly values: unknown[] }
@@ -27,6 +28,9 @@ export const FieldValue = {
   increment(amount: number): FieldOperation {
     if (!Number.isFinite(amount)) throw new Error("FieldValue.increment requires a finite number.")
     return { kind: "increment", amount }
+  },
+  maximum(value: number | string): FieldOperation {
+    return { kind: "maximum", value }
   },
   delete(): FieldOperation {
     return { kind: "delete" }
@@ -86,6 +90,8 @@ async function ensureSchema() {
       )
     `)
     await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_idx ON rawroute_documents (collection_path)")
+    await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_document_idx ON rawroute_documents (collection_path, document_id)")
+    await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_completed_idx ON rawroute_documents (collection_path, (data #>> '{completedAt}'))")
     await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_updated_idx ON rawroute_documents (updated_at)")
   })().catch((error) => {
     schemaReady = undefined
@@ -214,7 +220,7 @@ function orderExpressions(field: string | FieldPathToken, direction: OrderDirect
 
 function operation(value: unknown): value is FieldOperation {
   return Boolean(value && typeof value === "object" && "kind" in value && [
-    "increment", "delete", "server-timestamp", "array-union", "array-remove",
+    "increment", "maximum", "delete", "server-timestamp", "array-union", "array-remove",
   ].includes((value as { kind?: unknown }).kind as string))
 }
 
@@ -227,6 +233,11 @@ function applyValue(previous: unknown, value: unknown): unknown {
   if (value.kind === "delete") return undefined
   if (value.kind === "server-timestamp") return new Date().toISOString()
   if (value.kind === "increment") return (typeof previous === "number" ? previous : 0) + value.amount
+  if (value.kind === "maximum") {
+    if (typeof previous === "number" && typeof value.value === "number") return Math.max(previous, value.value)
+    if (typeof previous === "string" && typeof value.value === "string") return previous > value.value ? previous : value.value
+    return value.value
+  }
   const previousArray = Array.isArray(previous) ? [...previous] : []
   if (value.kind === "array-union") {
     for (const item of value.values) if (!previousArray.some((candidate) => sameJson(candidate, item))) previousArray.push(clone(item))
@@ -295,11 +306,13 @@ export class LocalQuery {
   protected readonly filters: Filter[]
   protected readonly orderings: Ordering[]
   protected readonly maximum?: number
+  protected readonly suppressDefaultOrder: boolean
 
-  constructor(filters: Filter[] = [], orderings: Ordering[] = [], maximum?: number) {
+  constructor(filters: Filter[] = [], orderings: Ordering[] = [], maximum?: number, suppressDefaultOrder = false) {
     this.filters = filters
     this.orderings = orderings
     this.maximum = maximum
+    this.suppressDefaultOrder = suppressDefaultOrder
   }
 
   where(field: string | FieldPathToken, operator: WhereOperator, value: unknown): this {
@@ -315,8 +328,17 @@ export class LocalQuery {
     return this.copy({ maximum }) as this
   }
 
-  protected copy(changes: { filters?: Filter[]; orderings?: Ordering[]; maximum?: number }): LocalQuery {
-    return new LocalQuery(changes.filters || this.filters, changes.orderings || this.orderings, changes.maximum === undefined ? this.maximum : changes.maximum)
+  withoutDefaultOrder(): this {
+    return this.copy({ suppressDefaultOrder: true }) as this
+  }
+
+  protected copy(changes: { filters?: Filter[]; orderings?: Ordering[]; maximum?: number; suppressDefaultOrder?: boolean }): LocalQuery {
+    return new LocalQuery(
+      changes.filters || this.filters,
+      changes.orderings || this.orderings,
+      changes.maximum === undefined ? this.maximum : changes.maximum,
+      changes.suppressDefaultOrder === undefined ? this.suppressDefaultOrder : changes.suppressDefaultOrder,
+    )
   }
 
   protected queryParts(collectionPath: string) {
@@ -325,7 +347,7 @@ export class LocalQuery {
     applyFilterSql(this.filters, parameters, where)
     const order = this.orderings.length
       ? ` ORDER BY ${this.orderings.flatMap((entry) => orderExpressions(entry.field, entry.direction)).join(", ")}, document_id ASC`
-      : " ORDER BY document_id ASC"
+      : this.suppressDefaultOrder ? "" : " ORDER BY document_id ASC"
     const limit = this.maximum === undefined ? "" : ` LIMIT ${this.maximum}`
     return { parameters, sql: `SELECT path, document_id, data FROM rawroute_documents WHERE ${where.join(" AND ")}${order}${limit}` }
   }
@@ -348,8 +370,8 @@ export class LocalQuery {
 export class LocalCollectionReference extends LocalQuery {
   readonly path: string
 
-  constructor(path: string, filters: Filter[] = [], orderings: Ordering[] = [], maximum?: number) {
-    super(filters, orderings, maximum)
+  constructor(path: string, filters: Filter[] = [], orderings: Ordering[] = [], maximum?: number, suppressDefaultOrder = false) {
+    super(filters, orderings, maximum, suppressDefaultOrder)
     this.path = normalizeCollectionPath(path)
   }
 
@@ -358,8 +380,14 @@ export class LocalCollectionReference extends LocalQuery {
     return new LocalDocumentReference(documentPath(this.path, documentId))
   }
 
-  protected copy(changes: { filters?: Filter[]; orderings?: Ordering[]; maximum?: number }) {
-    return new LocalCollectionReference(this.path, changes.filters || this.filters, changes.orderings || this.orderings, changes.maximum === undefined ? this.maximum : changes.maximum)
+  protected copy(changes: { filters?: Filter[]; orderings?: Ordering[]; maximum?: number; suppressDefaultOrder?: boolean }) {
+    return new LocalCollectionReference(
+      this.path,
+      changes.filters || this.filters,
+      changes.orderings || this.orderings,
+      changes.maximum === undefined ? this.maximum : changes.maximum,
+      changes.suppressDefaultOrder === undefined ? this.suppressDefaultOrder : changes.suppressDefaultOrder,
+    )
   }
 
   protected collectionPath() {
@@ -491,6 +519,14 @@ async function readDocument(client: PoolClient, reference: LocalDocumentReferenc
 async function writeDocument(client: PoolClient, reference: LocalDocumentReference, data: object, merge: boolean, createOnly: boolean) {
   const queryClient = client
   await ensureSchema()
+  if (!merge && !createOnly) {
+    await queryClient.query(`
+      INSERT INTO rawroute_documents (path, collection_path, document_id, data, updated_at)
+      VALUES ($1, $2, $3, $4::jsonb, NOW())
+      ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+    `, [reference.path, collectionPathForDocument(reference.path), reference.id, JSON.stringify(applyData(undefined, data, false))])
+    return
+  }
   const existing = await readDocument(queryClient, reference)
   if (createOnly && existing.exists) throw conflictError(`Document ${reference.path} already exists.`)
   const next = applyData(existing.data(), data, merge)

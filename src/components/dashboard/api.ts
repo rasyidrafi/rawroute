@@ -17,7 +17,7 @@ function withWorkspace(init?: RequestInit): RequestInit {
 
 async function parseError(response: Response) {
   if (response.status === 401) {
-    if (typeof window !== "undefined") window.location.replace("/login")
+    if (typeof window !== "undefined") window.location.assign(new URL("/login", window.location.origin).toString())
     throw new UnauthorizedError()
   }
   let message = `Request failed (${response.status})`

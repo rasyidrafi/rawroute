@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 
+import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
 import { getProviderApiKey, listProviderApiKeys, listProviders, upsertProvider, upsertProviderApiKey } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
@@ -233,6 +234,8 @@ export async function saveCodexAccount(token: CodexTokenBundle, name?: string) {
     maxConcurrency: existing?.maxConcurrency,
     priority: existing?.priority,
   })
+  invalidateCodexCliProxySync()
+  await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
   return { provider, account }
 }
 
@@ -275,7 +278,11 @@ export async function listCodexAccounts() {
   // Read-only views must not create Firestore documents. The dedicated
   // provider is provisioned only when the first account is actually saved.
   const provider = (await listProviders()).find((entry) => entry.prefix === CODEX_PROVIDER_PREFIX)
-  if (!provider) return { provider: null, accounts: [] as ProviderApiKey[] }
+  if (!provider) {
+    await syncCodexAccountsToCliProxy().catch(() => undefined)
+    return { provider: null, accounts: [] as ProviderApiKey[] }
+  }
   const accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth")
+  await syncCodexAccountsToCliProxy().catch(() => undefined)
   return { provider, accounts }
 }

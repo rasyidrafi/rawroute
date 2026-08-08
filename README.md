@@ -42,6 +42,8 @@ CLIProxyAPI-compatible traffic is forwarded through these wrapper paths:
 
 OAuth callback paths needed by the dashboard are routed through RawRoute to the private CLIProxyAPI service. CLIProxyAPI's root, management API, and dashboard are never proxied to clients.
 
+The ownership and feature-coverage audit is documented in [`docs/cliproxy-coverage.md`](docs/cliproxy-coverage.md). It records which behavior stays native to CLIProxyAPI and which behavior RawRoute adds around it.
+
 ## Verification
 
 ```bash
@@ -53,8 +55,16 @@ npm run build
 docker compose --env-file .env.local config
 ```
 
-For deployment, follow the handoff procedure in `AGENTS.md`; keep the live `rawroute` container on `:8080` serving traffic while the latest image is preflighted on `:18080`.
+For deployment, run the zero-downtime handoff script from this directory:
 
-The local Redis service is an intentionally empty runtime cache after cutover. Firestore migration imports only documents on or after `MIGRATION_SINCE` (default `2026-08-01T00:00:00.000Z`) and removes older local document rows; structural login/index documents without domain timestamps are retained.
+```bash
+./redeploy-rawroute-18080.sh
+```
+
+It builds the image, copies the live environment without printing secrets, preflights the new image on `:18081`, verifies health/browser/Traefik/public routes, drains the old `:18080` container, switches the direct port through a temporary NAT handoff, and retains the previous container for rollback. It prompts for sudo when needed. Override `RAWROUTE_PREFLIGHT_PORT`, `RAWROUTE_VERIFY_DOMAINS`, or other `RAWROUTE_*` settings when deploying a different environment. The detailed safety requirements remain in `AGENTS.md`.
+
+The local Redis service is an intentionally empty runtime cache after cutover. Firestore migration imports all configuration/workspace documents and usage events/rollups on or after `MIGRATION_SINCE`. For a complete historical cutover, run the Firestore migration with an all-history cutoff, then run `npm run import:legacy-usage -- --input old-uage/9router-keyed-usage.sqlite` (the keyed export contains only `apiKeys` and usage fields, not request details). The importer matches exact API-key values, preserves the real workspace/key identity, uses the Asia/Jakarta calendar boundary, and replaces only the overlapping rollups covered by SQLite.
+
+The complete backfill used `MIGRATION_SINCE=1970-01-01T00:00:00.000Z` and `LEGACY_USAGE_CUTOFF=2026-08-05T17:00:00.000Z` so SQLite supplies each real API key through the end of 5 August and Firestore supplies the older and newer periods. It does not create a synthetic or virtual API key.
 
 Before cutover, run `npm run migrate:local`, then `npm run firestore:backfill-api-key-indexes` and `npm run verify:local` with the migration-only Firestore credentials available as `SOURCE_*` variables. Run these commands while PostgreSQL is reachable from the migration process. The migration result is a source snapshot; freeze or retire any old Firestore writer immediately after cutover. Do not run the destructive historical-row cleanup against a live local instance unless the source and local write streams have been deliberately merged.

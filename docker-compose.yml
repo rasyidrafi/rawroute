@@ -33,10 +33,17 @@ services:
     restart: unless-stopped
 
   rawroute:
+    image: rawroute:latest
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rawroute
+      args:
+        NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}
+        DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-unknown}
+    container_name: ${RAWROUTE_CONTAINER_NAME:-rawroute}
+    networks:
+      - default
+      - dokploy
     environment:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
@@ -84,10 +91,12 @@ services:
       CODEX_FEDRAMP: ${CODEX_FEDRAMP:-}
       CODEX_OAUTH_CLIENT_ID: ${CODEX_OAUTH_CLIENT_ID:-}
       CODEX_USAGE_URL: ${CODEX_USAGE_URL:-}
-      RAWROUTE_PUBLIC_URL: ${RAWROUTE_PUBLIC_URL:-http://localhost:8080}
+      RAWROUTE_PUBLIC_URL: ${RAWROUTE_PUBLIC_URL:-http://localhost:18080}
       CLIPROXY_URL: http://cli-proxy-api:8317
       CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
       CLIPROXY_API_KEY: ${CLIPROXY_API_KEY:?Set CLIPROXY_API_KEY}
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}
+      DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-unknown}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,7 +105,7 @@ services:
       cli-proxy-api:
         condition: service_started
     ports:
-      - "8080:8080"
+      - "${RAWROUTE_HOST_PORT:-18080}:8080"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -108,7 +117,7 @@ services:
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
     pull_policy: always
-    container_name: cli-proxy-api
+    container_name: ${CLIPROXY_CONTAINER_NAME:-cli-proxy-api}
     environment:
       # This enables the internal Management API without publishing it.
       MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
@@ -128,3 +137,6 @@ volumes:
 networks:
   default:
     name: rawroute
+  dokploy:
+    external: true
+    name: dokploy-network

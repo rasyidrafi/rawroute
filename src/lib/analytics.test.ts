@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import { checkBudget, getBudgetAdmission, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetRequestState, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
 import { createApiKey, _resetMemoryBackend } from "@/lib/store"
 import type { UsageEvent } from "@/lib/types"
 
@@ -23,14 +23,42 @@ describe.sequential("usage analytics", () => {
     expect((await listUsageRollups()).map((rollup) => rollup.granularity).sort()).toEqual(["daily", "hourly"])
   })
 
+  test("keeps failed requests out of pricing-confidence totals", async () => {
+    const key = await createApiKey("Failed request")
+    await recordGatewayUsage({
+      gatewayKeyId: key.id,
+      providerModelId: "failed-model",
+      gatewayModelId: "failed/model",
+      protocol: "openai-chat",
+      startedAt: new Date().toISOString(),
+      status: 400,
+      durationMs: 1,
+      metrics: {},
+    })
+
+    const payload = await getDashboardPayload({ preset: "all" })
+    expect(payload.summary.requests).toBe(1)
+    expect(payload.summary.costMicros).toBe(0)
+    expect(payload.summary.pricedRequests).toBe(0)
+    expect(payload.summary.unpricedRequests).toBe(0)
+  })
+
   test("public dashboard shows key names without exposing credentials", async () => {
     const key = await createApiKey("Public traffic")
     await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: "public-model", gatewayModelId: "public/model", protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 1 } })
 
     const payload = await getDashboardPayload({ preset: "all" }, true)
 
-    expect(payload.keys[0]).toMatchObject({ label: "Public traffic", maskedKey: "hidden" })
+    expect(payload.keys[0]).toMatchObject({ id: "Public traffic", label: "Public traffic", maskedKey: "hidden" })
     expect(payload.keys[0].id).not.toBe(key.id)
+  })
+
+  test("resolves usage pricing even when a key has no budget", async () => {
+    const key = await createApiKey("Unbudgeted usage")
+    await upsertModelPricing({ modelId: "unbudgeted-model", provider: "test", gatewayModelId: "test/unbudgeted", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    const state = await getBudgetRequestState(key.id, "test/unbudgeted", "unbudgeted-model", { model: "test/unbudgeted" }, 64)
+    expect(state.pricing).toBeDefined()
+    expect(state.usageContext).toBeUndefined()
   })
 
   test("is idempotent and blocks configured budgets", async () => {
@@ -72,6 +100,43 @@ describe.sequential("usage analytics", () => {
 
     const payload = await getDashboardPayload({ preset: "all" })
     expect(payload.keys[0].budget).toMatchObject({ bypassLimits: true, spentMicros: 20, usageStartAt: activation.session?.startedAt })
+  })
+
+  test("uses active-session events instead of scaling pre-session boundary rollups", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-07T10:37:12.359Z"))
+    try {
+      const key = await createApiKey("Boundary usage")
+      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+      const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
+        id,
+        gatewayKeyId: key.id,
+        gatewayModelId: "boundary/model",
+        protocol: "openai-chat",
+        startedAt: completedAt,
+        completedAt,
+        status: 200,
+        durationMs: 1,
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 1,
+        costMicros,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+      })
+      await recordUsageEvent(event("before-session", "2026-08-07T10:20:00.000Z", 400), null)
+      const activation = await setBudgetBypassEnabled(true)
+      await recordUsageEvent(event("inside-session", "2026-08-07T10:40:00.000Z", 100), null)
+      await recordUsageEvent(event("inside-session-2", "2026-08-07T11:05:00.000Z", 200), null)
+
+      const budget = (await getBudgetRows()).find((row) => row.apiKeyId === key.id)
+      expect(budget).toMatchObject({ spentMicros: 300, usageStartAt: activation.session?.startedAt })
+    } finally {
+      await setBudgetBypassEnabled(false)
+      vi.useRealTimers()
+    }
   })
 
   test("persists a custom shared budget window", async () => {
@@ -118,6 +183,79 @@ describe.sequential("usage analytics", () => {
 
     await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T10:00:00.000Z", end: "2026-08-08T18:00:00.000Z" })
     expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
+  })
+
+  test("uses event records inside partial hourly boundaries", async () => {
+    const key = await createApiKey("Partial boundary")
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+    await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T09:30:00.000Z", end: "2026-08-08T10:30:00.000Z" })
+    const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
+      id,
+      gatewayKeyId: key.id,
+      gatewayModelId: "partial/model",
+      protocol: "openai-chat",
+      startedAt: completedAt,
+      completedAt,
+      status: 200,
+      durationMs: 1,
+      inputTokens: 1,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 1,
+      costMicros,
+      pricingConfidence: "exact",
+      usageAvailable: true,
+      usageCompleteness: "complete",
+    })
+    await recordUsageEvent(event("before-window", "2026-08-08T09:15:00.000Z", 400), null)
+    await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
+    await recordUsageEvent(event("inside-end-hour", "2026-08-08T10:15:00.000Z", 200), null)
+
+    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(300)
+  })
+
+  test("counts a reconciled baseline once across concurrent reservations", async () => {
+    const usageContext = { usageStartAt: "2026-08-08T00:00:00.000Z", windowEnd: "2026-08-15T00:00:00.000Z" }
+    const admission = { key: "baseline-test", limitMicros: 1_000, spentMicros: 900, reservationMicros: 50, ttlSeconds: 60 }
+    await reserveBudgetAdmission("baseline-key", admission, usageContext)
+    await reserveBudgetAdmission("baseline-key", admission, usageContext)
+    await expect(reserveBudgetAdmission("baseline-key", admission, usageContext)).rejects.toThrow("budget")
+  })
+
+  test("uses reconciled usage when an existing budget baseline lags the event ledger", async () => {
+    const key = await createApiKey("Ledger admission")
+    await upsertModelPricing({ modelId: "ledger-model", provider: "test", gatewayModelId: "ledger/model", upstreamModel: "ledger", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+    const completedAt = new Date().toISOString()
+    const event = (id: string, costMicros: number): UsageEvent => ({
+      id,
+      gatewayKeyId: key.id,
+      gatewayModelId: "ledger/model",
+      providerModelId: "ledger-model",
+      protocol: "openai-chat",
+      startedAt: completedAt,
+      completedAt,
+      status: 200,
+      durationMs: 1,
+      inputTokens: 1,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 1,
+      costMicros,
+      pricingConfidence: "exact",
+      usageAvailable: true,
+      usageCompleteness: "complete",
+    })
+    // Passing an explicit null context simulates imported usage that reached
+    // the event ledger without updating the old budget counter.
+    await recordUsageEvent(event("ledger-1", 100), null)
+    await getBudgetRows()
+    await recordUsageEvent(event("ledger-2", 200), null)
+
+    const admission = await getBudgetAdmission(key.id, "ledger/model", "ledger-model")
+    expect(admission?.spentMicros).toBe(300)
   })
 
   test("uses the budget window as an analytics range and preserves custom hours", async () => {
@@ -250,6 +388,39 @@ describe.sequential("usage analytics", () => {
     const admission = await getBudgetAdmission(key.id, "test/uncapped", "uncapped-model", { model: "test/uncapped", input: "hello" }, 48)
     expect(admission?.reservationMicros).toBeGreaterThan(0)
     expect(admission?.reservationMicros).toBeLessThan(10_000)
+  })
+
+  test("separates conservative admission from missing-usage cost prediction", async () => {
+    const key = await createApiKey("Predicted usage")
+    await upsertModelPricing({ modelId: "predicted-model", provider: "test", gatewayModelId: "test/predicted", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
+    const first = await getBudgetRequestState(key.id, "test/predicted", "predicted-model", { model: "test/predicted" }, 64)
+    expect(first.estimatedCostMicros).toBeGreaterThan(0)
+    expect(first.admission?.reservationMicros).toBeGreaterThan(first.estimatedCostMicros || 0)
+
+    await recordUsageEvent({
+      id: "prediction-sample",
+      gatewayKeyId: key.id,
+      providerModelId: "predicted-model",
+      gatewayModelId: "test/predicted",
+      protocol: "openai-chat",
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      status: 200,
+      durationMs: 1,
+      inputTokens: 10,
+      outputTokens: 2_048,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 2_058,
+      costMicros: 2_058,
+      pricingConfidence: "exact",
+      usageAvailable: true,
+      usageCompleteness: "complete",
+    }, null)
+    const second = await getBudgetRequestState(key.id, "test/predicted", "predicted-model", { model: "test/predicted" }, 64)
+    expect(second.estimatedCostMicros).toBeGreaterThan(first.estimatedCostMicros || 0)
+    expect(second.admission?.reservationMicros).toBeGreaterThan(second.estimatedCostMicros || 0)
   })
 
   test("recognizes the chat-completions max_completion_tokens cap", async () => {

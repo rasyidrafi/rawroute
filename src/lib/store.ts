@@ -1,7 +1,7 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { type DocumentData, type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type QuerySnapshot, type Transaction } from "@/lib/local-db"
 
-import { gatewayModelId, cleanId } from "@/lib/http"
+import { gatewayModelId, cleanAliasId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
 import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage, workspaceContext } from "@/lib/workspace-context"
@@ -99,6 +99,7 @@ const apiKeyLookupInflight = new Map<string, Promise<IndexedApiKey | undefined>>
 let apiKeyIndexReconciliationCache: { entries: Map<string, ApiKeyIndexCandidate | null>; expiresAt: number } | undefined
 let apiKeyIndexReconciliationInflight: Promise<Map<string, ApiKeyIndexCandidate | null>> | undefined
 let apiKeyIndexReconciliationGeneration = 0
+let apiKeyNamesCache: { value: Map<string, string>; expiresAt: number; inflight?: Promise<Map<string, string>> } | undefined
 const maximumApiKeyLookupEntries = 512
 let apiKeyLookupGeneration = 0
 let metaGeneration = 0
@@ -510,6 +511,7 @@ function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   apiKeyIndexReconciliationGeneration += 1
   apiKeyIndexReconciliationCache = undefined
   apiKeyIndexReconciliationInflight = undefined
+  apiKeyNamesCache = undefined
   if (hashes) {
     for (const hash of hashes) {
       apiKeyLookupCache.delete(hash)
@@ -579,7 +581,7 @@ function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) {
     throw new Error("Alias name must be between 1 and 80 characters.")
   }
-  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanId(input.alias))) {
+  if (input.alias !== undefined && (typeof input.alias !== "string" || !cleanAliasId(input.alias))) {
     throw new Error("Alias is required.")
   }
   if (input.targetModelId !== undefined && (typeof input.targetModelId !== "string" || !input.targetModelId.trim())) {
@@ -1209,6 +1211,39 @@ export async function listApiKeys(): Promise<ApiKey[]> {
     state.apiKeyHashIndex = new Map(apiKeys.map((apiKey) => [apiKeyValueHash(apiKey.key), apiKey]))
   }
   return apiKeys
+}
+
+/**
+ * Return names from the global API-key index without exposing key values.
+ * Public usage can contain historical events whose key document belongs to a
+ * different workspace; this lets the dashboard render the real name instead
+ * of inventing a placeholder or showing the document ID.
+ */
+export async function listIndexedApiKeyNames(): Promise<Map<string, string>> {
+  if (isMemoryBackend()) {
+    const names = new Map<string, string>()
+    for (const state of memoryRoot().states.values()) {
+      for (const apiKey of state.apiKeys.values()) names.set(apiKey.id, apiKey.name)
+    }
+    return names
+  }
+  const now = Date.now()
+  if (apiKeyNamesCache && apiKeyNamesCache.expiresAt > now) return apiKeyNamesCache.value
+  if (apiKeyNamesCache?.inflight) return apiKeyNamesCache.inflight
+  const generation = apiKeyLookupGeneration
+  const promise = apiKeyIndexesRef().get().then((snapshot) => {
+    const names = new Map<string, string>()
+    for (const document of snapshot.docs) {
+      const data = document.data() as ApiKeyIndexData
+      if (typeof data.apiKeyId === "string" && typeof data.name === "string" && data.name.trim()) names.set(data.apiKeyId, data.name.trim())
+    }
+    if (generation === apiKeyLookupGeneration) apiKeyNamesCache = { value: names, expiresAt: Date.now() + apiKeyCacheTtlMs }
+    return names
+  }).finally(() => {
+    if (apiKeyNamesCache?.inflight === promise) apiKeyNamesCache.inflight = undefined
+  })
+  apiKeyNamesCache = { value: new Map(), expiresAt: 0, inflight: promise }
+  return promise
 }
 
 export async function createApiKey(name: string, customKey?: string): Promise<ApiKey> {
@@ -1990,7 +2025,7 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
     const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Alias not found.")
-    const normalizedAlias = cleanId(input.alias || existing?.alias || "")
+    const normalizedAlias = cleanAliasId(input.alias || existing?.alias || "")
     if (!normalizedAlias) throw new Error("Alias is required.")
 
     const aliasMatches = await transaction.get(aliasesRef().where("alias", "==", normalizedAlias).limit(2))
@@ -2263,7 +2298,7 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
   const state = ensureMemorySeeded()
   const existing = input.originalId ? state.aliases.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Alias not found.")
-  const normalizedAlias = cleanId(input.alias || existing?.alias || "")
+  const normalizedAlias = cleanAliasId(input.alias || existing?.alias || "")
   if (!normalizedAlias) throw new Error("Alias is required.")
   for (const alias of state.aliases.values()) {
     if (alias.id !== input.originalId && (alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")

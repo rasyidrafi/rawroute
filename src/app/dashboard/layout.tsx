@@ -1,5 +1,9 @@
-import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { redirect } from "next/navigation"
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { isAuthenticated } from "@/lib/auth"
+
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  if (!(await isAuthenticated())) redirect("/login")
   return <DashboardShell>{children}</DashboardShell>
 }

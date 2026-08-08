@@ -12,15 +12,25 @@ function sign(value: string, secret: string) {
   return createHmac("sha256", secret).update(value).digest("base64url")
 }
 
+type HeaderReader = { get(name: string): string | null }
+
+export function isSecureSessionRequest(requestHeaders: HeaderReader) {
+  const forwardedProtocol = requestHeaders.get("x-forwarded-proto")?.split(",", 1)[0]?.trim().toLowerCase()
+  if (forwardedProtocol) return forwardedProtocol === "https"
+  const forwarded = requestHeaders.get("forwarded")?.match(/(?:^|[;,])\s*proto=([^;,]+)/i)?.[1]?.replace(/^"|"$/g, "").trim().toLowerCase()
+  return forwarded === "https"
+}
+
 export async function createSession() {
   const sessionSecret = await readSessionSecret()
   const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 7
   const value = `${expiresAt}.${sign(String(expiresAt), sessionSecret)}`
   const jar = await cookies()
+  const requestHeaders = await headers()
   jar.set(COOKIE_NAME, value, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureSessionRequest(requestHeaders),
     path: "/",
     expires: new Date(expiresAt),
   })

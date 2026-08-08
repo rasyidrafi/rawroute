@@ -1,6 +1,11 @@
-import { LoginForm } from "@/components/login-form"
+import { redirect } from "next/navigation"
 
-export default function Page() {
+import { LoginForm } from "@/components/login-form"
+import { isAuthenticated } from "@/lib/auth"
+
+export default async function Page() {
+  if (await isAuthenticated()) redirect("/dashboard")
+
   return (
     <div className="relative flex min-h-svh w-full items-center justify-center overflow-hidden bg-[#f3f0e8] p-6 dark:bg-slate-950 md:p-10">
       <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(to_right,#94a3b822_1px,transparent_1px),linear-gradient(to_bottom,#94a3b822_1px,transparent_1px)] [background-size:32px_32px]" />

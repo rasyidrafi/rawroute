@@ -95,6 +95,7 @@ export interface AuthenticatedGatewayKey {
 }
 
 export type PricingConfidence = "exact" | "unpriced" | "assumed"
+export type UsageCompleteness = "complete" | "partial" | "missing"
 
 export interface UsageEvent {
   id: string
@@ -116,6 +117,12 @@ export interface UsageEvent {
   costMicros: number
   pricingConfidence: PricingConfidence
   usageAvailable: boolean
+  /** Whether both billable token sides were returned by the provider. */
+  usageCompleteness?: UsageCompleteness
+  /** Provenance for migrated or estimated costs; absent on old records. */
+  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical"
+  predictionMethod?: "same-key-model-day-median" | "same-key-model-median" | "same-model-day-median" | "same-model-median"
+  predictionSampleCount?: number
   pricingGroupId?: string
   pricingVersionId?: string
   pricingContextTier?: string
@@ -136,8 +143,13 @@ export interface UsageRollup {
   costMicros: number
   pricedRequests?: number
   unpricedRequests?: number
+  failedRequests?: number
   lastEventAt?: string
   updatedAt: string
+  backfillSource?: string
+  reconciledFrom?: string
+  excludedEventIds?: string[]
+  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical"
 }
 
 export interface ModelPricing {

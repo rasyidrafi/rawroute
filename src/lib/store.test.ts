@@ -11,6 +11,7 @@ import {
   getProvider,
   hashPassword,
   listApiKeys,
+  listIndexedApiKeyNames,
   listProviderApiKeys,
   listProviderModels,
   migrateData,
@@ -245,6 +246,13 @@ describe("configuration storage", () => {
     const updated = await updateApiKeyName(apiKey.id, " Renamed ")
     expect(updated).toMatchObject({ id: apiKey.id, name: "Renamed", key: "client-secret" })
     expect((await listApiKeys()).find((entry) => entry.id === apiKey.id)).toMatchObject({ name: "Renamed", key: "client-secret" })
+  })
+
+  test("resolves API-key names from every workspace index", async () => {
+    const defaultKey = await createApiKey("Default name", "default-name-secret")
+    const scopedKey = await createApiKey("Scoped name", "scoped-name-secret")
+    expect((await listIndexedApiKeyNames()).get(defaultKey.id)).toBe("Default name")
+    expect((await listIndexedApiKeyNames()).get(scopedKey.id)).toBe("Scoped name")
   })
 
   test("enforces case-sensitive uniqueness against the bootstrap key and cleans indexes on delete", async () => {

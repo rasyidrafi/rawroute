@@ -523,13 +523,25 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
 
 export async function getPricingForModelAt(model: { gatewayModelId: string; providerModelId?: string }, at = new Date()) {
   const catalog = await loadPricingCatalog()
-  const target = (model.providerModelId ? catalog.modelById.get(model.providerModelId) : undefined) || catalog.modelByGatewayId.get(model.gatewayModelId)
-  if (!target) return undefined
-  const group = catalog.groupByModelId.get(target.id)
-  if (!group) return undefined
-  const version = activePricingVersion(catalog.versionsByGroup.get(group.id) || [], at)
-  if (!version) return undefined
-  return { ...version, groupId: group.id, pricingGroupId: group.id, pricingVersionId: version.id }
+  const exact = (model.providerModelId ? catalog.modelById.get(model.providerModelId) : undefined) || catalog.modelByGatewayId.get(model.gatewayModelId)
+  // CLIProxy can expose the upstream model name without the configured
+  // provider prefix (for example `gpt-5.6-luna` while RawRoute stores
+  // `codex/gpt-5.6-luna`). Resolve that spelling only when it maps to one
+  // configured model; ambiguous suffixes must remain unpriced rather than
+  // guessing between providers.
+  const suffixMatches = catalog.models.filter((candidate) => candidate.id !== exact?.id && (
+    candidate.upstreamModel === model.gatewayModelId || candidate.gatewayModelId.endsWith(`/${model.gatewayModelId}`)
+  ))
+  const candidates = exact
+    ? [exact, ...(suffixMatches.length === 1 ? suffixMatches : [])]
+    : suffixMatches.length === 1 ? suffixMatches : []
+  for (const target of candidates) {
+    const group = catalog.groupByModelId.get(target.id)
+    if (!group) continue
+    const version = activePricingVersion(catalog.versionsByGroup.get(group.id) || [], at)
+    if (version) return { ...version, groupId: group.id, pricingGroupId: group.id, pricingVersionId: version.id }
+  }
+  return undefined
 }
 
 function indexPricingCatalog(groups: ModelPricingGroup[], versions: ModelPricingVersion[], models: Model[], providers: ProviderRows): PricingCatalog {
