@@ -187,43 +187,49 @@ describe.sequential("usage analytics", () => {
   })
 
   test("recalculates budget usage from historical rollups for custom boundaries", async () => {
-    const key = await createApiKey("Historical budget")
-    const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
-      id,
-      gatewayKeyId: key.id,
-      gatewayModelId: "historical/model",
-      protocol: "openai-chat",
-      startedAt: completedAt,
-      completedAt,
-      status: 200,
-      durationMs: 1,
-      inputTokens: 1,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      totalTokens: 1,
-      costMicros,
-      pricingConfidence: "exact",
-      usageAvailable: true,
-    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-08T12:00:00.000Z"))
+    try {
+      const key = await createApiKey("Historical budget")
+      const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
+        id,
+        gatewayKeyId: key.id,
+        gatewayModelId: "historical/model",
+        protocol: "openai-chat",
+        startedAt: completedAt,
+        completedAt,
+        status: 200,
+        durationMs: 1,
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 1,
+        costMicros,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+      })
 
-    await recordUsageEvent(event("old-day", "2026-08-07T12:00:00.000Z", 400), null)
-    await recordUsageEvent(event("before-start", "2026-08-08T09:00:00.000Z", 50), null)
-    await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
-    await recordUsageEvent(event("inside-complete-hour", "2026-08-08T10:00:00.000Z", 100), null)
-    await recordUsageEvent(event("inside-end-hour", "2026-08-08T17:30:00.000Z", 100), null)
-    await recordUsageEvent(event("after-end", "2026-08-08T18:00:00.000Z", 50), null)
+      await recordUsageEvent(event("old-day", "2026-08-07T12:00:00.000Z", 400), null)
+      await recordUsageEvent(event("before-start", "2026-08-08T09:00:00.000Z", 50), null)
+      await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
+      await recordUsageEvent(event("inside-complete-hour", "2026-08-08T10:00:00.000Z", 100), null)
+      await recordUsageEvent(event("inside-end-hour", "2026-08-08T17:30:00.000Z", 100), null)
+      await recordUsageEvent(event("after-end", "2026-08-08T18:00:00.000Z", 50), null)
 
-    await updateBudgetWindow({ anchor: "custom", start: "2026-08-07T09:30:00.000Z", end: "2026-08-09T17:45:00.000Z" })
-    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
-    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(800)
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-07T09:30:00.000Z", end: "2026-08-09T17:45:00.000Z" })
+      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+      expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(800)
 
-    await configureTestPricing({ modelId: "historical-model", gatewayModelId: "historical/model", upstreamModel: "historical", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
-    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 700, enabled: true })
-    await expect(checkBudget(key.id, "historical/model")).rejects.toThrow("budget")
+      await configureTestPricing({ modelId: "historical-model", gatewayModelId: "historical/model", upstreamModel: "historical", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
+      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 700, enabled: true })
+      await expect(checkBudget(key.id, "historical/model")).rejects.toThrow("budget")
 
-    await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T10:00:00.000Z", end: "2026-08-08T18:00:00.000Z" })
-    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T10:00:00.000Z", end: "2026-08-08T18:00:00.000Z" })
+      expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test("uses event records inside partial hourly boundaries", async () => {

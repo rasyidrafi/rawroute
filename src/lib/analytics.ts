@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getLocalFirestore, type Firestore, type LocalQuery } from "@/lib/local-db"
 
+import { localRedisSetIfAbsent } from "@/lib/local-redis"
 import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "@/lib/store"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
+import { writeLog } from "@/lib/logger"
 import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
@@ -73,6 +75,10 @@ const budgetsCaches = new Map<string, TimedValue<GatewayKeyBudget[]>>()
 const budgetsInflights = new Map<string, Promise<GatewayKeyBudget[]>>()
 const budgetWindowCaches = new Map<string, TimedValue<BudgetWindow>>()
 const budgetWindowInflights = new Map<string, Promise<BudgetWindow>>()
+const codexBudgetWindowSyncAttempts = new Map<string, number>()
+const codexBudgetWindowSyncInflights = new Map<string, Promise<BudgetWindow>>()
+const codexBudgetWindowSyncIntervalMs = positiveDuration(process.env.CODEX_BUDGET_WINDOW_SYNC_INTERVAL_MS, 5 * 60_000)
+const codexBudgetWindowSyncLockTtlMs = codexBudgetWindowSyncIntervalMs + 60_000
 const budgetCacheGenerations = new Map<string, number>()
 
 const dashboardPerformanceLogging = process.env.DASHBOARD_PERF_LOG === "1"
@@ -214,13 +220,13 @@ function clearWorkspaceEntries<T>(cache: Map<string, T>, workspaceId: string) {
   for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key)
 }
 
-function invalidateBudgetReadCaches() {
+function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean } = {}) {
   const workspaceId = currentWorkspaceId()
   advanceWorkspaceGeneration(budgetCacheGenerations, workspaceId)
   budgetsCaches.delete(workspaceId)
   budgetsInflights.delete(workspaceId)
   budgetWindowCaches.delete(workspaceId)
-  budgetWindowInflights.delete(workspaceId)
+  if (!options.preserveWindowInflight) budgetWindowInflights.delete(workspaceId)
   clearWorkspaceEntries(budgetConfigCache, workspaceId)
   clearWorkspaceEntries(budgetConfigInflight, workspaceId)
   clearWorkspaceEntries(budgetCounterListCache, workspaceId)
@@ -680,6 +686,85 @@ export async function listBudgetBypassSessions(limit = 50, currentWindow?: Budge
   return promise
 }
 
+function codexBudgetWindowSyncKey(accountId: string) {
+  return `${currentWorkspaceId()}:${accountId}`
+}
+
+function sameCodexBudgetWindow(left: BudgetWindow, right: Pick<BudgetWindow, "start" | "end" | "anchor" | "codexAccountId">) {
+  return left.anchor === right.anchor && left.codexAccountId === right.codexAccountId && left.start === right.start && left.end === right.end
+}
+
+async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now()): Promise<BudgetWindow> {
+  if (isMemory() || window.anchor !== "codex" || !window.codexAccountId) return window
+
+  const workspaceId = currentWorkspaceId()
+  const syncKey = codexBudgetWindowSyncKey(window.codexAccountId)
+  const currentEnd = Date.parse(window.end)
+  const lastAttempt = codexBudgetWindowSyncAttempts.get(syncKey) || 0
+  const due = !lastAttempt || now - lastAttempt >= codexBudgetWindowSyncIntervalMs || !Number.isFinite(currentEnd) || currentEnd <= now
+  if (!due) return window
+
+  const existing = codexBudgetWindowSyncInflights.get(syncKey)
+  if (existing) return existing
+  boundedSet(codexBudgetWindowSyncAttempts, syncKey, now, 256)
+
+  const promise = (async () => {
+    let redisLock: boolean | undefined
+    try {
+      redisLock = await localRedisSetIfAbsent(`rawroute:codex-budget-window-sync:${syncKey}`, "1", codexBudgetWindowSyncLockTtlMs)
+    } catch {
+      redisLock = undefined
+    }
+    // Redis is coordination only. If it is unavailable, the process-local
+    // single-flight map still prevents duplicate refreshes in this instance.
+    if (redisLock === false) return window
+
+    try {
+      const resolved = await resolveCodexBudgetWindow(window.codexAccountId)
+      const ref = windowRef()
+      let result = window
+      let changed = false
+      await db().runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref)
+        const latest = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
+        // Do not let a delayed Codex refresh overwrite an administrator's
+        // account or custom-window change made while the request was running.
+        if (latest.anchor !== "codex" || latest.codexAccountId !== window.codexAccountId) {
+          result = latest
+          return
+        }
+        if (sameCodexBudgetWindow(latest, resolved)) {
+          result = latest
+          return
+        }
+        result = { ...latest, ...resolved, updatedAt: new Date().toISOString() }
+        changed = true
+        transaction.set(ref, result)
+      })
+
+      if (changed) {
+        // Preserve the current getBudgetWindow single-flight when this sync is
+        // running inside it; the caller will repopulate the window cache.
+        invalidateBudgetReadCaches({ preserveWindowInflight: true })
+        boundedSet(budgetWindowCaches, workspaceId, { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+      } else if (result !== window) {
+        boundedSet(budgetWindowCaches, workspaceId, { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+      }
+      return result
+    } catch (error) {
+      writeLog("warn", "admin", "Unable to sync Codex budget window", {
+        accountId: window.codexAccountId || "unknown",
+        error: error instanceof Error ? error.message : "Unknown error",
+      }, workspaceId)
+      return window
+    }
+  })().finally(() => {
+    if (codexBudgetWindowSyncInflights.get(syncKey) === promise) codexBudgetWindowSyncInflights.delete(syncKey)
+  })
+  codexBudgetWindowSyncInflights.set(syncKey, promise)
+  return promise
+}
+
 export async function getBudgetWindow(): Promise<BudgetWindow> {
   if (isMemory()) {
     const memory = memoryState()
@@ -692,8 +777,13 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
   const workspaceId = currentWorkspaceId()
   const budgetWindowCache = budgetWindowCaches.get(workspaceId)
   if (budgetWindowCache && budgetWindowCache.expiresAt > now) {
-    const next = advanceExpiredWindow(budgetWindowCache.value, now)
+    const synced = await syncCodexBudgetWindowIfStale(budgetWindowCache.value, now)
+    const next = advanceExpiredWindow(synced, now)
     if (next === budgetWindowCache.value) return next
+    if (next === synced) {
+      boundedSet(budgetWindowCaches, workspaceId, { value: next, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+      return next
+    }
   }
   const budgetWindowInflight = budgetWindowInflights.get(workspaceId)
   if (budgetWindowInflight) return budgetWindowInflight
@@ -703,7 +793,9 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     const ref = windowRef()
     const snapshot = await ref.get()
     const current = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
-    const next = advanceExpiredWindow(current)
+    const synced = await syncCodexBudgetWindowIfStale(current)
+    const next = advanceExpiredWindow(synced)
+    if (next === synced && synced !== current) return synced
     if (snapshot.exists && next === current) return next
 
     let result = next
@@ -757,6 +849,7 @@ export async function updateBudgetWindow(input: Partial<BudgetWindow> & { anchor
   else await windowRef().set(next)
   invalidateBudgetReadCaches()
   if (!isMemory()) boundedSet(budgetWindowCaches, currentWorkspaceId(), { value: next, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+  if (next.anchor === "codex" && next.codexAccountId) boundedSet(codexBudgetWindowSyncAttempts, codexBudgetWindowSyncKey(next.codexAccountId), Date.now(), 256)
   return next
 }
 
@@ -2396,6 +2489,8 @@ export function resetAnalyticsForTests() {
   budgetsInflights.clear()
   budgetWindowCaches.clear()
   budgetWindowInflights.clear()
+  codexBudgetWindowSyncAttempts.clear()
+  codexBudgetWindowSyncInflights.clear()
   budgetCacheGenerations.clear()
   resetModelPricingForTests()
 }

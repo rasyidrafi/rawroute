@@ -55,6 +55,16 @@ export async function localRedisSet(key: string, value: string, ttlMs: number) {
   return (await boundedCommand(getLocalRedis().setex(key, ttlSeconds, value))) !== undefined
 }
 
+/**
+ * Best-effort distributed single-flight marker. `undefined` means Redis was
+ * unavailable; callers can fall back to their process-local guard.
+ */
+export async function localRedisSetIfAbsent(key: string, value: string, ttlMs: number): Promise<boolean | undefined> {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) return false
+  const result = await boundedCommand(getLocalRedis().set(key, value, "PX", Math.max(1, Math.ceil(ttlMs)), "NX"))
+  return result === undefined ? undefined : result === "OK"
+}
+
 export async function localRedisDelete(...keys: string[]) {
   if (!keys.length) return false
   return (await boundedCommand(getLocalRedis().del(...keys))) !== undefined

@@ -23,7 +23,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "@/lib/types"
-import { formatAppDate, formatAppDateTime } from "@/lib/timezone"
+import { formatAppDate } from "@/lib/timezone"
 
 type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[] }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
@@ -52,6 +52,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const [starting, setStarting] = useState(false)
   const [resetAccount, setResetAccount] = useState<ProviderApiKey | null>(null)
   const [resetConfirmation, setResetConfirmation] = useState("")
+  const [toggleAccount, setToggleAccount] = useState<ProviderApiKey | null>(null)
 
   useEffect(() => {
     if (!device || !polling) return
@@ -120,8 +121,10 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiPatch(`/api/admin/oauth-providers/${account.id}`, { enabled: !account.enabled })
       await Promise.all([mutate(), globalMutate("/api/admin/providers"), globalMutate("/api/admin/oauth-providers/usage")])
       toast.success(`Codex account ${account.enabled ? "disabled" : "enabled"}`)
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to update Codex account")
+      return false
     } finally {
       setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
     }
@@ -308,7 +311,6 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                 <TableHead>Status</TableHead>
                 {isOAuthProvider && <TableHead>Usage Limits</TableHead>}
                 {isOAuthProvider && <TableHead>Unused Resets</TableHead>}
-                {isOAuthProvider && <TableHead>Token expiry</TableHead>}
                 <TableHead>Created</TableHead>
                 <TableHead />
               </TableRow>
@@ -330,13 +332,12 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     {showQuota && <CodexQuotaTableCell accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} />}
-                    {isOAuthProvider && <TableCell>{usageLoading && !usageData ? "…" : usageData?.accounts[apiKey.id]?.unusedResetCredits ?? "N/A"}</TableCell>}
-                    {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? formatAppDateTime(apiKey.expiresAt) : "Unknown"}</TableCell>}
+                    {isOAuthProvider && <TableCell className="align-middle"><div className="flex items-center gap-2"><span className="tabular-nums">{usageData?.accounts[apiKey.id]?.unusedResetCredits ?? 0}</span>{apiKey.credentialKind === "codex-oauth" && <Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={(usageData?.accounts[apiKey.id]?.unusedResetCredits ?? 0) < 1 || usageData?.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}</div></TableCell>}
                     <TableCell className="align-middle text-xs text-muted-foreground">{formatAppDate(apiKey.createdAt)}</TableCell>
-                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-label={`${apiKey.enabled ? "Disable" : "Enable"} ${apiKey.name}`} aria-busy={isPending(`toggle-codex-account:${apiKey.id}`)} size="icon-sm" variant="ghost" disabled={isPending(`toggle-codex-account:${apiKey.id}`)} onClick={() => void setCodexAccountEnabled(apiKey)}><PowerIcon /></Button><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-label={`${apiKey.enabled ? "Disable" : "Enable"} ${apiKey.name}`} aria-busy={isPending(`toggle-codex-account:${apiKey.id}`)} size="icon-sm" variant="outline" disabled={isPending(`toggle-codex-account:${apiKey.id}`)} onClick={() => setToggleAccount(apiKey)}><PowerIcon /></Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}
-              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 9 : 6} />}
+              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 8 : 6} />}
             </TableBody>
           </Table>
         </CardContent>
@@ -346,6 +347,12 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
           <AlertDialogHeader><AlertDialogTitle>Redeem Codex reset credit?</AlertDialogTitle><AlertDialogDescription>This consumes one banked reset credit for {resetAccount?.name}. Type <code>use my codex reset</code> to confirm.</AlertDialogDescription></AlertDialogHeader>
           <Input value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} placeholder="use my codex reset" autoFocus />
           <AlertDialogFooter><AlertDialogCancel disabled={isPending(`reset:${resetAccount?.id}`)}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={isPending(`reset:${resetAccount?.id}`)} disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || isPending(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>{isPending(`reset:${resetAccount?.id}`) && <LoadingSpinner />}Redeem reset</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={Boolean(toggleAccount)} onOpenChange={(open) => { if (!open && !isPending(`toggle-codex-account:${toggleAccount?.id}`)) setToggleAccount(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>{toggleAccount?.enabled ? "Disable" : "Enable"} Codex account?</AlertDialogTitle><AlertDialogDescription>{toggleAccount?.enabled ? `Requests will stop using ${toggleAccount.name} until you enable it again.` : `${toggleAccount?.name} will become available for fill-first routing.`}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel disabled={isPending(`toggle-codex-account:${toggleAccount?.id}`)}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={isPending(`toggle-codex-account:${toggleAccount?.id}`)} disabled={isPending(`toggle-codex-account:${toggleAccount?.id}`)} onClick={async () => { if (toggleAccount && await setCodexAccountEnabled(toggleAccount)) setToggleAccount(null) }}>{isPending(`toggle-codex-account:${toggleAccount?.id}`) && <LoadingSpinner />}{toggleAccount?.enabled ? "Disable account" : "Enable account"}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <Card>
