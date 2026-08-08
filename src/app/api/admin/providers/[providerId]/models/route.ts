@@ -2,7 +2,7 @@ import { requireAdmin } from "@/lib/auth"
 import { gatewayModelId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateRequestOverrides } from "@/lib/request-overrides"
-import { getProvider, upsertModel } from "@/lib/store"
+import { getProvider, listProviderModels, upsertModel } from "@/lib/store"
 import type { Model, Protocol } from "@/lib/types"
 
 
@@ -23,6 +23,10 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   try {
     const provider = await getProvider(providerId)
     if (!provider) throw new Error("Provider is missing.")
+    const existing = input.originalId ? (await listProviderModels(providerId)).find((model) => model.id === input.originalId) : undefined
+    if (existing?.source === "builtin") {
+      throw new Error("Built-in Codex models are fixed and cannot be edited.")
+    }
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const upstreamModel = typeof input.upstreamModel === "string" ? input.upstreamModel.trim() : ""
     const requestedProtocol = input.protocol as string | undefined
@@ -31,6 +35,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       ? input.gatewayModelId.trim()
       : typeof input.id === "string" ? input.id.trim() : ""
     const normalizedGatewayModelId = gatewayModelId(provider.prefix, requestedGatewayModelId)
+    if (!normalizedGatewayModelId) throw new Error("Gateway model ID is required.")
     const requestOverrides = input.requestOverrides !== undefined
       ? validateRequestOverrides(input.requestOverrides)
       : undefined
@@ -49,6 +54,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       name,
       upstreamModel,
       enabled: input.enabled,
+      source: existing?.source || "custom",
     }
     if (requestedProtocol === "inherit") modelInput.protocol = undefined
     else if (requestedProtocol !== undefined) modelInput.protocol = requestedProtocol as Protocol

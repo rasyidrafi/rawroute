@@ -1,7 +1,8 @@
 import { requireAdmin } from "@/lib/auth"
+import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { reorderProviderApiKeys } from "@/lib/store"
+import { getProvider, reorderProviderApiKeys } from "@/lib/store"
 
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
@@ -13,10 +14,15 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   }
   try {
     await reorderProviderApiKeys(providerId, body.orderedIds)
+    const provider = await getProvider(providerId)
+    if (provider?.prefix === "codex") {
+      invalidateCodexCliProxySync()
+      await syncCodexAccountsToCliProxy({ force: true })
+    }
     writeLog("info", "admin", "Provider API keys reordered", { providerId, count: body.orderedIds.length })
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Provider API key reorder failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to reorder provider API keys.", 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to reorder provider API keys.", 502)
   }
 }

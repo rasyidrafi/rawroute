@@ -19,3 +19,6 @@ logging-to-file: true
 usage-statistics-enabled: true
 plugins:
   enabled: false
+# Prefer the highest-priority available credential when multiple auth files match.
+routing:
+  strategy: "fill-first"

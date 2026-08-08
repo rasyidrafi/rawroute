@@ -18,6 +18,6 @@ describe("credential secrets", () => {
     expect(second?.startsWith("rr1:")).toBe(true)
     expect(first).not.toBe(second)
     expect(decryptCredentialSecret(first)).toBe("refresh-token")
-    expect(decryptCredentialSecret("legacy-value")).toBe("legacy-value")
+    expect(decryptCredentialSecret("fixture-value")).toBe("fixture-value")
   })
 })

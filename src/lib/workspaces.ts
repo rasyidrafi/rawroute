@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 
 import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getFirestoreInstance, isMemoryBackend } from "@/lib/store"
+import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
 import type { Workspace } from "@/lib/types"
 import { DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME } from "@/lib/workspace-context"
 
@@ -22,6 +23,7 @@ const workspaceCacheTtlMs = configuredDuration(process.env.WORKSPACE_CACHE_TTL_M
 const workspaceNegativeCacheTtlMs = configuredDuration(process.env.WORKSPACE_NEGATIVE_CACHE_TTL_MS, 10_000)
 const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
 const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
+const workspaceRedisPrefix = "rawroute:workspace:v1:"
 const workspaceCache = new Map<string, WorkspaceCacheEntry>()
 const workspaceReadInflight = new Map<string, Promise<Workspace | undefined>>()
 let workspaceListCache: { value: Workspace[]; expiresAt: number } | undefined
@@ -49,7 +51,7 @@ function nameHash(name: string) {
 
 function defaultWorkspace(): Workspace {
   const now = new Date().toISOString()
-  return { id: DEFAULT_WORKSPACE_ID, name: DEFAULT_WORKSPACE_NAME, status: "active", isDefault: true, storageMode: "legacy", createdAt: now, updatedAt: now }
+  return { id: DEFAULT_WORKSPACE_ID, name: DEFAULT_WORKSPACE_NAME, status: "active", isDefault: true, storageMode: "scoped", createdAt: now, updatedAt: now }
 }
 
 function workspacesRef() {
@@ -78,12 +80,28 @@ function cacheWorkspace(workspaceId: string, workspace: Workspace | undefined, e
   workspaceCache.set(workspaceId, { value: workspace || null, expiresAt })
 }
 
+function workspaceRedisKey(workspaceId: string) {
+  return `${workspaceRedisPrefix}${encodeURIComponent(workspaceId)}`
+}
+
+async function readWorkspaceFromRedis(workspaceId: string) {
+  const raw = await localRedisGet(workspaceRedisKey(workspaceId))
+  if (!raw) return undefined
+  try {
+    const workspace = JSON.parse(raw) as Workspace
+    return workspace.id === workspaceId ? workspace : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function publishWorkspace(workspace: Workspace) {
   workspaceCacheGeneration += 1
   workspaceReadInflight.delete(workspace.id)
   workspaceListCache = undefined
   workspaceListInflight = undefined
   cacheWorkspace(workspace.id, workspace)
+  if (!isMemoryBackend()) void localRedisSet(workspaceRedisKey(workspace.id), JSON.stringify(workspace), workspaceCacheTtlMs)
 }
 
 function evictWorkspace(workspaceId: string) {
@@ -92,6 +110,7 @@ function evictWorkspace(workspaceId: string) {
   workspaceReadInflight.delete(workspaceId)
   workspaceListCache = undefined
   workspaceListInflight = undefined
+  if (!isMemoryBackend()) void localRedisDelete(workspaceRedisKey(workspaceId))
 }
 
 async function ensureDefaultWorkspace() {
@@ -188,11 +207,15 @@ export async function getWorkspace(workspaceId: string) {
   if (existing) return existing
 
   const generation = workspaceCacheGeneration
-  const promise = (workspaceId === DEFAULT_WORKSPACE_ID
-    ? readDefaultWorkspace()
-    : workspaceRef(workspaceId).get().then((snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as Workspace : undefined)
-  ).then((workspace) => {
+  const promise = (async () => {
+    const redisWorkspace = await readWorkspaceFromRedis(workspaceId)
+    if (redisWorkspace) return redisWorkspace
+    return workspaceId === DEFAULT_WORKSPACE_ID
+      ? readDefaultWorkspace()
+      : workspaceRef(workspaceId).get().then((snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as Workspace : undefined)
+  })().then((workspace) => {
     if (generation === workspaceCacheGeneration) cacheWorkspace(workspaceId, workspace)
+    if (workspace && !isMemoryBackend()) void localRedisSet(workspaceRedisKey(workspace.id), JSON.stringify(workspace), workspaceCacheTtlMs)
     return workspace
   }).finally(() => {
     if (workspaceReadInflight.get(workspaceId) === promise) workspaceReadInflight.delete(workspaceId)

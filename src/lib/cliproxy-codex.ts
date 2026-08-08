@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import { listProviderApiKeys, listProviders } from "@/lib/store"
 import { listWorkspaces } from "@/lib/workspaces"
 import { runInWorkspace } from "@/lib/workspace-context"
@@ -13,6 +15,8 @@ type AuthFileEntry = {
 
 type CodexAuthFile = {
   type: "codex"
+  prefix: string
+  priority: number
   access_token: string
   refresh_token?: string
   id_token?: string
@@ -45,15 +49,30 @@ async function managementJson<T>(path: string, init: RequestInit = {}) {
   return { response, data }
 }
 
-function authFileName(account: ProviderApiKey) {
-  const identity = (account.accountId || account.id).trim().replace(/[^A-Za-z0-9._-]+/g, "-")
-  return `codex-rawroute-${identity}.json`
+export function codexWorkspacePrefix(workspaceId: string) {
+  const digest = createHash("sha1").update(`rawroute:codex:${workspaceId}`).digest("hex").slice(0, 16)
+  return `rr-codex-${digest}`
 }
 
-function authFilePayload(account: ProviderApiKey): CodexAuthFile {
+type LocalCodexAccount = {
+  workspaceId: string
+  account: ProviderApiKey
+  /** Rank derived from RawRoute's displayed order; higher means first. */
+  priority: number
+}
+
+function authFileName(workspaceId: string, account: ProviderApiKey) {
+  const workspace = codexWorkspacePrefix(workspaceId)
+  const identity = (account.accountId || account.id).trim().replace(/[^A-Za-z0-9._-]+/g, "-")
+  return `codex-rawroute-${workspace}-${identity}.json`
+}
+
+function authFilePayload(account: ProviderApiKey, prefix: string, priority = account.priority ?? 0): CodexAuthFile {
   if (!account.key.trim()) throw new Error(`Codex account ${account.name} has no access token.`)
   return {
     type: "codex",
+    prefix,
+    priority,
     access_token: account.key,
     ...(account.refreshToken ? { refresh_token: account.refreshToken } : {}),
     ...(account.idToken ? { id_token: account.idToken } : {}),
@@ -68,19 +87,23 @@ function authFilePayload(account: ProviderApiKey): CodexAuthFile {
 
 async function localCodexAccounts() {
   const workspaces = await listWorkspaces()
-  const accounts = new Map<string, ProviderApiKey>()
+  const accounts: LocalCodexAccount[] = []
   for (const workspace of workspaces) {
     const workspaceAccounts = await runInWorkspace(workspace, async () => {
       const provider = (await listProviders()).find((entry) => entry.prefix === "codex")
       if (!provider) return [] as ProviderApiKey[]
       return (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth")
     })
-    for (const account of workspaceAccounts) {
-      const identity = account.accountId || account.id
-      if (!accounts.has(identity)) accounts.set(identity, account)
-    }
+    accounts.push(...workspaceAccounts.map((account, index) => ({
+      workspaceId: workspace.id,
+      account,
+      // Re-derive a dense priority from the UI/store order. This makes old
+      // accounts with no persisted priority obey the same fill-first order as
+      // newly reordered accounts.
+      priority: workspaceAccounts.length - index - 1,
+    })))
   }
-  return [...accounts.values()]
+  return accounts
 }
 
 async function syncNow(force: boolean) {
@@ -91,15 +114,18 @@ async function syncNow(force: boolean) {
   if (!response.ok) throw new Error(`CLIProxy auth-file list failed (${response.status}).`)
   const files = Array.isArray(data?.files) ? data.files : []
   const accounts = await localCodexAccounts()
-  const desired = new Map(accounts.map((account) => [authFileName(account), account]))
+  const desired = new Map(accounts.map(({ workspaceId, account, priority }) => {
+    const prefix = codexWorkspacePrefix(workspaceId)
+    return [authFileName(workspaceId, account), { account, prefix, priority }] as const
+  }))
   const existingNames = new Set(files.flatMap((file) => typeof file.name === "string" ? [file.name] : []))
   let uploaded = 0
-  for (const [name, account] of desired) {
+  for (const [name, { account, prefix, priority }] of desired) {
     if (!force && existingNames.has(name)) continue
     const upload = await management(`/v0/management/auth-files?name=${encodeURIComponent(name)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(authFilePayload(account)),
+      body: JSON.stringify(authFilePayload(account, prefix, priority)),
     })
     if (!upload.ok) throw new Error(`CLIProxy auth-file upload failed (${upload.status}).`)
     uploaded += 1

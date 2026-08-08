@@ -14,21 +14,12 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "migrate:local": "tsx scripts/migrate-to-local.ts",
-    "import:legacy-usage": "tsx scripts/import-legacy-sqlite-usage.ts",
     "reconcile:usage": "tsx scripts/reconcile-usage.ts",
-    "reconcile:unpriced": "tsx scripts/reconcile-unpriced-usage.ts",
     "predict:usage": "tsx scripts/predict-missing-usage-cost.ts",
-    "reestimate:legacy-usage": "tsx scripts/reestimate-cache-adjusted-usage.ts",
     "sanitize:usage": "tsx scripts/sanitize-usage-integrity.ts",
-    "move:legacy-key-usage": "tsx scripts/move-legacy-key-usage.ts",
-    "merge:retire-api-key": "tsx scripts/merge-retire-api-key.ts",
-    "migrate:codex": "tsx scripts/migrate-codex-and-aliases.ts",
     "delete:gateway-key-data": "tsx scripts/delete-gateway-key-data.ts",
-    "verify:local": "tsx scripts/migrate-to-local.ts --verify-only",
     "test:local-db": "tsx scripts/local-db-smoke.ts",
-    "test:firestore": "tsx scripts/firestore-smoke.ts",
-    "firestore:backfill-api-key-indexes": "tsx scripts/backfill-api-key-indexes.ts"
+    "backfill:api-key-indexes": "tsx scripts/backfill-api-key-indexes.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -67,7 +58,6 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
-    "firebase-admin": "^14.2.0",
     "shadcn": "^4.16.2",
     "tailwindcss": "^4",
     "tsx": "^4.20.3",
@@ -79,7 +69,6 @@
     "unrs-resolver"
   ],
   "trustedDependencies": [
-    "@firebase/util",
     "protobufjs",
     "sharp",
     "unrs-resolver"

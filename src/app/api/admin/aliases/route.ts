@@ -1,5 +1,4 @@
 import { requireAdmin } from "@/lib/auth"
-import { listCliProxyCatalog } from "@/lib/cliproxy-catalog"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { listAliases, listModels, listProviders, upsertAlias } from "@/lib/store"
@@ -12,9 +11,15 @@ export async function GET() {
   } catch {
     return jsonError("Unauthorized", 401)
   }
-  const [aliases, models, providers, cliProxyCatalog] = await Promise.all([listAliases(), listModels(), listProviders(), listCliProxyCatalog()])
-  const availableModels = [...models, ...cliProxyCatalog.models.filter((candidate) => !models.some((model) => model.gatewayModelId === candidate.gatewayModelId))]
-  return Response.json({ aliases, models: availableModels, providers: [...providers, ...cliProxyCatalog.providers] })
+  const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
+  const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
+  const availableModels = models
+    .filter((model) => {
+      const provider = providerIndex.get(model.providerId)
+      return Boolean(provider && provider.enabled !== false && model.enabled)
+    })
+  const availableProviders = providers.filter((provider) => provider.enabled !== false)
+  return Response.json({ aliases, models: availableModels, providers: availableProviders })
 }
 
 export async function POST(request: Request) {
@@ -33,10 +38,16 @@ export async function POST(request: Request) {
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const targetModelId = typeof input.targetModelId === "string" ? input.targetModelId.trim() : ""
     if (!alias || !name || !targetModelId) throw new Error("Alias fields are incomplete.")
-    const [models, cliProxyCatalog] = await Promise.all([listModels(), listCliProxyCatalog()])
-    const target = [...models, ...cliProxyCatalog.models].find((model) => (model.gatewayModelId || model.id) === targetModelId)
+    const [models, providers] = await Promise.all([listModels(), listProviders()])
+    const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
+    const target = models
+      .find((model) => (model.gatewayModelId || model.id) === targetModelId)
     if (!target) throw new Error("Target model not found.")
     if (!target.enabled) throw new Error("Target model is disabled.")
+    const targetProvider = providerIndex.get(target.providerId)
+    if (!targetProvider || targetProvider.enabled === false) {
+      throw new Error("Target model is unavailable.")
+    }
     await upsertAlias({
       originalId: input.originalId,
       alias,

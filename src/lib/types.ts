@@ -6,7 +6,7 @@ export type ProviderCredentialKind = "api-key" | "codex-oauth"
 
 export type WorkspaceStatus = "active" | "deleting"
 
-export type WorkspaceStorageMode = "legacy" | "dual" | "scoped-mirror" | "scoped"
+export type WorkspaceStorageMode = "scoped"
 
 export interface Workspace {
   id: string
@@ -58,6 +58,8 @@ export interface ProviderApiKey {
   createdAt: string
 }
 
+export type ModelSource = "builtin" | "custom"
+
 export interface Model {
   id: string
   providerId: string
@@ -69,6 +71,8 @@ export interface Model {
   upstreamPath?: string
   requestOverrides?: Record<string, unknown>
   enabled: boolean
+  /** Whether this is a fixed built-in model or a workspace-defined model. */
+  source?: ModelSource
   createdAt: string
 }
 
@@ -150,20 +154,6 @@ export interface UsageRollup {
   reconciledFrom?: string
   excludedEventIds?: string[]
   costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical"
-}
-
-export interface ModelPricing {
-  id: string
-  modelId: string
-  provider: string
-  gatewayModelId: string
-  upstreamModel: string
-  inputMicrosPerMillion: number
-  outputMicrosPerMillion: number
-  cacheReadMicrosPerMillion: number
-  cacheCreationMicrosPerMillion: number
-  enabled: boolean
-  updatedAt: string
 }
 
 export interface PricingRates {

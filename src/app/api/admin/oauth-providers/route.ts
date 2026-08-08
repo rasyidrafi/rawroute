@@ -23,9 +23,13 @@ function publicAccount(account: Awaited<ReturnType<typeof listCodexAccounts>>["a
 
 export async function GET() {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
-  const result = await listCodexAccounts()
-  return Response.json({
-    provider: result.provider ? { id: result.provider.id, name: result.provider.name, prefix: result.provider.prefix, baseUrl: result.provider.baseUrl } : null,
-    accounts: result.accounts.map(publicAccount),
-  })
+  try {
+    const result = await listCodexAccounts()
+    return Response.json({
+      provider: result.provider ? { id: result.provider.id, name: result.provider.name, prefix: result.provider.prefix, baseUrl: result.provider.baseUrl } : null,
+      accounts: result.accounts.map(publicAccount),
+    })
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Unable to synchronize Codex accounts.", 502)
+  }
 }

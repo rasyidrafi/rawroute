@@ -1,14 +1,14 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import useSWR, { mutate as globalMutate } from "swr"
 import { toast } from "sonner"
 
 import { ConfirmAction, DetailValue, EmptyRow, NotFoundState } from "@/components/dashboard/shared"
-import { apiDelete, apiPost, fetcher } from "@/components/dashboard/api"
+import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
 import { CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ModelForm } from "@/components/dashboard/model-form"
 import { ProviderApiKeyForm } from "@/components/dashboard/provider-api-key-form"
@@ -108,6 +108,20 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to remove Codex account")
       return false
+    } finally {
+      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
+    }
+  }
+
+  async function setCodexAccountEnabled(account: ProviderApiKey) {
+    const pendingKey = `toggle-codex-account:${account.id}`
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      await apiPatch(`/api/admin/oauth-providers/${account.id}`, { enabled: !account.enabled })
+      await Promise.all([mutate(), globalMutate("/api/admin/providers"), globalMutate("/api/admin/oauth-providers/usage")])
+      toast.success(`Codex account ${account.enabled ? "disabled" : "enabled"}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to update Codex account")
     } finally {
       setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
     }
@@ -275,7 +289,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
-          <CardDescription>Sticky least-loaded routing keeps sessions warm while priority controls which credential is preferred when capacity is equal.</CardDescription>
+          <CardDescription>The account at the top has the highest priority. CLIProxy uses fill-first routing and only falls through when that account is unavailable.</CardDescription>
           <CardAction>{provider.prefix === "codex" ? <Button aria-busy={starting} onClick={() => void addCodexAccount()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
         <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
@@ -319,7 +333,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     {isOAuthProvider && <TableCell>{usageLoading && !usageData ? "…" : usageData?.accounts[apiKey.id]?.unusedResetCredits ?? "N/A"}</TableCell>}
                     {isOAuthProvider && <TableCell className="align-middle text-xs text-muted-foreground">{apiKey.expiresAt ? formatAppDateTime(apiKey.expiresAt) : "Unknown"}</TableCell>}
                     <TableCell className="align-middle text-xs text-muted-foreground">{formatAppDate(apiKey.createdAt)}</TableCell>
-                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-label={`${apiKey.enabled ? "Disable" : "Enable"} ${apiKey.name}`} aria-busy={isPending(`toggle-codex-account:${apiKey.id}`)} size="icon-sm" variant="ghost" disabled={isPending(`toggle-codex-account:${apiKey.id}`)} onClick={() => void setCodexAccountEnabled(apiKey)}><PowerIcon /></Button><Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={!usageData?.accounts[apiKey.id]?.unusedResetCredits || usageData.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 9 : 6} />}
@@ -337,7 +351,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><BoxesIcon className="size-5" />Models</CardTitle>
-          <CardDescription>Expose upstream models behind your provider prefix.</CardDescription>
+          <CardDescription>{provider.prefix === "codex" ? "Built-in Codex models are fixed; custom Codex mappings can be added below." : "Expose upstream models behind your provider prefix."}</CardDescription>
           <CardAction><Button onClick={() => { setEditingModel(null); setModelOpen(true) }}><PlusIcon />Add model</Button></CardAction>
         </CardHeader>
         <Dialog open={modelOpen} onOpenChange={(open) => { setModelOpen(open); if (!open) setEditingModel(null) }}>
@@ -353,6 +367,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                 <TableHead>Gateway ID</TableHead>
                 <TableHead>Upstream model</TableHead>
                 <TableHead>Protocol</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -360,15 +375,17 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
               {models.map((model) => {
                 const pendingKey = `delete-model:${model.id}`
                 const gatewayModelId = model.gatewayModelId || model.id
-                return <TableRow key={model.id}>
+                const builtin = model.source === "builtin"
+                return <TableRow key={model.id} className={model.enabled ? undefined : "opacity-60"}>
                   <TableCell className="font-medium">{model.name}</TableCell>
                   <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{gatewayModelId}</span></div><Button aria-label={`Copy gateway ID ${gatewayModelId}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void navigator.clipboard.writeText(gatewayModelId); toast.success("Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
                   <TableCell>{model.upstreamModel}</TableCell>
                   <TableCell>{protocolLabels[model.protocol || provider.protocol]}{model.protocol && <Badge variant="outline" className="ml-2">override</Badge>}</TableCell>
-                  <TableCell><div className="flex justify-end gap-1"><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><Badge variant={builtin ? "secondary" : "outline"}>{builtin ? "Built-in" : "Custom"}</Badge><Badge variant={model.enabled ? "secondary" : "outline"}>{model.enabled ? "Enabled" : "Disabled"}</Badge></div></TableCell>
+                  <TableCell><div className="flex justify-end gap-1">{builtin ? null : <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
                 </TableRow>
               })}
-              {!models.length && <EmptyRow label="No models yet." colSpan={5} />}
+              {!models.length && <EmptyRow label="No models yet." colSpan={6} />}
             </TableBody>
           </Table>
         </CardContent>

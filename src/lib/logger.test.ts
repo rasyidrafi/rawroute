@@ -30,7 +30,7 @@ test("changes the lightweight log version without allocating unrelated entry IDs
 })
 
 test("filters logs by the explicitly requested workspace", async () => {
-  await runInWorkspace({ id: "default", storageMode: "legacy" }, () => writeLog("info", "admin", "default workspace"))
+  await runInWorkspace({ id: "default", storageMode: "scoped" }, () => writeLog("info", "admin", "default workspace"))
   await runInWorkspace({ id: "other", storageMode: "scoped" }, () => writeLog("info", "admin", "other workspace"))
 
   expect(readLogs("default").map((entry) => entry.message)).toEqual(["default workspace"])

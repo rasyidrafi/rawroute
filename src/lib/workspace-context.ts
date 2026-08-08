@@ -13,22 +13,17 @@ export interface WorkspaceContext {
 const storage = new AsyncLocalStorage<WorkspaceContext>()
 
 export function workspaceContext(): WorkspaceContext {
-  return storage.getStore() || { id: DEFAULT_WORKSPACE_ID, storageMode: "legacy" }
+  return storage.getStore() || { id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" }
 }
 
 export function currentWorkspaceId() {
   return workspaceContext().id
 }
 
-export function usesLegacyWorkspaceStorage() {
-  const mode = workspaceContext().storageMode
-  return currentWorkspaceId() === DEFAULT_WORKSPACE_ID && (mode === "legacy" || mode === "dual")
-}
-
 export function enterWorkspace(workspace: Pick<Workspace, "id" | "storageMode">) {
-  storage.enterWith({ id: workspace.id, storageMode: workspace.storageMode || (workspace.id === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped") })
+  storage.enterWith({ id: workspace.id, storageMode: workspace.storageMode || "scoped" })
 }
 
 export function runInWorkspace<T>(workspace: Pick<Workspace, "id" | "storageMode">, callback: () => T): T {
-  return storage.run({ id: workspace.id, storageMode: workspace.storageMode || (workspace.id === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped") }, callback)
+  return storage.run({ id: workspace.id, storageMode: workspace.storageMode || "scoped" }, callback)
 }

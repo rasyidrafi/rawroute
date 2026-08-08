@@ -1,10 +1,11 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
-import { type DocumentData, type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type QuerySnapshot, type Transaction } from "@/lib/local-db"
+import { type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type Transaction } from "@/lib/local-db"
 
 import { gatewayModelId, cleanAliasId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
+import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
 import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
-import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, usesLegacyWorkspaceStorage, workspaceContext } from "@/lib/workspace-context"
+import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, workspaceContext } from "@/lib/workspace-context"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 60_000
@@ -101,6 +102,8 @@ let apiKeyIndexReconciliationInflight: Promise<Map<string, ApiKeyIndexCandidate 
 let apiKeyIndexReconciliationGeneration = 0
 let apiKeyNamesCache: { value: Map<string, string>; expiresAt: number; inflight?: Promise<Map<string, string>> } | undefined
 const maximumApiKeyLookupEntries = 512
+const apiKeyRedisPrefix = "rawroute:api-key-lookup:v1:"
+const apiKeyRedisMiss = "__rawroute_missing__"
 let apiKeyLookupGeneration = 0
 let metaGeneration = 0
 
@@ -202,116 +205,6 @@ function initialGatewayApiKey(): ApiKey {
     key: process.env.DEFAULT_PROXY_API_KEY || documentedProxyKey,
     createdAt: new Date().toISOString(),
   }
-}
-
-type LegacyProvider = Omit<Provider, "apiKeyCount" | "enabledApiKeyCount" | "modelCount" | "enabledModelCount"> &
-  Partial<Pick<Provider, "apiKeyCount" | "enabledApiKeyCount" | "modelCount" | "enabledModelCount">> &
-  { secret?: string }
-type LegacyModel = Omit<Model, "gatewayModelId"> & { gatewayModelId?: string }
-type LegacyAppData = Omit<AppData, "version" | "providers" | "providerApiKeys" | "models" | "aliases"> & {
-  version?: 1 | 2
-  providers?: LegacyProvider[]
-  providerApiKeys?: AppData["providerApiKeys"]
-  models?: LegacyModel[]
-  aliases?: ModelAlias[]
-}
-
-function migrateLegacy(legacy: LegacyAppData): { meta: Meta; providers: Map<string, Provider>; providerApiKeys: Map<string, Map<string, ProviderApiKey>>; models: Map<string, Map<string, Model>>; apiKeys: Map<string, ApiKey> } {
-  const migratedProviderApiKeys: ProviderApiKey[] = []
-  const existingProviderKeyIds = new Set((legacy.providerApiKeys || []).map((apiKey) => apiKey.providerId))
-  const providers: Provider[] = []
-  for (const entry of legacy.providers || []) {
-    const { secret, ...provider } = entry
-    const normalizedProvider: Provider = {
-      ...provider,
-      apiKeyCount: provider.apiKeyCount ?? 0,
-      enabledApiKeyCount: provider.enabledApiKeyCount ?? 0,
-      modelCount: provider.modelCount ?? 0,
-      enabledModelCount: provider.enabledModelCount ?? 0,
-    }
-    providers.push(normalizedProvider)
-    if (secret && !existingProviderKeyIds.has(provider.id)) {
-      migratedProviderApiKeys.push({
-        id: crypto.randomUUID(),
-        providerId: provider.id,
-        name: "Migrated provider key",
-        key: secret,
-        enabled: true,
-        createdAt: provider.createdAt || new Date().toISOString(),
-      })
-    }
-  }
-  const meta: Meta = {
-    version: 4,
-    admin: legacy.admin,
-    sessionSecret: legacy.sessionSecret,
-  }
-  const providerMap = new Map<string, Provider>()
-  const providerKeyMap = new Map<string, Map<string, ProviderApiKey>>()
-  for (const provider of providers) providerMap.set(provider.id, { ...provider, apiKeyCount: 0, enabledApiKeyCount: 0, modelCount: 0, enabledModelCount: 0 })
-  for (const apiKey of [...(legacy.providerApiKeys || []), ...migratedProviderApiKeys]) {
-    const slot = providerKeyMap.get(apiKey.providerId) || new Map<string, ProviderApiKey>()
-    slot.set(apiKey.id, apiKey)
-    providerKeyMap.set(apiKey.providerId, slot)
-    const provider = providerMap.get(apiKey.providerId)
-    if (provider) {
-      providerMap.set(provider.id, {
-        ...provider,
-        apiKeyCount: (provider.apiKeyCount || 0) + 1,
-        enabledApiKeyCount: (provider.enabledApiKeyCount || 0) + (apiKey.enabled ? 1 : 0),
-      })
-    }
-  }
-  const modelMap = new Map<string, Map<string, Model>>()
-  for (const model of legacy.models || []) {
-    const normalizedModel: Model = { ...model, gatewayModelId: model.gatewayModelId || model.id }
-    const slot = modelMap.get(model.providerId) || new Map<string, Model>()
-    slot.set(model.id, normalizedModel)
-    modelMap.set(model.providerId, slot)
-    const provider = providerMap.get(model.providerId)
-    if (provider) {
-      providerMap.set(provider.id, {
-        ...provider,
-        modelCount: (provider.modelCount || 0) + 1,
-        enabledModelCount: (provider.enabledModelCount || 0) + (normalizedModel.enabled ? 1 : 0),
-      })
-    }
-  }
-  const apiKeys = new Map<string, ApiKey>()
-  for (const apiKey of legacy.apiKeys || []) apiKeys.set(apiKey.id, apiKey)
-  return { meta, providers: providerMap, providerApiKeys: providerKeyMap, models: modelMap, apiKeys }
-}
-
-// Keep the old pure migration helper available to tests and small integrations.
-export function migrateData(legacy: LegacyAppData): AppData {
-  const migrated = migrateLegacy(legacy)
-  const providerIds = new Map<string, string>()
-  for (const provider of migrated.providers.values()) providerIds.set(provider.id, crypto.randomUUID())
-  return {
-    version: 4,
-    admin: migrated.meta.admin,
-    sessionSecret: migrated.meta.sessionSecret,
-    providers: [...migrated.providers.values()].map((provider) => ({ ...provider, id: providerIds.get(provider.id)! })),
-    providerApiKeys: [...migrated.providerApiKeys.entries()].flatMap(([providerId, slot]) => [...slot.values()].map((apiKey) => ({
-      ...apiKey,
-      id: crypto.randomUUID(),
-      providerId: providerIds.get(providerId) || providerId,
-    }))),
-    models: [...migrated.models.entries()].flatMap(([providerId, slot]) => [...slot.values()].map((model) => ({
-      ...model,
-      id: crypto.randomUUID(),
-      providerId: providerIds.get(providerId) || providerId,
-      gatewayModelId: model.gatewayModelId || model.id,
-    }))),
-    aliases: legacy.aliases || [],
-    apiKeys: [...migrated.apiKeys.values()].map((apiKey) => ({ ...apiKey, id: crypto.randomUUID() })),
-  }
-}
-
-function providerDoc(provider: Provider, meta: { apiKeyCount: number; enabledApiKeyCount: number; modelCount: number; enabledModelCount: number }) {
-  const { id, ...stored } = provider
-  void id
-  return { ...stored, ...meta }
 }
 
 function providerFromSnapshot(snapshot: DocumentSnapshot): Provider {
@@ -417,8 +310,9 @@ function apiKeyIndexCandidate(workspaceId: string, workspaceStorageMode: Workspa
 }
 
 function indexedWorkspaceStorageMode(workspaceId: string, value: unknown): WorkspaceStorageMode {
-  if (value === "legacy" || value === "dual" || value === "scoped-mirror" || value === "scoped") return value
-  return workspaceId === DEFAULT_WORKSPACE_ID ? "legacy" : "scoped"
+  void workspaceId
+  void value
+  return "scoped"
 }
 
 function storedAlias(alias: ModelAlias) {
@@ -504,6 +398,40 @@ function cacheApiKeyLookup(hash: string, value: IndexedApiKey | undefined) {
   apiKeyLookupCache.set(hash, { value: value || null, expiresAt: Date.now() + (value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs) })
 }
 
+function apiKeyRedisKey(hash: string) {
+  return `${apiKeyRedisPrefix}${hash}`
+}
+
+function cacheApiKeyLookupInRedis(hash: string, value: IndexedApiKey | undefined) {
+  const record = value
+    ? JSON.stringify({
+      workspaceId: value.workspaceId,
+      workspaceStorageMode: value.workspaceStorageMode,
+      apiKeyId: value.apiKey.id,
+      name: value.apiKey.name,
+      createdAt: value.apiKey.createdAt,
+    })
+    : apiKeyRedisMiss
+  void localRedisSet(apiKeyRedisKey(hash), record, value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs)
+}
+
+async function readApiKeyLookupFromRedis(hash: string): Promise<IndexedApiKey | null | undefined> {
+  const raw = await localRedisGet(apiKeyRedisKey(hash))
+  if (raw === undefined || raw === null) return undefined
+  if (raw === apiKeyRedisMiss) return null
+  try {
+    const value = JSON.parse(raw) as { workspaceId?: unknown; workspaceStorageMode?: unknown; apiKeyId?: unknown; name?: unknown; createdAt?: unknown }
+    if (typeof value.workspaceId !== "string" || typeof value.apiKeyId !== "string" || typeof value.name !== "string" || typeof value.createdAt !== "string") return undefined
+    return {
+      workspaceId: value.workspaceId,
+      workspaceStorageMode: indexedWorkspaceStorageMode(value.workspaceId, typeof value.workspaceStorageMode === "string" ? value.workspaceStorageMode as WorkspaceStorageMode : undefined),
+      apiKey: { id: value.apiKeyId, name: value.name, key: "", createdAt: value.createdAt },
+    }
+  } catch {
+    return undefined
+  }
+}
+
 function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   // Advance the generation so an already-running lookup cannot repopulate a
   // value that was changed while its Firestore read was in flight.
@@ -513,10 +441,13 @@ function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   apiKeyIndexReconciliationInflight = undefined
   apiKeyNamesCache = undefined
   if (hashes) {
+    const redisKeys: string[] = []
     for (const hash of hashes) {
       apiKeyLookupCache.delete(hash)
       apiKeyLookupInflight.delete(hash)
+      redisKeys.push(apiKeyRedisKey(hash))
     }
+    if (!isMemoryBackend()) void localRedisDelete(...redisKeys)
     return
   }
   apiKeyLookupCache.clear()
@@ -586,6 +517,12 @@ function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }
   }
   if (input.targetModelId !== undefined && (typeof input.targetModelId !== "string" || !input.targetModelId.trim())) {
     throw new Error("Alias target model is required.")
+  }
+}
+
+function assertModelMutationAllowed(existing: Model | undefined) {
+  if (existing?.source === "builtin") {
+    throw new Error("Built-in models are fixed and cannot be edited.")
   }
 }
 
@@ -707,24 +644,16 @@ function metaRef() {
   return getLocalDatabase().collection(`${collectionPrefix()}_system`).doc("meta")
 }
 
-function legacyMetaRef() {
-  return getLocalDatabase().collection(`${collectionPrefix()}_system`).doc("state")
-}
-
 function workspaceRootRef(workspaceId = currentWorkspaceId()) {
   return getLocalDatabase().collection(`${collectionPrefix()}_workspaces`).doc(workspaceId)
 }
 
-function apiKeysRefForWorkspace(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode) {
-  return workspaceId === DEFAULT_WORKSPACE_ID && (workspaceStorageMode === "legacy" || workspaceStorageMode === "dual")
-    ? getLocalDatabase().collection(collectionPrefix()).doc("apiKeys").collection("apiKeys")
-    : workspaceRootRef(workspaceId).collection("apiKeys")
+function apiKeysRefForWorkspace(workspaceId: string) {
+  return workspaceRootRef(workspaceId).collection("apiKeys")
 }
 
 function providersRef() {
-  return usesLegacyWorkspaceStorage()
-    ? getLocalDatabase().collection(collectionPrefix()).doc("providers").collection("providers")
-    : workspaceRootRef().collection("providers")
+  return workspaceRootRef().collection("providers")
 }
 
 function providerRef(providerId: string) {
@@ -748,9 +677,7 @@ function modelRef(providerId: string, modelId: string) {
 }
 
 function aliasesRef() {
-  return usesLegacyWorkspaceStorage()
-    ? getLocalDatabase().collection(collectionPrefix()).doc("aliases").collection("aliases")
-    : workspaceRootRef().collection("aliases")
+  return workspaceRootRef().collection("aliases")
 }
 
 function aliasRef(aliasId: string) {
@@ -758,7 +685,7 @@ function aliasRef(aliasId: string) {
 }
 
 function apiKeysRef() {
-  return apiKeysRefForWorkspace(currentWorkspaceId(), workspaceContext().storageMode)
+  return apiKeysRefForWorkspace(currentWorkspaceId())
 }
 
 function apiKeyRef(apiKeyId: string) {
@@ -795,7 +722,7 @@ async function firestoreWorkspaceScopes(): Promise<FirestoreWorkspaceScope[]> {
     id: document.id,
     storageMode: indexedWorkspaceStorageMode(document.id, document.data()?.storageMode),
   }))
-  if (!scopes.some((scope) => scope.id === DEFAULT_WORKSPACE_ID)) scopes.unshift({ id: DEFAULT_WORKSPACE_ID, storageMode: "legacy" })
+  if (!scopes.some((scope) => scope.id === DEFAULT_WORKSPACE_ID)) scopes.unshift({ id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" })
   return scopes
 }
 
@@ -808,7 +735,7 @@ async function firestoreReadApiKeyIndexCandidates(scopes: FirestoreWorkspaceScop
   if (!scopes.length) scopes = await firestoreWorkspaceScopes()
   const snapshots = await parallelMap(scopes, async (scope) => ({
     scope,
-    snapshot: await apiKeysRefForWorkspace(scope.id, scope.storageMode).get(),
+    snapshot: await apiKeysRefForWorkspace(scope.id).get(),
   }))
   const candidates = new Map<string, ApiKeyIndexCandidate | null>()
   let scannedApiKeys = 0
@@ -954,7 +881,7 @@ async function repairMissingApiKeyIndex(hash: string, normalized: string, candid
       return { kind: "existing" as const, data: existing }
     }
 
-    const keyRef = apiKeysRefForWorkspace(candidate.workspaceId, candidate.workspaceStorageMode).doc(candidate.apiKeyId)
+    const keyRef = apiKeysRefForWorkspace(candidate.workspaceId).doc(candidate.apiKeyId)
     const keySnapshot = await transaction.get(keyRef)
     if (!keySnapshot.exists) return { kind: "missing" as const }
     const apiKey = apiKeyFromSnapshot(keySnapshot)
@@ -975,7 +902,7 @@ async function repairMissingApiKeyIndex(hash: string, normalized: string, candid
   if (typeof existing.name === "string" && typeof existing.createdAt === "string") {
     return { workspaceId, workspaceStorageMode, apiKey: { id: apiKeyId, name: existing.name, key: normalized, createdAt: existing.createdAt } }
   }
-  const snapshot = await apiKeysRefForWorkspace(workspaceId, workspaceStorageMode).doc(apiKeyId).get()
+  const snapshot = await apiKeysRefForWorkspace(workspaceId).doc(apiKeyId).get()
   if (!snapshot.exists) return undefined
   const apiKey = apiKeyFromSnapshot(snapshot)
   return typeof apiKey.key === "string" && apiKeyValueHash(apiKey.key) === hash
@@ -1516,38 +1443,55 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
   if (existing) return existing
   const generation = apiKeyLookupGeneration
   const promise = (async () => {
+    const redisCached = await readApiKeyLookupFromRedis(hash)
+    if (redisCached !== undefined) {
+      const value = redisCached
+        ? { ...redisCached, apiKey: { ...redisCached.apiKey, key: normalized } }
+        : undefined
+      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+      return value
+    }
     const index = await apiKeyIndexRef(hash).get()
     const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
     const apiKeyId = indexData?.apiKeyId
     if (!apiKeyId) {
       // A global cross-workspace scan on every unknown credential turns invalid
-      // traffic into a large number of billable reads. Legacy repair remains an
-      // explicit migration mode; normal authentication performs one index read.
+      // traffic into a large number of billable reads. Repair remains an
+      // explicit opt-in fallback; normal authentication performs one index read.
       let value: IndexedApiKey | undefined
       if (repairApiKeyIndexOnMiss) {
         const candidates = await reconciledApiKeyIndexCandidates()
         const candidate = candidates.get(hash)
         value = candidate ? await repairMissingApiKeyIndex(hash, normalized, candidate) : undefined
       }
-      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+      if (generation === apiKeyLookupGeneration) {
+        cacheApiKeyLookup(hash, value)
+        cacheApiKeyLookupInRedis(hash, value)
+      }
       return value
     }
     const workspaceId = indexData.workspaceId || DEFAULT_WORKSPACE_ID
     const workspaceStorageMode = indexedWorkspaceStorageMode(workspaceId, indexData.workspaceStorageMode)
     if (typeof indexData.name === "string" && typeof indexData.createdAt === "string") {
       const value = { workspaceId, workspaceStorageMode, apiKey: { id: apiKeyId, name: indexData.name, key: normalized, createdAt: indexData.createdAt } }
-      if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+      if (generation === apiKeyLookupGeneration) {
+        cacheApiKeyLookup(hash, value)
+        cacheApiKeyLookupInRedis(hash, value)
+      }
       return value
     }
 
     // Older index rows did not contain all authentication metadata. Pay the
     // second document read once, then self-heal the index for subsequent hits.
-    const snapshot = await apiKeysRefForWorkspace(workspaceId, workspaceStorageMode).doc(apiKeyId).get()
+    const snapshot = await apiKeysRefForWorkspace(workspaceId).doc(apiKeyId).get()
     const apiKey = snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
     const value = apiKey && typeof apiKey.key === "string" && apiKeyValueHash(apiKey.key) === hash
       ? { workspaceId, workspaceStorageMode, apiKey: { ...apiKey, key: normalized } }
       : undefined
-    if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
+    if (generation === apiKeyLookupGeneration) {
+      cacheApiKeyLookup(hash, value)
+      cacheApiKeyLookupInRedis(hash, value)
+    }
     if (value && generation === apiKeyLookupGeneration) {
       void runInWorkspace({ id: workspaceId, storageMode: workspaceStorageMode }, () => apiKeyIndexRef(hash).set(apiKeyIndexDocument(value.apiKey), { merge: true })).catch(() => undefined)
     } else if (!value && generation === apiKeyLookupGeneration) {
@@ -1661,49 +1605,16 @@ async function firestoreReadMeta(): Promise<Meta> {
   const ref = metaRef()
   const current = await ref.get()
   const currentData = current.exists ? current.data() as Meta : undefined
-  if (currentData && currentData.version >= 4) return currentData
+  if (currentData) {
+    if (currentData.version !== 4) throw new Error("System metadata is not in the canonical format.")
+    return currentData
+  }
 
   return getFirestoreInstance().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref)
     if (snapshot.exists) {
       const meta = snapshot.data() as Meta
-      if (meta.version >= 4) return meta
-      return firestoreMigrateCurrentDocuments(transaction, meta)
-    }
-    const legacyRef = legacyMetaRef()
-    const legacy = await transaction.get(legacyRef)
-    if (legacy.exists) {
-      const migrated = migrateLegacy(legacy.data() as LegacyAppData)
-      const providerIds = new Map<string, string>()
-      for (const provider of migrated.providers.values()) providerIds.set(provider.id, providersRef().doc().id)
-      const meta = { ...migrated.meta, version: 4 as const }
-      transaction.set(ref, stripUndefined(meta))
-      for (const provider of migrated.providers.values()) transaction.set(providerRef(providerIds.get(provider.id)!), providerDoc(provider, {
-        apiKeyCount: provider.apiKeyCount,
-        enabledApiKeyCount: provider.enabledApiKeyCount,
-        modelCount: provider.modelCount,
-        enabledModelCount: provider.enabledModelCount,
-      }))
-      for (const [oldProviderId, slot] of migrated.providerApiKeys) {
-        const newProviderId = providerIds.get(oldProviderId)
-        if (!newProviderId) continue
-        for (const apiKey of slot.values()) {
-          const ref = providerApiKeysRef(newProviderId).doc()
-          transaction.set(ref, storedProviderApiKey(apiKey))
-        }
-      }
-      for (const [oldProviderId, slot] of migrated.models) {
-        const newProviderId = providerIds.get(oldProviderId)
-        if (!newProviderId) continue
-        for (const model of slot.values()) transaction.set(modelsRef(newProviderId).doc(), storedModel(model))
-      }
-      for (const apiKey of migrated.apiKeys.values()) {
-        const keyRef = apiKeysRef().doc()
-        const migratedKey = { ...apiKey, id: keyRef.id }
-        transaction.set(keyRef, storedApiKey(migratedKey))
-        transaction.set(apiKeyIndexRef(apiKeyValueHash(migratedKey.key)), apiKeyIndexDocument(migratedKey))
-      }
-      bumpRoutingRevision(transaction)
+      if (meta.version !== 4) throw new Error("System metadata is not in the canonical format.")
       return meta
     }
     const meta = initialMeta()
@@ -1714,62 +1625,6 @@ async function firestoreReadMeta(): Promise<Meta> {
     transaction.set(apiKeyIndexRef(apiKeyValueHash(seedKey.key)), apiKeyIndexDocument(seedKey))
     return meta
   })
-}
-
-async function firestoreMigrateCurrentDocuments(transaction: Transaction, meta: Meta): Promise<Meta> {
-  const providerSnapshot = await transaction.get(providersRef())
-  const gatewayKeySnapshot = await transaction.get(apiKeysRef())
-  const children: Array<{ providerId: string; keys: QuerySnapshot<DocumentData>; models: QuerySnapshot<DocumentData> }> = []
-  for (const provider of providerSnapshot.docs) {
-    children.push({
-      providerId: provider.id,
-      keys: await transaction.get(providerApiKeysRef(provider.id)),
-      models: await transaction.get(modelsRef(provider.id)),
-    })
-  }
-
-  const providerIds = new Map<string, string>()
-  for (const provider of providerSnapshot.docs) providerIds.set(provider.id, providersRef().doc().id)
-
-  for (const provider of providerSnapshot.docs) {
-    const nextId = providerIds.get(provider.id)!
-    transaction.set(providerRef(nextId), storedProvider({ ...provider.data(), id: provider.id } as Provider))
-  }
-  for (const child of children) {
-    const nextProviderId = providerIds.get(child.providerId)!
-    for (const doc of child.keys.docs) {
-      const apiKey = { ...doc.data(), id: doc.id, providerId: child.providerId } as ProviderApiKey
-      transaction.set(providerApiKeysRef(nextProviderId).doc(), storedProviderApiKey(apiKey))
-    }
-    for (const doc of child.models.docs) {
-      const data = doc.data() as Partial<Model>
-      const model = {
-        ...data,
-        id: doc.id,
-        providerId: child.providerId,
-        gatewayModelId: data.gatewayModelId || data.id || doc.id,
-      } as Model
-      transaction.set(modelsRef(nextProviderId).doc(), storedModel(model))
-    }
-  }
-  for (const doc of gatewayKeySnapshot.docs) {
-    const keyRef = apiKeysRef().doc()
-    const apiKey = { ...doc.data(), id: keyRef.id } as ApiKey
-    transaction.set(keyRef, storedApiKey(apiKey))
-    transaction.set(apiKeyIndexRef(apiKeyValueHash(apiKey.key)), apiKeyIndexDocument(apiKey))
-  }
-
-  for (const provider of providerSnapshot.docs) {
-    for (const child of children.find((entry) => entry.providerId === provider.id)?.keys.docs || []) transaction.delete(child.ref)
-    for (const child of children.find((entry) => entry.providerId === provider.id)?.models.docs || []) transaction.delete(child.ref)
-    transaction.delete(provider.ref)
-  }
-  for (const doc of gatewayKeySnapshot.docs) transaction.delete(doc.ref)
-
-  const nextMeta: Meta = { ...meta, version: 4 }
-  transaction.set(metaRef(), nextMeta)
-  bumpRoutingRevision(transaction)
-  return nextMeta
 }
 
 async function firestoreUpdateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
@@ -1958,8 +1813,11 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     const existingSnapshot = input.originalId ? await transaction.get(modelRef(providerId, input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? modelFromSnapshot(existingSnapshot, providerId) : undefined
     if (input.originalId && !existing) throw new Error("Model not found.")
+    assertModelMutationAllowed(existing)
     const gatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
-    if (!input.name || !input.upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
+    const name = input.name || existing?.name || ""
+    const upstreamModel = input.upstreamModel || existing?.upstreamModel || ""
+    if (!name || !upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
 
     const gatewayMatches = await transaction.get(modelsRef(providerId).where("gatewayModelId", "==", gatewayModelId).limit(2))
     if (gatewayMatches.docs.some((document) => document.id !== input.originalId)) throw new Error("Gateway model ID is already in use.")
@@ -1979,8 +1837,9 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       providerId,
       gatewayModelId,
       ...inputWithoutIds,
-      name: input.name,
-      upstreamModel: input.upstreamModel,
+      name,
+      upstreamModel,
+      source: input.source || existing?.source || "custom",
       protocol: hasProtocol ? input.protocol : existing?.protocol,
       upstreamPath: hasUpstreamPath ? (input.upstreamPath || undefined) : existing?.upstreamPath,
       requestOverrides: hasRequestOverrides ? input.requestOverrides : existing?.requestOverrides,
@@ -2004,7 +1863,8 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
     const ref = modelRef(providerId, modelId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
-    const model = snapshot.data() as Model
+    const model = modelFromSnapshot(snapshot, providerId)
+    if (model.source === "builtin") throw new Error("Built-in models cannot be deleted.")
     transaction.delete(ref)
     transaction.update(providerRef(providerId), {
       modelCount: FieldValue.increment(-1),
@@ -2232,9 +2092,12 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
   const slot = state.models.get(providerId) || new Map<string, Model>()
   const existing = input.originalId ? slot.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Model not found.")
+  assertModelMutationAllowed(existing)
   const modelId = existing ? input.originalId! : crypto.randomUUID()
   const gatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
-  if (!input.name || !input.upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
+  const name = input.name || existing?.name || ""
+  const upstreamModel = input.upstreamModel || existing?.upstreamModel || ""
+  if (!name || !upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
   for (const model of slot.values()) {
     if (model.id !== input.originalId && (model.gatewayModelId || model.id) === gatewayModelId) throw new Error("Gateway model ID is already in use.")
   }
@@ -2252,8 +2115,9 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
     id: modelId,
     providerId,
     gatewayModelId,
-    name: input.name,
-    upstreamModel: input.upstreamModel,
+    name,
+    upstreamModel,
+    source: input.source || existing?.source || "custom",
     protocol: hasProtocol ? input.protocol : existing?.protocol,
     upstreamPath: hasUpstreamPath ? (input.upstreamPath || undefined) : existing?.upstreamPath,
     requestOverrides: hasRequestOverrides ? input.requestOverrides : existing?.requestOverrides,
@@ -2285,6 +2149,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
   const slot = state.models.get(providerId)
   const model = slot?.get(modelId)
   if (!model || !slot) return
+  if (model.source === "builtin") throw new Error("Built-in models cannot be deleted.")
   slot.delete(modelId)
   state.providers.set(providerId, {
     ...provider,
@@ -2360,8 +2225,7 @@ export function _memorySnapshot() {
   return memorySnapshot(ensureMemorySeeded())
 }
 
-// Test-only accessor for simulating a legacy key document whose global index
-// row was never written.
+// Test-only accessor for simulating a missing global index row.
 export function _deleteMemoryApiKeyIndex(value: string) {
   const hash = apiKeyValueHash(value)
   for (const state of memoryRoot().states.values()) state.apiKeyIndexes.delete(hash)

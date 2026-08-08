@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim().replace(/\/$/, "") : ""
     if (!prefix || !name || !baseUrl || !input.protocol) throw new Error("Provider fields are incomplete.")
+    if (prefix === "codex" || prefix === "cliproxy") throw new Error("This provider prefix is reserved by RawRoute.")
     if (!["openai-chat", "openai-responses", "anthropic-messages"].includes(input.protocol)) throw new Error("Invalid provider protocol.")
     if (input.authType !== undefined && !["bearer", "x-api-key", "custom-header", "none"].includes(input.authType)) throw new Error("Invalid provider authentication type.")
     new URL(baseUrl)

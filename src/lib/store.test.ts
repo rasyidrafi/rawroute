@@ -14,7 +14,6 @@ import {
   listIndexedApiKeyNames,
   listProviderApiKeys,
   listProviderModels,
-  migrateData,
   readData,
   stripUndefined,
   updateApiKeyName,
@@ -67,29 +66,6 @@ describe("admin passwords", () => {
 })
 
 describe("configuration storage", () => {
-  test("migrates a legacy provider secret into a linked provider API key", () => {
-    const migrated = migrateData({
-      version: 1,
-      admin: { username: "admin", passwordHash: "hash", mustChangePassword: false },
-      sessionSecret: "session-secret",
-      providers: [{
-        id: "openai", name: "OpenAI", prefix: "oa", baseUrl: "https://api.example.com/v1",
-        protocol: "openai-chat", authType: "bearer", secret: "legacy-secret", headers: {}, enabled: true,
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }],
-      models: [],
-      aliases: [],
-      apiKeys: [],
-    })
-
-    expect(migrated.version).toBe(4)
-    expect(migrated.providers[0]).not.toHaveProperty("secret")
-    expect(migrated.providers[0]).toMatchObject({ apiKeyCount: 1, enabledApiKeyCount: 1, modelCount: 0, enabledModelCount: 0 })
-    expect(migrated.providerApiKeys).toHaveLength(1)
-    expect(migrated.providerApiKeys[0]).toMatchObject({ providerId: migrated.providers[0].id, key: "legacy-secret", enabled: true })
-    expect(migrated.providers[0].id).not.toBe("openai")
-  })
-
   test("removes undefined optional fields before Firestore writes", () => {
     const data = stripUndefined({
       providers: [{ id: "openai", authHeader: undefined, secret: undefined }],
@@ -151,9 +127,9 @@ describe("configuration storage", () => {
   })
 
   test("keeps provider subcollections when provider details change", async () => {
-    const provider = await upsertProvider(providerInput("legacy"))
+    const provider = await upsertProvider(providerInput("renamed"))
     await upsertProviderApiKey(provider.id, { name: "Primary", key: "provider-key", enabled: true })
-    await upsertModel(provider.id, { id: "legacy/chat", name: "Chat", upstreamModel: "upstream-chat", enabled: true })
+    await upsertModel(provider.id, { id: "renamed/chat", name: "Chat", upstreamModel: "upstream-chat", enabled: true })
 
     await upsertProvider({ originalId: provider.id, prefix: "current", name: "Current", baseUrl: "https://api.example.com/v2", protocol: "openai-chat", authType: "bearer", headers: {}, enabled: true })
 

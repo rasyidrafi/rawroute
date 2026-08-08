@@ -1,7 +1,6 @@
 import { after } from "next/server"
 
 import { requireAdmin } from "@/lib/auth"
-import { upsertModelPricing } from "@/lib/analytics"
 import { findModelsDevCanonicalModel, searchModelsDevCanonicalModels } from "@/lib/models-dev"
 import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricingJob, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
@@ -32,7 +31,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
-  const action = typeof body?.action === "string" ? body.action : "legacy"
+  const action = typeof body?.action === "string" ? body.action : ""
   const canonical = body?.canonicalModelId && typeof body.canonicalModelId === "string"
     ? {
         id: body.canonicalModelId,
@@ -89,16 +88,5 @@ export async function POST(request: Request) {
     writeLog("error", "admin", "Model pricing update failed", { action, error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update model pricing.", 400)
   }
-  const text = (key: string) => typeof body?.[key] === "string" ? String(body[key]).trim() : ""
-  const number = (key: string) => Number(body?.[key])
-  const modelId = text("modelId")
-  if (!modelId || !text("gatewayModelId") || !text("upstreamModel") || !Number.isSafeInteger(number("inputMicrosPerMillion")) || !Number.isSafeInteger(number("outputMicrosPerMillion"))) return jsonError("Model and integer token rates are required.", 400)
-  try {
-    const pricing = await upsertModelPricing({ modelId, provider: text("provider"), gatewayModelId: text("gatewayModelId"), upstreamModel: text("upstreamModel"), inputMicrosPerMillion: number("inputMicrosPerMillion"), outputMicrosPerMillion: number("outputMicrosPerMillion"), cacheReadMicrosPerMillion: Number.isSafeInteger(number("cacheReadMicrosPerMillion")) ? number("cacheReadMicrosPerMillion") : 0, cacheCreationMicrosPerMillion: Number.isSafeInteger(number("cacheCreationMicrosPerMillion")) ? number("cacheCreationMicrosPerMillion") : 0, enabled: body?.enabled !== false })
-    writeLog("info", "admin", "Model pricing saved", { modelId })
-    return Response.json({ pricing })
-  } catch (error) {
-    writeLog("error", "admin", "Model pricing save failed", { modelId, error: error instanceof Error ? error.message : "Unknown error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to save model pricing.", 400)
-  }
+  return jsonError("Unsupported model pricing action.", 400)
 }

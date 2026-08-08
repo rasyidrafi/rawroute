@@ -1,12 +1,24 @@
 import { createHash, randomBytes } from "node:crypto"
 
 import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
-import { getProviderApiKey, listProviderApiKeys, listProviders, upsertProvider, upsertProviderApiKey } from "@/lib/store"
+import { getProvider, getProviderApiKey, listProviderApiKeys, listProviderModels, listProviders, upsertModel, upsertProvider, upsertProviderApiKey } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
 export const CODEX_PROVIDER_PREFIX = "codex"
 export const CODEX_PROVIDER_NAME = "Codex OAuth"
+
+const CODEX_BUILTIN_MODELS = [
+  { name: "GPT 5.3 Codex Spark", gatewayModelId: "codex/gpt-5.3-codex-spark", upstreamModel: "gpt-5.3-codex-spark", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT 5.4 Mini", gatewayModelId: "codex/gpt-5.4-mini", upstreamModel: "gpt-5.4-mini", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT 5.4", gatewayModelId: "codex/gpt-5.4", upstreamModel: "gpt-5.4", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT 5.5", gatewayModelId: "codex/gpt-5.5", upstreamModel: "gpt-5.5", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT 5.6 Luna", gatewayModelId: "codex/gpt-5.6-luna", upstreamModel: "gpt-5.6-luna", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT 5.6 Sol", gatewayModelId: "codex/gpt-5.6-sol", upstreamModel: "gpt-5.6-sol", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT 5.6 Terra", gatewayModelId: "codex/gpt-5.6-terra", upstreamModel: "gpt-5.6-terra", protocol: "openai-responses", source: "builtin" },
+] as const
+
+const codexProviderEnsureInflight = new Map<string, Promise<Provider>>()
 
 type FetchLike = typeof fetch
 
@@ -193,23 +205,43 @@ export function codexCredentialNeedsRefresh(account: ProviderApiKey, skewMs = 60
 }
 
 export async function ensureCodexProvider(): Promise<Provider> {
-  const providers = await listProviders()
-  const existing = providers.find((provider) => provider.prefix === CODEX_PROVIDER_PREFIX)
-  if (existing) {
-    if (existing.protocol !== "openai-responses" || existing.authType !== "bearer" || existing.baseUrl !== codexBaseUrl()) {
+  const workspaceId = currentWorkspaceId()
+  const inflight = codexProviderEnsureInflight.get(workspaceId)
+  if (inflight) return inflight
+  const promise = (async () => {
+    const providers = await listProviders()
+    const existing = providers.find((provider) => provider.prefix === CODEX_PROVIDER_PREFIX)
+    const provider = existing || await upsertProvider({
+      name: CODEX_PROVIDER_NAME,
+      prefix: CODEX_PROVIDER_PREFIX,
+      baseUrl: codexBaseUrl(),
+      protocol: "openai-responses",
+      authType: "bearer",
+      headers: {},
+      enabled: true,
+    })
+    if (provider.protocol !== "openai-responses" || provider.authType !== "bearer" || provider.baseUrl !== codexBaseUrl()) {
       throw new Error(`Provider prefix ${CODEX_PROVIDER_PREFIX} is already configured for a different upstream.`)
     }
-    return existing
+
+    const existingModels = await listProviderModels(provider.id)
+    for (const builtin of CODEX_BUILTIN_MODELS) {
+      const model = existingModels.find((entry) => entry.gatewayModelId === builtin.gatewayModelId)
+      if (model?.source === "builtin") continue
+      await upsertModel(provider.id, {
+        ...(model ? { originalId: model.id } : {}),
+        ...builtin,
+        enabled: model?.enabled !== false,
+      })
+    }
+    return (await getProvider(provider.id)) || provider
+  })()
+  codexProviderEnsureInflight.set(workspaceId, promise)
+  try {
+    return await promise
+  } finally {
+    if (codexProviderEnsureInflight.get(workspaceId) === promise) codexProviderEnsureInflight.delete(workspaceId)
   }
-  return upsertProvider({
-    name: CODEX_PROVIDER_NAME,
-    prefix: CODEX_PROVIDER_PREFIX,
-    baseUrl: codexBaseUrl(),
-    protocol: "openai-responses",
-    authType: "bearer",
-    headers: {},
-    enabled: true,
-  })
 }
 
 export async function saveCodexAccount(token: CodexTokenBundle, name?: string) {
@@ -235,7 +267,7 @@ export async function saveCodexAccount(token: CodexTokenBundle, name?: string) {
     priority: existing?.priority,
   })
   invalidateCodexCliProxySync()
-  await syncCodexAccountsToCliProxy({ force: true }).catch(() => undefined)
+  await syncCodexAccountsToCliProxy({ force: true })
   return { provider, account }
 }
 
@@ -252,7 +284,7 @@ export async function refreshCodexAccount(account: ProviderApiKey, force = false
     if (!force && !codexCredentialNeedsRefresh(current)) return current
     if (!current.refreshToken) throw new Error(`Codex account ${current.name} has no refresh token.`)
     const token = await refreshCodexToken(current.refreshToken, current)
-    return upsertProviderApiKey(current.providerId, {
+    const updated = await upsertProviderApiKey(current.providerId, {
       originalId: current.id,
       name: current.name,
       key: token.accessToken,
@@ -269,6 +301,9 @@ export async function refreshCodexAccount(account: ProviderApiKey, force = false
       maxConcurrency: current.maxConcurrency,
       priority: current.priority,
     })
+    invalidateCodexCliProxySync()
+    await syncCodexAccountsToCliProxy({ force: true })
+    return updated
   })()
   refreshes.set(refreshKey, promise)
   try { return await promise } finally { refreshes.delete(refreshKey) }
@@ -279,10 +314,10 @@ export async function listCodexAccounts() {
   // provider is provisioned only when the first account is actually saved.
   const provider = (await listProviders()).find((entry) => entry.prefix === CODEX_PROVIDER_PREFIX)
   if (!provider) {
-    await syncCodexAccountsToCliProxy().catch(() => undefined)
+    await syncCodexAccountsToCliProxy()
     return { provider: null, accounts: [] as ProviderApiKey[] }
   }
   const accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth")
-  await syncCodexAccountsToCliProxy().catch(() => undefined)
+  await syncCodexAccountsToCliProxy()
   return { provider, accounts }
 }

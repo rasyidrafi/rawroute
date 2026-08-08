@@ -1,11 +1,35 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
-import { getDashboardPayload, listModelPricing, recordGatewayUsage, resetAnalyticsForTests, upsertBudget, upsertModelPricing } from "@/lib/analytics"
+import { getDashboardPayload, recordGatewayUsage, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { authenticateProxyKey } from "@/lib/auth"
 import { clearLogs, readLogs, writeLog } from "@/lib/logger"
-import { _deleteMemoryApiKeyIndex, _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listProviders, upsertProvider } from "@/lib/store"
+import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "@/lib/model-pricing"
+import { _deleteMemoryApiKeyIndex, _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
 import { runInWorkspace } from "@/lib/workspace-context"
 import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, renameWorkspace, resetWorkspacesForTests } from "@/lib/workspaces"
+
+async function configureWorkspacePricing(gatewayModelId: string, upstreamModel: string, inputMicrosPerMillion: number, outputMicrosPerMillion: number) {
+  const prefix = gatewayModelId.slice(0, gatewayModelId.indexOf("/"))
+  const provider = (await listProviders()).find((entry) => entry.prefix === prefix)
+    || await upsertProvider({ name: prefix, prefix, baseUrl: "https://example.test/v1", protocol: "openai-chat", authType: "none", headers: {}, enabled: true })
+  const existing = (await listModels()).find((model) => model.providerId === provider.id && model.gatewayModelId === gatewayModelId)
+  const model = await upsertModel(provider.id, {
+    ...(existing ? { originalId: existing.id } : {}),
+    gatewayModelId,
+    name: upstreamModel,
+    upstreamModel,
+    enabled: true,
+  })
+  const group = (await syncModelPricingGroups()).find((entry) => entry.memberModelIds.includes(model.id))
+  if (!group) throw new Error(`Missing pricing group for ${gatewayModelId}`)
+  const versions = await listPricingVersions(group.id)
+  await savePricingVersion({
+    groupId: group.id,
+    mode: versions.length ? "replace" : "new",
+    rates: { inputMicrosPerMillion, outputMicrosPerMillion, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 },
+    contextTiers: [],
+  })
+}
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
@@ -76,19 +100,19 @@ describe("workspace isolation", () => {
     const workspace = await createWorkspace("Routing")
     await runInWorkspace(defaultWorkspace, async () => {
       clearLogs()
-      await upsertModelPricing({ modelId: "same-model", provider: "default", gatewayModelId: "shared/model", upstreamModel: "default-upstream", inputMicrosPerMillion: 1, outputMicrosPerMillion: 2, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+      await configureWorkspacePricing("shared/model", "default-upstream", 1, 2)
       writeLog("info", "admin", "default-only")
     })
     await runInWorkspace(workspace, async () => {
       await createApiKey("Routing key", "routing-secret")
-      await upsertModelPricing({ modelId: "same-model", provider: "routing", gatewayModelId: "shared/model", upstreamModel: "routing-upstream", inputMicrosPerMillion: 10, outputMicrosPerMillion: 20, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+      await configureWorkspacePricing("shared/model", "routing-upstream", 10, 20)
       writeLog("info", "admin", "routing-only")
     })
 
     const authenticated = await authenticateProxyKey(new Request("https://gateway.test/v1/models", { headers: { authorization: "Bearer routing-secret" } }))
     expect(authenticated?.workspace.id).toBe(workspace.id)
     await runInWorkspace(authenticated!.workspace, async () => {
-      expect((await listModelPricing())[0]?.upstreamModel).toBe("routing-upstream")
+      expect((await listModels()).find((model) => model.gatewayModelId === "shared/model")?.upstreamModel).toBe("routing-upstream")
       expect(readLogs().map((entry) => entry.message)).toContain("routing-only")
       expect(readLogs().map((entry) => entry.message)).not.toContain("default-only")
     })
@@ -97,7 +121,7 @@ describe("workspace isolation", () => {
     await runInWorkspace(defaultWorkspace, () => createApiKey("Reused", "routing-secret"))
   })
 
-  test("repairs a missing gateway-key index in legacy and scoped workspaces", async () => {
+  test("repairs a missing gateway-key index in every canonical workspace", async () => {
     const defaultWorkspace = (await listWorkspaces())[0]
     const workspace = await createWorkspace("Repair")
     const defaultKey = await runInWorkspace(defaultWorkspace, () => createApiKey("Default repair", "default-repair-secret"))
@@ -109,7 +133,7 @@ describe("workspace isolation", () => {
     await expect(createApiKey("Duplicate while index is missing", defaultKey.key)).rejects.toThrow("already in use")
     await expect(findIndexedApiKeyByValue(defaultKey.key)).resolves.toMatchObject({
       workspaceId: defaultWorkspace.id,
-      workspaceStorageMode: "legacy",
+      workspaceStorageMode: "scoped",
       apiKey: { id: defaultKey.id, name: defaultKey.name, key: defaultKey.key },
     })
     await expect(findIndexedApiKeyByValue(scopedKey.key)).resolves.toMatchObject({

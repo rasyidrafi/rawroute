@@ -19,6 +19,11 @@ test("catalog excludes models whose provider is disabled or missing", () => {
   expect(catalogModels([provider], [model])).toHaveLength(1)
 })
 
+test("catalog includes Codex models", () => {
+  const codexProvider = { ...provider, id: "codex", prefix: "codex" }
+  expect(catalogModels([codexProvider], [{ ...model, providerId: "codex", id: "codex/model", gatewayModelId: "codex/model" }])).toHaveLength(1)
+})
+
 test("catalog includes an alias that points at an enabled model", () => {
   expect(catalogModels([provider], [model], [alias])).toEqual([
     {

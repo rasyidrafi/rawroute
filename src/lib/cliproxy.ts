@@ -1,12 +1,13 @@
 import { authenticateProxyKey } from "@/lib/auth"
-import { BudgetDeniedError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
-import { listCliProxyCatalog } from "@/lib/cliproxy-catalog"
+import { BudgetDeniedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
+import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
+import { catalogModels } from "@/lib/catalog"
 import { writeLog } from "@/lib/logger"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
 import { listAliases, listModels, listProviders } from "@/lib/store"
 import type { Protocol } from "@/lib/types"
-import { runInWorkspace } from "@/lib/workspace-context"
+import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
 
 const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 
@@ -181,6 +182,12 @@ function protocolForPath(path: string): Protocol {
   return "openai-chat"
 }
 
+function protocolForLogPath(path: string): Protocol | "catalog" {
+  const normalized = path.toLowerCase()
+  if (normalized.endsWith("/models") || normalized.endsWith("/models/")) return "catalog"
+  return protocolForPath(path)
+}
+
 async function actualResponseUsage(response: Response) {
   if (!response.headers.get("content-type")?.toLowerCase().includes("json")) return undefined
   const payload = await response.clone().json().catch(() => undefined) as Record<string, unknown> | undefined
@@ -196,36 +203,64 @@ interface ResolvedGatewayModel {
   providerName?: string
 }
 
-function mergeAvailableModels(models: Awaited<ReturnType<typeof listModels>>, catalogModels: Awaited<ReturnType<typeof listCliProxyCatalog>>["models"]) {
-  const configuredGatewayModelIds = new Set(models.map((entry) => entry.gatewayModelId))
-  return [...models, ...catalogModels.filter((candidate) => !configuredGatewayModelIds.has(candidate.gatewayModelId))]
+export class GatewayModelResolutionError extends Error {
+  readonly status: 400 | 503
+  readonly code: "model_not_found" | "model_resolver_unavailable"
+
+  constructor(message: string, status: 400 | 503, code: GatewayModelResolutionError["code"]) {
+    super(message)
+    this.name = "GatewayModelResolutionError"
+    this.status = status
+    this.code = code
+  }
+}
+
+function modelGatewayId(model: { gatewayModelId?: string; id: string }) {
+  return model.gatewayModelId || model.id
+}
+
+function activeModel(model: Awaited<ReturnType<typeof listModels>>[number], provider: Awaited<ReturnType<typeof listProviders>>[number] | undefined) {
+  return Boolean(provider && provider.enabled !== false && model.enabled)
+}
+
+function modelNotFound(model: string): never {
+  throw new GatewayModelResolutionError(`Model ${model} is not configured or is unavailable.`, 400, "model_not_found")
 }
 
 async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel> {
-  try {
-    const [aliases, models, providers, cliProxyCatalog] = await Promise.all([listAliases(), listModels(), listProviders(), listCliProxyCatalog()])
-    const availableModels = mergeAvailableModels(models, cliProxyCatalog.models)
-    const alias = aliases.find((entry) => entry.alias === model)
-    const target = alias
-      ? availableModels.find((entry) => entry.id === alias.targetModelId || (entry.gatewayModelId || entry.id) === alias.targetModelId)
-      : availableModels.find((entry) => entry.id === model || (entry.gatewayModelId || entry.id) === model)
-        || (() => {
-          const suffixMatches = availableModels.filter((entry) => entry.upstreamModel === model || (entry.gatewayModelId || entry.id).endsWith(`/${model}`))
-          return suffixMatches.length === 1 ? suffixMatches[0] : undefined
-        })()
-    if (!target) return { forwardedModel: alias?.targetModelId || model, upstreamModel: alias?.targetModelId || model, pricingGatewayModelId: alias?.targetModelId || model }
-    const provider = providers.find((entry) => entry.id === target.providerId) || cliProxyCatalog.providers.find((entry) => entry.id === target.providerId)
-    const upstreamModel = target.upstreamModel || target.gatewayModelId || model
-    return {
-      forwardedModel: alias ? upstreamModel : model,
-      upstreamModel,
-      pricingGatewayModelId: target.gatewayModelId || target.id,
-      providerModelId: target.id,
-      providerId: target.providerId,
-      providerName: provider?.name,
-    }
-  } catch {
-    return { forwardedModel: model, upstreamModel: model, pricingGatewayModelId: model }
+  const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
+  const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
+  const availableModels = models.filter((candidate) => activeModel(candidate, providerIndex.get(candidate.providerId)))
+  const alias = aliases.find((entry) => entry.alias === model)
+  const target = alias
+    ? availableModels.find((entry) => entry.id === alias.targetModelId || modelGatewayId(entry) === alias.targetModelId)
+    : availableModels.find((entry) => entry.id === model || modelGatewayId(entry) === model)
+      || (() => {
+        if (model.includes("/")) return undefined
+        const suffixMatches = availableModels.filter((entry) => entry.upstreamModel === model || modelGatewayId(entry).endsWith(`/${model}`))
+        return suffixMatches.length === 1 ? suffixMatches[0] : undefined
+      })()
+  if (!target) return modelNotFound(model)
+
+  const provider = providerIndex.get(target.providerId)
+  if (!provider || provider.enabled === false) return modelNotFound(model)
+  const upstreamModel = target.upstreamModel || modelGatewayId(target)
+  let forwardedModel = upstreamModel
+
+  if (provider.prefix === "codex") {
+    // RawRoute has already selected the workspace from the global API-key
+    // index. The namespace is an internal CLIProxy transport selector; it is
+    // never stored as a provider or exposed in the RawRoute model catalog.
+    forwardedModel = `${codexWorkspacePrefix(currentWorkspaceId())}/${upstreamModel}`
+  }
+
+  return {
+    forwardedModel,
+    upstreamModel,
+    pricingGatewayModelId: modelGatewayId(target),
+    providerModelId: target.id,
+    providerId: target.providerId,
+    providerName: provider.name,
   }
 }
 
@@ -242,26 +277,9 @@ async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, mo
   }
 }
 
-async function addAliasesToModelsResponse(response: Response) {
-  if (!response.headers.get("content-type")?.toLowerCase().includes("json")) return response
-  const payload = await response.clone().json().catch(() => undefined) as Record<string, unknown> | undefined
-  if (!payload || !Array.isArray(payload.data)) return response
-  try {
-    const aliases = await listAliases()
-    const [models, cliProxyModels] = await Promise.all([listModels(), listCliProxyCatalog().then((catalog) => catalog.models)])
-    const availableModels = mergeAvailableModels(models, cliProxyModels)
-    const existing = new Set(payload.data.map((entry) => entry && typeof entry === "object" && "id" in entry ? String((entry as Record<string, unknown>).id) : ""))
-    const additions = aliases.flatMap((alias) => {
-      const target = availableModels.find((entry) => entry.id === alias.targetModelId || (entry.gatewayModelId || entry.id) === alias.targetModelId)
-      const targetInUpstream = existing.has(alias.targetModelId)
-      if ((!target && !targetInUpstream) || existing.has(alias.alias)) return []
-      return [{ id: alias.alias, object: "model", created: Math.floor(Date.parse(alias.createdAt) / 1000) || Math.floor(Date.now() / 1000), owned_by: "rawroute" }]
-    })
-    if (!additions.length) return response
-    return new Response(JSON.stringify({ ...payload, data: [...payload.data, ...additions] }), { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
-  } catch {
-    return response
-  }
+async function canonicalModelsResponse() {
+  const [models, providers, aliases] = await Promise.all([listModels(), listProviders(), listAliases()])
+  return Response.json({ object: "list", data: catalogModels(providers, models, aliases) }, { headers: { "cache-control": "no-store" } })
 }
 
 async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
@@ -325,7 +343,7 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
   const authenticated = await authenticateProxyKey(request)
   if (!authenticated) {
-    writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: protocolForPath(path) })
+    writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: protocolForLogPath(path) })
     return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
   }
   return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey))
@@ -344,16 +362,26 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
   if (!isInference) {
+    if (request.method === "GET" && path.endsWith("/models")) return canonicalModelsResponse()
     const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
     const response = await proxyToCliProxy(request, path, { headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
-    return path.endsWith("/models") && request.method === "GET" ? addAliasesToModelsResponse(response) : response
+    return response
   }
 
   const body = new Uint8Array(await request.clone().arrayBuffer())
   let parsed: unknown
   try { parsed = JSON.parse(new TextDecoder().decode(body)) } catch { parsed = {} }
   const estimate = estimateRequest(parsed)
-  const resolvedModel = await resolveGatewayModel(estimate.model)
+  let resolvedModel: ResolvedGatewayModel
+  try {
+    resolvedModel = await resolveGatewayModel(estimate.model)
+  } catch (error) {
+    const resolution = error instanceof GatewayModelResolutionError
+      ? error
+      : new GatewayModelResolutionError("Model resolver is unavailable.", 503, "model_resolver_unavailable")
+    writeLog(resolution.status === 400 ? "warn" : "error", "gateway", "Model resolution failed", { model: estimate.model, error: error instanceof Error ? error.message : "Unknown error" })
+    return new Response(JSON.stringify({ error: { message: resolution.message, code: resolution.code } }), { status: resolution.status, headers: { "content-type": "application/json" } })
+  }
   const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path)
   let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   let reservation: BudgetReservation | undefined
@@ -369,6 +397,9 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     if (error instanceof BudgetDeniedError) {
       return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds) } })
     }
+    if (error instanceof BudgetPricingUnavailableError) {
+      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json" } })
+    }
     writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
     return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json" } })
   }
@@ -376,6 +407,13 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   try {
     reservation = await reserveBudgetAdmission(apiKey.id, budgetState.admission, budgetState.usageContext)
   } catch (error) {
+    if (error instanceof BudgetDeniedError) {
+      writeLog("warn", "gateway", "Budget admission denied", { apiKeyId: apiKey.id, error: error.message })
+      return new Response(JSON.stringify({ error: { message: error.message } }), {
+        status: error.status,
+        headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds) },
+      })
+    }
     writeLog("error", "gateway", "Shared budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
     return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json" } })
   }
@@ -385,7 +423,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   const startedAt = new Date(startedAtMs).toISOString()
   const protocol = protocolForPath(path)
   const payload = objectValue(parsed) || {}
-  const provider = resolvedModel.providerName || resolvedModel.providerId || "CLIProxyAPI"
+  const provider = resolvedModel.providerName || resolvedModel.providerId || "RawRoute"
   const account = apiKey.name || "CLIProxyAPI"
   writeLog("info", "gateway", requestSummary(provider, resolvedModel.pricingGatewayModelId, resolvedModel.upstreamModel, protocol, account, payload, extractReasoningEffort(payload)))
   let response: Response
@@ -464,10 +502,9 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput, reservation
     status: input.status,
     durationMs: Math.max(0, Date.now() - Date.parse(input.startedAt)),
     metrics: input.response,
-    // The reservation is deliberately conservative for admission control. It
-    // must not become the historical bill when usage is missing; settle to the
-    // best-effort request prediction and only fall back to the reservation if
-    // pricing was unavailable for that prediction.
+    // This estimate is only a settlement fallback when the provider omits
+    // usage metadata. It is never used for admission control, and it must not
+    // become the historical bill when actual usage is available.
     assumedCostMicros: shouldSettleEstimate
       ? input.budgetState.estimatedCostMicros ?? reservation?.amountMicros
       : undefined,

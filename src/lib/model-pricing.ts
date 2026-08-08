@@ -2,10 +2,9 @@ import { createHash } from "node:crypto"
 import { getLocalFirestore, type Firestore } from "@/lib/local-db"
 
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
-import { listCliProxyModels } from "@/lib/cliproxy-catalog"
 import { listModels, listProviders } from "@/lib/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
-import { currentWorkspaceId, usesLegacyWorkspaceStorage } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace-context"
 
 let localDatabase: Firestore | undefined
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>
@@ -32,8 +31,6 @@ interface PricingWorkspaceState {
   pricingAdminPromise?: Promise<PricingAdminData>
   pricingJobsCache?: { value: PricingJob[]; expiresAt: number }
   pricingJobsPromise?: Promise<PricingJob[]>
-  legacyMigrationPromise?: Promise<boolean>
-  legacyMigrationComplete: boolean
   pricingCacheGeneration: number
   pricingAdminGeneration: number
   pricingJobsGeneration: number
@@ -57,12 +54,12 @@ function workspaceState() {
           && !candidate.pricingCatalogPromise
           && !candidate.pricingAdminPromise
           && !candidate.pricingJobsPromise
-          && !candidate.legacyMigrationPromise)
+          )
         if (!evictable) break
         states.delete(evictable[0])
       }
     }
-    state = { groups: new Map(), versions: new Map(), jobs: new Map(), runningJobs: new Set(), legacyMigrationComplete: false, pricingCacheGeneration: 0, pricingAdminGeneration: 0, pricingJobsGeneration: 0 }
+    state = { groups: new Map(), versions: new Map(), jobs: new Map(), runningJobs: new Set(), pricingCacheGeneration: 0, pricingAdminGeneration: 0, pricingJobsGeneration: 0 }
     states.set(workspaceId, state)
   }
   return state
@@ -80,10 +77,9 @@ function db() {
   return localDatabase ||= getLocalFirestore()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
-function groupsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_groups`) : workspaceRef().collection("modelPricingGroups") }
-function versionsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_versions`) : workspaceRef().collection("modelPricingVersions") }
-function jobsRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing_jobs`) : workspaceRef().collection("modelPricingJobs") }
-function legacyPricingRef() { return usesLegacyWorkspaceStorage() ? db().collection(`${prefix()}_model_pricing`) : workspaceRef().collection("modelPricing") }
+function groupsRef() { return workspaceRef().collection("modelPricingGroups") }
+function versionsRef() { return workspaceRef().collection("modelPricingVersions") }
+function jobsRef() { return workspaceRef().collection("modelPricingJobs") }
 function stableGroupId(key: string) { return `fixed-${createHash("sha1").update(key).digest("hex").slice(0, 20)}` }
 function positiveDuration(value: string | undefined, fallback: number) {
   const parsed = Number(value)
@@ -122,8 +118,7 @@ function modelGroupLabel(model: Model, providerPrefixes: Map<string, string>) {
 }
 
 async function listPricingModels() {
-  const [models, cliProxyModels] = await Promise.all([listModels(), listCliProxyModels()])
-  return [...models, ...cliProxyModels.filter((candidate) => !models.some((model) => model.gatewayModelId === candidate.gatewayModelId))]
+  return listModels()
 }
 
 type CanonicalLinkInput = { id: string; source: PricingCanonicalSource; name?: string; provider?: string } | null
@@ -204,20 +199,6 @@ async function writeGroups(groups: ModelPricingGroup[]) { return writeGroupChang
 async function writeVersion(version: ModelPricingVersion) {
   if (isMemory()) workspaceState().versions.set(version.id, version)
   else await versionsRef().doc(version.id).set(version)
-  invalidatePricingCatalog()
-}
-
-async function writeVersions(versions: ModelPricingVersion[]) {
-  if (!versions.length) return
-  if (isMemory()) {
-    for (const version of versions) workspaceState().versions.set(version.id, version)
-  } else {
-    for (let offset = 0; offset < versions.length; offset += 450) {
-      const batch = db().batch()
-      for (const version of versions.slice(offset, offset + 450)) batch.set(versionsRef().doc(version.id), version)
-      await batch.commit()
-    }
-  }
   invalidatePricingCatalog()
 }
 
@@ -331,44 +312,8 @@ export function activePricingVersion(versions: ModelPricingVersion[], at = new D
   return selected
 }
 
-async function migrateLegacyPricing(catalog: PricingCatalog) {
-  if (isMemory()) return false
-  const legacy = await legacyPricingRef().get()
-  if (legacy.empty) return false
-
-  const groupsWithVersions = new Set(catalog.versions.map((version) => version.groupId))
-  const writes: ModelPricingVersion[] = []
-  for (const document of legacy.docs) {
-    const entry = document.data() as Record<string, unknown>
-    const modelId = typeof entry.modelId === "string" ? entry.modelId : undefined
-    const gatewayModelId = typeof entry.gatewayModelId === "string" ? entry.gatewayModelId : undefined
-    const target = (modelId ? catalog.modelById.get(modelId) : undefined) || (gatewayModelId ? catalog.modelByGatewayId.get(gatewayModelId) : undefined)
-    if (!target) continue
-    const group = catalog.groupByModelId.get(target.id)
-    if (!group || groupsWithVersions.has(group.id)) continue
-    const updatedAt = typeof entry.updatedAt === "string" && Number.isFinite(Date.parse(entry.updatedAt)) ? entry.updatedAt : new Date().toISOString()
-    writes.push({ id: crypto.randomUUID(), groupId: group.id, version: 1, effectiveAt: updatedAt, createdAt: updatedAt, updatedAt, inputMicrosPerMillion: Number(entry.inputMicrosPerMillion) || 0, outputMicrosPerMillion: Number(entry.outputMicrosPerMillion) || 0, cacheReadMicrosPerMillion: Number(entry.cacheReadMicrosPerMillion) || 0, cacheCreationMicrosPerMillion: Number(entry.cacheCreationMicrosPerMillion) || 0, contextTiers: [] })
-    groupsWithVersions.add(group.id)
-  }
-  await writeVersions(writes)
-  return writes.length > 0
-}
-
-async function ensureLegacyPricingMigrated(catalog: PricingCatalog) {
-  const state = workspaceState()
-  if (state.legacyMigrationComplete || isMemory()) return false
-  if (!state.legacyMigrationPromise) {
-    state.legacyMigrationPromise = migrateLegacyPricing(catalog).then((changed) => {
-      state.legacyMigrationComplete = true
-      return changed
-    }).finally(() => { state.legacyMigrationPromise = undefined })
-  }
-  return state.legacyMigrationPromise
-}
-
 async function buildPricingAdminData() {
-  let catalog = await loadPricingCatalog()
-  if (await ensureLegacyPricingMigrated(catalog)) catalog = await loadPricingCatalog()
+  const catalog = await loadPricingCatalog()
 
   const providerPrefixes = new Map(catalog.providers.map((provider) => [provider.id, provider.prefix]))
   const canonicalIds = new Set(catalog.groups

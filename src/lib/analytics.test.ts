@@ -1,8 +1,49 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import { checkBudget, getBudgetAdmission, getBudgetRequestState, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget, upsertModelPricing } from "@/lib/analytics"
-import { createApiKey, _resetMemoryBackend } from "@/lib/store"
+import { checkBudget, getBudgetAdmission, getBudgetRequestState, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
+import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
+import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
 import type { UsageEvent } from "@/lib/types"
+
+type TestPricing = {
+  modelId: string
+  gatewayModelId: string
+  upstreamModel: string
+  inputMicrosPerMillion: number
+  outputMicrosPerMillion: number
+  cacheReadMicrosPerMillion: number
+  cacheCreationMicrosPerMillion: number
+}
+
+async function configureTestPricing(input: TestPricing) {
+  const separator = input.gatewayModelId.indexOf("/")
+  const prefix = separator > 0 ? input.gatewayModelId.slice(0, separator) : "test"
+  const provider = (await listProviders()).find((entry) => entry.prefix === prefix)
+    || await upsertProvider({ name: prefix, prefix, baseUrl: "https://example.test/v1", protocol: "openai-chat", authType: "none", headers: {}, enabled: true })
+  const existing = (await listModels()).find((model) => model.providerId === provider.id && model.gatewayModelId === input.gatewayModelId)
+  const model = await upsertModel(provider.id, {
+    ...(existing ? { originalId: existing.id } : {}),
+    gatewayModelId: input.gatewayModelId,
+    name: input.upstreamModel,
+    upstreamModel: input.upstreamModel,
+    enabled: true,
+  })
+  const group = (await syncModelPricingGroups()).find((entry) => entry.memberModelIds.includes(model.id))
+  if (!group) throw new Error(`Missing pricing group for ${input.gatewayModelId}`)
+  const versions = await listPricingVersions(group.id)
+  await savePricingVersion({
+    groupId: group.id,
+    mode: versions.length ? "replace" : "new",
+    rates: {
+      inputMicrosPerMillion: input.inputMicrosPerMillion,
+      outputMicrosPerMillion: input.outputMicrosPerMillion,
+      cacheReadMicrosPerMillion: input.cacheReadMicrosPerMillion,
+      cacheCreationMicrosPerMillion: input.cacheCreationMicrosPerMillion,
+    },
+    contextTiers: [],
+  })
+  return model
+}
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"
@@ -13,7 +54,7 @@ beforeEach(() => {
 describe.sequential("usage analytics", () => {
   test("normalizes cache buckets and calculates integer micros", async () => {
     const key = await createApiKey("Analytics")
-    await upsertModelPricing({ modelId: "model-doc", provider: "test", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 100_000, cacheCreationMicrosPerMillion: 200_000, enabled: true })
+    await configureTestPricing({ modelId: "model-doc", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 100_000, cacheCreationMicrosPerMillion: 200_000 })
     await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: "model-doc", gatewayModelId: "test/model", protocol: "openai-chat", startedAt: "2026-08-05T00:00:00.000Z", status: 200, durationMs: 10, metrics: { input: 100, cached: 20, cacheCreation: 10, output: 5 } })
     const payload = await getDashboardPayload({ preset: "all" })
     expect(payload.summary.requests).toBe(1)
@@ -55,7 +96,7 @@ describe.sequential("usage analytics", () => {
 
   test("resolves usage pricing even when a key has no budget", async () => {
     const key = await createApiKey("Unbudgeted usage")
-    await upsertModelPricing({ modelId: "unbudgeted-model", provider: "test", gatewayModelId: "test/unbudgeted", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "unbudgeted-model", gatewayModelId: "test/unbudgeted", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     const state = await getBudgetRequestState(key.id, "test/unbudgeted", "unbudgeted-model", { model: "test/unbudgeted" }, 64)
     expect(state.pricing).toBeDefined()
     expect(state.usageContext).toBeUndefined()
@@ -63,7 +104,7 @@ describe.sequential("usage analytics", () => {
 
   test("is idempotent and blocks configured budgets", async () => {
     const key = await createApiKey("Budgeted")
-    await upsertModelPricing({ modelId: "model-doc", provider: "test", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "model-doc", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1, enabled: true })
     const input = { id: "event-1", gatewayKeyId: key.id, providerModelId: "model-doc", gatewayModelId: "test/model", protocol: "openai-chat" as const, startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 2 } }
     await recordGatewayUsage(input)
@@ -89,7 +130,7 @@ describe.sequential("usage analytics", () => {
 
   test("tracks Unlimited Mode usage from the active session in budgets and usage payloads", async () => {
     const key = await createApiKey("Unlimited usage")
-    await upsertModelPricing({ modelId: "unlimited-model", provider: "test", gatewayModelId: "test/unlimited", upstreamModel: "unlimited", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "unlimited-model", gatewayModelId: "test/unlimited", upstreamModel: "unlimited", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 100, enabled: true })
     const activation = await setBudgetBypassEnabled(true)
     await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: "unlimited-model", gatewayModelId: "test/unlimited", protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 20 } })
@@ -177,7 +218,7 @@ describe.sequential("usage analytics", () => {
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
     expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(800)
 
-    await upsertModelPricing({ modelId: "historical-model", provider: "test", gatewayModelId: "historical/model", upstreamModel: "historical", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "historical-model", gatewayModelId: "historical/model", upstreamModel: "historical", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 700, enabled: true })
     await expect(checkBudget(key.id, "historical/model")).rejects.toThrow("budget")
 
@@ -186,46 +227,79 @@ describe.sequential("usage analytics", () => {
   })
 
   test("uses event records inside partial hourly boundaries", async () => {
-    const key = await createApiKey("Partial boundary")
-    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
-    await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T09:30:00.000Z", end: "2026-08-08T10:30:00.000Z" })
-    const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
-      id,
-      gatewayKeyId: key.id,
-      gatewayModelId: "partial/model",
-      protocol: "openai-chat",
-      startedAt: completedAt,
-      completedAt,
-      status: 200,
-      durationMs: 1,
-      inputTokens: 1,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      totalTokens: 1,
-      costMicros,
-      pricingConfidence: "exact",
-      usageAvailable: true,
-      usageCompleteness: "complete",
-    })
-    await recordUsageEvent(event("before-window", "2026-08-08T09:15:00.000Z", 400), null)
-    await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
-    await recordUsageEvent(event("inside-end-hour", "2026-08-08T10:15:00.000Z", 200), null)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
+    try {
+      const key = await createApiKey("Partial boundary")
+      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T09:30:00.000Z", end: "2026-08-08T10:30:00.000Z" })
+      const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
+        id,
+        gatewayKeyId: key.id,
+        gatewayModelId: "partial/model",
+        protocol: "openai-chat",
+        startedAt: completedAt,
+        completedAt,
+        status: 200,
+        durationMs: 1,
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 1,
+        costMicros,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+        usageCompleteness: "complete",
+      })
+      await recordUsageEvent(event("before-window", "2026-08-08T09:15:00.000Z", 400), null)
+      await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
+      await recordUsageEvent(event("inside-end-hour", "2026-08-08T10:15:00.000Z", 200), null)
 
-    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(300)
+      expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(300)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  test("counts a reconciled baseline once across concurrent reservations", async () => {
+  test("does not reject a request before actual usage reaches the budget", async () => {
     const usageContext = { usageStartAt: "2026-08-08T00:00:00.000Z", windowEnd: "2026-08-15T00:00:00.000Z" }
     const admission = { key: "baseline-test", limitMicros: 1_000, spentMicros: 900, reservationMicros: 50, ttlSeconds: 60 }
     await reserveBudgetAdmission("baseline-key", admission, usageContext)
     await reserveBudgetAdmission("baseline-key", admission, usageContext)
-    await expect(reserveBudgetAdmission("baseline-key", admission, usageContext)).rejects.toThrow("budget")
+    await reserveBudgetAdmission("baseline-key", admission, usageContext)
+    await expect(reserveBudgetAdmission("baseline-key", { ...admission, spentMicros: 1_000 }, usageContext)).rejects.toThrow("budget")
+  })
+
+  test("applies the budget at actual 100 percent, not the request estimate", async () => {
+    const key = await createApiKey("Actual threshold")
+    await configureTestPricing({ modelId: "threshold-model", gatewayModelId: "test/threshold", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 100, enabled: true })
+
+    const usage = (input: number) => recordGatewayUsage({
+      gatewayKeyId: key.id,
+      providerModelId: "threshold-model",
+      gatewayModelId: "test/threshold",
+      protocol: "openai-chat",
+      startedAt: new Date().toISOString(),
+      status: 200,
+      durationMs: 1,
+      metrics: { input },
+    })
+
+    await usage(95)
+    const admission = await getBudgetAdmission(key.id, "test/threshold", "threshold-model", { model: "test/threshold", max_output_tokens: 100 }, 64)
+    expect(admission?.spentMicros).toBe(95)
+    await expect(reserveBudgetAdmission(key.id, admission, { usageStartAt: new Date(Date.now() - 1_000).toISOString(), windowEnd: new Date(Date.now() + 86_400_000).toISOString() })).resolves.toBeDefined()
+    expect((await getBudgetRows()).find((row) => row.apiKeyId === key.id)?.spentMicros).toBe(95)
+
+    await usage(5)
+    await expect(getBudgetAdmission(key.id, "test/threshold", "threshold-model")).rejects.toThrow("budget")
   })
 
   test("uses reconciled usage when an existing budget baseline lags the event ledger", async () => {
     const key = await createApiKey("Ledger admission")
-    await upsertModelPricing({ modelId: "ledger-model", provider: "test", gatewayModelId: "ledger/model", upstreamModel: "ledger", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "ledger-model", gatewayModelId: "ledger/model", upstreamModel: "ledger", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
     const completedAt = new Date().toISOString()
     const event = (id: string, costMicros: number): UsageEvent => ({
@@ -373,30 +447,45 @@ describe.sequential("usage analytics", () => {
     expect(window.start).not.toBe("2026-07-01T09:30:00.000Z")
   })
 
+  test("starts the next window exactly at the previous end boundary", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-01T09:00:00.000Z"))
+    try {
+      await updateBudgetWindow({ anchor: "custom", start: "2026-07-01T17:45:00.000Z", end: "2026-07-08T17:45:00.000Z" })
+      vi.setSystemTime(new Date("2026-07-08T17:45:00.000Z"))
+
+      const window = await getBudgetWindow()
+      expect(window.start).toBe("2026-07-08T17:45:00.000Z")
+      expect(window.end).toBe("2026-07-15T17:45:00.000Z")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test("uses a bounded request reservation when output is capped", async () => {
     const key = await createApiKey("Admission")
-    await upsertModelPricing({ modelId: "model-doc", provider: "test", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "model-doc", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
     const admission = await getBudgetAdmission(key.id, "test/model", "model-doc", { model: "test/model", input: "hello", max_output_tokens: 2 })
     expect(admission?.reservationMicros).toBeLessThan(10_000)
   })
 
-  test("uses a conservative bounded reservation for uncapped requests", async () => {
+  test("keeps an uncapped request estimate bounded", async () => {
     const key = await createApiKey("Uncapped admission")
-    await upsertModelPricing({ modelId: "uncapped-model", provider: "test", gatewayModelId: "test/uncapped", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "uncapped-model", gatewayModelId: "test/uncapped", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
     const admission = await getBudgetAdmission(key.id, "test/uncapped", "uncapped-model", { model: "test/uncapped", input: "hello" }, 48)
     expect(admission?.reservationMicros).toBeGreaterThan(0)
     expect(admission?.reservationMicros).toBeLessThan(10_000)
   })
 
-  test("separates conservative admission from missing-usage cost prediction", async () => {
+  test("keeps request estimate separate from missing-usage cost prediction", async () => {
     const key = await createApiKey("Predicted usage")
-    await upsertModelPricing({ modelId: "predicted-model", provider: "test", gatewayModelId: "test/predicted", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "predicted-model", gatewayModelId: "test/predicted", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
     const first = await getBudgetRequestState(key.id, "test/predicted", "predicted-model", { model: "test/predicted" }, 64)
     expect(first.estimatedCostMicros).toBeGreaterThan(0)
-    expect(first.admission?.reservationMicros).toBeGreaterThan(first.estimatedCostMicros || 0)
+    expect(first.admission?.reservationMicros).toBeGreaterThan(0)
 
     await recordUsageEvent({
       id: "prediction-sample",
@@ -420,20 +509,20 @@ describe.sequential("usage analytics", () => {
     }, null)
     const second = await getBudgetRequestState(key.id, "test/predicted", "predicted-model", { model: "test/predicted" }, 64)
     expect(second.estimatedCostMicros).toBeGreaterThan(first.estimatedCostMicros || 0)
-    expect(second.admission?.reservationMicros).toBeGreaterThan(second.estimatedCostMicros || 0)
+    expect(second.admission?.reservationMicros).toBeGreaterThan(0)
   })
 
   test("recognizes the chat-completions max_completion_tokens cap", async () => {
     const key = await createApiKey("Completion cap")
-    await upsertModelPricing({ modelId: "completion-model", provider: "test", gatewayModelId: "test/completion", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "completion-model", gatewayModelId: "test/completion", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
     const admission = await getBudgetAdmission(key.id, "test/completion", "completion-model", { model: "test/completion", messages: [], max_completion_tokens: 3 }, 64)
     expect(admission?.reservationMicros).toBeLessThan(100)
   })
 
-  test("retains the conservative reservation when successful usage metadata is missing", async () => {
+  test("retains the request estimate when successful usage metadata is missing", async () => {
     const key = await createApiKey("Missing usage")
-    await upsertModelPricing({ modelId: "missing-usage-model", provider: "test", gatewayModelId: "test/missing-usage", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0, enabled: true })
+    await configureTestPricing({ modelId: "missing-usage-model", gatewayModelId: "test/missing-usage", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
     const admission = await getBudgetAdmission(key.id, "test/missing-usage", "missing-usage-model", { model: "test/missing-usage", input: "hello", max_output_tokens: 4 }, 64)
     expect(admission?.reservationMicros).toBeGreaterThan(0)

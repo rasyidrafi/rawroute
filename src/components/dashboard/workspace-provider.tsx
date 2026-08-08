@@ -18,7 +18,7 @@ const fallbackWorkspace: Workspace = {
   name: "Default",
   status: "active",
   isDefault: true,
-  storageMode: "legacy",
+  storageMode: "scoped",
   createdAt: "",
   updatedAt: "",
 }
