@@ -26,6 +26,8 @@ export interface Provider {
   protocol: Protocol
   authType: AuthType
   headers: Record<string, string>
+  /** Opt in to CLIProxy's prompt_cache_key projection for OpenAI-compatible providers. */
+  supportPromptCacheKey?: boolean
   enabled: boolean
   createdAt: string
   apiKeyCount: number

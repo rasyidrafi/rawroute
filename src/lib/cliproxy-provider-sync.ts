@@ -28,6 +28,7 @@ type OpenAICompatProjection = {
   disabled: false
   prefix: string
   "base-url": string
+  "support-prompt-cache-key"?: true
   "api-key-entries"?: OpenAICompatKeyEntry[]
   models: OpenAICompatModel[]
   headers?: Record<string, string>
@@ -199,6 +200,7 @@ async function desiredProjection(providerId: string): Promise<Projection> {
       prefix: namespace,
       "base-url": baseUrl,
       models: mappedModels,
+      ...(provider.supportPromptCacheKey === true && kind === "openai" ? { "support-prompt-cache-key": true as const } : {}),
       ...(headers ? { headers } : {}),
     } satisfies OpenAICompatProjection
     return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai: [entry], claude: [] })
@@ -217,6 +219,7 @@ async function desiredProjection(providerId: string): Promise<Projection> {
       "base-url": baseUrl,
       "api-key-entries": [{ "api-key": apiKey.key }],
       models: mappedModels,
+      ...(provider.supportPromptCacheKey === true ? { "support-prompt-cache-key": true as const } : {}),
       ...(headers ? { headers } : {}),
     } satisfies OpenAICompatProjection))
     return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai, claude: [] })
@@ -362,7 +365,12 @@ async function reconcile(providerId: string, force: boolean) {
       await applyProjection(projection, force)
       projectionState.set(projectionStateKey, { fingerprint: projection.fingerprint, expiresAt: Date.now() + SYNC_TTL_MS })
       await localRedisSet(redisStateKey(projection.workspaceId, providerId), projection.fingerprint, SYNC_TTL_MS)
-      writeLog("info", "admin", "CLIProxy provider projection reconciled", { providerId, projectedCredentials: projection.openai.length || projection.claude.length, projectedModels: projection.openai[0]?.models.length || projection.claude[0]?.models.length || 0 })
+      writeLog("info", "admin", "CLIProxy provider projection reconciled", {
+        providerId,
+        projectedCredentials: projection.openai.length || projection.claude.length,
+        projectedModels: projection.openai[0]?.models.length || projection.claude[0]?.models.length || 0,
+        supportPromptCacheKey: projection.openai.some((entry) => entry["support-prompt-cache-key"] === true),
+      })
     } catch (error) {
       projectionState.delete(projectionStateKey)
       await localRedisDelete(redisStateKey(projection.workspaceId, providerId))

@@ -280,10 +280,11 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
           </DialogContent>
         </Dialog>
         <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-7">
             <DetailValue label="Gateway prefix" value={`${provider.prefix}/`} mono />
             <DetailValue label="Authentication" value={provider.authType === "none" ? "None" : provider.authType} />
             <DetailValue label="Protocol" value={protocolLabels[provider.protocol]} />
+            {provider.protocol !== "anthropic-messages" && <DetailValue label="Prompt cache key" value={provider.supportPromptCacheKey === true ? "Enabled" : "Disabled"} />}
             <DetailValue label={isOAuthProvider ? "Configured accounts" : "Configured keys"} value={String(apiKeyCounts.configured)} />
             <DetailValue label="Configured models" value={String(models.length)} />
           </div>

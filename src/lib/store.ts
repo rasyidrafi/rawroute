@@ -215,6 +215,7 @@ function providerFromSnapshot(snapshot: DocumentSnapshot): Provider {
     protocol: data.protocol || "openai-chat",
     authType: data.authType || "bearer",
     headers: data.headers || {},
+    supportPromptCacheKey: data.supportPromptCacheKey === true,
     enabled: data.enabled !== false,
     createdAt: data.createdAt || "",
     apiKeyCount: data.apiKeyCount || 0,
@@ -265,6 +266,7 @@ function storedProvider(provider: Provider) {
     protocol: provider.protocol,
     authType: provider.authType,
     headers: provider.headers,
+    supportPromptCacheKey: provider.supportPromptCacheKey,
     enabled: provider.enabled,
     createdAt: provider.createdAt,
     apiKeyCount: provider.apiKeyCount,
@@ -1552,6 +1554,7 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
       protocol: input.protocol,
       authType: input.authType,
       headers: input.headers,
+      supportPromptCacheKey: input.supportPromptCacheKey,
       enabled: input.enabled,
     }) as Partial<Provider>
     const provider: Provider = {
@@ -1564,6 +1567,7 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
       protocol: input.protocol || existing?.protocol || "openai-chat",
       authType: input.authType || existing?.authType || "bearer",
       headers: input.headers || existing?.headers || {},
+      supportPromptCacheKey: input.supportPromptCacheKey !== undefined ? input.supportPromptCacheKey : (existing?.supportPromptCacheKey ?? expected?.supportPromptCacheKey ?? false),
       enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
       createdAt: existing?.createdAt || new Date().toISOString(),
       apiKeyCount: existing?.apiKeyCount ?? 0,
@@ -1881,6 +1885,7 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
     protocol: input.protocol,
     authType: input.authType,
     headers: input.headers,
+    supportPromptCacheKey: input.supportPromptCacheKey,
     enabled: input.enabled,
   }) as Partial<Provider>
   for (const provider of state.providers.values()) {
@@ -1903,6 +1908,7 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
     protocol: input.protocol || existing?.protocol || "openai-chat",
     authType: input.authType || existing?.authType || "bearer",
     headers: input.headers || existing?.headers || {},
+    supportPromptCacheKey: input.supportPromptCacheKey !== undefined ? input.supportPromptCacheKey : (existing?.supportPromptCacheKey ?? expected?.supportPromptCacheKey ?? false),
     enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
     createdAt: existing?.createdAt || new Date().toISOString(),
     ...counters,

@@ -119,6 +119,27 @@ test("separates the same RawRoute prefix across workspaces", async () => {
   expect(nonCodexProviderPrefix("workspace-a", "provider-a")).not.toBe(nonCodexProviderPrefix("workspace-b", "provider-a"))
 })
 
+test("projects prompt cache key support only when the provider opts in", async () => {
+  mocks.getProvider.mockResolvedValue({
+    id: "provider-a",
+    name: "Bynara",
+    prefix: "bynara",
+    baseUrl: "https://api.bynara.example/v1",
+    protocol: "openai-chat",
+    authType: "bearer",
+    headers: {},
+    supportPromptCacheKey: true,
+    enabled: true,
+  })
+
+  await syncNonCodexProviderProjection("provider-a")
+
+  const openaiPut = mocks.cliproxyManagement.mock.calls.find(([path, init]) => path.endsWith("/openai-compatibility") && init.method === "PUT")
+  if (!openaiPut) throw new Error("OpenAI-compatible PUT was not sent")
+  const entries = JSON.parse(String(openaiPut[1].body)) as Array<Record<string, unknown>>
+  expect(entries.slice(1).every((entry) => entry["support-prompt-cache-key"] === true)).toBe(true)
+})
+
 test("projects Anthropic credentials with fill-first priority", async () => {
   mocks.getProvider.mockResolvedValue({
     id: "provider-a",

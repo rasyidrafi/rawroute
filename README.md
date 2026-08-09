@@ -6,13 +6,18 @@ The original RawRoute dashboard remains intact, including workspaces, aliases, g
 
 ## Network boundary
 
-Only RawRoute binds a host port:
+Only RawRoute binds a host port. CLIProxyAPI remains the private provider
+execution and translation service; provider requests use the configured
+upstream base URL directly.
 
 ```text
 client -> rawroute:8080 -> cli-proxy-api:8317 (private Compose network)
+                              -> provider origin
 ```
 
-CLIProxyAPI uses `expose`, not `ports`. Its API, management API, and dashboard are not reachable from the host. RawRoute exposes only its own authenticated dashboard and wrapper endpoints.
+CLIProxyAPI uses `expose`, not `ports`, so its management API is not reachable
+from the host. RawRoute synchronizes workspace-scoped provider projections to
+CLIProxyAPI; it does not proxy or rewrite provider traffic itself.
 
 ## Setup
 
@@ -26,6 +31,11 @@ docker compose --env-file .env.local up --build
 ```
 
 Compose pulls `eceasy/cli-proxy-api:latest` from Docker Hub by default. Set `CLI_PROXY_IMAGE` in `.env.local` to use another published Docker Hub or GCR image/tag.
+
+`Enable CLIProxy prompt cache key support` is an opt-in provider setting. It
+projects CLIProxy's native `support-prompt-cache-key` option for
+OpenAI-compatible providers without adding RawRoute-side cache-key or user
+rewriting.
 
 Replace all placeholder credentials before production use. The dashboard login is configured by `DEFAULT_ADMIN_USERNAME` and `DEFAULT_ADMIN_PASSWORD`.
 

@@ -37,9 +37,11 @@ export async function POST(request: Request) {
     if (prefix === "codex" || prefix === "cliproxy") throw new Error("This provider prefix is reserved by RawRoute.")
     if (!["openai-chat", "openai-responses", "anthropic-messages"].includes(input.protocol)) throw new Error("Invalid provider protocol.")
     if (input.authType !== undefined && !["bearer", "x-api-key", "none"].includes(input.authType)) throw new Error("Invalid provider authentication type.")
+    if (input.supportPromptCacheKey !== undefined && typeof input.supportPromptCacheKey !== "boolean") throw new Error("supportPromptCacheKey must be a boolean.")
     new URL(rawBaseUrl)
     const baseUrl = normalizeProviderBaseUrl(input.protocol as Protocol, rawBaseUrl)
     const authType = (input.authType || "bearer") as Provider["authType"]
+    const openAICompatible = input.protocol !== "anthropic-messages"
     validateProviderCliProxyCompatibility({ protocol: input.protocol as Protocol, baseUrl, authType })
     const provider = await upsertProvider({
       originalId: input.originalId,
@@ -49,6 +51,7 @@ export async function POST(request: Request) {
       protocol: input.protocol as Protocol,
       authType,
       headers: validateProviderHeaders(input.headers || {}),
+      supportPromptCacheKey: openAICompatible ? input.supportPromptCacheKey : false,
       enabled: input.enabled !== false,
     })
     if (provider.prefix !== "codex") await syncNonCodexProviderProjection(provider.id)
