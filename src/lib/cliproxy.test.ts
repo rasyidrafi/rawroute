@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   listModels: vi.fn(),
   listProviders: vi.fn(),
   writeLog: vi.fn(),
+  ensureNonCodexProviderProjection: vi.fn(),
 }))
 
 vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
@@ -29,6 +30,10 @@ vi.mock("@/lib/analytics", () => ({
   reserveBudgetAdmission: mocks.reserveBudgetAdmission,
 }))
 vi.mock("@/lib/cliproxy-codex", () => ({ codexWorkspacePrefix: (workspaceId: string) => `rr-codex-${workspaceId}` }))
+vi.mock("@/lib/cliproxy-provider-sync", () => ({
+  ensureNonCodexProviderProjection: mocks.ensureNonCodexProviderProjection,
+  nonCodexProviderPrefix: (workspaceId: string, providerId: string) => `rr-ws-${workspaceId}-p-${providerId}`,
+}))
 vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
 vi.mock("@/lib/store", () => ({
   listAliases: mocks.listAliases,
@@ -56,6 +61,7 @@ beforeEach(() => {
   mocks.releaseBudgetReservation.mockResolvedValue(undefined)
   mocks.createGatewayUsageEvent.mockResolvedValue({ id: "usage-event" })
   mocks.recordUsageEvent.mockResolvedValue(undefined)
+  mocks.ensureNonCodexProviderProjection.mockResolvedValue(undefined)
   mocks.listAliases.mockResolvedValue([])
   mocks.listModels.mockResolvedValue([{
     id: "codex-model",
@@ -169,6 +175,56 @@ test("routes Codex models through the authenticated workspace namespace", async 
 
   const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
   expect(forwarded.model).toBe("rr-codex-default/gpt-5")
+})
+
+test("routes non-Codex models through a workspace/provider namespace", async () => {
+  const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", protocol: "openai-chat", authType: "bearer", enabled: true }
+  const model = {
+    id: "model-a",
+    providerId: provider.id,
+    gatewayModelId: "bynara/model-a",
+    name: "Model A",
+    upstreamModel: "upstream-a",
+    enabled: true,
+    createdAt: "2026-08-08T00:00:00.000Z",
+  }
+  mocks.listProviders.mockResolvedValue([provider])
+  mocks.listModels.mockResolvedValue([model])
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "bynara/model-a", messages: [{ role: "user", content: "hello" }] }),
+  }))
+  await response.text()
+
+  expect(mocks.ensureNonCodexProviderProjection).toHaveBeenCalledWith(provider.id)
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+  expect(forwarded.model).toBe("rr-ws-default-p-provider-a/model-a")
+})
+
+test("rejects a model when the request protocol does not match its local policy", async () => {
+  const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", protocol: "openai-responses", authType: "bearer", enabled: true }
+  mocks.listProviders.mockResolvedValue([provider])
+  mocks.listModels.mockResolvedValue([{
+    id: "model-a",
+    providerId: provider.id,
+    gatewayModelId: "bynara/model-a",
+    name: "Model A",
+    upstreamModel: "upstream-a",
+    enabled: true,
+    createdAt: "2026-08-08T00:00:00.000Z",
+  }])
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "bynara/model-a", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(400)
+  await expect(response.json()).resolves.toEqual({ error: { message: "Model bynara/model-a accepts openai-responses, but this request uses openai-chat.", code: "model_protocol_mismatch" } })
+  expect(globalThis.fetch).not.toHaveBeenCalled()
 })
 
 test("rejects unknown runtime models before calling the backend", async () => {

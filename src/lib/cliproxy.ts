@@ -1,6 +1,7 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { BudgetDeniedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
+import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
 import { catalogModels } from "@/lib/catalog"
 import { writeLog } from "@/lib/logger"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
@@ -205,7 +206,7 @@ interface ResolvedGatewayModel {
 
 export class GatewayModelResolutionError extends Error {
   readonly status: 400 | 503
-  readonly code: "model_not_found" | "model_resolver_unavailable"
+  readonly code: "model_not_found" | "model_protocol_mismatch" | "model_resolver_unavailable"
 
   constructor(message: string, status: 400 | 503, code: GatewayModelResolutionError["code"]) {
     super(message)
@@ -227,7 +228,20 @@ function modelNotFound(model: string): never {
   throw new GatewayModelResolutionError(`Model ${model} is not configured or is unavailable.`, 400, "model_not_found")
 }
 
-async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel> {
+function modelProtocolMismatch(model: string, expected: Protocol, received: Protocol): never {
+  throw new GatewayModelResolutionError(`Model ${model} accepts ${expected}, but this request uses ${received}.`, 400, "model_protocol_mismatch")
+}
+
+function providerModelSuffix(provider: Awaited<ReturnType<typeof listProviders>>[number], model: Awaited<ReturnType<typeof listModels>>[number]) {
+  const gatewayModelId = modelGatewayId(model)
+  const prefix = `${provider.prefix}/`
+  if (!gatewayModelId.startsWith(prefix)) modelNotFound(gatewayModelId)
+  const suffix = gatewayModelId.slice(prefix.length).trim()
+  if (!suffix) modelNotFound(gatewayModelId)
+  return suffix
+}
+
+async function resolveGatewayModel(model: string, requestProtocol: Protocol): Promise<ResolvedGatewayModel> {
   const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const availableModels = models.filter((candidate) => activeModel(candidate, providerIndex.get(candidate.providerId)))
@@ -244,6 +258,8 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
 
   const provider = providerIndex.get(target.providerId)
   if (!provider || provider.enabled === false) return modelNotFound(model)
+  const configuredProtocol = target.protocol || provider.protocol
+  if (configuredProtocol && configuredProtocol !== requestProtocol) modelProtocolMismatch(model, configuredProtocol, requestProtocol)
   const upstreamModel = target.upstreamModel || modelGatewayId(target)
   let forwardedModel = upstreamModel
 
@@ -252,6 +268,11 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
     // index. The namespace is an internal CLIProxy transport selector; it is
     // never stored as a provider or exposed in the RawRoute model catalog.
     forwardedModel = `${codexWorkspacePrefix(currentWorkspaceId())}/${upstreamModel}`
+  } else {
+    // RawRoute owns the external provider/model resolver. CLIProxy receives a
+    // workspace/provider-scoped transport model only after this local lookup.
+    await ensureNonCodexProviderProjection(provider.id)
+    forwardedModel = `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
   }
 
   return {
@@ -374,7 +395,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   const estimate = estimateRequest(parsed)
   let resolvedModel: ResolvedGatewayModel
   try {
-    resolvedModel = await resolveGatewayModel(estimate.model)
+    resolvedModel = await resolveGatewayModel(estimate.model, protocolForPath(path))
   } catch (error) {
     const resolution = error instanceof GatewayModelResolutionError
       ? error
@@ -521,22 +542,7 @@ export async function cliProxyHealth() {
   }
 }
 
-export async function cliproxyManagement(path: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers)
-  const managementKey = process.env.CLIPROXY_MANAGEMENT_KEY?.trim()
-  if (managementKey) headers.set("x-management-key", managementKey)
-  return fetch(upstreamUrl(path), {
-    ...init,
-    headers,
-    cache: "no-store",
-  })
-}
-
-export async function cliproxyManagementJson<T>(path: string, init: RequestInit = {}) {
-  const response = await cliproxyManagement(path, init)
-  const data = await response.json().catch(() => undefined) as T | undefined
-  return { response, data }
-}
+export { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy-management"
 
 export function maskSecret(value: unknown) {
   if (typeof value !== "string" || value.length < 5) return "••••••••"

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
-import { _resetMemoryBackend, deleteAlias, listAliases, readData, upsertAlias } from "@/lib/store"
+import { _resetMemoryBackend, deleteAlias, listAliases, upsertAlias } from "@/lib/store"
 import type { ModelAlias } from "@/lib/types"
 
 beforeEach(() => {
@@ -28,7 +28,7 @@ describe("model aliases", () => {
     await upsertAlias(aliasInput({ alias: "aaa-first", name: "ZZZ Display Name" }))
     const aliases = await listAliases()
     expect(aliases.map((entry) => entry.alias)).toEqual(["aaa-first", "my-cool-model"])
-    expect((await readData()).aliases).toHaveLength(2)
+    expect(aliases).toHaveLength(2)
   })
 
   test("normalizes the alias ID and rejects duplicates", async () => {

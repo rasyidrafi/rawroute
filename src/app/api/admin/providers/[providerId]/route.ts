@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
+import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
 import { ensureCodexProvider } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
@@ -44,11 +45,14 @@ export async function DELETE(_request: Request, context: { params: Promise<{ pro
   }
   const { providerId } = await context.params
   try {
+    const provider = await getProvider(providerId)
+    if (provider?.prefix === "codex") throw new Error("The Codex provider is fixed and cannot be deleted.")
     await deleteProvider(providerId)
+    await syncNonCodexProviderProjection(providerId)
     writeLog("info", "admin", "Provider deleted", { providerId })
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Provider delete failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to delete provider.", 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to delete provider.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }

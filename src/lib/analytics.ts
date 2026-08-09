@@ -1629,7 +1629,7 @@ export async function reserveBudgetAdmission(
 
 export async function releaseBudgetReservation(reservation: BudgetReservation | undefined) {
   // Reservations do not alter the actual-spend counter, so there is nothing
-  // to release. Keep the lifecycle hook for compatibility with callers.
+  // to release. Keep the lifecycle hook so request finalization stays uniform.
   void reservation
 }
 

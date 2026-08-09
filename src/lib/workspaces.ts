@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 
-import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getFirestoreInstance, isMemoryBackend } from "@/lib/store"
+import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getLocalDatabase, isMemoryBackend } from "@/lib/store"
 import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
 import type { Workspace } from "@/lib/types"
 import { DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME } from "@/lib/workspace-context"
@@ -55,7 +55,7 @@ function defaultWorkspace(): Workspace {
 }
 
 function workspacesRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`)
+  return getLocalDatabase().collection(`${collectionPrefix()}_workspaces`)
 }
 
 function workspaceRef(workspaceId: string) {
@@ -63,11 +63,11 @@ function workspaceRef(workspaceId: string) {
 }
 
 function workspaceNameIndexesRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_workspace_name_indexes`)
+  return getLocalDatabase().collection(`${collectionPrefix()}_workspace_name_indexes`)
 }
 
 function apiKeyIndexesRef() {
-  return getFirestoreInstance().collection(`${collectionPrefix()}_api_key_indexes`)
+  return getLocalDatabase().collection(`${collectionPrefix()}_api_key_indexes`)
 }
 
 function cacheWorkspace(workspaceId: string, workspace: Workspace | undefined, expiresAt = Date.now() + (workspace ? workspaceCacheTtlMs : workspaceNegativeCacheTtlMs)) {
@@ -118,7 +118,7 @@ async function ensureDefaultWorkspace() {
     if (!memoryWorkspaces().has(DEFAULT_WORKSPACE_ID)) memoryWorkspaces().set(DEFAULT_WORKSPACE_ID, defaultWorkspace())
     return memoryWorkspaces().get(DEFAULT_WORKSPACE_ID)!
   }
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const ref = workspaceRef(DEFAULT_WORKSPACE_ID)
     const snapshot = await transaction.get(ref)
@@ -234,7 +234,7 @@ export async function createWorkspace(nameInput: unknown) {
     memoryWorkspaces().set(workspace.id, workspace)
     return workspace
   }
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   const workspace = await firestore.runTransaction(async (transaction) => {
     const indexRef = workspaceNameIndexesRef().doc(nameHash(name))
     if ((await transaction.get(indexRef)).exists) throw new Error("Workspace name is already in use.")
@@ -262,7 +262,7 @@ export async function renameWorkspace(workspaceId: string, nameInput: unknown) {
     memoryWorkspaces().set(workspaceId, updated)
     return updated
   }
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   const updated = await firestore.runTransaction(async (transaction) => {
     const ref = workspaceRef(workspaceId)
     const snapshot = await transaction.get(ref)
@@ -302,7 +302,7 @@ export async function deleteWorkspace(workspaceId: string, confirmation: unknown
   const apiKeys = await workspaceRef(workspaceId).collection("apiKeys").get()
   const hashes: string[] = []
   for (let offset = 0; offset < apiKeys.docs.length; offset += 400) {
-    const batch = getFirestoreInstance().batch()
+    const batch = getLocalDatabase().batch()
     let operations = 0
     for (const apiKey of apiKeys.docs.slice(offset, offset + 400)) {
       const value = apiKey.data()?.key
@@ -314,7 +314,7 @@ export async function deleteWorkspace(workspaceId: string, confirmation: unknown
     }
     if (operations > 0) await batch.commit()
   }
-  await getFirestoreInstance().recursiveDelete(workspaceRef(workspaceId))
+  await getLocalDatabase().recursiveDelete(workspaceRef(workspaceId))
   await workspaceNameIndexesRef().doc(nameHash(workspace.name)).delete()
   evictWorkspace(workspaceId)
   _invalidateApiKeyLookupCache(hashes)

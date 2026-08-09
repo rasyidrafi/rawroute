@@ -1,5 +1,6 @@
 import { requireAdmin } from "@/lib/auth"
 import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
+import { syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getProvider, reorderProviderApiKeys } from "@/lib/store"
@@ -18,6 +19,8 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     if (provider?.prefix === "codex") {
       invalidateCodexCliProxySync()
       await syncCodexAccountsToCliProxy({ force: true })
+    } else {
+      await syncNonCodexProviderProjection(providerId)
     }
     writeLog("info", "admin", "Provider API keys reordered", { providerId, count: body.orderedIds.length })
     return Response.json({ ok: true })

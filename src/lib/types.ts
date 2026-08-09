@@ -1,6 +1,6 @@
 export type Protocol = "openai-chat" | "openai-responses" | "anthropic-messages"
 
-export type AuthType = "bearer" | "x-api-key" | "custom-header" | "none"
+export type AuthType = "bearer" | "x-api-key" | "none"
 
 export type ProviderCredentialKind = "api-key" | "codex-oauth"
 
@@ -25,7 +25,6 @@ export interface Provider {
   baseUrl: string
   protocol: Protocol
   authType: AuthType
-  authHeader?: string
   headers: Record<string, string>
   enabled: boolean
   createdAt: string
@@ -68,8 +67,6 @@ export interface Model {
   name: string
   upstreamModel: string
   protocol?: Protocol
-  upstreamPath?: string
-  requestOverrides?: Record<string, unknown>
   enabled: boolean
   /** Whether this is a fixed built-in model or a workspace-defined model. */
   source?: ModelSource

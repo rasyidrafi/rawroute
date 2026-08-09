@@ -1,7 +1,8 @@
 import { requireAdmin } from "@/lib/auth"
+import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { upsertProviderApiKey } from "@/lib/store"
+import { getProvider, upsertProviderApiKey } from "@/lib/store"
 import type { ProviderApiKey } from "@/lib/types"
 
 
@@ -27,6 +28,11 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   if (!input) return jsonError("Provider API key payload is required.", 400)
 
   try {
+    const provider = await getProvider(providerId)
+    if (!provider) throw new Error("Provider is missing.")
+    if (provider.authType === "none") {
+      throw new Error("This provider uses no API keys.")
+    }
     const name = typeof input.name === "string" ? input.name.trim() : ""
     if (!name) throw new Error("API key name is required.")
     if (name.length > 80) throw new Error("API key name must be 80 characters or fewer.")
@@ -45,10 +51,11 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       rpmLimit,
       maxConcurrency,
     })
+    if (provider?.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
     writeLog("info", "admin", "Provider API key saved", { providerId })
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Provider API key save failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to save provider API key.", 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to save provider API key.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }

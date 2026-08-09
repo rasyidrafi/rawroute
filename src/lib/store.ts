@@ -35,8 +35,6 @@ interface ReadCache<T> {
 }
 
 interface WorkspaceCacheState {
-  compatibilityCache?: CompatibilityCache
-  compatibilityReadPromise?: Promise<AppData>
   routingDataCache?: DataCache<RoutingData>
   routingDataReadPromise?: Promise<RoutingData>
   catalogDataCache?: DataCache<CatalogData>
@@ -208,7 +206,22 @@ function initialGatewayApiKey(): ApiKey {
 }
 
 function providerFromSnapshot(snapshot: DocumentSnapshot): Provider {
-  return { ...snapshot.data(), id: snapshot.id } as Provider
+  const data = snapshot.data() as Partial<Provider>
+  return {
+    id: snapshot.id,
+    name: data.name || "",
+    prefix: data.prefix || "",
+    baseUrl: data.baseUrl || "",
+    protocol: data.protocol || "openai-chat",
+    authType: data.authType || "bearer",
+    headers: data.headers || {},
+    enabled: data.enabled !== false,
+    createdAt: data.createdAt || "",
+    apiKeyCount: data.apiKeyCount || 0,
+    enabledApiKeyCount: data.enabledApiKeyCount || 0,
+    modelCount: data.modelCount || 0,
+    enabledModelCount: data.enabledModelCount || 0,
+  }
 }
 
 function providerApiKeyFromSnapshot(snapshot: DocumentSnapshot, providerId: string): ProviderApiKey {
@@ -222,8 +235,18 @@ function providerApiKeyFromSnapshot(snapshot: DocumentSnapshot, providerId: stri
 }
 
 function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Model {
-  const data = snapshot.data() as Omit<Model, "id" | "providerId"> & { gatewayModelId?: string }
-  return { ...data, id: snapshot.id, providerId, gatewayModelId: data.gatewayModelId || snapshot.id } as Model
+  const data = snapshot.data() as Partial<Model>
+  return {
+    id: snapshot.id,
+    providerId,
+    gatewayModelId: data.gatewayModelId || snapshot.id,
+    name: data.name || "",
+    upstreamModel: data.upstreamModel || "",
+    protocol: data.protocol,
+    enabled: data.enabled !== false,
+    source: data.source || "custom",
+    createdAt: data.createdAt || "",
+  }
 }
 
 function apiKeyFromSnapshot(snapshot: DocumentSnapshot): ApiKey {
@@ -235,9 +258,20 @@ function aliasFromSnapshot(snapshot: DocumentSnapshot): ModelAlias {
 }
 
 function storedProvider(provider: Provider) {
-  const { id, ...data } = provider
-  void id
-  return stripUndefined(data)
+  return stripUndefined({
+    name: provider.name,
+    prefix: provider.prefix,
+    baseUrl: provider.baseUrl,
+    protocol: provider.protocol,
+    authType: provider.authType,
+    headers: provider.headers,
+    enabled: provider.enabled,
+    createdAt: provider.createdAt,
+    apiKeyCount: provider.apiKeyCount,
+    enabledApiKeyCount: provider.enabledApiKeyCount,
+    modelCount: provider.modelCount,
+    enabledModelCount: provider.enabledModelCount,
+  })
 }
 
 function storedProviderApiKey(apiKey: ProviderApiKey) {
@@ -253,10 +287,15 @@ function storedProviderApiKey(apiKey: ProviderApiKey) {
 }
 
 function storedModel(model: Model) {
-  const { id, providerId, gatewayModelId, ...data } = model
-  void id
-  void providerId
-  return stripUndefined({ ...data, gatewayModelId: gatewayModelId || model.id })
+  return stripUndefined({
+    gatewayModelId: model.gatewayModelId || model.id,
+    name: model.name,
+    upstreamModel: model.upstreamModel,
+    protocol: model.protocol,
+    enabled: model.enabled,
+    source: model.source,
+    createdAt: model.createdAt,
+  })
 }
 
 function migrateProviderModels(models: Iterable<Model>, prefix: string): Map<string, Model> {
@@ -328,7 +367,6 @@ export function isMemoryBackend() {
 type RoutingData = Pick<AppData, "sessionSecret" | "providers" | "providerApiKeys" | "models" | "aliases">
 type CatalogData = Pick<AppData, "providers" | "models" | "aliases">
 interface DataCache<T> { data: T; expiresAt: number; revision?: string; fullRefreshAt?: number }
-type CompatibilityCache = DataCache<AppData>
 
 function clearReadCache<T>(cache: ReadCache<T>) {
   cache.value = undefined
@@ -454,11 +492,9 @@ function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   apiKeyLookupInflight.clear()
 }
 
-function invalidateCompatibilityCache() {
+function invalidateRoutingCaches() {
   const state = workspaceCacheState()
   state.generation += 1
-  state.compatibilityCache = undefined
-  state.compatibilityReadPromise = undefined
   state.routingDataCache = undefined
   state.routingDataReadPromise = undefined
   state.catalogDataCache = undefined
@@ -476,7 +512,7 @@ function invalidateCompatibilityCache() {
 }
 
 function invalidateGatewayApiKeyCaches(hashes?: Iterable<string>) {
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
   invalidateApiKeyLookupCache(hashes)
 }
 
@@ -633,9 +669,6 @@ export function getLocalDatabase(): Firestore {
   return localDatabase ||= getLocalFirestore()
 }
 
-/** Compatibility name retained for workspace modules while callers migrate to the local database name. */
-export const getFirestoreInstance = getLocalDatabase
-
 export function collectionPrefix() {
   return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
 }
@@ -717,7 +750,7 @@ interface FirestoreWorkspaceScope {
 }
 
 async function firestoreWorkspaceScopes(): Promise<FirestoreWorkspaceScope[]> {
-  const snapshot = await getFirestoreInstance().collection(`${collectionPrefix()}_workspaces`).get()
+  const snapshot = await getLocalDatabase().collection(`${collectionPrefix()}_workspaces`).get()
   const scopes = snapshot.docs.map((document) => ({
     id: document.id,
     storageMode: indexedWorkspaceStorageMode(document.id, document.data()?.storageMode),
@@ -818,7 +851,7 @@ export async function backfillApiKeyIndexes(options: { dryRun?: boolean; batchSi
 
   if (!dryRun) {
     for (let offset = 0; offset < writes.length; offset += batchSize) {
-      const batch = getFirestoreInstance().batch()
+      const batch = getLocalDatabase().batch()
       for (const operation of writes.slice(offset, offset + batchSize)) {
         const reference = apiKeyIndexRef(operation.hash)
         if (operation.type === "set") batch.set(reference, operation.data)
@@ -873,7 +906,7 @@ function indexedApiKeyFromCandidate(candidate: ApiKeyIndexCandidate, normalized:
 }
 
 async function repairMissingApiKeyIndex(hash: string, normalized: string, candidate: ApiKeyIndexCandidate): Promise<IndexedApiKey | undefined> {
-  const repaired = await getFirestoreInstance().runTransaction(async (transaction) => {
+  const repaired = await getLocalDatabase().runTransaction(async (transaction) => {
     const indexRef = apiKeyIndexRef(hash)
     const indexSnapshot = await transaction.get(indexRef)
     const existing = indexSnapshot.exists ? indexSnapshot.data() as ApiKeyIndexData : undefined
@@ -947,14 +980,14 @@ export async function writeMeta(meta: Meta): Promise<void> {
     metaGeneration += 1
     metaReadPromise = undefined
     metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
-    invalidateCompatibilityCache()
+    invalidateRoutingCaches()
     return
   }
   await metaRef().set(stripUndefined(meta))
   metaGeneration += 1
   metaReadPromise = undefined
   metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
 }
 
 export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
@@ -965,14 +998,14 @@ export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>):
     metaGeneration += 1
     metaReadPromise = undefined
     metaCache = { data: structuredClone(memoryRoot().meta!), expiresAt: Date.now() + cacheTtlMs }
-    invalidateCompatibilityCache()
+    invalidateRoutingCaches()
     return memoryRoot().meta!
   }
   const meta = await firestoreUpdateMeta(mutator)
   metaGeneration += 1
   metaReadPromise = undefined
   metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
   return meta
 }
 
@@ -997,14 +1030,14 @@ export async function getProvider(providerId: string): Promise<Provider | undefi
 
 export async function upsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
   const provider = isMemoryBackend() ? memoryUpsertProvider(input, expected) : await firestoreUpsertProvider(input, expected)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
   return provider
 }
 
 export async function deleteProvider(providerId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteProvider(providerId)
   else await firestoreDeleteProvider(providerId)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
 }
 
 export async function listProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
@@ -1044,7 +1077,7 @@ export async function reorderProviderApiKeys(providerId: string, orderedIds: str
   } else {
     await firestoreReorderProviderApiKeys(providerId, orderedIds)
   }
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
 }
 
 export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
@@ -1060,14 +1093,14 @@ export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
 export async function upsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
   validateProviderApiKeyInput(input)
   const apiKey = isMemoryBackend() ? memoryUpsertProviderApiKey(providerId, input) : await firestoreUpsertProviderApiKey(providerId, input)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
   return apiKey
 }
 
 export async function deleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteProviderApiKey(providerId, apiKeyId)
   else await firestoreDeleteProviderApiKey(providerId, apiKeyId)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
 }
 
 export async function listModels(): Promise<Model[]> {
@@ -1094,14 +1127,14 @@ export async function listProviderModels(providerId: string): Promise<Model[]> {
 
 export async function upsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
   const model = isMemoryBackend() ? memoryUpsertModel(providerId, input) : await firestoreUpsertModel(providerId, input)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
   return model
 }
 
 export async function deleteModel(providerId: string, modelId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteModel(providerId, modelId)
   else await firestoreDeleteModel(providerId, modelId)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
 }
 
 export async function listAliases(): Promise<ModelAlias[]> {
@@ -1118,14 +1151,14 @@ function compareAliases(left: ModelAlias, right: ModelAlias) {
 export async function upsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
   validateAliasInput(input)
   const alias = isMemoryBackend() ? memoryUpsertAlias(input) : await firestoreUpsertAlias(input)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
   return alias
 }
 
 export async function deleteAlias(aliasId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteAlias(aliasId)
   else await firestoreDeleteAlias(aliasId)
-  invalidateCompatibilityCache()
+  invalidateRoutingCaches()
 }
 
 export async function listApiKeys(): Promise<ApiKey[]> {
@@ -1192,7 +1225,7 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
     invalidateGatewayApiKeyCaches([apiKeyValueHash(updated.key)])
     return updated
   }
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   const updated = await firestore.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const snapshot = await transaction.get(ref)
@@ -1205,60 +1238,13 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
   invalidateGatewayApiKeyCaches([apiKeyValueHash(updated.key)])
   return updated
 }
-
-export async function _setApiKey(apiKey: ApiKey): Promise<void> {
-  if (isMemoryBackend()) {
-    const state = ensureMemorySeeded()
-    const previous = state.apiKeys.get(apiKey.id)
-    const normalized = normalizeApiKeyValue(apiKey.key)
-    const hash = apiKeyValueHash(normalized)
-    const owner = memoryApiKeyOwner(hash)
-    if (owner && (owner.workspaceId !== currentWorkspaceId() || owner.apiKeyId !== apiKey.id)) throw new ApiKeyConflictError()
-    const previousHash = previous ? apiKeyValueHash(previous.key) : undefined
-    if (previousHash && previousHash !== hash) state.apiKeyIndexes.delete(previousHash)
-    state.apiKeys.set(apiKey.id, { ...apiKey, key: normalized })
-    state.apiKeyIndexes.set(hash, apiKey.id)
-    invalidateGatewayApiKeyCaches(previousHash && previousHash !== hash ? [previousHash, hash] : [hash])
-    return
-  }
-  const firestore = getFirestoreInstance()
-  const hashes = await firestore.runTransaction(async (transaction) => {
-    const ref = apiKeyRef(apiKey.id)
-    const previousSnapshot = await transaction.get(ref)
-    const normalized = normalizeApiKeyValue(apiKey.key)
-    const hash = apiKeyValueHash(normalized)
-    const indexRef = apiKeyIndexRef(hash)
-    const indexSnapshot = await transaction.get(indexRef)
-    const owner = indexSnapshot.data() as ApiKeyIndexData | undefined
-    if (indexSnapshot.exists && (owner?.workspaceId || DEFAULT_WORKSPACE_ID) !== currentWorkspaceId()) throw new ApiKeyConflictError()
-    if (indexSnapshot.exists && owner?.apiKeyId !== apiKey.id) throw new ApiKeyConflictError()
-    const next = { ...apiKey, key: normalized }
-    let previousHash: string | undefined
-    if (previousSnapshot.exists) {
-      const previous = apiKeyFromSnapshot(previousSnapshot)
-      const previousHashValue = apiKeyValueHash(previous.key)
-      previousHash = previousHashValue
-      if (previousHashValue !== hash) transaction.delete(apiKeyIndexRef(previousHashValue))
-    }
-    transaction.set(ref, storedApiKey(next))
-    transaction.set(indexRef, apiKeyIndexDocument(next))
-    return previousHash && previousHash !== hash ? [previousHash, hash] : [hash]
-  })
-  invalidateGatewayApiKeyCaches(hashes)
-}
-
 export async function deleteApiKey(apiKeyId: string): Promise<void> {
   const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId) : await firestoreDeleteApiKey(apiKeyId)
   invalidateGatewayApiKeyCaches(hash ? [hash] : [])
 }
 
-async function deleteApiKeyForSync(apiKeyId: string): Promise<void> {
-  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId, false) : await firestoreDeleteApiKeyWithInvariant(apiKeyId, false)
-  invalidateGatewayApiKeyCaches(hash ? [hash] : [])
-}
-
 // -------------------------------------------------------------------------------------------------
-// Compatibility shim (preserved for proxy/auth/catalog)
+// Routing revision cache
 // -------------------------------------------------------------------------------------------------
 
 async function readRoutingRevisionFresh() {
@@ -1395,23 +1381,6 @@ async function readSharedRoutingData(): Promise<RoutingData> {
   return state.routingDataReadPromise
 }
 
-async function readSharedData(): Promise<AppData> {
-  const state = workspaceCacheState()
-  if (state.compatibilityCache && state.compatibilityCache.expiresAt > Date.now()) return state.compatibilityCache.data
-  if (!state.compatibilityReadPromise) {
-    const generation = state.generation
-    const promise = Promise.all([readSharedRoutingData(), listApiKeys(), readSharedMeta()]).then(([routing, apiKeys, meta]) => {
-      const data: AppData = { version: 4, admin: meta.admin, ...routing, apiKeys }
-      if (generation === state.generation) state.compatibilityCache = { data, expiresAt: Date.now() + cacheTtlMs }
-      return data
-    }).finally(() => {
-      if (state.compatibilityReadPromise === promise) state.compatibilityReadPromise = undefined
-    })
-    state.compatibilityReadPromise = promise
-  }
-  return state.compatibilityReadPromise
-}
-
 /** Read-only catalog snapshot. Do not mutate it. */
 export async function readCatalogData(): Promise<CatalogData> {
   return readSharedCatalogData()
@@ -1420,10 +1389,6 @@ export async function readCatalogData(): Promise<CatalogData> {
 /** Read-only routing snapshot for latency-sensitive server paths. Do not mutate it. */
 export async function readRoutingData(): Promise<RoutingData> {
   return readSharedRoutingData()
-}
-
-export async function readData(): Promise<AppData> {
-  return structuredClone(await readSharedData())
 }
 
 export async function findIndexedApiKeyByValue(value: string): Promise<IndexedApiKey | undefined> {
@@ -1509,93 +1474,6 @@ export async function findApiKeyByValue(value: string): Promise<ApiKey | undefin
   return (await findIndexedApiKeyByValue(value))?.apiKey
 }
 
-export async function writeData(data: AppData) {
-  void data
-  throw new Error("writeData is no longer supported; use the collection-scoped helpers in src/lib/store.ts.")
-}
-
-export async function updateData(mutator: (data: AppData) => void | Promise<void>) {
-  const before = await readData()
-  const data = structuredClone(before)
-  await mutator(data)
-  await updateMeta((meta) => {
-    meta.admin = data.admin
-    meta.sessionSecret = data.sessionSecret
-  })
-  // Sync providers
-  const beforeProviderIds = new Set(before.providers.map((p) => p.id))
-  const afterProviderIds = new Set(data.providers.map((p) => p.id))
-  for (const id of beforeProviderIds) if (!afterProviderIds.has(id)) await deleteProvider(id)
-  const providerIdMap = new Map<string, string>()
-  for (const provider of data.providers) {
-    const originalId = beforeProviderIds.has(provider.id) ? provider.id : undefined
-    const saved = await upsertProvider({ ...provider, ...(originalId ? { originalId } : {}) }, provider)
-    providerIdMap.set(provider.id, saved.id)
-  }
-  // Sync provider api keys (scoped per provider)
-  const beforeKeysByProvider = new Map<string, Set<string>>()
-  for (const apiKey of before.providerApiKeys) {
-    const slot = beforeKeysByProvider.get(apiKey.providerId) || new Set<string>()
-    slot.add(apiKey.id)
-    beforeKeysByProvider.set(apiKey.providerId, slot)
-  }
-  const afterKeysByProvider = new Map<string, Set<string>>()
-  for (const apiKey of data.providerApiKeys) {
-    const slot = afterKeysByProvider.get(apiKey.providerId) || new Set<string>()
-    slot.add(apiKey.id)
-    afterKeysByProvider.set(apiKey.providerId, slot)
-  }
-  const allProviderIds = new Set([...beforeKeysByProvider.keys(), ...afterKeysByProvider.keys()])
-  for (const providerId of allProviderIds) {
-    const beforeIds = beforeKeysByProvider.get(providerId) || new Set<string>()
-    const afterIds = afterKeysByProvider.get(providerId) || new Set<string>()
-    for (const id of beforeIds) if (!afterIds.has(id)) await deleteProviderApiKey(providerId, id)
-  }
-  for (const apiKey of data.providerApiKeys) {
-    const providerId = providerIdMap.get(apiKey.providerId) || apiKey.providerId
-    const originalId = before.providerApiKeys.some((entry) => entry.id === apiKey.id && entry.providerId === apiKey.providerId) ? apiKey.id : undefined
-    await upsertProviderApiKey(providerId, { ...apiKey, providerId, ...(originalId ? { originalId } : {}) })
-  }
-  // Sync models (scoped per provider)
-  const beforeModelsByProvider = new Map<string, Set<string>>()
-  for (const model of before.models) {
-    const slot = beforeModelsByProvider.get(model.providerId) || new Set<string>()
-    slot.add(model.id)
-    beforeModelsByProvider.set(model.providerId, slot)
-  }
-  const afterModelsByProvider = new Map<string, Set<string>>()
-  for (const model of data.models) {
-    const slot = afterModelsByProvider.get(model.providerId) || new Set<string>()
-    slot.add(model.id)
-    afterModelsByProvider.set(model.providerId, slot)
-  }
-  const allModelProviderIds = new Set([...beforeModelsByProvider.keys(), ...afterModelsByProvider.keys()])
-  for (const providerId of allModelProviderIds) {
-    const beforeIds = beforeModelsByProvider.get(providerId) || new Set<string>()
-    const afterIds = afterModelsByProvider.get(providerId) || new Set<string>()
-    for (const id of beforeIds) if (!afterIds.has(id)) await deleteModel(providerId, id)
-  }
-  for (const model of data.models) {
-    const providerId = providerIdMap.get(model.providerId) || model.providerId
-    const provider = data.providers.find((entry) => entry.id === model.providerId)
-    const nextGatewayModelId = provider ? gatewayModelId(provider.prefix, model.gatewayModelId || model.id) : (model.gatewayModelId || model.id)
-    const originalId = before.models.some((entry) => entry.id === model.id && entry.providerId === model.providerId) ? model.id : undefined
-    const modelInput: Partial<Model> & { originalId?: string } = { ...model, providerId, gatewayModelId: nextGatewayModelId, ...(originalId ? { originalId } : {}) }
-    if (!Object.hasOwn(model, "protocol")) modelInput.protocol = undefined
-    if (!Object.hasOwn(model, "upstreamPath")) modelInput.upstreamPath = ""
-    if (!Object.hasOwn(model, "requestOverrides")) modelInput.requestOverrides = {}
-    await upsertModel(providerId, modelInput)
-  }
-  // Sync gateway api keys
-  const beforeKeyIds = new Set(before.apiKeys.map((k) => k.id))
-  const afterKeyIds = new Set(data.apiKeys.map((k) => k.id))
-  for (const id of beforeKeyIds) if (!afterKeyIds.has(id)) await deleteApiKeyForSync(id)
-  for (const apiKey of data.apiKeys) {
-    await _setApiKey(apiKey)
-  }
-  workspaceCacheState().compatibilityCache = undefined
-  return data
-}
 
 // -------------------------------------------------------------------------------------------------
 // Firestore implementations
@@ -1610,7 +1488,7 @@ async function firestoreReadMeta(): Promise<Meta> {
     return currentData
   }
 
-  return getFirestoreInstance().runTransaction(async (transaction) => {
+  return getLocalDatabase().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref)
     if (snapshot.exists) {
       const meta = snapshot.data() as Meta
@@ -1628,7 +1506,7 @@ async function firestoreReadMeta(): Promise<Meta> {
 }
 
 async function firestoreUpdateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
-  return getFirestoreInstance().runTransaction(async (transaction) => {
+  return getLocalDatabase().runTransaction(async (transaction) => {
     const ref = metaRef()
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("System metadata is missing.")
@@ -1652,7 +1530,7 @@ async function firestoreGetProvider(providerId: string): Promise<Provider | unde
 }
 
 async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const originalId = input.originalId
     const existingSnapshot = originalId ? await transaction.get(providerRef(originalId)) : undefined
@@ -1667,9 +1545,15 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
     const existingModels = existing && existing.prefix !== desiredPrefix
       ? await transaction.get(modelsRef(existing.id))
       : undefined
-    const providerInput = { ...input }
-    delete providerInput.originalId
-    delete providerInput.id
+    const providerInput = stripUndefined({
+      name: input.name,
+      prefix: input.prefix,
+      baseUrl: input.baseUrl,
+      protocol: input.protocol,
+      authType: input.authType,
+      headers: input.headers,
+      enabled: input.enabled,
+    }) as Partial<Provider>
     const provider: Provider = {
       ...(existing || expected || {}),
       ...providerInput,
@@ -1700,7 +1584,7 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
 }
 
 async function firestoreDeleteProvider(providerId: string): Promise<void> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   await firestore.runTransaction(async (transaction) => {
     const [apiKeys, models] = await Promise.all([
       transaction.get(providerApiKeysRef(providerId)),
@@ -1719,7 +1603,7 @@ async function firestoreListProviderApiKeys(providerId: string): Promise<Provide
 }
 
 async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   await firestore.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(providerApiKeysRef(providerId))
     const ids = snapshot.docs.map((doc) => doc.id)
@@ -1740,7 +1624,7 @@ async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
 }
 
 async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
@@ -1748,9 +1632,22 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
     const existing = existingSnapshot?.exists ? providerApiKeyFromSnapshot(existingSnapshot, providerId) : undefined
     if (input.originalId && !existing) throw new Error("Provider API key not found.")
     const apiKeyId = existing ? input.originalId! : providerApiKeysRef(providerId).doc().id
-    const inputWithoutIds = { ...input }
-    delete inputWithoutIds.id
-    delete inputWithoutIds.originalId
+    const inputWithoutIds = stripUndefined({
+      name: input.name,
+      key: input.key,
+      credentialKind: input.credentialKind,
+      refreshToken: input.refreshToken,
+      idToken: input.idToken,
+      accountId: input.accountId,
+      email: input.email,
+      planType: input.planType,
+      expiresAt: input.expiresAt,
+      lastRefresh: input.lastRefresh,
+      enabled: input.enabled,
+      rpmLimit: input.rpmLimit,
+      maxConcurrency: input.maxConcurrency,
+      priority: input.priority,
+    }) as Partial<ProviderApiKey>
     const apiKey: ProviderApiKey = {
       ...(existing || {}),
       ...inputWithoutIds,
@@ -1776,7 +1673,7 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
 }
 
 async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   await firestore.runTransaction(async (transaction) => {
     const ref = providerApiKeyRef(providerId, apiKeyId)
     const snapshot = await transaction.get(ref)
@@ -1806,7 +1703,7 @@ async function firestoreListProviderModels(providerId: string): Promise<Model[]>
 }
 
 async function firestoreUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
@@ -1823,13 +1720,13 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     if (gatewayMatches.docs.some((document) => document.id !== input.originalId)) throw new Error("Gateway model ID is already in use.")
 
     const modelId = existing ? input.originalId! : modelsRef(providerId).doc().id
-    const inputWithoutIds = { ...input }
-    delete inputWithoutIds.id
-    delete inputWithoutIds.originalId
-    delete inputWithoutIds.providerId
-    delete inputWithoutIds.gatewayModelId
-    const hasUpstreamPath = Object.hasOwn(input, "upstreamPath")
-    const hasRequestOverrides = Object.hasOwn(input, "requestOverrides")
+    const inputWithoutIds = stripUndefined({
+      name: input.name,
+      upstreamModel: input.upstreamModel,
+      protocol: input.protocol,
+      enabled: input.enabled,
+      source: input.source,
+    }) as Partial<Model>
     const hasProtocol = Object.hasOwn(input, "protocol")
     const model: Model = {
       ...(existing || {}),
@@ -1841,8 +1738,6 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       upstreamModel,
       source: input.source || existing?.source || "custom",
       protocol: hasProtocol ? input.protocol : existing?.protocol,
-      upstreamPath: hasUpstreamPath ? (input.upstreamPath || undefined) : existing?.upstreamPath,
-      requestOverrides: hasRequestOverrides ? input.requestOverrides : existing?.requestOverrides,
       enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
@@ -1858,7 +1753,7 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
 }
 
 async function firestoreDeleteModel(providerId: string, modelId: string): Promise<void> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   await firestore.runTransaction(async (transaction) => {
     const ref = modelRef(providerId, modelId)
     const snapshot = await transaction.get(ref)
@@ -1880,7 +1775,7 @@ async function firestoreListAliases(): Promise<ModelAlias[]> {
 }
 
 async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
@@ -1911,7 +1806,7 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
 }
 
 async function firestoreDeleteAlias(aliasId: string): Promise<void> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   await firestore.runTransaction(async (transaction) => {
     const ref = aliasRef(aliasId)
     const snapshot = await transaction.get(ref)
@@ -1933,7 +1828,7 @@ function isFirestoreAlreadyExistsError(error: unknown) {
 
 async function firestoreCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
   const normalizedCustomKey = customKey === undefined ? undefined : validateGatewayApiKeyValue(customKey)
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   const apiKey = {
     id: apiKeysRef().doc().id,
     name,
@@ -1956,16 +1851,11 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
 }
 
 async function firestoreDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
-  return firestoreDeleteApiKeyWithInvariant(apiKeyId, false)
-}
-
-async function firestoreDeleteApiKeyWithInvariant(apiKeyId: string, enforceAtLeastOne: boolean): Promise<string | undefined> {
-  const firestore = getFirestoreInstance()
+  const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const target = await transaction.get(ref)
     if (!target.exists) return undefined
-    void enforceAtLeastOne
     const apiKey = apiKeyFromSnapshot(target)
     const hash = apiKeyValueHash(apiKey.key)
     transaction.delete(ref)
@@ -1984,9 +1874,15 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
   const existing = originalId ? state.providers.get(originalId) : undefined
   if (originalId && !existing) throw new Error("Provider not found.")
   const id = existing ? originalId! : crypto.randomUUID()
-  const providerInput = { ...input }
-  delete providerInput.originalId
-  delete providerInput.id
+  const providerInput = stripUndefined({
+    name: input.name,
+    prefix: input.prefix,
+    baseUrl: input.baseUrl,
+    protocol: input.protocol,
+    authType: input.authType,
+    headers: input.headers,
+    enabled: input.enabled,
+  }) as Partial<Provider>
   for (const provider of state.providers.values()) {
     if (provider.prefix === input.prefix && provider.id !== id) throw new Error("Provider prefix is already in use.")
   }
@@ -2015,7 +1911,7 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
   const migratedModels = existingModels ? migrateProviderModels(existingModels.values(), provider.prefix) : undefined
   state.providers.set(id, provider)
   if (migratedModels) state.models.set(id, migratedModels)
-  workspaceCacheState().compatibilityCache = undefined
+
   return provider
 }
 
@@ -2024,7 +1920,7 @@ function memoryDeleteProvider(providerId: string): void {
   state.providers.delete(providerId)
   state.providerApiKeys.delete(providerId)
   state.models.delete(providerId)
-  workspaceCacheState().compatibilityCache = undefined
+
 }
 
 function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): ProviderApiKey {
@@ -2035,9 +1931,22 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
   const existing = input.originalId ? slot.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Provider API key not found.")
   const apiKeyId = existing ? input.originalId! : crypto.randomUUID()
-  const inputWithoutIds = { ...input }
-  delete inputWithoutIds.id
-  delete inputWithoutIds.originalId
+  const inputWithoutIds = stripUndefined({
+    name: input.name,
+    key: input.key,
+    credentialKind: input.credentialKind,
+    refreshToken: input.refreshToken,
+    idToken: input.idToken,
+    accountId: input.accountId,
+    email: input.email,
+    planType: input.planType,
+    expiresAt: input.expiresAt,
+    lastRefresh: input.lastRefresh,
+    enabled: input.enabled,
+    rpmLimit: input.rpmLimit,
+    maxConcurrency: input.maxConcurrency,
+    priority: input.priority,
+  }) as Partial<ProviderApiKey>
   const apiKey: ProviderApiKey = {
     ...(existing || {}),
     ...inputWithoutIds,
@@ -2065,7 +1974,7 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
       enabledApiKeyCount: provider.enabledApiKeyCount + (apiKey.enabled ? 1 : -1),
     })
   }
-  workspaceCacheState().compatibilityCache = undefined
+
   return apiKey
 }
 
@@ -2082,7 +1991,7 @@ function memoryDeleteProviderApiKey(providerId: string, apiKeyId: string): void 
     apiKeyCount: Math.max(0, provider.apiKeyCount - 1),
     enabledApiKeyCount: Math.max(0, provider.enabledApiKeyCount - (apiKey.enabled ? 1 : 0)),
   })
-  workspaceCacheState().compatibilityCache = undefined
+
 }
 
 function memoryUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Model {
@@ -2101,13 +2010,13 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
   for (const model of slot.values()) {
     if (model.id !== input.originalId && (model.gatewayModelId || model.id) === gatewayModelId) throw new Error("Gateway model ID is already in use.")
   }
-  const inputWithoutIds = { ...input }
-  delete inputWithoutIds.id
-  delete inputWithoutIds.originalId
-  delete inputWithoutIds.providerId
-  delete inputWithoutIds.gatewayModelId
-  const hasUpstreamPath = Object.hasOwn(input, "upstreamPath")
-  const hasRequestOverrides = Object.hasOwn(input, "requestOverrides")
+  const inputWithoutIds = stripUndefined({
+    name: input.name,
+    upstreamModel: input.upstreamModel,
+    protocol: input.protocol,
+    enabled: input.enabled,
+    source: input.source,
+  }) as Partial<Model>
   const hasProtocol = Object.hasOwn(input, "protocol")
   const model: Model = {
     ...(existing || {}),
@@ -2119,8 +2028,6 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
     upstreamModel,
     source: input.source || existing?.source || "custom",
     protocol: hasProtocol ? input.protocol : existing?.protocol,
-    upstreamPath: hasUpstreamPath ? (input.upstreamPath || undefined) : existing?.upstreamPath,
-    requestOverrides: hasRequestOverrides ? input.requestOverrides : existing?.requestOverrides,
     enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
@@ -2138,7 +2045,7 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
       enabledModelCount: provider.enabledModelCount + (model.enabled ? 1 : -1),
     })
   }
-  workspaceCacheState().compatibilityCache = undefined
+
   return model
 }
 
@@ -2156,7 +2063,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
     modelCount: Math.max(0, provider.modelCount - 1),
     enabledModelCount: Math.max(0, provider.enabledModelCount - (model.enabled ? 1 : 0)),
   })
-  workspaceCacheState().compatibilityCache = undefined
+
 }
 
 function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): ModelAlias {
@@ -2182,14 +2089,14 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
   state.aliases.set(aliasId, alias)
-  workspaceCacheState().compatibilityCache = undefined
+
   return alias
 }
 
 function memoryDeleteAlias(aliasId: string): void {
   const state = ensureMemorySeeded()
   state.aliases.delete(aliasId)
-  workspaceCacheState().compatibilityCache = undefined
+
 }
 
 function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
@@ -2204,19 +2111,18 @@ function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
   if (memoryApiKeyValueExists(hash)) throw new ApiKeyConflictError()
   state.apiKeys.set(apiKey.id, apiKey)
   state.apiKeyIndexes.set(hash, apiKey.id)
-  workspaceCacheState().compatibilityCache = undefined
+
   return apiKey
 }
 
-function memoryDeleteApiKey(apiKeyId: string, enforceAtLeastOne = false): string | undefined {
+function memoryDeleteApiKey(apiKeyId: string): string | undefined {
   const state = ensureMemorySeeded()
   if (!state.apiKeys.has(apiKeyId)) return undefined
-  void enforceAtLeastOne
   const apiKey = state.apiKeys.get(apiKeyId)
   state.apiKeys.delete(apiKeyId)
   const hash = apiKey ? apiKeyValueHash(apiKey.key) : undefined
   if (hash) state.apiKeyIndexes.delete(hash)
-  workspaceCacheState().compatibilityCache = undefined
+
   return hash
 }
 

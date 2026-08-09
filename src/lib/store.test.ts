@@ -14,10 +14,10 @@ import {
   listIndexedApiKeyNames,
   listProviderApiKeys,
   listProviderModels,
-  readData,
+  readMeta,
   stripUndefined,
   updateApiKeyName,
-  updateData,
+  updateMeta,
   upsertModel,
   upsertProvider,
   upsertProviderApiKey,
@@ -25,7 +25,7 @@ import {
   verifyPassword,
 } from "@/lib/store"
 
-import type { Provider } from "@/lib/types"
+import type { Model, Provider } from "@/lib/types"
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"
@@ -68,8 +68,8 @@ describe("admin passwords", () => {
 describe("configuration storage", () => {
   test("removes undefined optional fields before Firestore writes", () => {
     const data = stripUndefined({
-      providers: [{ id: "openai", authHeader: undefined, secret: undefined }],
-      models: [{ id: "oa/test", protocol: undefined, upstreamPath: undefined }],
+      providers: [{ id: "openai", secret: undefined }],
+      models: [{ id: "oa/test", protocol: undefined }],
       nested: { keep: "value", omit: undefined },
     })
 
@@ -80,14 +80,14 @@ describe("configuration storage", () => {
     })
   })
 
-  test("persists an update through the test memory adapter", async () => {
-    const before = await readData()
-    await updateData((data) => { data.admin.username = "test-admin" })
-    const after = await readData()
+  test("persists metadata through the canonical store API", async () => {
+    const before = await readMeta()
+    await updateMeta((meta) => { meta.admin.username = "test-admin" })
+    const after = await readMeta()
     expect(after.admin.username).toBe("test-admin")
     after.admin.username = "mutated-copy"
-    expect((await readData()).admin.username).toBe("test-admin")
-    await updateData((data) => { data.admin.username = before.admin.username })
+    expect((await readMeta()).admin.username).toBe("test-admin")
+    await updateMeta((meta) => { meta.admin.username = before.admin.username })
   })
 
   test("maintains provider counters for API keys and models", async () => {
@@ -168,16 +168,15 @@ describe("configuration storage", () => {
     expect(await getProvider(provider.id)).toMatchObject({ apiKeyCount: 0, enabledApiKeyCount: 0 })
   })
 
-  test("allows model connection overrides to be cleared", async () => {
+  test("persists only canonical model fields", async () => {
     const provider = await upsertProvider(providerInput())
     const model = await upsertModel(provider.id, {
       gatewayModelId: "openai/chat",
       name: "Chat",
       upstreamModel: "upstream-chat",
       protocol: "openai-responses",
-      upstreamPath: "/custom/infer",
-      requestOverrides: { temperature: 0 },
-    })
+      unexpectedField: true,
+    } as Partial<Model> & { unexpectedField: boolean })
 
     const updated = await upsertModel(provider.id, {
       originalId: model.id,
@@ -185,13 +184,19 @@ describe("configuration storage", () => {
       name: "Chat",
       upstreamModel: "upstream-chat",
       protocol: undefined,
-      upstreamPath: "",
-      requestOverrides: {},
     })
 
-    expect(updated.upstreamPath).toBeUndefined()
+    expect(updated).not.toHaveProperty("unexpectedField")
     expect(updated.protocol).toBeUndefined()
-    expect(updated.requestOverrides).toEqual({})
+  })
+
+  test("persists only canonical provider fields", async () => {
+    const provider = await upsertProvider({
+      ...providerInput(),
+      unexpectedField: true,
+    } as Partial<Provider> & { unexpectedField: boolean })
+
+    expect(provider).not.toHaveProperty("unexpectedField")
   })
 
   test("rejects invalid provider API key configuration", async () => {
@@ -248,8 +253,10 @@ describe("configuration storage", () => {
     await expect(createApiKey("Long", "x".repeat(257))).rejects.toThrow("256 characters")
   })
 
-  test("allows updateData to synchronize removal of the final gateway key", async () => {
-    await updateData((data) => { data.apiKeys = [] })
+  test("allows the canonical API to remove the final gateway key", async () => {
+    const key = (await listApiKeys())[0]
+    if (!key) throw new Error("Memory backend did not seed a gateway API key.")
+    await deleteApiKey(key.id)
     expect(await listApiKeys()).toEqual([])
   })
 })

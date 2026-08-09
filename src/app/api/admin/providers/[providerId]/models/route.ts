@@ -1,7 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
+import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
 import { gatewayModelId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { validateRequestOverrides } from "@/lib/request-overrides"
 import { getProvider, listProviderModels, upsertModel } from "@/lib/store"
 import type { Model, Protocol } from "@/lib/types"
 
@@ -17,7 +17,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   const { providerId } = await context.params
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   if (!body) return jsonError("Invalid request.", 400)
-  const input = body.model as Partial<Model> & { originalId?: string } | undefined
+  const input = body.model as (Partial<Model> & { originalId?: string }) | undefined
   if (!input) return jsonError("Model payload is required.", 400)
 
   try {
@@ -36,14 +36,8 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       : typeof input.id === "string" ? input.id.trim() : ""
     const normalizedGatewayModelId = gatewayModelId(provider.prefix, requestedGatewayModelId)
     if (!normalizedGatewayModelId) throw new Error("Gateway model ID is required.")
-    const requestOverrides = input.requestOverrides !== undefined
-      ? validateRequestOverrides(input.requestOverrides)
-      : undefined
     if (requestedProtocol !== undefined && requestedProtocol !== "inherit" && !protocols.includes(requestedProtocol as Protocol)) {
       throw new Error("Invalid model protocol.")
-    }
-    if (input.upstreamPath !== undefined && typeof input.upstreamPath !== "string") {
-      throw new Error("Upstream path must be a string.")
     }
     if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
       throw new Error("Model enabled value must be a boolean.")
@@ -58,13 +52,12 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     }
     if (requestedProtocol === "inherit") modelInput.protocol = undefined
     else if (requestedProtocol !== undefined) modelInput.protocol = requestedProtocol as Protocol
-    if (input.upstreamPath !== undefined) modelInput.upstreamPath = input.upstreamPath.trim()
-    if (input.requestOverrides !== undefined) modelInput.requestOverrides = requestOverrides
     await upsertModel(providerId, modelInput)
+    if (provider.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
     writeLog("info", "admin", "Model saved", { providerId })
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Model save failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to save model.", 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to save model.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }
