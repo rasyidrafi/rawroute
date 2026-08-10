@@ -185,7 +185,6 @@ async function desiredProjection(providerId: string): Promise<Projection> {
   const baseUrl = normalizeProviderBaseUrl(provider.protocol, provider.baseUrl)
   const enabledKeys = apiKeys.filter((apiKey) => apiKey.enabled && apiKey.key.trim())
   const headers = Object.keys(provider.headers || {}).length ? cleanHeaders(provider.headers) : undefined
-
   if (!provider.enabled || mappedModels.length === 0) {
     return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai: [], claude: [] })
   }

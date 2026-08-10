@@ -68,7 +68,6 @@ export interface Model {
   gatewayModelId: string
   name: string
   upstreamModel: string
-  protocol?: Protocol
   enabled: boolean
   /** Whether this is a fixed built-in model or a workspace-defined model. */
   source?: ModelSource
@@ -112,6 +111,8 @@ export interface UsageEvent {
   status: number
   durationMs: number
   ttftMs?: number
+  /** Serialized request body size used to calibrate missing-usage estimates. */
+  requestBodyBytes?: number
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -123,8 +124,8 @@ export interface UsageEvent {
   /** Whether both billable token sides were returned by the provider. */
   usageCompleteness?: UsageCompleteness
   /** Provenance for migrated or estimated costs; absent on old records. */
-  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical"
-  predictionMethod?: "same-key-model-day-median" | "same-key-model-median" | "same-model-day-median" | "same-model-median"
+  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical" | "payload-calibrated"
+  predictionMethod?: "same-key-model-day-median" | "same-key-model-median" | "same-model-day-median" | "same-model-median" | "same-key-model-p25" | "pooled-model-p25" | "default-model-shrunk-p25" | "openai-codex-payload-calibrated-p50" | "openai-codex-payload-calibrated-p75-reservation"
   predictionSampleCount?: number
   pricingGroupId?: string
   pricingVersionId?: string
@@ -152,7 +153,7 @@ export interface UsageRollup {
   backfillSource?: string
   reconciledFrom?: string
   excludedEventIds?: string[]
-  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical"
+  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical" | "payload-calibrated"
 }
 
 export interface PricingRates {

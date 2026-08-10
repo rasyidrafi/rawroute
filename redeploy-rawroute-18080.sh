@@ -111,8 +111,8 @@ command -v ss >/dev/null || die "ss is required for connection draining."
 browser="$(command -v chromium-browser || command -v chromium || true)"
 [[ -n "$browser" ]] || die "chromium-browser or chromium is required for browser verification."
 
-docker inspect "$live_name" >/dev/null 2>&1 || die "Live container $live_name was not found."
-docker inspect "$next_name" >/dev/null 2>&1 && die "Temporary container $next_name already exists; remove or inspect it before retrying."
+docker container inspect "$live_name" >/dev/null 2>&1 || die "Live container $live_name was not found."
+docker container inspect "$next_name" >/dev/null 2>&1 && die "Temporary container $next_name already exists; remove or inspect it before retrying."
 
 log "Building $image"
 docker build -t "$image" .
@@ -120,6 +120,18 @@ docker build -t "$image" .
 log "Copying the live environment to a protected temporary file"
 docker inspect "$live_name" --format '{{range .Config.Env}}{{println .}}{{end}}' > "$deployment_env_file"
 chmod 600 "$deployment_env_file"
+
+set_deployment_env() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$deployment_env_file"; then
+    sed -i -E "s#^${key}=.*#${key}=${value}#" "$deployment_env_file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$deployment_env_file"
+  fi
+}
+
+sed -i -E '/^OPENAI_COMPAT_/d' "$deployment_env_file"
 
 grep -q '^DATABASE_URL=' "$deployment_env_file" || die "Live environment is missing DATABASE_URL."
 grep -q '^SESSION_SECRET=' "$deployment_env_file" || die "Live environment is missing SESSION_SECRET."

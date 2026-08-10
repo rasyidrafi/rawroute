@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { FieldPath, FieldValue, getLocalFirestore, type Firestore, type LocalQuery } from "@/lib/local-db"
+import { FieldPath, FieldValue, getLocalFirestore, listLocalDocuments, type Firestore, type LocalQuery } from "@/lib/local-db"
 
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
 import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "@/lib/store"
@@ -7,6 +7,7 @@ import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
+import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "@/lib/usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
 import { writeLog } from "@/lib/logger"
 import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
@@ -52,7 +53,31 @@ const analyticsReadConcurrency = positiveInteger(process.env.DATABASE_ANALYTICS_
 const defaultBudgetOutputTokens = positiveInteger(process.env.BUDGET_DEFAULT_OUTPUT_TOKENS, 4_096)
 const defaultPredictedOutputTokens = positiveInteger(process.env.BUDGET_PREDICTED_OUTPUT_TOKENS, Math.min(defaultBudgetOutputTokens, 1_024))
 const budgetInputBytesPerToken = positiveNumber(process.env.BUDGET_INPUT_BYTES_PER_TOKEN, 3)
-const usagePredictionSamples = new Map<string, number[]>()
+const estimatedCacheReadRatio = boundedRatio(process.env.BUDGET_ESTIMATED_CACHE_READ_RATIO, 0.5)
+const missingUsageEstimateMaxCostMicros = positiveInteger(process.env.BUDGET_MISSING_USAGE_MAX_COST_MICROS, 2_000_000)
+const missingUsageQuantile = boundedRatio(process.env.BUDGET_MISSING_USAGE_QUANTILE, 0.25)
+const predictionPriorStrength = positiveInteger(process.env.BUDGET_PREDICTION_PRIOR_STRENGTH, 500)
+const predictionBaselineMinimumSamples = positiveInteger(process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES, 30)
+const usagePredictionSampleLimit = positiveInteger(process.env.BUDGET_PREDICTION_SAMPLE_LIMIT, 2_048)
+const payloadPredictionEnabled = process.env.BUDGET_PAYLOAD_PREDICTION_ENABLED !== "0"
+const payloadPredictionMinimumSamples = positiveInteger(process.env.BUDGET_PAYLOAD_PREDICTION_MIN_SAMPLES, 3)
+const payloadPredictionMaximumNeighbors = positiveInteger(process.env.BUDGET_PAYLOAD_PREDICTION_MAX_NEIGHBORS, 31)
+
+interface UsagePredictionSamples {
+  outputs: number[]
+  costs: number[]
+  payloads: PayloadUsageSample[]
+}
+
+interface ExpectedCostPrediction {
+  costMicros: number
+  source: "empirical" | "payload-calibrated" | "bounded-formula"
+  predictionMethod?: NonNullable<UsageEvent["predictionMethod"]>
+  predictionSampleCount?: number
+}
+
+const usagePredictionSamples = new Map<string, UsagePredictionSamples>()
+let usagePredictionWarmup: Promise<void> | undefined
 const budgetConfigCache = new Map<string, TimedValue<GatewayKeyBudget | null>>()
 const budgetConfigInflight = new Map<string, Promise<GatewayKeyBudget | undefined>>()
 type BudgetCounterRow = { id: string; spentMicros?: number; lastUsedAt?: string }
@@ -114,25 +139,148 @@ function positiveNumber(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function usagePredictionKey(gatewayModelId: string, providerModelId?: string) {
-  return `${currentWorkspaceId()}\u0000${gatewayModelId}\u0000${providerModelId || ""}`
+function boundedRatio(value: string | undefined, fallback: number) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback
 }
 
-function rememberUsagePrediction(event: UsageEvent) {
+function canonicalPredictionModel(gatewayModelId: string) {
+  return gatewayModelId.trim().toLowerCase().replace(/^(?:codex|cx)\//, "")
+}
+
+function predictionKey(scope: "local" | "default" | "global", workspaceId: string, gatewayKeyId: string | undefined, gatewayModelId: string) {
+  return `${scope}\u0000${workspaceId}\u0000${gatewayKeyId || "*"}\u0000${canonicalPredictionModel(gatewayModelId)}`
+}
+
+function predictionSampleKeys(workspaceId: string, gatewayKeyId: string | undefined, gatewayModelId: string) {
+  const keys = [
+    predictionKey("local", workspaceId, gatewayKeyId, gatewayModelId),
+    predictionKey("global", "*", undefined, gatewayModelId),
+  ]
+  if (workspaceId === "default") keys.push(predictionKey("default", "default", undefined, gatewayModelId))
+  return keys
+}
+
+function rememberUsagePrediction(event: UsageEvent, workspaceId = currentWorkspaceId()) {
   if (event.status < 200 || event.status >= 300 || event.pricingConfidence !== "exact" || event.usageCompleteness === "partial" || event.usageCompleteness === "missing") return
-  if (!Number.isSafeInteger(event.outputTokens) || event.outputTokens <= 0) return
-  const key = usagePredictionKey(event.gatewayModelId, event.providerModelId)
-  const samples = usagePredictionSamples.get(key) || []
-  samples.push(event.outputTokens)
-  if (samples.length > 256) samples.splice(0, samples.length - 256)
-  usagePredictionSamples.set(key, samples)
+  const output = Number.isSafeInteger(event.outputTokens) && event.outputTokens > 0 ? event.outputTokens : undefined
+  const cost = Number.isSafeInteger(event.costMicros) && event.costMicros > 0 ? event.costMicros : undefined
+  const payload = isOpenAiCodexModel(event.gatewayModelId)
+    && Number.isSafeInteger(event.requestBodyBytes)
+    && Number(event.requestBodyBytes) > 0
+    && Number.isSafeInteger(event.inputTokens)
+    && event.inputTokens > 0
+    ? {
+      requestBodyBytes: Number(event.requestBodyBytes),
+      inputTokens: event.inputTokens,
+      outputTokens: Math.max(0, event.outputTokens),
+      cacheReadTokens: Math.max(0, Math.min(event.inputTokens, event.cacheReadTokens)),
+      cacheCreationTokens: 0,
+      protocol: event.protocol,
+    } satisfies PayloadUsageSample
+    : undefined
+  if (payload) {
+    payload.cacheCreationTokens = Math.max(0, Math.min(payload.inputTokens - payload.cacheReadTokens, event.cacheCreationTokens))
+  }
+  if (output === undefined && cost === undefined && payload === undefined) return
+  for (const key of predictionSampleKeys(workspaceId, event.gatewayKeyId, event.gatewayModelId)) {
+    const samples = usagePredictionSamples.get(key) || { outputs: [], costs: [], payloads: [] }
+    if (output !== undefined) samples.outputs.push(output)
+    if (cost !== undefined) samples.costs.push(cost)
+    if (payload !== undefined) samples.payloads.push(payload)
+    if (samples.outputs.length > usagePredictionSampleLimit) samples.outputs.splice(0, samples.outputs.length - usagePredictionSampleLimit)
+    if (samples.costs.length > usagePredictionSampleLimit) samples.costs.splice(0, samples.costs.length - usagePredictionSampleLimit)
+    if (samples.payloads.length > usagePredictionSampleLimit) samples.payloads.splice(0, samples.payloads.length - usagePredictionSampleLimit)
+    usagePredictionSamples.set(key, samples)
+  }
+}
+
+function quantile(values: number[], probability: number) {
+  const sorted = values.filter((value) => Number.isSafeInteger(value) && value > 0).sort((left, right) => left - right)
+  if (!sorted.length) return 0
+  const position = Math.min(sorted.length - 1, Math.max(0, (sorted.length - 1) * probability))
+  const lower = Math.floor(position)
+  const upper = Math.ceil(position)
+  if (lower === upper) return sorted[lower]
+  return Math.round(sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower))
 }
 
 function median(values: number[]) {
-  const sorted = values.filter((value) => Number.isSafeInteger(value) && value > 0).sort((left, right) => left - right)
-  if (!sorted.length) return 0
-  const middle = Math.floor(sorted.length / 2)
-  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+  return quantile(values, 0.5)
+}
+
+function predictionValues(scope: "local" | "default" | "global", workspaceId: string, gatewayKeyId: string | undefined, gatewayModelId: string, field: "costs" | "outputs") {
+  return usagePredictionSamples.get(predictionKey(scope, scope === "global" ? "*" : scope === "default" ? "default" : workspaceId, scope === "local" ? gatewayKeyId : undefined, gatewayModelId))?.[field] || []
+}
+
+function payloadPredictionValues(scope: "local" | "default" | "global", workspaceId: string, gatewayKeyId: string | undefined, gatewayModelId: string) {
+  return usagePredictionSamples.get(predictionKey(scope, scope === "global" ? "*" : scope === "default" ? "default" : workspaceId, scope === "local" ? gatewayKeyId : undefined, gatewayModelId))?.payloads || []
+}
+
+function payloadPredictionSamples(gatewayKeyId: string | undefined, gatewayModelId: string) {
+  const workspaceId = currentWorkspaceId()
+  const candidates = [
+    payloadPredictionValues("local", workspaceId, gatewayKeyId, gatewayModelId),
+    ...(workspaceId === "default" ? [payloadPredictionValues("default", "default", undefined, gatewayModelId)] : []),
+    payloadPredictionValues("global", "*", undefined, gatewayModelId),
+  ]
+  return candidates.find((samples) => samples.length >= payloadPredictionMinimumSamples) || []
+}
+
+function historicalCostPrediction(gatewayKeyId: string | undefined, gatewayModelId: string) {
+  const localValues = predictionValues("local", currentWorkspaceId(), gatewayKeyId, gatewayModelId, "costs")
+  const defaultValues = predictionValues("default", "default", undefined, gatewayModelId, "costs")
+  const globalValues = predictionValues("global", "*", undefined, gatewayModelId, "costs")
+  const baselineValues = defaultValues.length >= predictionBaselineMinimumSamples
+    ? defaultValues
+    : globalValues.length >= predictionBaselineMinimumSamples ? globalValues : undefined
+  const localValue = localValues.length >= 3 ? quantile(localValues, missingUsageQuantile) : 0
+  if (baselineValues) {
+    const baselineValue = quantile(baselineValues, missingUsageQuantile)
+    const localWeight = Math.min(0.35, localValues.length / (localValues.length + predictionPriorStrength))
+    const value = Math.max(1, Math.round(baselineValue * (1 - localWeight) + (localValue || baselineValue) * localWeight))
+    return {
+      value,
+      method: localValue ? "default-model-shrunk-p25" as const : "pooled-model-p25" as const,
+      sampleCount: baselineValues.length + (localValue ? localValues.length : 0),
+    }
+  }
+  if (localValue > 0) return { value: localValue, method: "same-key-model-p25" as const, sampleCount: localValues.length }
+  if (globalValues.length >= 3) return { value: quantile(globalValues, missingUsageQuantile), method: "pooled-model-p25" as const, sampleCount: globalValues.length }
+  return undefined
+}
+
+function historicalOutputPrediction(gatewayKeyId: string | undefined, gatewayModelId: string) {
+  const localValues = predictionValues("local", currentWorkspaceId(), gatewayKeyId, gatewayModelId, "outputs")
+  const defaultValues = predictionValues("default", "default", undefined, gatewayModelId, "outputs")
+  const globalValues = predictionValues("global", "*", undefined, gatewayModelId, "outputs")
+  const values = localValues.length >= 3 ? localValues : defaultValues.length >= 3 ? defaultValues : globalValues
+  if (!values.length) return undefined
+  return { value: median(values), sampleCount: values.length }
+}
+
+function eventWorkspaceId(collectionPath: string) {
+  const collectionPrefix = prefix()
+  if (collectionPath === `${collectionPrefix}_usage_events`) return "default"
+  const match = collectionPath.match(new RegExp(`^${collectionPrefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}_workspaces/([^/]+)/usageEvents$`))
+  return match?.[1]
+}
+
+async function warmUsagePredictionSamples() {
+  if (isMemory() || usagePredictionWarmup) return usagePredictionWarmup
+  usagePredictionWarmup = (async () => {
+    const documents = await listLocalDocuments()
+    const events = documents
+      .filter((document) => document.collection_path.endsWith("/usageEvents") || document.collection_path.endsWith("_usage_events"))
+      .map((document) => ({ event: document.data as unknown as UsageEvent, workspaceId: eventWorkspaceId(document.collection_path) }))
+      .filter((entry): entry is { event: UsageEvent; workspaceId: string } => Boolean(entry.workspaceId))
+      .sort((left, right) => Date.parse(left.event.completedAt) - Date.parse(right.event.completedAt))
+    for (const entry of events) rememberUsagePrediction(entry.event, entry.workspaceId)
+  })().catch((error) => {
+    usagePredictionWarmup = undefined
+    writeLog("warn", "system", "Unable to warm usage prediction history", { error: error instanceof Error ? error.message : "Unknown error" })
+  })
+  return usagePredictionWarmup
 }
 
 function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1_024) {
@@ -386,7 +534,6 @@ async function usageBudgetContext(event: UsageEvent) {
 }
 
 export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: BudgetUsageContext | null) {
-  rememberUsagePrediction(event)
   const context = budgetUsageContext === undefined ? await usageBudgetContext(event) : budgetUsageContext
   const completedAtMs = Date.parse(event.completedAt)
   const countForBudget = Boolean(
@@ -405,6 +552,7 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
     const memory = memoryState()
     if (memory.events.has(event.id)) return event
     memory.events.set(event.id, event)
+    rememberUsagePrediction(event)
     for (const granularity of usageRollupGranularities) {
       const bucket = bucketStart(completedDate, granularity).toISOString()
       const id = rollupId(granularity, bucket, event)
@@ -481,6 +629,7 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
     if (!isAlreadyExistsError(error)) throw error
     return event
   }
+  rememberUsagePrediction(event)
   if (counterId && context) {
     const now = Date.now()
     const list = budgetCounterListCache.get(scopedKey(context.usageStartAt))
@@ -547,8 +696,12 @@ export interface GatewayUsageInput {
   status: number
   durationMs: number
   ttftMs?: number
+  requestBodyBytes?: number
   metrics?: UsageMetrics
   assumedCostMicros?: number
+  assumedCostSource?: "reservation" | "empirical" | "payload-calibrated"
+  predictionMethod?: UsageEvent["predictionMethod"]
+  predictionSampleCount?: number
 }
 
 export async function createGatewayUsageEvent(input: GatewayUsageInput, resolvedPricing?: ResolvedModelPricing): Promise<UsageEvent> {
@@ -580,12 +733,17 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     status: input.status,
     durationMs: Math.max(0, input.durationMs),
     ...(input.ttftMs !== undefined ? { ttftMs: Math.max(0, input.ttftMs) } : {}),
+    ...(Number.isSafeInteger(input.requestBodyBytes) && Number(input.requestBodyBytes) > 0 ? { requestBodyBytes: Number(input.requestBodyBytes) } : {}),
     ...normalized,
     costMicros: assumedCostMicros ?? calculated.costMicros,
     pricingConfidence: assumedCostMicros !== undefined ? "assumed" : calculated.pricingConfidence,
     usageCompleteness: normalized.usageCompleteness,
     ...(assumedCostMicros !== undefined
-      ? { costSource: "reservation" as const }
+      ? {
+        costSource: input.assumedCostSource || "reservation",
+        ...(input.predictionMethod ? { predictionMethod: input.predictionMethod } : {}),
+        ...(input.predictionSampleCount !== undefined ? { predictionSampleCount: input.predictionSampleCount } : {}),
+      }
       : pricing && calculated.pricingConfidence !== "unpriced"
         ? { costSource: "configured-pricing" as const }
         : {}),
@@ -1511,16 +1669,52 @@ function requestOutputLimit(payload: Record<string, unknown> | undefined) {
   return undefined
 }
 
+function calibratedPayloadPrediction(
+  payload: Record<string, unknown> | undefined,
+  pricing: NonNullable<Parameters<typeof calculateCostMicros>[1]>,
+  gatewayKeyId: string | undefined,
+  gatewayModelId: string,
+  protocol: UsageEvent["protocol"],
+  requestBodyBytes: number | undefined,
+  reservation = false,
+) {
+  if (!payloadPredictionEnabled || !isOpenAiCodexModel(gatewayModelId)) return undefined
+  const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
+  if (!Number.isSafeInteger(inputBytes) || inputBytes <= 0) return undefined
+  const samples = payloadPredictionSamples(gatewayKeyId, gatewayModelId)
+  if (!samples.length) return undefined
+  return predictPayloadCalibratedCost({
+    gatewayModelId,
+    requestBodyBytes: inputBytes,
+    protocol,
+    outputLimit: requestOutputLimit(payload),
+    defaultOutputTokens: defaultPredictedOutputTokens,
+    samples,
+    pricing,
+    maximumNeighbors: payloadPredictionMaximumNeighbors,
+    minimumSamples: payloadPredictionMinimumSamples,
+    reservation,
+  })
+}
+
 function estimateReservationMicros(
   payload: Record<string, unknown> | undefined,
   pricing: Parameters<typeof calculateCostMicros>[1],
   limitMicros: number,
   requestBodyBytes?: number,
+  gatewayKeyId?: string,
+  gatewayModelId?: string,
+  protocol: UsageEvent["protocol"] = "openai-chat",
 ) {
+  if (pricing && gatewayModelId) {
+    const calibrated = calibratedPayloadPrediction(payload, pricing, gatewayKeyId, gatewayModelId, protocol, requestBodyBytes, true)
+    if (calibrated) return Math.min(limitMicros, Math.max(1, Math.ceil(calibrated.costMicros)))
+  }
   const outputLimit = requestOutputLimit(payload) || defaultBudgetOutputTokens
   const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
-  const estimatedInputTokens = Math.ceil(inputBytes / budgetInputBytesPerToken)
-  const usage = normalizeUsageMetrics({ input: estimatedInputTokens, output: outputLimit })
+  const estimatedInputTokens = Math.max(1, Math.ceil(inputBytes / budgetInputBytesPerToken))
+  const estimatedCachedTokens = Math.floor(estimatedInputTokens * estimatedCacheReadRatio)
+  const usage = normalizeUsageMetrics({ input: estimatedInputTokens, cached: estimatedCachedTokens, output: outputLimit })
   const estimatedCost = Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(calculateCostMicros(usage, pricing).costMicros))
   return Math.min(limitMicros, Math.max(1, estimatedCost))
 }
@@ -1528,28 +1722,61 @@ function estimateReservationMicros(
 function estimateExpectedCostMicros(
   payload: Record<string, unknown> | undefined,
   pricing: Parameters<typeof calculateCostMicros>[1],
+  gatewayKeyId: string,
   gatewayModelId: string,
   providerModelId?: string,
   requestBodyBytes?: number,
-) {
+  protocol: UsageEvent["protocol"] = "openai-chat",
+) : ExpectedCostPrediction {
+  if (pricing) {
+    const calibrated = calibratedPayloadPrediction(payload, pricing, gatewayKeyId, gatewayModelId, protocol, requestBodyBytes)
+    if (calibrated) {
+      return {
+        costMicros: Math.min(missingUsageEstimateMaxCostMicros, Math.max(1, calibrated.costMicros)),
+        source: "payload-calibrated",
+        predictionMethod: calibrated.method,
+        predictionSampleCount: calibrated.sampleCount,
+      }
+    }
+  }
+  const historicalCost = historicalCostPrediction(gatewayKeyId, gatewayModelId)
+  if (historicalCost) {
+    return {
+      costMicros: historicalCost.value,
+      source: "empirical",
+      predictionMethod: historicalCost.method,
+      predictionSampleCount: historicalCost.sampleCount,
+    }
+  }
+
   const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
   const estimatedInputTokens = Math.max(1, Math.ceil(inputBytes / budgetInputBytesPerToken))
   const outputLimit = requestOutputLimit(payload)
-  const historicalOutput = median(usagePredictionSamples.get(usagePredictionKey(gatewayModelId, providerModelId)) || [])
+  const historicalOutput = historicalOutputPrediction(gatewayKeyId, gatewayModelId)
   const expectedOutputTokens = outputLimit
-    ? Math.min(outputLimit, historicalOutput || defaultPredictedOutputTokens)
-    : historicalOutput || defaultPredictedOutputTokens
-  const usage = normalizeUsageMetrics({ input: estimatedInputTokens, output: expectedOutputTokens })
-  return Math.max(1, calculateCostMicros(usage, pricing).costMicros)
+    ? Math.min(outputLimit, historicalOutput?.value || defaultPredictedOutputTokens)
+    : historicalOutput?.value || defaultPredictedOutputTokens
+  const estimatedCachedTokens = Math.floor(estimatedInputTokens * estimatedCacheReadRatio)
+  const usage = normalizeUsageMetrics({ input: estimatedInputTokens, cached: estimatedCachedTokens, output: expectedOutputTokens })
+  const calculatedCost = Math.max(1, calculateCostMicros(usage, pricing).costMicros)
+  return {
+    costMicros: Math.min(missingUsageEstimateMaxCostMicros, calculatedCost),
+    source: "bounded-formula",
+    ...(historicalOutput ? { predictionSampleCount: historicalOutput.sampleCount } : {}),
+  }
 }
 
 export interface BudgetRequestState {
   admission?: BudgetAdmission
   usageContext?: BudgetUsageContext
   pricing?: ResolvedModelPricing
+  requestBodyBytes?: number
   /** Conservative request estimate used to settle successful responses whose
    * provider did not return complete usage metadata. */
   estimatedCostMicros?: number
+  estimatedCostSource?: ExpectedCostPrediction["source"]
+  predictionMethod?: NonNullable<UsageEvent["predictionMethod"]>
+  predictionSampleCount?: number
 }
 
 export async function getBudgetRequestState(
@@ -1558,22 +1785,32 @@ export async function getBudgetRequestState(
   providerModelId?: string,
   payload?: Record<string, unknown>,
   requestBodyBytes?: number,
+  protocol: UsageEvent["protocol"] = "openai-chat",
 ): Promise<BudgetRequestState> {
+  await warmUsagePredictionSamples()
   const budget = await budgetConfig(apiKeyId)
   // Pricing is needed for usage accounting even when a key has no RawRoute
   // budget. A budget is an admission policy, not a prerequisite for billing.
   let pricing: ResolvedModelPricing | undefined
   try { pricing = await getPricingForModel(gatewayModelId, providerModelId) }
   catch { pricing = undefined }
-  const estimatedCostMicros = pricing
-    ? estimateExpectedCostMicros(payload, pricing, gatewayModelId, providerModelId, requestBodyBytes)
+  const estimatedCost = pricing
+    ? estimateExpectedCostMicros(payload, pricing, apiKeyId, gatewayModelId, providerModelId, requestBodyBytes, protocol)
     : undefined
-  if (!budget) return { pricing, estimatedCostMicros }
+  const estimatedState = estimatedCost
+    ? {
+      estimatedCostMicros: estimatedCost.costMicros,
+      estimatedCostSource: estimatedCost.source,
+      ...(estimatedCost.predictionMethod ? { predictionMethod: estimatedCost.predictionMethod } : {}),
+      ...(estimatedCost.predictionSampleCount !== undefined ? { predictionSampleCount: estimatedCost.predictionSampleCount } : {}),
+    }
+    : {}
+  if (!budget) return { pricing, requestBodyBytes, ...estimatedState }
 
   const window = await getBudgetWindow()
   const usageStartAt = await budgetUsageStart(window)
   const usageContext = { usageStartAt, windowEnd: window.end } satisfies BudgetUsageContext
-  if (!budget.enabled || window.bypassLimits) return { usageContext, pricing, estimatedCostMicros }
+  if (!budget.enabled || window.bypassLimits) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
   if (!pricing) throw new BudgetPricingUnavailableError("This API key cannot call a model without configured pricing.")
 
   const spentMicros = await budgetSpentMicros(budget, window)
@@ -1585,10 +1822,11 @@ export async function getBudgetRequestState(
       key: `rawroute:budget:v2:${currentWorkspaceId()}:${budgetCounterId(apiKeyId, usageStartAt)}:${hash(`${budget.updatedAt || ""}:${window.updatedAt || ""}`).slice(0, 16)}`,
       limitMicros: budget.weeklyLimitMicros,
       spentMicros,
-      reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes),
+      reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes, apiKeyId, gatewayModelId, protocol),
       ttlSeconds: budgetRetryAfter(window) + 60,
     },
-    estimatedCostMicros,
+    requestBodyBytes,
+    ...estimatedState,
   }
 }
 
@@ -2468,6 +2706,7 @@ export async function repriceUsageForGroup(jobId: string) {
 export function resetAnalyticsForTests() {
   memoryStates().clear()
   usagePredictionSamples.clear()
+  usagePredictionWarmup = undefined
   pricingCache.clear()
   pricingInflight.clear()
   budgetConfigCache.clear()

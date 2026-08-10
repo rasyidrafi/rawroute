@@ -26,7 +26,7 @@ export function catalogModels(providers: Provider[], models: Model[], aliases: M
       object: "model",
       created: Math.floor(Date.parse(model.createdAt) / 1000),
       owned_by: provider.prefix,
-      protocol: model.protocol || provider.protocol,
+      protocol: provider.protocol,
     })
   }
 
@@ -38,7 +38,7 @@ export function catalogModels(providers: Provider[], models: Model[], aliases: M
       object: "model",
       created: Math.floor(Date.parse(alias.createdAt) / 1000),
       owned_by: target.provider.prefix,
-      protocol: target.model.protocol || target.provider.protocol,
+      protocol: target.provider.protocol,
     })
   }
   return entries
@@ -59,7 +59,7 @@ export function catalogLiteLlmModelInfo(providers: Provider[], models: Model[], 
     if (!provider) continue
     const gatewayModelId = modelGatewayId(model)
     if (!enabledModels.has(gatewayModelId)) enabledModels.set(gatewayModelId, { model, provider })
-    if ((model.protocol || provider.protocol) !== "openai-chat") continue
+    if (provider.protocol !== "openai-chat") continue
     entries.push({
       model_name: gatewayModelId,
       litellm_params: { model: model.upstreamModel },
@@ -69,7 +69,7 @@ export function catalogLiteLlmModelInfo(providers: Provider[], models: Model[], 
 
   for (const alias of aliases) {
     const target = enabledModels.get(alias.targetModelId)
-    if (!target || (target.model.protocol || target.provider.protocol) !== "openai-chat") continue
+    if (!target || target.provider.protocol !== "openai-chat") continue
     entries.push({
       model_name: alias.alias,
       litellm_params: { model: target.model.upstreamModel },

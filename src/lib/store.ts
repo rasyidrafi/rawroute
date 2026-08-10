@@ -243,7 +243,6 @@ function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Mode
     gatewayModelId: data.gatewayModelId || snapshot.id,
     name: data.name || "",
     upstreamModel: data.upstreamModel || "",
-    protocol: data.protocol,
     enabled: data.enabled !== false,
     source: data.source || "custom",
     createdAt: data.createdAt || "",
@@ -293,7 +292,6 @@ function storedModel(model: Model) {
     gatewayModelId: model.gatewayModelId || model.id,
     name: model.name,
     upstreamModel: model.upstreamModel,
-    protocol: model.protocol,
     enabled: model.enabled,
     source: model.source,
     createdAt: model.createdAt,
@@ -1727,11 +1725,9 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     const inputWithoutIds = stripUndefined({
       name: input.name,
       upstreamModel: input.upstreamModel,
-      protocol: input.protocol,
       enabled: input.enabled,
       source: input.source,
     }) as Partial<Model>
-    const hasProtocol = Object.hasOwn(input, "protocol")
     const model: Model = {
       ...(existing || {}),
       id: modelId,
@@ -1741,7 +1737,6 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       name,
       upstreamModel,
       source: input.source || existing?.source || "custom",
-      protocol: hasProtocol ? input.protocol : existing?.protocol,
       enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
@@ -2019,11 +2014,9 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
   const inputWithoutIds = stripUndefined({
     name: input.name,
     upstreamModel: input.upstreamModel,
-    protocol: input.protocol,
     enabled: input.enabled,
     source: input.source,
   }) as Partial<Model>
-  const hasProtocol = Object.hasOwn(input, "protocol")
   const model: Model = {
     ...(existing || {}),
     ...inputWithoutIds,
@@ -2033,7 +2026,6 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
     name,
     upstreamModel,
     source: input.source || existing?.source || "custom",
-    protocol: hasProtocol ? input.protocol : existing?.protocol,
     enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
     createdAt: existing?.createdAt || new Date().toISOString(),
   }

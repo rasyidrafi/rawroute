@@ -8,14 +8,14 @@ import type { UsageEvent, UsageRollup } from "@/lib/types"
 /**
  * Best-effort repair for successful responses whose provider returned no token
  * usage. The request payload is not stored, so exact billing is impossible;
- * use a robust median from nearby exact events instead of treating the request
- * as free or carrying a worst-case reservation into historical cost totals.
+ * use a lower robust quantile from pooled exact events instead of treating the
+ * request as free or carrying a same-day outlier into historical cost totals.
  *
- * Candidate priority:
- *   1. same key + model + UTC day
- *   2. same key + model across the stored history
- *   3. same model + UTC day
- *   4. same model across the stored history
+ * The estimator canonicalizes model aliases (codex/foo, cx/foo, and foo),
+ * pools exact history across workspaces, uses the Default workspace as a
+ * stable prior when it has enough samples, and shrinks the local key estimate
+ * toward that prior. The default quantile is p25 because a missing-usage
+ * fallback must avoid repeating the high-tail cost burst as the typical cost.
  *
  * Every rewritten event remains `assumed` and is marked `empirical`. The
  * script is idempotent and defaults to a dry run; pass --apply explicitly.
@@ -35,6 +35,16 @@ type Prediction = {
   method: NonNullable<UsageEvent["predictionMethod"]>
   sampleCount: number
 }
+
+const predictionQuantile = Number.isFinite(Number(process.env.BUDGET_MISSING_USAGE_QUANTILE))
+  ? Math.min(1, Math.max(0, Number(process.env.BUDGET_MISSING_USAGE_QUANTILE)))
+  : 0.25
+const predictionPriorStrength = Number.isSafeInteger(Number(process.env.BUDGET_PREDICTION_PRIOR_STRENGTH)) && Number(process.env.BUDGET_PREDICTION_PRIOR_STRENGTH) > 0
+  ? Number(process.env.BUDGET_PREDICTION_PRIOR_STRENGTH)
+  : 500
+const predictionBaselineMinimum = Number.isSafeInteger(Number(process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES)) && Number(process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES) > 0
+  ? Number(process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES)
+  : 30
 
 const apply = process.argv.includes("--apply")
 const prefix = (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
@@ -90,15 +100,14 @@ function bucketStart(timestamp: string, granularity: UsageRollup["granularity"])
   return startOfZonedDay(date).toISOString()
 }
 
-function utcDay(timestamp: string) {
-  return timestamp.slice(0, 10)
-}
-
-function median(values: number[]) {
+function quantile(values: number[], probability: number) {
   const sorted = values.filter((value) => Number.isSafeInteger(value) && value > 0).sort((left, right) => left - right)
   if (!sorted.length) return 0
-  const middle = Math.floor(sorted.length / 2)
-  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+  const position = Math.min(sorted.length - 1, Math.max(0, (sorted.length - 1) * probability))
+  const lower = Math.floor(position)
+  const upper = Math.ceil(position)
+  if (lower === upper) return sorted[lower]
+  return Math.round(sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower))
 }
 
 function addSample(map: Map<string, Sample[]>, key: string, sample: Sample) {
@@ -107,33 +116,47 @@ function addSample(map: Map<string, Sample[]>, key: string, sample: Sample) {
   map.set(key, current)
 }
 
+function canonicalModelId(gatewayModelId: string) {
+  return gatewayModelId.trim().toLowerCase().replace(/^(?:codex|cx)\//, "")
+}
+
+function keyModelKey(workspaceId: string, gatewayKeyId: string, gatewayModelId: string) {
+  return `${workspaceId}\u0000${gatewayKeyId}\u0000${canonicalModelId(gatewayModelId)}`
+}
+
 function selectPrediction(
   event: UsageEvent,
-  exactByKeyModelDay: Map<string, Sample[]>,
+  workspaceId: string,
   exactByKeyModel: Map<string, Sample[]>,
-  exactByModelDay: Map<string, Sample[]>,
+  exactByDefaultModel: Map<string, Sample[]>,
   exactByModel: Map<string, Sample[]>,
 ): Prediction | undefined {
-  const keyModel = `${event.gatewayKeyId}\u0000${event.gatewayModelId}`
-  const keyModelDay = `${keyModel}\u0000${utcDay(event.completedAt)}`
-  const modelDay = `${event.gatewayModelId}\u0000${utcDay(event.completedAt)}`
-  const candidates: Array<{ values: Sample[] | undefined; method: Prediction["method"]; minimum: number }> = [
-    { values: exactByKeyModelDay.get(keyModelDay), method: "same-key-model-day-median", minimum: 3 },
-    { values: exactByKeyModel.get(keyModel), method: "same-key-model-median", minimum: 5 },
-    { values: exactByModelDay.get(modelDay), method: "same-model-day-median", minimum: 5 },
-    { values: exactByModel.get(event.gatewayModelId), method: "same-model-median", minimum: 5 },
-  ]
-  for (const candidate of candidates) {
-    if (!candidate.values || candidate.values.length < candidate.minimum) continue
-    const costMicros = median(candidate.values.map((sample) => sample.costMicros))
-    if (costMicros > 0) return { costMicros, method: candidate.method, sampleCount: candidate.values.length }
+  const localValues = exactByKeyModel.get(keyModelKey(workspaceId, event.gatewayKeyId, event.gatewayModelId))
+  const defaultValues = exactByDefaultModel.get(canonicalModelId(event.gatewayModelId))
+  const globalValues = exactByModel.get(canonicalModelId(event.gatewayModelId))
+  const baselineValues = defaultValues && defaultValues.length >= predictionBaselineMinimum
+    ? defaultValues
+    : globalValues && globalValues.length >= predictionBaselineMinimum ? globalValues : undefined
+  const localValue = localValues && localValues.length >= 3 ? quantile(localValues.map((sample) => sample.costMicros), predictionQuantile) : 0
+  if (baselineValues) {
+    const baselineValue = quantile(baselineValues.map((sample) => sample.costMicros), predictionQuantile)
+    const localWeight = Math.min(0.35, (localValues?.length || 0) / ((localValues?.length || 0) + predictionPriorStrength))
+    const costMicros = Math.max(1, Math.round(baselineValue * (1 - localWeight) + (localValue || baselineValue) * localWeight))
+    return {
+      costMicros,
+      method: localValue ? "default-model-shrunk-p25" : "pooled-model-p25",
+      sampleCount: baselineValues.length + (localValue ? localValues?.length || 0 : 0),
+    }
   }
+  if (localValue > 0) return { costMicros: localValue, method: "same-key-model-p25", sampleCount: localValues?.length || 0 }
+  if (globalValues && globalValues.length >= 3) return { costMicros: quantile(globalValues.map((sample) => sample.costMicros), predictionQuantile), method: "pooled-model-p25", sampleCount: globalValues.length }
   return undefined
 }
 
 function eligibleForPrediction(event: UsageEvent) {
   if (event.status < 200 || event.status >= 300) return false
-  if (event.costSource === "provider-recorded" || event.costSource === "empirical") return false
+  if (event.costSource === "provider-recorded") return false
+  if (event.costSource === "empirical" && new Set(["same-key-model-p25", "pooled-model-p25", "default-model-shrunk-p25"]).has(event.predictionMethod || "")) return false
   if (event.usageAvailable === true && event.usageCompleteness !== "missing") return false
   return event.pricingConfidence === "unpriced" || event.pricingConfidence === "assumed"
 }
@@ -143,22 +166,21 @@ async function main() {
   const documents = await listLocalDocuments()
   const byPath = new Map(documents.map((document) => [document.path, document]))
   const eventDocuments = documents.filter((document) => isEventCollection(document.collection_path))
-  const exactByKeyModelDay = new Map<string, Sample[]>()
   const exactByKeyModel = new Map<string, Sample[]>()
-  const exactByModelDay = new Map<string, Sample[]>()
+  const exactByDefaultModel = new Map<string, Sample[]>()
   const exactByModel = new Map<string, Sample[]>()
   for (const document of eventDocuments) {
+    const scope = scopeForEventCollection(document.collection_path)
+    if (!scope) continue
     const event = document.data as unknown as UsageEvent
     const completedAt = Date.parse(event.completedAt)
     if (!Number.isFinite(completedAt) || event.status < 200 || event.status >= 300 || event.pricingConfidence !== "exact" || event.usageAvailable !== true) continue
     const costMicros = Math.round(number(event.costMicros))
     if (!Number.isSafeInteger(costMicros) || costMicros <= 0 || !event.gatewayModelId) continue
     const sample = { costMicros, completedAt: event.completedAt }
-    const keyModel = `${event.gatewayKeyId}\u0000${event.gatewayModelId}`
-    addSample(exactByKeyModelDay, `${keyModel}\u0000${utcDay(event.completedAt)}`, sample)
-    addSample(exactByKeyModel, keyModel, sample)
-    addSample(exactByModelDay, `${event.gatewayModelId}\u0000${utcDay(event.completedAt)}`, sample)
-    addSample(exactByModel, event.gatewayModelId, sample)
+    addSample(exactByKeyModel, keyModelKey(scope.id, event.gatewayKeyId, event.gatewayModelId), sample)
+    addSample(exactByModel, canonicalModelId(event.gatewayModelId), sample)
+    if (scope.id === "default") addSample(exactByDefaultModel, canonicalModelId(event.gatewayModelId), sample)
   }
 
   const updates: Array<{ path: string; data: UsageEvent; beforeCost: number; prediction: Prediction }> = []
@@ -170,7 +192,7 @@ async function main() {
     const event = document.data as unknown as UsageEvent
     const completedAt = Date.parse(event.completedAt)
     if (!Number.isFinite(completedAt) || completedAt < from || completedAt >= to || !eligibleForPrediction(event)) continue
-    const prediction = selectPrediction(event, exactByKeyModelDay, exactByKeyModel, exactByModelDay, exactByModel)
+    const prediction = selectPrediction(event, scope.id, exactByKeyModel, exactByDefaultModel, exactByModel)
     if (!prediction) continue
     const beforeCost = Math.max(0, Math.round(number(event.costMicros)))
     const after: UsageEvent = {

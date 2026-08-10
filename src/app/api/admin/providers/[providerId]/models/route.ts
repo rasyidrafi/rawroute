@@ -3,10 +3,7 @@ import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib
 import { gatewayModelId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getProvider, listProviderModels, upsertModel } from "@/lib/store"
-import type { Model, Protocol } from "@/lib/types"
-
-
-const protocols: Protocol[] = ["openai-chat", "openai-responses", "anthropic-messages"]
+import type { Model } from "@/lib/types"
 
 export async function POST(request: Request, context: { params: Promise<{ providerId: string }> }) {
   try {
@@ -29,16 +26,12 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     }
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const upstreamModel = typeof input.upstreamModel === "string" ? input.upstreamModel.trim() : ""
-    const requestedProtocol = input.protocol as string | undefined
     if (!name || !upstreamModel) throw new Error("Model fields are incomplete.")
     const requestedGatewayModelId = typeof input.gatewayModelId === "string"
       ? input.gatewayModelId.trim()
       : typeof input.id === "string" ? input.id.trim() : ""
     const normalizedGatewayModelId = gatewayModelId(provider.prefix, requestedGatewayModelId)
     if (!normalizedGatewayModelId) throw new Error("Gateway model ID is required.")
-    if (requestedProtocol !== undefined && requestedProtocol !== "inherit" && !protocols.includes(requestedProtocol as Protocol)) {
-      throw new Error("Invalid model protocol.")
-    }
     if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
       throw new Error("Model enabled value must be a boolean.")
     }
@@ -50,8 +43,6 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       enabled: input.enabled,
       source: existing?.source || "custom",
     }
-    if (requestedProtocol === "inherit") modelInput.protocol = undefined
-    else if (requestedProtocol !== undefined) modelInput.protocol = requestedProtocol as Protocol
     await upsertModel(providerId, modelInput)
     if (provider.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
     writeLog("info", "admin", "Model saved", { providerId })

@@ -69,7 +69,7 @@ describe("configuration storage", () => {
   test("removes undefined optional fields before Firestore writes", () => {
     const data = stripUndefined({
       providers: [{ id: "openai", secret: undefined }],
-      models: [{ id: "oa/test", protocol: undefined }],
+      models: [{ id: "oa/test", staleField: undefined }],
       nested: { keep: "value", omit: undefined },
     })
 
@@ -174,7 +174,6 @@ describe("configuration storage", () => {
       gatewayModelId: "openai/chat",
       name: "Chat",
       upstreamModel: "upstream-chat",
-      protocol: "openai-responses",
       unexpectedField: true,
     } as Partial<Model> & { unexpectedField: boolean })
 
@@ -183,11 +182,10 @@ describe("configuration storage", () => {
       gatewayModelId: "openai/chat",
       name: "Chat",
       upstreamModel: "upstream-chat",
-      protocol: undefined,
     })
 
     expect(updated).not.toHaveProperty("unexpectedField")
-    expect(updated.protocol).toBeUndefined()
+    expect(updated).not.toHaveProperty("protocol")
   })
 
   test("persists only canonical provider fields", async () => {

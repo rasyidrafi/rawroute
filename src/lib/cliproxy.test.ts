@@ -46,7 +46,7 @@ vi.mock("@/lib/workspace-context", () => ({
 }))
 
 import { BudgetDeniedError } from "@/lib/analytics"
-import { proxyGatewayRequest } from "@/lib/cliproxy"
+import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest } from "@/lib/cliproxy"
 
 const originalFetch = globalThis.fetch
 
@@ -95,7 +95,7 @@ test("restores the pre-rewrite request and completion console logs", async () =>
   await response.text()
 
   const messages = mocks.writeLog.mock.calls.map((call) => call[2])
-  expect(messages).toContain("POST PROVIDER:Codex MODEL:codex/gpt-5 -> gpt-5 FMT:openai-responses ACC:Gateway THINK:low MSG:2 TOOL:2")
+  expect(messages).toContain("POST PROVIDER:Codex MODEL:codex/gpt-5 -> gpt-5 FMT:openai-responses -> openai-responses ACC:Gateway THINK:low MSG:2 TOOL:2")
   expect(messages.some((message) => typeof message === "string" && /^DONE \d+ms/.test(message))).toBe(true)
 })
 
@@ -151,6 +151,41 @@ test("normalizes reasoning_effort before forwarding Responses requests", async (
   expect(forwarded.max_tokens).toBeUndefined()
 })
 
+test("strips Expect before forwarding a request to CLIProxy", async () => {
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json", expect: "100-continue" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello" }),
+  }))
+  await response.text()
+
+  const forwardedHeaders = new Headers((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.headers)
+  expect(forwardedHeaders.has("expect")).toBe(false)
+})
+
+test("accepts terminal stream events even when usage is missing", async () => {
+  expect(isTerminalStreamEvent("message_stop", {})).toBe(true)
+  expect(isTerminalStreamEvent("", { type: "response.completed" })).toBe(true)
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("data: {\"type\":\"response.completed\"}\n\n"))
+      controller.close()
+    },
+  })
+  await expect(collectStreamUsage(stream)).resolves.toMatchObject({ completedNormally: true, terminalEventSeen: true, usage: undefined })
+})
+
+test("marks a stream without a terminal event as incomplete", async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"))
+      controller.close()
+    },
+  })
+  await expect(collectStreamUsage(stream)).resolves.toMatchObject({ completedNormally: false, terminalEventSeen: false })
+})
+
 test("routes Codex models through the authenticated workspace namespace", async () => {
   const provider = { id: "codex", name: "Codex", prefix: "codex", enabled: true }
   const model = {
@@ -203,28 +238,70 @@ test("routes non-Codex models through a workspace/provider namespace", async () 
   expect(forwarded.model).toBe("rr-ws-default-p-provider-a/model-a")
 })
 
-test("rejects a model when the request protocol does not match its local policy", async () => {
-  const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", protocol: "openai-responses", authType: "bearer", enabled: true }
+test("logs the received protocol and the saved provider protocol", async () => {
+  const provider = { id: "provider-a", name: "Nara", prefix: "nara", protocol: "openai-chat", authType: "bearer", enabled: true }
   mocks.listProviders.mockResolvedValue([provider])
   mocks.listModels.mockResolvedValue([{
     id: "model-a",
     providerId: provider.id,
-    gatewayModelId: "bynara/model-a",
-    name: "Model A",
-    upstreamModel: "upstream-a",
+    gatewayModelId: "nara/grok-4.5",
+    name: "Grok 4.5",
+    upstreamModel: "grok-4.5",
     enabled: true,
     createdAt: "2026-08-08T00:00:00.000Z",
   }])
 
-  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/messages", {
     method: "POST",
     headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
-    body: JSON.stringify({ model: "bynara/model-a", messages: [{ role: "user", content: "hello" }] }),
+    body: JSON.stringify({ model: "nara/grok-4.5", max_tokens: 32, messages: [{ role: "user", content: "hello" }] }),
   }))
+  await response.text()
 
-  expect(response.status).toBe(400)
-  await expect(response.json()).resolves.toEqual({ error: { message: "Model bynara/model-a accepts openai-responses, but this request uses openai-chat.", code: "model_protocol_mismatch" } })
-  expect(globalThis.fetch).not.toHaveBeenCalled()
+  const messages = mocks.writeLog.mock.calls.map((call) => call[2])
+  expect(messages).toContain("POST PROVIDER:Nara MODEL:nara/grok-4.5 -> grok-4.5 FMT:anthropic-messages -> openai-chat ACC:Gateway MSG:1")
+})
+
+test("lets CLIProxy translate every supported client/provider protocol direction", async () => {
+  const cases = [
+    { name: "openai-responses to openai-chat", providerProtocol: "openai-chat" as const, path: "/v1/responses", body: { model: "bynara/model-a", input: "hello" } },
+    { name: "openai-chat to openai-responses", providerProtocol: "openai-responses" as const, path: "/v1/chat/completions", body: { model: "bynara/model-a", messages: [{ role: "user", content: "hello" }] } },
+    { name: "openai-responses to anthropic-messages", providerProtocol: "anthropic-messages" as const, path: "/v1/responses", body: { model: "bynara/model-a", input: "hello" } },
+    { name: "anthropic-messages to openai-responses", providerProtocol: "openai-responses" as const, path: "/v1/messages", body: { model: "bynara/model-a", max_tokens: 32, messages: [{ role: "user", content: "hello" }] } },
+    { name: "openai-chat to anthropic-messages", providerProtocol: "anthropic-messages" as const, path: "/v1/chat/completions", body: { model: "bynara/model-a", messages: [{ role: "user", content: "hello" }] } },
+    { name: "anthropic-messages to openai-chat", providerProtocol: "openai-chat" as const, path: "/v1/messages", body: { model: "bynara/model-a", max_tokens: 32, messages: [{ role: "user", content: "hello" }] } },
+  ]
+
+  for (const scenario of cases) {
+    vi.clearAllMocks()
+    const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", protocol: scenario.providerProtocol, authType: "bearer", enabled: true }
+    mocks.listProviders.mockResolvedValue([provider])
+    mocks.listModels.mockResolvedValue([{
+      id: "model-a",
+      providerId: provider.id,
+      gatewayModelId: "bynara/model-a",
+      name: "Model A",
+      upstreamModel: "upstream-a",
+      enabled: true,
+      createdAt: "2026-08-08T00:00:00.000Z",
+    }])
+    const fetchMock = vi.fn(async () => Response.json({ id: "response-1" })) as typeof fetch
+    globalThis.fetch = fetchMock
+
+    const response = await proxyGatewayRequest(new Request(`http://gateway${scenario.path}`, {
+      method: "POST",
+      headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+      body: JSON.stringify(scenario.body),
+    }))
+
+    expect(response.status, scenario.name).toBe(200)
+    await response.text()
+    expect(mocks.ensureNonCodexProviderProjection, scenario.name).toHaveBeenCalledWith(provider.id)
+    const fetchCalls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls
+    expect(String(fetchCalls[0]?.[0]), scenario.name).toContain(scenario.path)
+    const forwarded = JSON.parse(String(fetchCalls[0]?.[1]?.body)) as Record<string, unknown>
+    expect(forwarded.model, scenario.name).toBe("rr-ws-default-p-provider-a/model-a")
+  }
 })
 
 test("rejects unknown runtime models before calling the backend", async () => {

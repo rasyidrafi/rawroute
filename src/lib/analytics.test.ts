@@ -493,29 +493,79 @@ describe.sequential("usage analytics", () => {
     expect(first.estimatedCostMicros).toBeGreaterThan(0)
     expect(first.admission?.reservationMicros).toBeGreaterThan(0)
 
-    await recordUsageEvent({
-      id: "prediction-sample",
-      gatewayKeyId: key.id,
-      providerModelId: "predicted-model",
-      gatewayModelId: "test/predicted",
-      protocol: "openai-chat",
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      status: 200,
-      durationMs: 1,
-      inputTokens: 10,
-      outputTokens: 2_048,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      totalTokens: 2_058,
-      costMicros: 2_058,
-      pricingConfidence: "exact",
-      usageAvailable: true,
-      usageCompleteness: "complete",
-    }, null)
+    for (const [index, costMicros] of [2_058, 2_060, 2_062].entries()) {
+      await recordUsageEvent({
+        id: `prediction-sample-${index}`,
+        gatewayKeyId: key.id,
+        providerModelId: "predicted-model",
+        gatewayModelId: "test/predicted",
+        protocol: "openai-chat",
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        status: 200,
+        durationMs: 1,
+        inputTokens: 10,
+        outputTokens: 2_048,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 2_058,
+        costMicros,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+        usageCompleteness: "complete",
+      }, null)
+    }
     const second = await getBudgetRequestState(key.id, "test/predicted", "predicted-model", { model: "test/predicted" }, 64)
     expect(second.estimatedCostMicros).toBeGreaterThan(first.estimatedCostMicros || 0)
+    expect(second.estimatedCostSource).toBe("empirical")
+    expect(second.predictionSampleCount).toBe(3)
     expect(second.admission?.reservationMicros).toBeGreaterThan(0)
+  })
+
+  test("uses OpenAI/Codex payload history before the generic missing-usage fallback", async () => {
+    const key = await createApiKey("Payload calibrated")
+    const model = await configureTestPricing({
+      modelId: "payload-model",
+      gatewayModelId: "gpt-5.6-sol",
+      upstreamModel: "gpt-5.6-sol",
+      inputMicrosPerMillion: 5_000_000,
+      outputMicrosPerMillion: 30_000_000,
+      cacheReadMicrosPerMillion: 500_000,
+      cacheCreationMicrosPerMillion: 6_250_000,
+    })
+
+    for (const sample of [
+      { requestBodyBytes: 1_000, input: 250, cached: 225, output: 100 },
+      { requestBodyBytes: 2_000, input: 500, cached: 450, output: 200 },
+      { requestBodyBytes: 3_000, input: 750, cached: 675, output: 300 },
+    ]) {
+      await recordGatewayUsage({
+        gatewayKeyId: key.id,
+        providerModelId: model.id,
+        gatewayModelId: "gpt-5.6-sol",
+        protocol: "openai-responses",
+        startedAt: new Date().toISOString(),
+        status: 200,
+        durationMs: 1,
+        requestBodyBytes: sample.requestBodyBytes,
+        metrics: { input: sample.input, cached: sample.cached, cacheCreation: 0, output: sample.output },
+      })
+    }
+
+    const state = await getBudgetRequestState(key.id, "gpt-5.6-sol", model.id, { model: "gpt-5.6-sol", max_output_tokens: 200 }, 2_000)
+    expect(state.estimatedCostSource).toBe("payload-calibrated")
+    expect(state.predictionMethod).toBe("openai-codex-payload-calibrated-p50")
+    expect(state.predictionSampleCount).toBe(3)
+    expect(state.estimatedCostMicros).toBe(6_475)
+    expect(state.requestBodyBytes).toBe(2_000)
+  })
+
+  test("caps the no-history fallback instead of billing raw request bytes", async () => {
+    const key = await createApiKey("Bounded missing usage")
+    await configureTestPricing({ modelId: "bounded-missing-model", gatewayModelId: "test/bounded-missing", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 100_000, cacheCreationMicrosPerMillion: 0 })
+    const state = await getBudgetRequestState(key.id, "test/bounded-missing", "bounded-missing-model", { model: "test/bounded-missing" }, 100_000_000)
+    expect(state.estimatedCostSource).toBe("bounded-formula")
+    expect(state.estimatedCostMicros).toBe(2_000_000)
   })
 
   test("recognizes the chat-completions max_completion_tokens cap", async () => {

@@ -23,6 +23,7 @@ const hopByHopHeaders = new Set([
   "upgrade",
   "host",
   "content-length",
+  "expect",
 ])
 
 function estimateRequest(body: unknown) {
@@ -94,15 +95,15 @@ function extractReasoningEffort(payload: Record<string, unknown>) {
   return unique.size === 1 ? found[0].effort : found.map(({ path, effort }) => `${path}:${effort}`).join(", ")
 }
 
-function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, protocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {
+function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, receivedProtocol: Protocol, upstreamProtocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {
   const parts = [
     `POST PROVIDER:${provider}`,
     `MODEL:${gatewayModel} -> ${upstreamModel}`,
-    `FMT:${protocol}`,
+    `FMT:${receivedProtocol} -> ${upstreamProtocol}`,
     `ACC:${account}`,
   ]
   if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
-  parts.push(`MSG:${requestItemCount(payload, protocol)}`)
+  parts.push(`MSG:${requestItemCount(payload, receivedProtocol)}`)
   const toolCount = requestToolCount(payload)
   if (toolCount) parts.push(`TOOL:${toolCount}`)
   return parts.join(" ")
@@ -115,7 +116,7 @@ function completionSummary(durationMs: number, ttftMs: number | undefined, usage
     if (usage.input !== undefined) parts.push(`IN:${usage.input}`)
     if (usage.cached !== undefined) parts.push(`(CACHE ↻${usage.cached})`)
     if (usage.output !== undefined) parts.push(`OUT:${usage.output}`)
-  }
+  } else parts.push("USAGE:unknown")
   return parts.join(" ")
 }
 
@@ -198,15 +199,17 @@ async function actualResponseUsage(response: Response) {
 interface ResolvedGatewayModel {
   forwardedModel: string
   upstreamModel: string
+  upstreamProtocol: Protocol
   pricingGatewayModelId: string
   providerModelId?: string
   providerId?: string
   providerName?: string
+  promptCacheKey: boolean
 }
 
 export class GatewayModelResolutionError extends Error {
   readonly status: 400 | 503
-  readonly code: "model_not_found" | "model_protocol_mismatch" | "model_resolver_unavailable"
+  readonly code: "model_not_found" | "model_resolver_unavailable"
 
   constructor(message: string, status: 400 | 503, code: GatewayModelResolutionError["code"]) {
     super(message)
@@ -228,10 +231,6 @@ function modelNotFound(model: string): never {
   throw new GatewayModelResolutionError(`Model ${model} is not configured or is unavailable.`, 400, "model_not_found")
 }
 
-function modelProtocolMismatch(model: string, expected: Protocol, received: Protocol): never {
-  throw new GatewayModelResolutionError(`Model ${model} accepts ${expected}, but this request uses ${received}.`, 400, "model_protocol_mismatch")
-}
-
 function providerModelSuffix(provider: Awaited<ReturnType<typeof listProviders>>[number], model: Awaited<ReturnType<typeof listModels>>[number]) {
   const gatewayModelId = modelGatewayId(model)
   const prefix = `${provider.prefix}/`
@@ -241,7 +240,7 @@ function providerModelSuffix(provider: Awaited<ReturnType<typeof listProviders>>
   return suffix
 }
 
-async function resolveGatewayModel(model: string, requestProtocol: Protocol): Promise<ResolvedGatewayModel> {
+async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel> {
   const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const availableModels = models.filter((candidate) => activeModel(candidate, providerIndex.get(candidate.providerId)))
@@ -258,8 +257,9 @@ async function resolveGatewayModel(model: string, requestProtocol: Protocol): Pr
 
   const provider = providerIndex.get(target.providerId)
   if (!provider || provider.enabled === false) return modelNotFound(model)
-  const configuredProtocol = target.protocol || provider.protocol
-  if (configuredProtocol && configuredProtocol !== requestProtocol) modelProtocolMismatch(model, configuredProtocol, requestProtocol)
+  // The request endpoint is the client source format. The saved provider
+  // protocol identifies the CLIProxy upstream executor; it is not an ingress
+  // restriction because CLIProxy translates supported client formats.
   const upstreamModel = target.upstreamModel || modelGatewayId(target)
   let forwardedModel = upstreamModel
 
@@ -278,10 +278,12 @@ async function resolveGatewayModel(model: string, requestProtocol: Protocol): Pr
   return {
     forwardedModel,
     upstreamModel,
+    upstreamProtocol: provider.protocol || (provider.prefix === "codex" ? "openai-responses" : "openai-chat"),
     pricingGatewayModelId: modelGatewayId(target),
     providerModelId: target.id,
     providerId: target.providerId,
     providerName: provider.name,
+    promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
   }
 }
 
@@ -303,12 +305,21 @@ async function canonicalModelsResponse() {
   return Response.json({ object: "list", data: catalogModels(providers, models, aliases) }, { headers: { "cache-control": "no-store" } })
 }
 
-async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
+export function isTerminalStreamEvent(eventName: string, parsed: Record<string, unknown> | undefined) {
+  const normalizedEvent = eventName.trim().toLowerCase()
+  if (["message_stop", "response.completed", "response.done", "message.completed", "message.done", "done"].includes(normalizedEvent)) return true
+  const type = typeof parsed?.type === "string" ? parsed.type.trim().toLowerCase() : ""
+  if (["response.completed", "response.done", "message_stop", "message.completed", "message.done", "done"].includes(type)) return true
+  const response = objectValue(parsed?.response)
+  return response?.status === "completed" || response?.status === "complete"
+}
+
+export async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
   let usage: UsageMetrics | undefined
-  let completedNormally = false
+  let terminalEventSeen = false
   let firstByteAt: number | undefined
   const configuredTimeout = Number(process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || 290) * 1_000 + 10_000
   const readTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 300_000
@@ -326,13 +337,27 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
       if (timer) clearTimeout(timer)
     }
   }
+  let eventName = ""
   const consumeLine = (line: string) => {
     const value = line.trim()
+    if (value.startsWith("event:")) {
+      eventName = value.slice(6).trim()
+      return
+    }
+    if (!value) {
+      eventName = ""
+      return
+    }
     if (!value.startsWith("data:")) return
     const payload = value.slice(5).trim()
-    if (!payload || payload === "[DONE]") return
+    if (!payload) return
+    if (payload === "[DONE]") {
+      terminalEventSeen = true
+      return
+    }
     try {
       const parsed = JSON.parse(payload) as Record<string, unknown>
+      terminalEventSeen ||= isTerminalStreamEvent(eventName, parsed)
       usage = mergeUsage(usage, extractUsageMetrics(parsed))
     } catch {
       // A provider may emit non-JSON comments or partial events; keep reading.
@@ -342,7 +367,6 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
     while (true) {
       const next = await readWithTimeout()
       if (next.done) {
-        completedNormally = true
         break
       }
       firstByteAt ??= Date.now()
@@ -358,7 +382,7 @@ async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
   }
   buffer += decoder.decode()
   for (const line of buffer.split(/\r?\n/)) consumeLine(line)
-  return { usage, completedNormally, firstByteAt }
+  return { usage, completedNormally: terminalEventSeen, terminalEventSeen, firstByteAt }
 }
 
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
@@ -393,9 +417,10 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   let parsed: unknown
   try { parsed = JSON.parse(new TextDecoder().decode(body)) } catch { parsed = {} }
   const estimate = estimateRequest(parsed)
+  const protocol = protocolForPath(path)
   let resolvedModel: ResolvedGatewayModel
   try {
-    resolvedModel = await resolveGatewayModel(estimate.model, protocolForPath(path))
+    resolvedModel = await resolveGatewayModel(estimate.model)
   } catch (error) {
     const resolution = error instanceof GatewayModelResolutionError
       ? error
@@ -403,6 +428,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     writeLog(resolution.status === 400 ? "warn" : "error", "gateway", "Model resolution failed", { model: estimate.model, error: error instanceof Error ? error.message : "Unknown error" })
     return new Response(JSON.stringify({ error: { message: resolution.message, code: resolution.code } }), { status: resolution.status, headers: { "content-type": "application/json" } })
   }
+  const payload = objectValue(parsed) || {}
   const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path)
   let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   let reservation: BudgetReservation | undefined
@@ -412,7 +438,8 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       resolvedModel.pricingGatewayModelId,
       resolvedModel.providerModelId,
       parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
-      body.byteLength,
+      forwardedBody.byteLength,
+      protocol,
     )
   } catch (error) {
     if (error instanceof BudgetDeniedError) {
@@ -442,11 +469,11 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
-  const protocol = protocolForPath(path)
-  const payload = objectValue(parsed) || {}
   const provider = resolvedModel.providerName || resolvedModel.providerId || "RawRoute"
   const account = apiKey.name || "CLIProxyAPI"
-  writeLog("info", "gateway", requestSummary(provider, resolvedModel.pricingGatewayModelId, resolvedModel.upstreamModel, protocol, account, payload, extractReasoningEffort(payload)))
+  writeLog("info", "gateway", requestSummary(provider, resolvedModel.pricingGatewayModelId, resolvedModel.upstreamModel, protocol, resolvedModel.upstreamProtocol, account, payload, extractReasoningEffort(payload)), {
+    promptCacheKey: resolvedModel.promptCacheKey,
+  })
   let response: Response
   try {
     response = await proxyToCliProxy(request, path, {
@@ -455,7 +482,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     })
   } catch (error) {
     await releaseBudgetReservationWithLog(reservation)
-    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState }, reservation).catch(() => undefined)
+    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState }).catch(() => undefined)
     writeLog("error", "gateway", "Upstream request failed", { provider, model: resolvedModel.pricingGatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     throw error
   }
@@ -465,9 +492,12 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     void (async () => {
       try {
         const collected = await collectStreamUsage(monitor)
-        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: collected.completedNormally ? response.status : 502, response: collected.usage, budgetState }, reservation)
+        const streamStatus = collected.terminalEventSeen ? response.status : 502
+        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState })
           .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
-        writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage))
+        const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
+        if (streamStatus >= 200 && streamStatus < 400) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage), details)
+        else writeLog("warn", "gateway", `FAILED ${streamStatus} ${Date.now() - startedAtMs}ms`, details)
       } catch (recordingError) {
         writeLog("warn", "gateway", "Unable to calculate usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" })
       } finally {
@@ -477,7 +507,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     return trackedResponse
   }
   const usage = await actualResponseUsage(response)
-  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState }, reservation)
+  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState })
     .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
   if (response.ok) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, undefined, usage))
   else writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`)
@@ -497,12 +527,12 @@ type GatewayUsageRecordingInput = {
   id?: string
 }
 
-async function recordGatewayUsageWithRetry(input: GatewayUsageRecordingInput, reservation?: BudgetReservation) {
+async function recordGatewayUsageWithRetry(input: GatewayUsageRecordingInput) {
   const id = input.id || crypto.randomUUID()
   let lastError: unknown
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await recordGatewayUsage({ ...input, id }, reservation)
+      return await recordGatewayUsage({ ...input, id })
     } catch (error) {
       lastError = error
       if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
@@ -511,7 +541,7 @@ async function recordGatewayUsageWithRetry(input: GatewayUsageRecordingInput, re
   throw lastError instanceof Error ? lastError : new Error("Usage recording failed.")
 }
 
-async function recordGatewayUsage(input: GatewayUsageRecordingInput, reservation?: BudgetReservation) {
+async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
   const shouldSettleEstimate = input.status >= 200 && input.status < 300
   const event = await createGatewayUsageEvent({
     id: input.id,
@@ -522,13 +552,21 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput, reservation
     startedAt: input.startedAt,
     status: input.status,
     durationMs: Math.max(0, Date.now() - Date.parse(input.startedAt)),
+    requestBodyBytes: input.budgetState.requestBodyBytes,
     metrics: input.response,
     // This estimate is only a settlement fallback when the provider omits
     // usage metadata. It is never used for admission control, and it must not
     // become the historical bill when actual usage is available.
     assumedCostMicros: shouldSettleEstimate
-      ? input.budgetState.estimatedCostMicros ?? reservation?.amountMicros
+      ? input.budgetState.estimatedCostMicros
       : undefined,
+    assumedCostSource: shouldSettleEstimate && input.budgetState.estimatedCostMicros !== undefined
+      ? input.budgetState.estimatedCostSource === "payload-calibrated"
+        ? "payload-calibrated"
+        : input.budgetState.estimatedCostSource === "empirical" ? "empirical" : "reservation"
+      : undefined,
+    predictionMethod: shouldSettleEstimate ? input.budgetState.predictionMethod : undefined,
+    predictionSampleCount: shouldSettleEstimate ? input.budgetState.predictionSampleCount : undefined,
   }, input.budgetState.pricing)
   await recordUsageEvent(event, input.budgetState.usageContext)
 }

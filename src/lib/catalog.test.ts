@@ -84,16 +84,22 @@ test("LiteLLM catalog includes chat-protocol aliases with the target's upstream 
 })
 
 test("LiteLLM catalog excludes aliases whose target is not chat protocol", () => {
-  const responsesModel = { ...model, protocol: "openai-responses" as const, upstreamModel: "responses-model" }
-  expect(catalogLiteLlmModelInfo([provider], [responsesModel], [alias])).toEqual([])
+  const responsesProvider = { ...provider, protocol: "openai-responses" as const }
+  const responsesModel = { ...model, upstreamModel: "responses-model" }
+  expect(catalogLiteLlmModelInfo([responsesProvider], [responsesModel], [alias])).toEqual([])
 })
 
 test("LiteLLM catalog excludes models Junie cannot call through Chat Completions", () => {
-  const incompatibleModels = (["openai-responses", "anthropic-messages"] as const).map((protocol) => ({
+  const incompatibleProviders = [
+    { ...provider, id: "responses", prefix: "responses", protocol: "openai-responses" as const },
+    { ...provider, id: "anthropic", prefix: "anthropic", protocol: "anthropic-messages" as const },
+  ]
+  const incompatibleModels = incompatibleProviders.map((incompatibleProvider) => ({
     ...model,
-    upstreamModel: `${protocol}-model`,
-    protocol,
-  })) as Model[]
+    id: `${incompatibleProvider.id}/model`,
+    providerId: incompatibleProvider.id,
+    upstreamModel: `${incompatibleProvider.protocol}-model`,
+  }))
 
-  expect(catalogLiteLlmModelInfo([provider], incompatibleModels)).toEqual([])
+  expect(catalogLiteLlmModelInfo(incompatibleProviders, incompatibleModels)).toEqual([])
 })

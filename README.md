@@ -43,6 +43,15 @@ Replace all placeholder credentials before production use. The dashboard login i
 
 RawRoute authenticates its gateway keys, resolves its retained aliases, applies its custom model pricing, reserves each key's RawRoute budget, and records usage. Requests that would exceed the configured budget are rejected with `429` before they reach CLIProxyAPI. The original dashboard and RawRoute-owned feature APIs remain available without exposing CLIProxyAPI management endpoints.
 
+For direct OpenAI/Codex models, successful responses with complete usage are
+used to calibrate later missing-usage estimates against serialized request-body
+size. Settlement uses the nearby-history median (p50); admission reservations
+use a conservative p75 input/output estimate and p25 cache-read estimate.
+Observed cache-write tokens are used only when history contains them—there is
+no fixed per-request cache-write charge. Other providers retain the generic
+fallback estimator. Set `BUDGET_PAYLOAD_PREDICTION_ENABLED=0` to disable this
+calibration.
+
 CLIProxyAPI-compatible traffic is forwarded through these wrapper paths:
 
 - `/v1/*`
