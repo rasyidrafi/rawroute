@@ -280,7 +280,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
           </DialogContent>
         </Dialog>
         <CardContent>
-          <div className="flex flex-wrap gap-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(120px,1fr))]">
             <DetailValue label="Gateway prefix" value={`${provider.prefix}/`} mono />
             <DetailValue label="Authentication" value={provider.authType === "none" ? "None" : provider.authType} />
             <DetailValue label="Protocol" value={protocolLabels[provider.protocol]} />
