@@ -4,11 +4,13 @@ import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
 import { catalogModels } from "@/lib/catalog"
 import { writeLog } from "@/lib/logger"
+import { resolveSharedModelForRecipient } from "@/lib/model-shares"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
 import { listAliases, listModels, listProviders } from "@/lib/store"
-import type { Protocol } from "@/lib/types"
+import type { Protocol, UsageEvent } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
+import { getWorkspace } from "@/lib/workspaces"
 
 const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 
@@ -205,6 +207,7 @@ interface ResolvedGatewayModel {
   providerId?: string
   providerName?: string
   promptCacheKey: boolean
+  shared?: { id: string; ownerWorkspaceId: string; ownerWorkspaceName: string; consumerWorkspaceId: string; consumerWorkspaceName: string; sourceGatewayModelId: string; sourceModelId: string }
 }
 
 export class GatewayModelResolutionError extends Error {
@@ -245,6 +248,39 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const availableModels = models.filter((candidate) => activeModel(candidate, providerIndex.get(candidate.providerId)))
   const alias = aliases.find((entry) => entry.alias === model)
+  if (alias?.sharedModelId) {
+    const consumerWorkspaceId = currentWorkspaceId()
+    const [shared, consumerWorkspace] = await Promise.all([resolveSharedModelForRecipient(alias.sharedModelId, consumerWorkspaceId), getWorkspace(consumerWorkspaceId)])
+    if (!shared || !consumerWorkspace) throw new GatewayModelResolutionError("Shared model is no longer available.", 400, "model_not_found")
+    return runInWorkspace(shared.owner, async () => {
+      const target = shared.model
+      const provider = shared.provider
+      const upstreamModel = target.upstreamModel || modelGatewayId(target)
+      const forwardedModel = provider.prefix === "codex"
+        ? `${codexWorkspacePrefix(currentWorkspaceId())}/${upstreamModel}`
+        : `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
+      if (provider.prefix !== "codex") await ensureNonCodexProviderProjection(provider.id)
+      return {
+        forwardedModel,
+        upstreamModel,
+        upstreamProtocol: provider.protocol || (provider.prefix === "codex" ? "openai-responses" : "openai-chat"),
+        pricingGatewayModelId: modelGatewayId(target),
+        providerModelId: target.id,
+        providerId: target.providerId,
+        providerName: provider.name,
+        promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
+        shared: {
+          id: shared.share.id,
+          ownerWorkspaceId: shared.owner.id,
+          ownerWorkspaceName: shared.owner.name,
+          consumerWorkspaceId,
+          consumerWorkspaceName: consumerWorkspace.name,
+          sourceGatewayModelId: modelGatewayId(target),
+          sourceModelId: target.id,
+        },
+      }
+    })
+  }
   const target = alias
     ? availableModels.find((entry) => entry.id === alias.targetModelId || modelGatewayId(entry) === alias.targetModelId)
     : availableModels.find((entry) => entry.id === model || modelGatewayId(entry) === model)
@@ -433,14 +469,24 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   let reservation: BudgetReservation | undefined
   try {
-    budgetState = await getBudgetRequestState(
-      apiKey.id,
-      resolvedModel.pricingGatewayModelId,
-      resolvedModel.providerModelId,
-      parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
-      forwardedBody.byteLength,
-      protocol,
-    )
+    const ownerWorkspace = resolvedModel.shared ? await getWorkspace(resolvedModel.shared.ownerWorkspaceId) : undefined
+    budgetState = resolvedModel.shared && ownerWorkspace
+      ? await runInWorkspace(ownerWorkspace, () => getBudgetRequestState(
+          `shared-workspace:${resolvedModel.shared!.consumerWorkspaceId}`,
+          resolvedModel.pricingGatewayModelId,
+          resolvedModel.providerModelId,
+          parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
+          forwardedBody.byteLength,
+          protocol,
+        ))
+      : await getBudgetRequestState(
+          apiKey.id,
+          resolvedModel.pricingGatewayModelId,
+          resolvedModel.providerModelId,
+          parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
+          forwardedBody.byteLength,
+          protocol,
+        )
   } catch (error) {
     if (error instanceof BudgetDeniedError) {
       return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds) } })
@@ -482,7 +528,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     })
   } catch (error) {
     await releaseBudgetReservationWithLog(reservation)
-    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState }).catch(() => undefined)
+    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
     writeLog("error", "gateway", "Upstream request failed", { provider, model: resolvedModel.pricingGatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
     throw error
   }
@@ -493,7 +539,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       try {
         const collected = await collectStreamUsage(monitor)
         const streamStatus = collected.terminalEventSeen ? response.status : 502
-        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState })
+        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared })
           .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
         const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
         if (streamStatus >= 200 && streamStatus < 400) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage), details)
@@ -507,7 +553,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     return trackedResponse
   }
   const usage = await actualResponseUsage(response)
-  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState })
+  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
     .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
   if (response.ok) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, undefined, usage))
   else writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`)
@@ -525,6 +571,7 @@ type GatewayUsageRecordingInput = {
   response: ReturnType<typeof extractUsageMetrics> | undefined
   budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   id?: string
+  shared?: ResolvedGatewayModel["shared"]
 }
 
 async function recordGatewayUsageWithRetry(input: GatewayUsageRecordingInput) {
@@ -568,7 +615,32 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     predictionMethod: shouldSettleEstimate ? input.budgetState.predictionMethod : undefined,
     predictionSampleCount: shouldSettleEstimate ? input.budgetState.predictionSampleCount : undefined,
   }, input.budgetState.pricing)
-  await recordUsageEvent(event, input.budgetState.usageContext)
+  if (!input.shared) {
+    await recordUsageEvent(event, input.budgetState.usageContext)
+    return
+  }
+  const shared = input.shared
+  const consumerEvent: UsageEvent = {
+    ...event,
+    id: `${event.id}-consumer`,
+    costMicros: 0,
+    pricingConfidence: event.pricingConfidence === "unpriced" ? "unpriced" : "exact",
+    costSource: undefined,
+    pricingGroupId: undefined,
+    pricingVersionId: undefined,
+    pricingContextTier: undefined,
+    sharedUsage: { shareId: shared.id, role: "consumer" as const, peerWorkspaceId: shared.ownerWorkspaceId, peerWorkspaceName: shared.ownerWorkspaceName, sourceGatewayModelId: shared.sourceGatewayModelId },
+  }
+  const ownerEvent = {
+    ...event,
+    id: `${event.id}-owner`,
+    gatewayKeyId: `shared-workspace:${shared.consumerWorkspaceId}`,
+    gatewayModelId: shared.sourceGatewayModelId,
+    sharedUsage: { shareId: shared.id, role: "owner" as const, peerWorkspaceId: shared.consumerWorkspaceId, peerWorkspaceName: shared.consumerWorkspaceName, sourceGatewayModelId: shared.sourceGatewayModelId },
+  }
+  await recordUsageEvent(consumerEvent, null)
+  const ownerWorkspace = await getWorkspace(shared.ownerWorkspaceId)
+  if (ownerWorkspace) await runInWorkspace(ownerWorkspace, () => recordUsageEvent(ownerEvent, input.budgetState.usageContext))
 }
 
 export async function cliProxyHealth() {

@@ -31,7 +31,7 @@ function EndpointKeySkeleton() {
 }
 
 function AliasesSkeleton() {
-  return <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-[28rem]" actionWidth="w-28" /><SkeletonTable columns={4} rows={4} /></section>
+  return <><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-20" descriptionWidth="w-[28rem]" actionWidth="w-28" /><SkeletonTable columns={5} rows={4} /></section><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-40" descriptionWidth="w-[30rem]" /><SkeletonTable columns={4} rows={3} /></section></>
 }
 
 function ProviderDetailSkeleton() {

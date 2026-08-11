@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
+import { getSharedModelForRecipient, listSharedModelsForRecipient } from "@/lib/model-shares"
 import { listAliases, listModels, listProviders, upsertAlias } from "@/lib/store"
 import type { ModelAlias } from "@/lib/types"
 
@@ -11,7 +12,7 @@ export async function GET() {
   } catch {
     return jsonError("Unauthorized", 401)
   }
-  const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
+  const [aliases, models, providers, sharedModels] = await Promise.all([listAliases(), listModels(), listProviders(), listSharedModelsForRecipient()])
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const availableModels = models
     .filter((model) => {
@@ -19,7 +20,7 @@ export async function GET() {
       return Boolean(provider && provider.enabled !== false && model.enabled)
     })
   const availableProviders = providers.filter((provider) => provider.enabled !== false)
-  return Response.json({ aliases, models: availableModels, providers: availableProviders })
+  return Response.json({ aliases, models: availableModels, providers: availableProviders, sharedModels })
 }
 
 export async function POST(request: Request) {
@@ -37,22 +38,27 @@ export async function POST(request: Request) {
     const alias = typeof input.alias === "string" ? input.alias.trim() : ""
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const targetModelId = typeof input.targetModelId === "string" ? input.targetModelId.trim() : ""
+    const sharedModelId = typeof input.sharedModelId === "string" ? input.sharedModelId.trim() : ""
     if (!alias || !name || !targetModelId) throw new Error("Alias fields are incomplete.")
-    const [models, providers] = await Promise.all([listModels(), listProviders()])
-    const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
-    const target = models
-      .find((model) => (model.gatewayModelId || model.id) === targetModelId)
-    if (!target) throw new Error("Target model not found.")
-    if (!target.enabled) throw new Error("Target model is disabled.")
-    const targetProvider = providerIndex.get(target.providerId)
-    if (!targetProvider || targetProvider.enabled === false) {
-      throw new Error("Target model is unavailable.")
+    if (sharedModelId) {
+      const shared = await getSharedModelForRecipient(sharedModelId)
+      if (!shared || shared.status !== "active") throw new Error("Shared model is no longer available.")
+      if (targetModelId !== shared.qualifiedModelId) throw new Error("Shared model target is invalid.")
+    } else {
+      const [models, providers] = await Promise.all([listModels(), listProviders()])
+      const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
+      const target = models.find((model) => (model.gatewayModelId || model.id) === targetModelId)
+      if (!target) throw new Error("Target model not found.")
+      if (!target.enabled) throw new Error("Target model is disabled.")
+      const targetProvider = providerIndex.get(target.providerId)
+      if (!targetProvider || targetProvider.enabled === false) throw new Error("Target model is unavailable.")
     }
     await upsertAlias({
       originalId: input.originalId,
       alias,
       name,
       targetModelId,
+      sharedModelId,
     })
     writeLog("info", "admin", "Alias saved", { alias })
     return Response.json({ ok: true })

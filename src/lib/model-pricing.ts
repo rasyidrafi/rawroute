@@ -435,7 +435,10 @@ export async function deletePricingGroup(groupId: string) {
   const groups = await listPricingGroups()
   const group = groups.find((entry) => entry.id === groupId)
   if (!group) return
-  if (group.kind === "fixed") throw new Error("Fixed pricing groups cannot be deleted.")
+  if (group.kind === "fixed") {
+    const configuredModelIds = new Set((await listPricingModels()).map((model) => model.id))
+    if (group.memberModelIds.some((modelId) => configuredModelIds.has(modelId))) throw new Error("Only empty fixed pricing groups can be deleted.")
+  }
   const released = new Set(group.memberModelIds)
   const now = new Date().toISOString()
   const writes: ModelPricingGroup[] = []

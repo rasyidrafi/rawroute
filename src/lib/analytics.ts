@@ -12,6 +12,7 @@ import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone
 import { writeLog } from "@/lib/logger"
 import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
+import { listWorkspaces } from "@/lib/workspaces"
 
 let localDatabase: Firestore | undefined
 interface AnalyticsMemoryState {
@@ -405,6 +406,17 @@ function windowRef() { return workspaceRef().collection("budgetWindows").doc("cu
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
 function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
 function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
+function sharedWorkspaceBudgetId(workspaceId: string) { return `shared-workspace:${workspaceId}` }
+function sharedWorkspaceIdFromBudgetId(value: string) { return value.startsWith("shared-workspace:") ? value.slice("shared-workspace:".length) : undefined }
+async function budgetSelectableKeys() {
+  const [keys, workspaces] = await Promise.all([listApiKeys(), listWorkspaces()])
+  return [
+    ...keys,
+    ...workspaces
+      .filter((workspace) => workspace.status === "active" && workspace.id !== currentWorkspaceId())
+      .map((workspace) => ({ id: sharedWorkspaceBudgetId(workspace.id), name: `${workspace.name} (For Shared Models)`, key: "", createdAt: workspace.createdAt })),
+  ]
+}
 function budgetBaselineRevision(budget: GatewayKeyBudget, window: BudgetWindow) { return hash(`${budget.updatedAt || ""}:${window.updatedAt || ""}`).slice(0, 24) }
 function budgetCounterBaselineId(budget: GatewayKeyBudget, usageStart: string, window: BudgetWindow) {
   return scopedKey(`${budget.apiKeyId}:${usageStart}:${window.end}:${budgetBaselineRevision(budget, window)}`)
@@ -1067,7 +1079,10 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
   if (!Number.isSafeInteger(input.weeklyLimitMicros) || input.weeklyLimitMicros <= 0) throw new Error("Weekly budget must be a positive safe integer in micros.")
-  if (!(await listApiKeys()).some((apiKey) => apiKey.id === input.apiKeyId)) throw new Error("API key not found in the selected workspace.")
+  const sharedWorkspaceId = sharedWorkspaceIdFromBudgetId(input.apiKeyId)
+  if (sharedWorkspaceId) {
+    if (!(await listWorkspaces()).some((workspace) => workspace.id === sharedWorkspaceId && workspace.id !== currentWorkspaceId() && workspace.status === "active")) throw new Error("Shared workspace is unavailable.")
+  } else if (!(await listApiKeys()).some((apiKey) => apiKey.id === input.apiKeyId)) throw new Error("API key not found in the selected workspace.")
   const window = await getBudgetWindow()
   const budget: GatewayKeyBudget = {
     ...input,
@@ -1988,7 +2003,7 @@ async function loadBudgetRows(
 
 export async function getBudgetAdminData() {
   const [keys, window, codex] = await Promise.all([
-    listApiKeys(),
+    budgetSelectableKeys(),
     getBudgetWindow(),
     listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
   ])
@@ -2006,7 +2021,7 @@ export async function getBudgetAdminData() {
 }
 
 export async function getBudgetRows() {
-  const [keys, window] = await Promise.all([listApiKeys(), getBudgetWindow()])
+  const [keys, window] = await Promise.all([budgetSelectableKeys(), getBudgetWindow()])
   return (await loadBudgetRows(keys, window, undefined, { freshUsage: true })).rows
 }
 
@@ -2128,7 +2143,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     ? dashboardTimed("boundary-events", parallelMap(boundary.ranges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
       .then(uniqueUsageEvents))
     : Promise.resolve([] as UsageEvent[])
-  const keysPromise = dashboardTimed("keys", listApiKeys())
+  const keysPromise = dashboardTimed("keys", budgetSelectableKeys())
   const indexedKeyNamesPromise = publicView ? dashboardTimed("indexed-key-names", listIndexedApiKeyNames()) : Promise.resolve(new Map<string, string>())
   const modelLabelsPromise = dashboardTimed("model-labels", loadDashboardModelLabels())
   const budgetDataPromise = dashboardTimed("budget-data", budgetsPromise.then(async (budgets) => {

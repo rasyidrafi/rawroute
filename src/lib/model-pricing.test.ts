@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import { getPricingAdminData, getPricingForModelAt, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
+import { deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPricingGroups, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/lib/store"
 import type { Provider, UsageEvent } from "@/lib/types"
@@ -106,6 +106,17 @@ describe("model pricing catalog", () => {
     expect(data.ungroupedModels.map((model) => model.id)).toContain(second.id)
     const pricing = await getPricingForModelAt({ gatewayModelId: first.gatewayModelId, providerModelId: first.id })
     expect(pricing?.pricingVersionId).toBe(result.version.id)
+  })
+
+  test("allows deleting an empty fixed group but protects fixed groups with models", async () => {
+    const providerEntry = await upsertProvider(provider("cx"))
+    const model = await upsertModel(providerEntry.id, { id: "first", name: "First", gatewayModelId: "cx/gpt-5.6-sol", upstreamModel: "gpt-5.6-sol" })
+    const group = (await syncModelPricingGroups()).find((entry) => entry.memberModelIds.includes(model.id))!
+
+    await expect(deletePricingGroup(group.id)).rejects.toThrow("Only empty fixed pricing groups can be deleted.")
+    await updatePricingGroup(group.id, [])
+    await expect(deletePricingGroup(group.id)).resolves.toBeUndefined()
+    expect((await listPricingGroups()).find((entry) => entry.id === group.id)).toBeUndefined()
   })
 
   test("keeps a manually added model in another fixed group after refresh", async () => {

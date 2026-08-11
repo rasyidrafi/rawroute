@@ -81,7 +81,34 @@ export interface ModelAlias {
   name: string
   // gatewayModelId of the model this alias forwards to.
   targetModelId: string
+  /** A cross-workspace model grant. Local aliases leave this unset. */
+  sharedModelId?: string
   createdAt: string
+}
+
+export interface ModelShare {
+  id: string
+  ownerWorkspaceId: string
+  recipientWorkspaceId: string
+  sourceProviderId: string
+  sourceModelId: string
+  sourceGatewayModelId: string
+  status: "active" | "revoked"
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SharedModelView {
+  id: string
+  ownerWorkspaceId: string
+  ownerWorkspaceName: string
+  sourceProviderId: string
+  sourceModelId: string
+  sourceGatewayModelId: string
+  sourceModelName: string
+  providerName: string
+  qualifiedModelId: string
+  status: "active" | "revoked" | "unavailable"
 }
 
 export interface ApiKey {
@@ -130,6 +157,13 @@ export interface UsageEvent {
   pricingGroupId?: string
   pricingVersionId?: string
   pricingContextTier?: string
+  sharedUsage?: {
+    shareId: string
+    role: "owner" | "consumer"
+    peerWorkspaceId: string
+    peerWorkspaceName: string
+    sourceGatewayModelId: string
+  }
 }
 
 export interface UsageRollup {

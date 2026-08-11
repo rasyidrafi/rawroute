@@ -554,6 +554,9 @@ function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }
   if (input.targetModelId !== undefined && (typeof input.targetModelId !== "string" || !input.targetModelId.trim())) {
     throw new Error("Alias target model is required.")
   }
+  if (input.sharedModelId !== undefined && typeof input.sharedModelId !== "string") {
+    throw new Error("Shared model reference is invalid.")
+  }
 }
 
 function assertModelMutationAllowed(existing: Model | undefined) {
@@ -1796,6 +1799,7 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
       alias: normalizedAlias,
       name: input.name?.trim() || existing?.name || "",
       targetModelId: input.targetModelId?.trim() || existing?.targetModelId || "",
+      ...(input.sharedModelId !== undefined ? (input.sharedModelId.trim() ? { sharedModelId: input.sharedModelId.trim() } : {}) : existing?.sharedModelId ? { sharedModelId: existing.sharedModelId } : {}),
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(aliasRef(aliasId), storedAlias(alias))
@@ -2084,6 +2088,7 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
     alias: normalizedAlias,
     name: input.name?.trim() || existing?.name || "",
     targetModelId: input.targetModelId?.trim() || existing?.targetModelId || "",
+    ...(input.sharedModelId !== undefined ? (input.sharedModelId.trim() ? { sharedModelId: input.sharedModelId.trim() } : {}) : existing?.sharedModelId ? { sharedModelId: existing.sharedModelId } : {}),
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
   state.aliases.set(aliasId, alias)

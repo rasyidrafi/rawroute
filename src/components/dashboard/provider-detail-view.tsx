@@ -11,6 +11,7 @@ import { ConfirmAction, DetailValue, EmptyRow, NotFoundState } from "@/component
 import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
 import { CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ModelForm } from "@/components/dashboard/model-form"
+import { ModelShareButton } from "@/components/dashboard/model-share-button"
 import { ProviderApiKeyForm } from "@/components/dashboard/provider-api-key-form"
 import { ProviderForm } from "@/components/dashboard/provider-form"
 import { Input } from "@/components/ui/input"
@@ -390,7 +391,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                   <TableCell>{model.upstreamModel}</TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
                   <TableCell><div className="flex items-center gap-2"><Badge variant={builtin ? "secondary" : "outline"}>{builtin ? "Built-in" : "Custom"}</Badge><Badge variant={model.enabled ? "secondary" : "outline"}>{model.enabled ? "Enabled" : "Disabled"}</Badge></div></TableCell>
-                  <TableCell><div className="flex justify-end gap-1">{builtin ? null : <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
+                  <TableCell><div className="flex justify-end gap-1"><ModelShareButton modelId={model.id} modelName={model.name} disabled={!model.enabled || !provider.enabled} onSaved={mutate} />{builtin ? null : <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
                 </TableRow>
               })}
               {!models.length && <EmptyRow label="No models yet." colSpan={6} />}
