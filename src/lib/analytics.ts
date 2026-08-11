@@ -10,6 +10,7 @@ import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@
 import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "@/lib/usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
 import { writeLog } from "@/lib/logger"
+import { listSharedModelsForRecipient } from "@/lib/model-shares"
 import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 import { listWorkspaces } from "@/lib/workspaces"
@@ -389,6 +390,15 @@ function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean 
   clearWorkspaceEntries(bypassSessionListInflight, workspaceId)
   clearWorkspaceEntries(dashboardCache, workspaceId)
   clearWorkspaceEntries(dashboardInflight, workspaceId)
+}
+
+/** Clear presentation-only Usage caches after aliases or shared models change. */
+export function invalidateDashboardPresentation() {
+  const workspaceId = currentWorkspaceId()
+  clearWorkspaceEntries(dashboardCache, workspaceId)
+  clearWorkspaceEntries(dashboardInflight, workspaceId)
+  dashboardModelLabelCache.delete(workspaceId)
+  dashboardModelLabelInflight.delete(workspaceId)
 }
 
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
@@ -2072,10 +2082,11 @@ async function loadDashboardModelLabels() {
   if (existing) return existing
 
   const promise = (async () => {
-    const [groups, models, aliases] = await Promise.all([
+    const [groups, models, aliases, sharedModels] = await Promise.all([
       dashboardTimed("labels.groups", listPricingGroups()),
       dashboardTimed("labels.models", listModels()),
       dashboardTimed("labels.aliases", listAliases()),
+      dashboardTimed("labels.shared-models", listSharedModelsForRecipient()),
     ])
     const allModels = new Map<string, typeof models[number]>()
     for (const model of models) {
@@ -2103,8 +2114,14 @@ async function loadDashboardModelLabels() {
     for (const [upstreamModel, labels] of upstreamLabels) {
       if (labels.size === 1) labelsByGatewayModel.set(upstreamModel, [...labels][0])
     }
+    for (const sharedModel of sharedModels) {
+      const label = sharedModel.sourceModelName.trim()
+      if (label) labelsByGatewayModel.set(sharedModel.qualifiedModelId, label)
+    }
     for (const alias of aliases) {
-      const label = labelsByGatewayModel.get(alias.targetModelId)
+      // An alias is the caller-facing model selection, so its local name wins.
+      // Shared model names are mapped above as the fallback for aliases with no name.
+      const label = alias.name.trim() || labelsByGatewayModel.get(alias.targetModelId)
       if (label) labelsByGatewayModel.set(alias.alias, label)
     }
     dashboardModelLabelCache.set(workspaceId, { value: labelsByGatewayModel, expiresAt: Date.now() + dashboardCacheTtlMs })

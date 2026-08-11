@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
+import { getDashboardPayload, recordUsageEvent, resetAnalyticsForTests } from "@/lib/analytics"
 import { listShareTargets, listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/model-shares"
-import { _resetMemoryBackend, upsertModel, upsertProvider } from "@/lib/store"
+import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/lib/store"
 import { runInWorkspace } from "@/lib/workspace-context"
 import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/lib/workspaces"
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
   _resetMemoryBackend()
+  resetAnalyticsForTests()
   resetModelSharesForTests()
   await resetWorkspacesForTests()
 })
@@ -39,5 +41,26 @@ describe("model shares", () => {
     await runInWorkspace(owner, () => setModelShareTargets(model.id, []))
     expect((await runInWorkspace(recipient, () => listSharedModelsForRecipient()))[0].status).toBe("revoked")
     await expect(runInWorkspace(recipient, () => resolveSharedModelForRecipient(id))).resolves.toBeUndefined()
+  })
+
+  test("labels recipient usage with its alias name before the shared model name", async () => {
+    const owner = (await listWorkspaces())[0]
+    const recipient = await createWorkspace("Recipient")
+    const model = await runInWorkspace(owner, async () => {
+      const provider = await upsertProvider({ name: "Long", prefix: "long", baseUrl: "https://example.test", protocol: "openai-chat", authType: "none", headers: {}, enabled: true })
+      return upsertModel(provider.id, { gatewayModelId: "long/longcat-2.0", name: "LongCat 2.0", upstreamModel: "longcat-2.0", enabled: true })
+    })
+    await runInWorkspace(owner, () => setModelShareTargets(model.id, [recipient.id]))
+    await runInWorkspace(recipient, async () => {
+      const shared = (await listSharedModelsForRecipient())[0]
+      const key = await createApiKey("Recipient key")
+      await upsertAlias({ alias: "my-longcat", name: "My LongCat", targetModelId: shared.qualifiedModelId, sharedModelId: shared.id })
+      const event = (id: string, gatewayModelId: string) => recordUsageEvent({ id, gatewayKeyId: key.id, gatewayModelId, protocol: "openai-chat", startedAt: "2026-08-11T00:00:00.000Z", completedAt: "2026-08-11T00:00:01.000Z", status: 200, durationMs: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 2, costMicros: 0, pricingConfidence: "exact", usageAvailable: true })
+      await event("shared-alias", "my-longcat")
+      await event("shared-qualified", shared.qualifiedModelId)
+      await event("unknown", "unknown-model")
+      const usage = await getDashboardPayload({ preset: "all" })
+      expect(usage.models.map((entry) => entry.model)).toEqual(expect.arrayContaining(["My LongCat", "LongCat 2.0", "unknown-model"]))
+    })
   })
 })

@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
+import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { deleteAlias } from "@/lib/store"
@@ -13,6 +14,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ ali
   const { aliasId } = await context.params
   try {
     await deleteAlias(aliasId)
+    invalidateDashboardPresentation()
     writeLog("info", "admin", "Alias deleted", { aliasId })
     return Response.json({ ok: true })
   } catch (error) {

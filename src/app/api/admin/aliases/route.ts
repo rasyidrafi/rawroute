@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
+import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getSharedModelForRecipient, listSharedModelsForRecipient } from "@/lib/model-shares"
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
       targetModelId,
       sharedModelId,
     })
+    invalidateDashboardPresentation()
     writeLog("info", "admin", "Alias saved", { alias })
     return Response.json({ ok: true })
   } catch (error) {
