@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { CopyIcon, LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
-import useSWR from "swr"
+import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
@@ -50,6 +50,7 @@ function expiryLabel(value?: string) {
 }
 
 export function OAuthProvidersView() {
+  const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, error, isLoading, isValidating, mutate } = useSWR<OAuthResponse>("/api/admin/oauth-providers", fetcher)
   const { data: usageData, error: usageError, isLoading: usageLoading, mutate: mutateUsage } = useSWR<UsageResponse>("/api/admin/oauth-providers/usage", fetcher, {
     refreshInterval: 300000,
@@ -80,7 +81,7 @@ export function OAuthProvidersView() {
           setPolling(false)
           setDevice(null)
           setAccountName("")
-          await Promise.all([mutate(), mutateUsage()])
+          await Promise.all([mutate(), mutateUsage(), refreshCachedResource("/api/admin/providers")])
           toast.success("Codex account connected")
           return
         }
@@ -97,7 +98,7 @@ export function OAuthProvidersView() {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [accountName, device, mutate, mutateUsage, polling])
+  }, [accountName, device, mutate, mutateUsage, polling, refreshCachedResource])
 
   if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">OAuth providers unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
   if (isLoading || !data) return <DashboardContentSkeleton variant="oauth-providers" />
@@ -120,7 +121,7 @@ export function OAuthProvidersView() {
     setPending((current) => new Set(current).add(key))
     try {
       await apiPatch(`/api/admin/oauth-providers/${account.id}`, { enabled })
-      await mutate()
+      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers")])
       toast.success(enabled ? "Account enabled" : "Account disabled")
     } catch (updateError) {
       toast.error(updateError instanceof Error ? updateError.message : "Unable to update account")
@@ -134,7 +135,7 @@ export function OAuthProvidersView() {
     setPending((current) => new Set(current).add(key))
     try {
       await apiDelete(`/api/admin/oauth-providers/${account.id}`)
-      await mutate()
+      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers")])
       toast.success("Codex account removed")
       return true
     } catch (removeError) {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
-import { listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/model-shares"
+import { listShareTargets, listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/model-shares"
 import { _resetMemoryBackend, upsertModel, upsertProvider } from "@/lib/store"
 import { runInWorkspace } from "@/lib/workspace-context"
 import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/lib/workspaces"
@@ -21,6 +21,7 @@ describe("model shares", () => {
       return upsertModel(provider.id, { gatewayModelId: "codex/gpt-5.3-codex-spark", name: "Spark", upstreamModel: "gpt-5.3-codex-spark", enabled: true })
     })
     await runInWorkspace(owner, () => setModelShareTargets(model.id, [recipient.id]))
+    await expect(runInWorkspace(owner, () => listShareTargets(model.id))).resolves.toContainEqual({ id: recipient.id, name: recipient.name, shared: true })
     const shared = await runInWorkspace(recipient, () => listSharedModelsForRecipient())
     expect(shared).toMatchObject([{ ownerWorkspaceId: owner.id, sourceModelId: model.id, status: "active", qualifiedModelId: `${owner.id}/codex/gpt-5.3-codex-spark` }])
     await expect(runInWorkspace(recipient, () => resolveSharedModelForRecipient(shared[0].id))).resolves.toMatchObject({ owner: { id: owner.id }, model: { id: model.id } })

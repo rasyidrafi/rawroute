@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useContext, useEffect, useState } from "react"
-import useSWR from "swr"
+import useSWR, { useSWRConfig } from "swr"
 
 import { apiFetch, setApiWorkspaceId } from "@/components/dashboard/api"
 import type { Workspace } from "@/lib/types"
@@ -27,6 +27,7 @@ const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefi
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState(() => typeof window === "undefined" ? "default" : window.localStorage.getItem("rawroute_workspace") || "default")
+  const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, mutate } = useSWR<{ workspaces: Workspace[] }>("/api/admin/workspaces", apiFetch)
   const active = data?.workspaces.filter((workspace) => workspace.status === "active") || []
   const workspaces = active.length ? active : [fallbackWorkspace]
@@ -39,6 +40,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setWorkspaceId(nextId)
     setApiWorkspaceId(nextId)
     window.localStorage.setItem("rawroute_workspace", nextId)
+    void refreshCachedResource((key) => typeof key === "string" && key.startsWith("/api/admin/"))
   }
 
   const workspace = workspaces.find((entry) => entry.id === workspaceId) || workspaces.find((entry) => entry.isDefault) || fallbackWorkspace

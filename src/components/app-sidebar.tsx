@@ -24,7 +24,7 @@ const navigationGroups = [
       { title: "Endpoint & Key", icon: KeyRoundIcon, href: "/dashboard" },
       { title: "Providers", icon: ServerIcon, href: "/dashboard/providers" },
       { title: "Codex Providers", icon: ShieldCheckIcon, href: "/dashboard/providers/codex" },
-      { title: "Alias", icon: ArrowLeftRightIcon, href: "/dashboard/aliases" },
+      { title: "Alias & Shared Models", icon: ArrowLeftRightIcon, href: "/dashboard/aliases" },
     ],
   },
   {

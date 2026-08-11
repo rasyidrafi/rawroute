@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import useSWR, { mutate as globalMutate } from "swr"
+import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
 import { ConfirmAction, DetailValue, EmptyRow, NotFoundState } from "@/components/dashboard/shared"
@@ -31,6 +31,7 @@ const providerKey = (providerId: string) => `/api/admin/providers/${encodeURICom
 
 export function ProviderDetailView({ providerId }: { providerId: string }) {
   const router = useRouter()
+  const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId))
   const usageKey = data && (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-oauth"))
     ? "/api/admin/oauth-providers/usage"
@@ -63,13 +64,13 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       try {
         const result = await apiPost<{ status: "pending" | "authorized" }>("/api/admin/oauth-providers/codex/device/poll", { deviceAuthId: device.deviceAuthId, userCode: device.userCode, name: accountName.trim() || undefined })
         if (stopped) return
-        if (result.status === "authorized") { setPolling(false); setDevice(null); setAccountName(""); await mutate(); await globalMutate("/api/admin/providers"); toast.success("Codex account connected"); return }
+        if (result.status === "authorized") { setPolling(false); setDevice(null); setAccountName(""); await mutate(); await refreshCachedResource("/api/admin/providers"); toast.success("Codex account connected"); return }
         timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
       } catch (pollError) { if (!stopped) { setPolling(false); toast.error(pollError instanceof Error ? pollError.message : "Codex login failed") } }
     }
     timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
     return () => { stopped = true; if (timer) clearTimeout(timer) }
-  }, [accountName, device, mutate, polling])
+  }, [accountName, device, mutate, polling, refreshCachedResource])
 
   if (error) return <NotFoundState onBack={() => router.push("/dashboard/providers")} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="provider-detail" />
@@ -88,7 +89,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     setPending((current) => new Set(current).add(pendingKey))
     try {
       await apiPost(`/api/admin/oauth-providers/${account.id}/reset`, { confirmation: resetConfirmation })
-      await globalMutate("/api/admin/oauth-providers/usage")
+      await refreshCachedResource("/api/admin/oauth-providers/usage")
       setResetAccount(null)
       setResetConfirmation("")
       toast.success("Codex reset credit redeemed")
@@ -104,7 +105,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     setPending((current) => new Set(current).add(pendingKey))
     try {
       await apiDelete(`/api/admin/oauth-providers/${account.id}`)
-      await Promise.all([mutate(), globalMutate("/api/admin/providers"), globalMutate("/api/admin/oauth-providers/usage")])
+      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers"), refreshCachedResource("/api/admin/oauth-providers/usage")])
       toast.success("Codex account removed")
       return true
     } catch (error) {
@@ -120,7 +121,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     setPending((current) => new Set(current).add(pendingKey))
     try {
       await apiPatch(`/api/admin/oauth-providers/${account.id}`, { enabled: !account.enabled })
-      await Promise.all([mutate(), globalMutate("/api/admin/providers"), globalMutate("/api/admin/oauth-providers/usage")])
+      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers"), refreshCachedResource("/api/admin/oauth-providers/usage")])
       toast.success(`Codex account ${account.enabled ? "disabled" : "enabled"}`)
       return true
     } catch (error) {
@@ -137,7 +138,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiPost("/api/admin/providers", { provider })
       toast.success(editingProvider ? "Provider updated" : "Provider saved")
       await mutate()
-      await globalMutate("/api/admin/providers")
+      await refreshCachedResource("/api/admin/providers")
       setProviderOpen(false)
       return true
     } catch (error) {
@@ -154,7 +155,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     try {
       await apiDelete(`/api/admin/providers/${provider.id}`)
       toast.success("Provider deleted")
-      await globalMutate("/api/admin/providers")
+      await refreshCachedResource("/api/admin/providers")
       router.push("/dashboard/providers")
       return true
     } catch (error) {
@@ -171,7 +172,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiPost(`/api/admin/providers/${provider.id}/api-keys`, { providerApiKey: apiKey })
       toast.success(editingProviderApiKey ? "Provider API key updated" : "Provider API key added")
       await mutate()
-      await globalMutate("/api/admin/providers")
+      await refreshCachedResource("/api/admin/providers")
       setProviderKeyOpen(false)
       return true
     } catch (error) {
@@ -189,7 +190,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiDelete(`/api/admin/providers/${providerId}/api-keys/${apiKey.id}`)
       toast.success("Provider API key deleted")
       await mutate()
-      await globalMutate("/api/admin/providers")
+      await refreshCachedResource("/api/admin/providers")
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed")
@@ -222,7 +223,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiPost(`/api/admin/providers/${provider.id}/models`, { model })
       toast.success(editingModel ? "Model updated" : "Model saved")
       await mutate()
-      await globalMutate("/api/admin/providers")
+      await refreshCachedResource("/api/admin/providers")
       setModelOpen(false)
       return true
     } catch (error) {
@@ -240,7 +241,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiDelete(`/api/admin/providers/${provider.id}/models/${encodeURIComponent(model.id)}`)
       toast.success("Model deleted")
       await mutate()
-      await globalMutate("/api/admin/providers")
+      await refreshCachedResource("/api/admin/providers")
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed")
