@@ -43,7 +43,17 @@ describe("model shares", () => {
     await expect(runInWorkspace(recipient, () => resolveSharedModelForRecipient(id))).resolves.toBeUndefined()
   })
 
-  test("labels recipient usage with its alias name before the shared model name", async () => {
+  test("labels owner usage from a recipient workspace without a synthetic API key", async () => {
+    const owner = (await listWorkspaces())[0]
+    const recipient = await createWorkspace("Recipient")
+    await runInWorkspace(owner, async () => {
+      await recordUsageEvent({ id: "owner-shared-usage", gatewayKeyId: `shared-workspace:${recipient.id}`, gatewayModelId: "long/longcat-2.0", protocol: "openai-chat", startedAt: "2026-08-11T00:00:00.000Z", completedAt: "2026-08-11T00:00:01.000Z", status: 200, durationMs: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 2, costMicros: 10, pricingConfidence: "exact", usageAvailable: true })
+      const usage = await getDashboardPayload({ preset: "all" })
+      expect(usage.keys).toEqual(expect.arrayContaining([expect.objectContaining({ id: `shared-workspace:${recipient.id}`, label: "Shared Workspace: Recipient" })]))
+    })
+  })
+
+  test("labels aliases with their resolved source model names so usage stays grouped", async () => {
     const owner = (await listWorkspaces())[0]
     const recipient = await createWorkspace("Recipient")
     const model = await runInWorkspace(owner, async () => {
@@ -55,12 +65,18 @@ describe("model shares", () => {
       const shared = (await listSharedModelsForRecipient())[0]
       const key = await createApiKey("Recipient key")
       await upsertAlias({ alias: "my-longcat", name: "My LongCat", targetModelId: shared.qualifiedModelId, sharedModelId: shared.id })
+      const localProvider = await upsertProvider({ name: "Codex", prefix: "cx", baseUrl: "https://example.test", protocol: "openai-responses", authType: "none", headers: {}, enabled: true })
+      const localModel = await upsertModel(localProvider.id, { gatewayModelId: "cx/gpt-5.6-sol", name: "GPT 5.6 Sol", upstreamModel: "gpt-5.6-sol", enabled: true })
+      await upsertAlias({ alias: "my-sol", name: "Anything custom", targetModelId: localModel.gatewayModelId })
       const event = (id: string, gatewayModelId: string) => recordUsageEvent({ id, gatewayKeyId: key.id, gatewayModelId, protocol: "openai-chat", startedAt: "2026-08-11T00:00:00.000Z", completedAt: "2026-08-11T00:00:01.000Z", status: 200, durationMs: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 2, costMicros: 0, pricingConfidence: "exact", usageAvailable: true })
       await event("shared-alias", "my-longcat")
       await event("shared-qualified", shared.qualifiedModelId)
+      await event("local-alias", "my-sol")
       await event("unknown", "unknown-model")
       const usage = await getDashboardPayload({ preset: "all" })
-      expect(usage.models.map((entry) => entry.model)).toEqual(expect.arrayContaining(["My LongCat", "LongCat 2.0", "unknown-model"]))
+      expect(usage.models.map((entry) => entry.model)).toEqual(expect.arrayContaining(["LongCat 2.0", "GPT 5.6 Sol", "unknown-model"]))
+      expect(usage.models.map((entry) => entry.model)).not.toContain("My LongCat")
+      expect(usage.models.map((entry) => entry.model)).not.toContain("Anything custom")
     })
   })
 })

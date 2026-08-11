@@ -418,6 +418,10 @@ function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); co
 function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
 function sharedWorkspaceBudgetId(workspaceId: string) { return `shared-workspace:${workspaceId}` }
 function sharedWorkspaceIdFromBudgetId(value: string) { return value.startsWith("shared-workspace:") ? value.slice("shared-workspace:".length) : undefined }
+function sharedWorkspaceUsageLabel(key: { name?: string } | undefined, workspaceId: string) {
+  const workspaceName = key?.name?.replace(/ \(For Shared Models\)$/, "").trim() || workspaceId
+  return `Shared Workspace: ${workspaceName}`
+}
 async function budgetSelectableKeys() {
   const [keys, workspaces] = await Promise.all([listApiKeys(), listWorkspaces()])
   return [
@@ -2102,8 +2106,7 @@ async function loadDashboardModelLabels() {
     const labelsByGatewayModel = new Map<string, string>()
     const upstreamLabels = new Map<string, Set<string>>()
     for (const model of allModels.values()) {
-      const label = groupByMemberId.get(model.id) || groupByMemberId.get(model.gatewayModelId)
-      if (!label) continue
+      const label = groupByMemberId.get(model.id) || groupByMemberId.get(model.gatewayModelId) || model.name.trim() || model.gatewayModelId
       labelsByGatewayModel.set(model.gatewayModelId, label)
       const upstreamModel = model.upstreamModel.trim()
       if (!upstreamModel) continue
@@ -2119,9 +2122,9 @@ async function loadDashboardModelLabels() {
       if (label) labelsByGatewayModel.set(sharedModel.qualifiedModelId, label)
     }
     for (const alias of aliases) {
-      // An alias is the caller-facing model selection, so its local name wins.
-      // Shared model names are mapped above as the fallback for aliases with no name.
-      const label = alias.name.trim() || labelsByGatewayModel.get(alias.targetModelId)
+      // Aliases are routing IDs, not Usage dimensions. Their target's resolved
+      // model name keeps every alias of the same model in one Usage group.
+      const label = labelsByGatewayModel.get(alias.targetModelId)
       if (label) labelsByGatewayModel.set(alias.alias, label)
     }
     dashboardModelLabelCache.set(workspaceId, { value: labelsByGatewayModel, expiresAt: Date.now() + dashboardCacheTtlMs })
@@ -2369,7 +2372,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     let row = keyRows.get(keyId)
     if (!row) {
       const key = keyMap.get(keyId)
-      const displayName = publicView ? publicKeyName(key, keyId, indexedKeyNames) : key?.name?.trim() || keyId
+      const sharedWorkspaceId = sharedWorkspaceIdFromBudgetId(keyId)
+      const displayName = sharedWorkspaceId
+        ? sharedWorkspaceUsageLabel(key, sharedWorkspaceId)
+        : publicView ? publicKeyName(key, keyId, indexedKeyNames) : key?.name?.trim() || keyId
       row = {
         id: publicView ? displayName : keyId,
         label: displayName,
