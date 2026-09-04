@@ -62,6 +62,8 @@ export function OAuthProvidersView() {
   const [accountName, setAccountName] = useState("")
   const [polling, setPolling] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [callbackUrl, setCallbackUrl] = useState("")
+  const [submittingCallback, setSubmittingCallback] = useState(false)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
   const [resetAccount, setResetAccount] = useState<Account | null>(null)
   const [resetConfirmation, setResetConfirmation] = useState("")
@@ -108,6 +110,7 @@ export function OAuthProvidersView() {
     try {
       const nextDevice = await apiPost<DeviceCode>("/api/admin/oauth-providers/codex/device/start", {})
       setDevice(nextDevice)
+      setCallbackUrl("")
       setPolling(true)
     } catch (startError) {
       toast.error(startError instanceof Error ? startError.message : "Unable to start Codex login")
@@ -120,6 +123,20 @@ export function OAuthProvidersView() {
     if (device) void apiPost("/api/admin/oauth-providers/codex/device/cancel", { loginId: device.loginId }).catch(() => undefined)
     setPolling(false)
     setDevice(null)
+    setCallbackUrl("")
+  }
+
+  async function submitCallback() {
+    if (!device) return
+    setSubmittingCallback(true)
+    try {
+      await apiPost("/api/admin/oauth-providers/codex/device/callback", { loginId: device.loginId, redirectUrl: callbackUrl })
+      toast.success("Callback accepted. Finishing Codex login…")
+    } catch (callbackError) {
+      toast.error(callbackError instanceof Error ? callbackError.message : "Unable to submit callback URL")
+    } finally {
+      setSubmittingCallback(false)
+    }
   }
 
   async function updateAccount(account: Account, enabled: boolean) {
@@ -206,8 +223,8 @@ export function OAuthProvidersView() {
     </div>
     <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) cancelCodexLogin() }}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>CLIProxy handles the OAuth credential directly. Complete sign-in in the new window while RawRoute waits only to create its workspace mapping.</DialogDescription></DialogHeader>
-        {device && <div className="grid gap-4 py-2"><div className="grid gap-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label <span className="font-normal text-muted-foreground">(optional)</span></label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /></div><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization…" : "Login paused."}</p></div></div>}
+        <DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>Sign in, then copy the localhost URL from the browser address bar and paste it below. The localhost page may fail to load; that is expected.</DialogDescription></DialogHeader>
+        {device && <div className="grid gap-4 py-2"><div className="grid gap-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label <span className="font-normal text-muted-foreground">(optional)</span></label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /></div><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button></div><div className="grid gap-2"><label htmlFor="codex-callback-url" className="text-sm font-medium">Redirect URL</label><div className="flex gap-2"><Input id="codex-callback-url" value={callbackUrl} onChange={(event) => setCallbackUrl(event.target.value)} placeholder="http://localhost:1455/auth/callback?code=...&state=..." /><Button aria-busy={submittingCallback} disabled={!callbackUrl.trim() || submittingCallback} onClick={() => void submitCallback()}>{submittingCallback && <LoadingSpinner />}Submit</Button></div><p className="text-xs text-muted-foreground">{polling ? "Waiting for the pasted callback…" : "Login paused."}</p></div></div>}
         <DialogFooter><Button variant="outline" onClick={cancelCodexLogin}>Cancel</Button></DialogFooter>
       </DialogContent>
     </Dialog>

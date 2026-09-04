@@ -259,6 +259,16 @@ export async function cancelCliProxyCodexLogin(state: string) {
   if (!response.ok) throw new Error(`CLIProxy Codex login cancellation failed (${response.status}).`)
 }
 
+export async function submitCliProxyCodexCallback(input: { code?: string; error?: string; state: string }) {
+  const response = await cliproxyManagement("/v0/management/oauth-callback", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "codex", ...input }),
+  })
+  const payload = await response.json().catch(() => undefined) as { error?: unknown } | undefined
+  if (!response.ok) throw new Error(string(payload?.error) || `CLIProxy Codex callback failed (${response.status}).`)
+}
+
 export async function completeCliProxyCodexLogin(state: string, existingAuthFiles: Record<string, string>, workspaceId: string, name?: string) {
   const statusResponse = await cliproxyManagement(`/v0/management/get-auth-status?state=${encodeURIComponent(state)}`)
   const statusPayload = await statusResponse.json().catch(() => undefined) as { status?: unknown; error?: unknown } | undefined

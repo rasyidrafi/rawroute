@@ -52,6 +52,8 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const [accountName, setAccountName] = useState("")
   const [polling, setPolling] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [callbackUrl, setCallbackUrl] = useState("")
+  const [submittingCallback, setSubmittingCallback] = useState(false)
   const [resetAccount, setResetAccount] = useState<ProviderApiKey | null>(null)
   const [resetConfirmation, setResetConfirmation] = useState("")
   const [toggleAccount, setToggleAccount] = useState<ProviderApiKey | null>(null)
@@ -79,7 +81,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
 
   async function addCodexAccount() {
     setStarting(true)
-    try { setDevice(await apiPost("/api/admin/oauth-providers/codex/device/start", {})); setPolling(true) }
+    try { setDevice(await apiPost("/api/admin/oauth-providers/codex/device/start", {})); setCallbackUrl(""); setPolling(true) }
     catch (startError) { toast.error(startError instanceof Error ? startError.message : "Unable to start Codex login") }
     finally { setStarting(false) }
   }
@@ -88,6 +90,18 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     if (device) void apiPost("/api/admin/oauth-providers/codex/device/cancel", { loginId: device.loginId }).catch(() => undefined)
     setPolling(false)
     setDevice(null)
+    setCallbackUrl("")
+  }
+
+  async function submitCodexCallback() {
+    if (!device) return
+    setSubmittingCallback(true)
+    try {
+      await apiPost("/api/admin/oauth-providers/codex/device/callback", { loginId: device.loginId, redirectUrl: callbackUrl })
+      toast.success("Callback accepted. Finishing Codex login…")
+    } catch (callbackError) {
+      toast.error(callbackError instanceof Error ? callbackError.message : "Unable to submit callback URL")
+    } finally { setSubmittingCallback(false) }
   }
 
   async function redeemReset(account: ProviderApiKey) {
@@ -309,7 +323,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
             <ProviderApiKeyForm key={editingProviderApiKey?.id || "new"} providers={[provider]} apiKey={editingProviderApiKey} onSave={saveProviderApiKey} />
           </DialogContent>
         </Dialog>
-        {provider.prefix === "codex" && <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) cancelCodexLogin() }}><DialogContent><DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>CLIProxy stores and refreshes the OAuth credential; RawRoute only maps it to this workspace.</DialogDescription></DialogHeader>{device && <div className="grid gap-4 py-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label (optional)</label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization..." : "Login paused."}</p></div></div>}<DialogFooter><Button variant="outline" onClick={cancelCodexLogin}>Cancel</Button></DialogFooter></DialogContent></Dialog>}
+        {provider.prefix === "codex" && <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) cancelCodexLogin() }}><DialogContent><DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>Sign in, then copy the localhost URL from the browser address bar and paste it below. The localhost page may fail to load; that is expected.</DialogDescription></DialogHeader>{device && <div className="grid gap-4 py-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label (optional)</label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button></div><div className="grid gap-2"><label htmlFor="codex-callback-url" className="text-sm font-medium">Redirect URL</label><div className="flex gap-2"><Input id="codex-callback-url" value={callbackUrl} onChange={(event) => setCallbackUrl(event.target.value)} placeholder="http://localhost:1455/auth/callback?code=...&state=..." /><Button aria-busy={submittingCallback} disabled={!callbackUrl.trim() || submittingCallback} onClick={() => void submitCodexCallback()}>{submittingCallback && <LoadingSpinner />}Submit</Button></div><p className="text-xs text-muted-foreground">{polling ? "Waiting for the pasted callback..." : "Login paused."}</p></div></div>}<DialogFooter><Button variant="outline" onClick={cancelCodexLogin}>Cancel</Button></DialogFooter></DialogContent></Dialog>}
         <CardContent>
           <Table>
             <TableHeader>

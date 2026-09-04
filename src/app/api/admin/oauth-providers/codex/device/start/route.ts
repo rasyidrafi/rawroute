@@ -7,14 +7,7 @@ import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
-function publicCallback(urlText: string, request: Request) {
-  const url = new URL(urlText)
-  const publicOrigin = process.env.RAWROUTE_PUBLIC_URL?.replace(/\/$/, "") || new URL(request.url).origin
-  url.searchParams.set("redirect_uri", `${publicOrigin}/codex/callback`)
-  return url.toString()
-}
-
-export async function POST(request: Request) {
+export async function POST() {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   try {
     const loginId = randomUUID()
@@ -30,7 +23,7 @@ export async function POST(request: Request) {
     }
     if (!login) throw new Error("CLIProxy Codex login did not start.")
     writeLog("info", "admin", "CLIProxy Codex login started")
-    return Response.json({ loginId, authorizationUrl: publicCallback(login.url, request) })
+    return Response.json({ loginId, authorizationUrl: login.url })
   } catch (error) {
     writeLog("error", "admin", "CLIProxy Codex login start failed", { error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to start Codex login.", 502)
