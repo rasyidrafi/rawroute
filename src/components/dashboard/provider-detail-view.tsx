@@ -33,7 +33,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const router = useRouter()
   const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId))
-  const usageKey = data && (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-oauth"))
+  const usageKey = data && (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
     ? "/api/admin/oauth-providers/usage"
     : null
   const { data: usageData, error: usageError, isLoading: usageLoading } = useSWR<UsageResponse>(usageKey, fetcher, {
@@ -48,7 +48,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const [editingProviderApiKey, setEditingProviderApiKey] = useState<ProviderApiKey | null>(null)
   const [editingModel, setEditingModel] = useState<Model | null>(null)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
-  const [device, setDevice] = useState<{ deviceAuthId: string; userCode: string; intervalSeconds: number; verificationUrl: string } | null>(null)
+  const [device, setDevice] = useState<{ loginId: string; authorizationUrl: string } | null>(null)
   const [accountName, setAccountName] = useState("")
   const [polling, setPolling] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -62,13 +62,13 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     let timer: ReturnType<typeof setTimeout> | undefined
     const poll = async () => {
       try {
-        const result = await apiPost<{ status: "pending" | "authorized" }>("/api/admin/oauth-providers/codex/device/poll", { deviceAuthId: device.deviceAuthId, userCode: device.userCode, name: accountName.trim() || undefined })
+        const result = await apiPost<{ status: "pending" | "authorized" }>("/api/admin/oauth-providers/codex/device/poll", { loginId: device.loginId, name: accountName.trim() || undefined })
         if (stopped) return
         if (result.status === "authorized") { setPolling(false); setDevice(null); setAccountName(""); await mutate(); await refreshCachedResource("/api/admin/providers"); toast.success("Codex account connected"); return }
-        timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
+        timer = setTimeout(poll, 3000)
       } catch (pollError) { if (!stopped) { setPolling(false); toast.error(pollError instanceof Error ? pollError.message : "Codex login failed") } }
     }
-    timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
+    timer = setTimeout(poll, 3000)
     return () => { stopped = true; if (timer) clearTimeout(timer) }
   }, [accountName, device, mutate, polling, refreshCachedResource])
 
@@ -256,7 +256,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     configured: apiKeys.length,
     enabled: apiKeys.filter((apiKey) => apiKey.enabled).length,
   }
-  const isOAuthProvider = provider.prefix === "codex" || (apiKeys.length > 0 && apiKeys.every((apiKey) => apiKey.credentialKind === "codex-oauth"))
+  const isOAuthProvider = provider.prefix === "codex" || (apiKeys.length > 0 && apiKeys.every((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
   const credentialLabel = isOAuthProvider ? (apiKeyCounts.configured === 1 ? "account" : "accounts") : `API ${apiKeyCounts.configured === 1 ? "key" : "keys"}`
 
   return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
@@ -303,7 +303,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
             <ProviderApiKeyForm key={editingProviderApiKey?.id || "new"} providers={[provider]} apiKey={editingProviderApiKey} onSave={saveProviderApiKey} />
           </DialogContent>
         </Dialog>
-        {provider.prefix === "codex" && <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) { setPolling(false); setDevice(null) } }}><DialogContent><DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>Open the verification page, enter this one-time code, then leave this window open while RawRoute waits for approval.</DialogDescription></DialogHeader>{device && <div className="grid gap-4 py-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label (optional)</label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /><div className="rounded-lg border bg-muted/20 p-4 text-center"><p className="text-xs uppercase tracking-wide text-muted-foreground">One-time code</p><p className="my-2 font-mono text-2xl font-semibold tracking-widest">{device.userCode}</p><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.verificationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open verification page</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization..." : "Login paused."}</p></div></div>}<DialogFooter><Button variant="outline" onClick={() => { setPolling(false); setDevice(null) }}>Cancel</Button></DialogFooter></DialogContent></Dialog>}
+        {provider.prefix === "codex" && <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) { setPolling(false); setDevice(null) } }}><DialogContent><DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>CLIProxy stores and refreshes the OAuth credential; RawRoute only maps it to this workspace.</DialogDescription></DialogHeader>{device && <div className="grid gap-4 py-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label (optional)</label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization..." : "Login paused."}</p></div></div>}<DialogFooter><Button variant="outline" onClick={() => { setPolling(false); setDevice(null) }}>Cancel</Button></DialogFooter></DialogContent></Dialog>}
         <CardContent>
           <Table>
             <TableHeader>
@@ -323,7 +323,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                 const pendingKey = `delete-provider-api-key:${apiKey.id}`
                 const moveUpPending = isPending(`move-provider-api-key:${apiKey.id}:-1`)
                 const moveDownPending = isPending(`move-provider-api-key:${apiKey.id}:1`)
-                const showQuota = isOAuthProvider && apiKey.credentialKind === "codex-oauth"
+                const showQuota = isOAuthProvider && apiKey.credentialKind === "codex-cli-proxy"
                 return <TableRow key={apiKey.id} className={apiKey.enabled ? undefined : "opacity-60"}>
                     <TableCell className="align-middle">
                       <div className="flex items-center gap-0.5">
@@ -335,9 +335,9 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
                     <TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     {showQuota && <CodexQuotaTableCell accountUsage={usageData?.accounts[apiKey.id]} loading={usageLoading && !usageData} error={usageError?.message} />}
-                    {isOAuthProvider && <TableCell className="align-middle"><div className="flex items-center gap-2"><span className="tabular-nums">{usageData?.accounts[apiKey.id]?.unusedResetCredits ?? 0}</span>{apiKey.credentialKind === "codex-oauth" && <Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={(usageData?.accounts[apiKey.id]?.unusedResetCredits ?? 0) < 1 || usageData?.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}</div></TableCell>}
+                    {isOAuthProvider && <TableCell className="align-middle"><div className="flex items-center gap-2"><span className="tabular-nums">{usageData?.accounts[apiKey.id]?.unusedResetCredits ?? 0}</span>{apiKey.credentialKind === "codex-cli-proxy" && <Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={(usageData?.accounts[apiKey.id]?.unusedResetCredits ?? 0) < 1 || usageData?.accounts[apiKey.id]?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}</div></TableCell>}
                     <TableCell className="align-middle text-xs text-muted-foreground">{formatAppDate(apiKey.createdAt)}</TableCell>
-                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-oauth" ? <div className="flex items-center justify-end gap-1"><Button aria-label={`${apiKey.enabled ? "Disable" : "Enable"} ${apiKey.name}`} aria-busy={isPending(`toggle-codex-account:${apiKey.id}`)} size="icon-sm" variant="outline" disabled={isPending(`toggle-codex-account:${apiKey.id}`)} onClick={() => setToggleAccount(apiKey)}><PowerIcon /></Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
+                    <TableCell className="align-middle px-0">{apiKey.credentialKind === "codex-cli-proxy" ? <div className="flex items-center justify-end gap-1"><Button aria-label={`${apiKey.enabled ? "Disable" : "Enable"} ${apiKey.name}`} aria-busy={isPending(`toggle-codex-account:${apiKey.id}`)} size="icon-sm" variant="outline" disabled={isPending(`toggle-codex-account:${apiKey.id}`)} onClick={() => setToggleAccount(apiKey)}><PowerIcon /></Button><ConfirmAction title={`Remove ${apiKey.name}?`} description="This deletes the CLIProxy OAuth credential. You can connect this account again later." pending={isPending(`delete-codex-account:${apiKey.id}`)} onConfirm={() => deleteCodexAccount(apiKey)}><Trash2Icon /></ConfirmAction></div> : <div className="flex items-center justify-end gap-1"><Button aria-label={`Edit ${apiKey.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProviderApiKey(apiKey); setProviderKeyOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${apiKey.name}?`} description="Requests currently routed through this key will fail." pending={isPending(pendingKey)} onConfirm={() => deleteProviderApiKey(apiKey)}><Trash2Icon /></ConfirmAction></div>}</TableCell>
                   </TableRow>
               })}
               {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 8 : 6} />}

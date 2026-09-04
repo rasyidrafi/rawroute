@@ -1,4 +1,4 @@
-import { refreshCodexAccount } from "@/lib/codex"
+import { cliProxyCodexApiCall } from "@/lib/cliproxy-codex"
 import { getLocalRedis } from "@/lib/local-redis"
 import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
@@ -47,6 +47,8 @@ export interface UsageRedis {
 }
 
 let redisClient: UsageRedis | undefined
+type CodexApiCall = typeof cliProxyCodexApiCall
+let codexApiCall: CodexApiCall = cliProxyCodexApiCall
 let now = () => Date.now()
 const localUsageCache = new Map<string, { result: CodexUsageResult; expiresAt: number }>()
 const usageInflight = new Map<string, Promise<CodexUsageResult>>()
@@ -220,18 +222,18 @@ export function parseCodexUsagePayload(payload: unknown): CodexUsageSnapshot {
   return snapshot
 }
 
-async function fetchCodexUsage(account: ProviderApiKey, fetchImpl: typeof fetch): Promise<CodexUsageSnapshot> {
-  const headers = new Headers({
-    authorization: `Bearer ${account.key}`,
-    accept: "application/json",
-  })
-  if (account.accountId) headers.set("chatgpt-account-id", account.accountId)
-  const response = await fetchImpl(getUsageUrl(), { method: "GET", headers, cache: "no-store" })
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 200)
-    throw Object.assign(new Error(`Codex usage request failed (${response.status})${detail ? `: ${detail}` : ""}`), { status: response.status })
+async function fetchCodexUsage(account: ProviderApiKey): Promise<CodexUsageSnapshot> {
+  const headers: Record<string, string> = { authorization: "Bearer $TOKEN$", accept: "application/json" }
+  if (account.accountId) headers["chatgpt-account-id"] = account.accountId
+  const response = await codexApiCall(account, { method: "GET", url: getUsageUrl(), headers })
+  if (response.status < 200 || response.status >= 300) {
+    throw Object.assign(new Error(`Codex usage request failed (${response.status})${response.body ? `: ${response.body.slice(0, 200)}` : ""}`), { status: response.status })
   }
-  return parseCodexUsagePayload(await response.json())
+  try {
+    return parseCodexUsagePayload(JSON.parse(response.body) as unknown)
+  } catch {
+    throw new Error("Codex usage response was not valid JSON.")
+  }
 }
 
 function emptyResult(error?: string): CodexUsageResult {
@@ -274,7 +276,6 @@ function isUnauthorized(error: unknown) {
 
 async function loadCodexUsageForAccount(
   account: ProviderApiKey,
-  fetchImpl: typeof fetch = fetch,
 ): Promise<CodexUsageResult> {
   let redis: UsageRedis
   try {
@@ -297,15 +298,7 @@ async function loadCodexUsageForAccount(
   }
 
   try {
-    let current = await refreshCodexAccount(account)
-    let snapshot: CodexUsageSnapshot
-    try {
-      snapshot = await fetchCodexUsage(current, fetchImpl)
-    } catch (error) {
-      if (!isUnauthorized(error) || !current.refreshToken) throw error
-      current = await refreshCodexAccount(current, true)
-      snapshot = await fetchCodexUsage(current, fetchImpl)
-    }
+    const snapshot = await fetchCodexUsage(account)
     const fetchedAt = new Date(now()).toISOString()
     const record: CachedCodexUsage = { snapshot, fetchedAt, retryAt: now() + CODEX_USAGE_CACHE_TTL_SECONDS * 1000 }
     await redis.set(key, record, { ex: CACHE_RETENTION_SECONDS })
@@ -327,7 +320,6 @@ async function loadCodexUsageForAccount(
 
 export async function getCodexUsageForAccount(
   account: ProviderApiKey,
-  fetchImpl: typeof fetch = fetch,
 ): Promise<CodexUsageResult> {
   const localKey = `${currentWorkspaceId()}:${account.id}`
   const cached = localUsageCache.get(localKey)
@@ -339,7 +331,7 @@ export async function getCodexUsageForAccount(
   const workspaceId = currentWorkspaceId()
   const resetGeneration = localCacheResetGeneration
   const generation = localCacheGeneration(workspaceId)
-  const promise = loadCodexUsageForAccount(account, fetchImpl).then((result) => {
+  const promise = loadCodexUsageForAccount(account).then((result) => {
     if (resetGeneration === localCacheResetGeneration && generation === localCacheGeneration(workspaceId)) setLocalUsageCache(workspaceId, account.id, result)
     return result
   }).finally(() => {
@@ -351,6 +343,11 @@ export async function getCodexUsageForAccount(
 
 export function setCodexUsageRedisForTests(redis?: UsageRedis) {
   redisClient = redis
+  resetLocalUsageCache()
+}
+
+export function setCodexUsageApiCallForTests(apiCall?: CodexApiCall) {
+  codexApiCall = apiCall || cliProxyCodexApiCall
   resetLocalUsageCache()
 }
 

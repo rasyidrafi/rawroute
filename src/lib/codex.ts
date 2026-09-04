@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 
-import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
-import { getProvider, getProviderApiKey, listProviderApiKeys, listProviderModels, listProviders, upsertModel, upsertProvider, upsertProviderApiKey } from "@/lib/store"
+import { listMappedCodexAccounts } from "@/lib/cliproxy-codex"
+import { getProvider, listProviderModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
@@ -244,80 +244,10 @@ export async function ensureCodexProvider(): Promise<Provider> {
   }
 }
 
-export async function saveCodexAccount(token: CodexTokenBundle, name?: string) {
-  const provider = await ensureCodexProvider()
-  const existing = token.accountId
-    ? (await listProviderApiKeys(provider.id)).find((account) => account.credentialKind === "codex-oauth" && account.accountId === token.accountId)
-    : undefined
-  const account = await upsertProviderApiKey(provider.id, {
-    ...(existing ? { originalId: existing.id } : {}),
-    name: name?.trim() || token.email || token.accountId || "Codex account",
-    key: token.accessToken,
-    credentialKind: "codex-oauth",
-    refreshToken: token.refreshToken,
-    idToken: token.idToken,
-    accountId: token.accountId,
-    email: token.email,
-    planType: token.planType,
-    expiresAt: token.expiresAt,
-    lastRefresh: new Date().toISOString(),
-    enabled: existing?.enabled !== false,
-    rpmLimit: existing?.rpmLimit,
-    maxConcurrency: existing?.maxConcurrency,
-    priority: existing?.priority,
-  })
-  invalidateCodexCliProxySync()
-  await syncCodexAccountsToCliProxy({ force: true })
-  return { provider, account }
-}
-
-const refreshes = new Map<string, Promise<ProviderApiKey>>()
-
-export async function refreshCodexAccount(account: ProviderApiKey, force = false) {
-  if (account.credentialKind !== "codex-oauth") return account
-  if (!force && !codexCredentialNeedsRefresh(account)) return account
-  const refreshKey = `${currentWorkspaceId()}:${account.id}`
-  const existingRefresh = refreshes.get(refreshKey)
-  if (existingRefresh) return existingRefresh
-  const promise = (async () => {
-    const current = await getProviderApiKey(account.providerId, account.id) || account
-    if (!force && !codexCredentialNeedsRefresh(current)) return current
-    if (!current.refreshToken) throw new Error(`Codex account ${current.name} has no refresh token.`)
-    const token = await refreshCodexToken(current.refreshToken, current)
-    const updated = await upsertProviderApiKey(current.providerId, {
-      originalId: current.id,
-      name: current.name,
-      key: token.accessToken,
-      credentialKind: "codex-oauth",
-      refreshToken: token.refreshToken,
-      idToken: token.idToken,
-      accountId: token.accountId,
-      email: token.email,
-      planType: token.planType,
-      expiresAt: token.expiresAt,
-      lastRefresh: new Date().toISOString(),
-      enabled: current.enabled,
-      rpmLimit: current.rpmLimit,
-      maxConcurrency: current.maxConcurrency,
-      priority: current.priority,
-    })
-    invalidateCodexCliProxySync()
-    await syncCodexAccountsToCliProxy({ force: true })
-    return updated
-  })()
-  refreshes.set(refreshKey, promise)
-  try { return await promise } finally { refreshes.delete(refreshKey) }
-}
-
 export async function listCodexAccounts() {
-  // Read-only views must not create Firestore documents. The dedicated
-  // provider is provisioned only when the first account is actually saved.
+  // CLIProxy owns every mutable OAuth field. RawRoute keeps only its stable
+  // workspace-to-auth-file mapping and overlays the live management state.
   const provider = (await listProviders()).find((entry) => entry.prefix === CODEX_PROVIDER_PREFIX)
-  if (!provider) {
-    await syncCodexAccountsToCliProxy()
-    return { provider: null, accounts: [] as ProviderApiKey[] }
-  }
-  const accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth")
-  await syncCodexAccountsToCliProxy()
-  return { provider, accounts }
+  if (!provider) return { provider: null, accounts: [] as ProviderApiKey[] }
+  return { provider, accounts: await listMappedCodexAccounts(provider, currentWorkspaceId()) }
 }

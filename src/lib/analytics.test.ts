@@ -268,6 +268,51 @@ describe.sequential("usage analytics", () => {
     }
   })
 
+  test("uses the runtime event ledger when a reset-window rollup briefly lags", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
+    try {
+      const key = await createApiKey("Rollup lag")
+      await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T09:30:00.000Z", end: "2026-08-08T13:00:00.000Z" })
+      const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
+        id,
+        gatewayKeyId: key.id,
+        gatewayModelId: "lag/model",
+        protocol: "openai-chat",
+        startedAt: completedAt,
+        completedAt,
+        status: 200,
+        durationMs: 1,
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        totalTokens: 1,
+        costMicros,
+        pricingConfidence: "exact",
+        usageAvailable: true,
+        usageCompleteness: "complete",
+      })
+      await recordUsageEvent(event("before-window", "2026-08-08T09:15:00.000Z", 50), null)
+      await recordUsageEvent(event("inside-start-hour", "2026-08-08T09:45:00.000Z", 100), null)
+      await recordUsageEvent(event("inside-complete-hour", "2026-08-08T10:15:00.000Z", 200), null)
+      await recordUsageEvent(event("inside-later-hour", "2026-08-08T11:15:00.000Z", 400), null)
+
+      // Simulate a daily rollup that was advanced before its hourly rows.
+      // The historical event ledger is complete, so budget usage must remain
+      // the exact $0.000700 rather than retaining only the first partial hour.
+      const memory = globalThis.__rawrouteAnalyticsMemory?.get("default")
+      const daily = [...(memory?.rollups.values() || [])].find((rollup) => rollup.granularity === "daily" && rollup.gatewayKeyId === key.id)
+      if (!daily) throw new Error("Missing daily test rollup")
+      daily.requests += 1
+
+      expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(700)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test("does not reject a request before actual usage reaches the budget", async () => {
     const usageContext = { usageStartAt: "2026-08-08T00:00:00.000Z", windowEnd: "2026-08-15T00:00:00.000Z" }
     const admission = { key: "baseline-test", limitMicros: 1_000, spentMicros: 900, reservationMicros: 50, ttlSeconds: 60 }

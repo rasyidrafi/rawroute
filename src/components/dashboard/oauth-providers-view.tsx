@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { CopyIcon, LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
+import { LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
@@ -36,10 +36,8 @@ type OAuthResponse = {
 }
 
 type DeviceCode = {
-  deviceAuthId: string
-  userCode: string
-  intervalSeconds: number
-  verificationUrl: string
+  loginId: string
+  authorizationUrl: string
 }
 
 function expiryLabel(value?: string) {
@@ -72,8 +70,7 @@ export function OAuthProvidersView() {
     const poll = async () => {
       try {
         const result = await apiPost<{ status: "pending" | "authorized"; account?: Account }>("/api/admin/oauth-providers/codex/device/poll", {
-          deviceAuthId: device.deviceAuthId,
-          userCode: device.userCode,
+          loginId: device.loginId,
           name: accountName.trim() || undefined,
         })
         if (stopped) return
@@ -85,7 +82,7 @@ export function OAuthProvidersView() {
           toast.success("Codex account connected")
           return
         }
-        timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
+        timer = setTimeout(poll, 3000)
       } catch (pollError) {
         if (!stopped) {
           setPolling(false)
@@ -93,7 +90,7 @@ export function OAuthProvidersView() {
         }
       }
     }
-    timer = setTimeout(poll, Math.max(2, device.intervalSeconds) * 1000)
+    timer = setTimeout(poll, 3000)
     return () => {
       stopped = true
       if (timer) clearTimeout(timer)
@@ -195,8 +192,8 @@ export function OAuthProvidersView() {
     </div>
     <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) { setPolling(false); setDevice(null) } }}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>Open the verification page, enter this one-time code, then leave this window open while RawRoute waits for approval.</DialogDescription></DialogHeader>
-        {device && <div className="grid gap-4 py-2"><div className="grid gap-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label <span className="font-normal text-muted-foreground">(optional)</span></label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /></div><div className="rounded-lg border bg-muted/20 p-4 text-center"><p className="text-xs uppercase tracking-wide text-muted-foreground">One-time code</p><p className="my-2 font-mono text-2xl font-semibold tracking-widest" data-testid="codex-user-code">{device.userCode}</p><div className="flex justify-center gap-2"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.verificationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open verification page</Button><Button size="sm" variant="ghost" onClick={() => { void navigator.clipboard.writeText(device.userCode); toast.success("Code copied") }}><CopyIcon />Copy code</Button></div></div><p className="text-xs text-muted-foreground">{polling ? "Waiting for authorization…" : "Login paused."}</p></div>}
+        <DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>CLIProxy handles the OAuth credential directly. Complete sign-in in the new window while RawRoute waits only to create its workspace mapping.</DialogDescription></DialogHeader>
+        {device && <div className="grid gap-4 py-2"><div className="grid gap-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label <span className="font-normal text-muted-foreground">(optional)</span></label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /></div><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization…" : "Login paused."}</p></div></div>}
         <DialogFooter><Button variant="outline" onClick={() => { setPolling(false); setDevice(null) }}>Cancel</Button></DialogFooter>
       </DialogContent>
     </Dialog>

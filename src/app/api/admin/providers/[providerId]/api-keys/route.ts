@@ -30,6 +30,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
   try {
     const provider = await getProvider(providerId)
     if (!provider) throw new Error("Provider is missing.")
+    if (provider.prefix === "codex") throw new Error("Codex accounts are managed by CLIProxy. Use the Codex account flow.")
     if (provider.authType === "none") {
       throw new Error("This provider uses no API keys.")
     }

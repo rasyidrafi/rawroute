@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
-import { invalidateCodexCliProxySync, syncCodexAccountsToCliProxy } from "@/lib/cliproxy-codex"
+import { deleteCliProxyCodexAccount, setCliProxyCodexAccountEnabled } from "@/lib/cliproxy-codex"
 import { listCodexAccounts } from "@/lib/codex"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
@@ -25,6 +25,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
       if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive whole number.`)
       return parsed
     }
+    await setCliProxyCodexAccountEnabled(account, enabled)
     await upsertProviderApiKey(result.provider.id, {
       originalId: account.id,
       name: name.trim(),
@@ -34,8 +35,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
       maxConcurrency: positiveInteger(body?.maxConcurrency, account.maxConcurrency, "Maximum concurrency"),
       priority: account.priority,
     })
-    invalidateCodexCliProxySync()
-    await syncCodexAccountsToCliProxy({ force: true })
     writeLog("info", "admin", "Codex account updated", { accountId })
     return Response.json({ ok: true })
   } catch (error) {
@@ -50,9 +49,10 @@ export async function DELETE(_request: Request, context: { params: Promise<{ acc
   try {
     const result = await listCodexAccounts()
     if (!result.provider || !result.accounts.some((entry) => entry.id === accountId)) return jsonError("Codex account not found.", 404)
+    const account = result.accounts.find((entry) => entry.id === accountId)
+    if (!account) return jsonError("Codex account not found.", 404)
+    await deleteCliProxyCodexAccount(account)
     await deleteProviderApiKey(result.provider.id, accountId)
-    invalidateCodexCliProxySync()
-    await syncCodexAccountsToCliProxy({ force: true })
     writeLog("info", "admin", "Codex account deleted", { accountId })
     return Response.json({ ok: true })
   } catch (error) {

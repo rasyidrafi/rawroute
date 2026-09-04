@@ -1287,11 +1287,14 @@ async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promis
         const hourlyStats = hourlyStatsByKey.get(key)
         const rollupStats = hourlyStats || dailyStatsByKey.get(key)
         const eventCount = allEventCountsByKey.get(key) || 0
-        // A pure runtime key whose rollup request count matches the event
-        // ledger is safe to read directly from events, including partial
-        // calendar boundaries. Mixed aggregate/runtime keys stay on the
-        // dimension-aware fallback below.
-        if (!rollupStats || (!rollupStats.hasBackfill && rollupStats.requests === eventCount && eventCount > 0)) canonicalEventKeys.add(key)
+        // Runtime events are the source of truth. A rollup can lag a just
+        // completed write (or be rebuilt independently), so its request
+        // count must not prevent us from using a complete event ledger. This
+        // is especially important when a Codex window resets inside a day:
+        // the fallback path can otherwise discard every complete hour after
+        // the initial partial boundary. Mixed aggregate/runtime keys still
+        // stay on the dimension-aware fallback below.
+        if (!rollupStats || (!rollupStats.hasBackfill && eventCount > 0)) canonicalEventKeys.add(key)
       }
     }
 

@@ -168,6 +168,25 @@ describe("configuration storage", () => {
     expect(await getProvider(provider.id)).toMatchObject({ apiKeyCount: 0, enabledApiKeyCount: 0 })
   })
 
+  test("stores CLIProxy Codex mappings without an API key value", async () => {
+    const provider = await upsertProvider(providerInput("codex"))
+    const account = await upsertProviderApiKey(provider.id, {
+      name: "Codex account",
+      key: "",
+      credentialKind: "codex-cli-proxy",
+      cliProxyAuthFile: "codex-account.json",
+      cliProxyAuthIndex: "auth-index-1",
+      enabled: true,
+    })
+
+    expect(account).toMatchObject({
+      credentialKind: "codex-cli-proxy",
+      key: "",
+      cliProxyAuthFile: "codex-account.json",
+      cliProxyAuthIndex: "auth-index-1",
+    })
+  })
+
   test("persists only canonical model fields", async () => {
     const provider = await upsertProvider(providerInput())
     const model = await upsertModel(provider.id, {

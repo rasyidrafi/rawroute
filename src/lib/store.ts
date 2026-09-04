@@ -517,19 +517,20 @@ function invalidateGatewayApiKeyCaches(hashes?: Iterable<string>) {
 }
 
 function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { originalId?: string }) {
+  const isCliProxyCodexMapping = input.credentialKind === "codex-cli-proxy"
   if (!input.originalId && (typeof input.name !== "string" || !input.name.trim())) {
     throw new Error("API key name is required.")
   }
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) {
     throw new Error("API key name must be between 1 and 80 characters.")
   }
-  if (!input.originalId && (typeof input.key !== "string" || !input.key.trim())) {
+  if (!isCliProxyCodexMapping && !input.originalId && (typeof input.key !== "string" || !input.key.trim())) {
     throw new Error("API key value is required.")
   }
-  if (input.key !== undefined && input.key !== "__unchanged__" && (typeof input.key !== "string" || !input.key.trim())) {
+  if (!isCliProxyCodexMapping && input.key !== undefined && input.key !== "__unchanged__" && (typeof input.key !== "string" || !input.key.trim())) {
     throw new Error("API key value is required.")
   }
-  if (input.key === "__unchanged__" && !input.originalId) throw new Error("API key value is required.")
+  if (!isCliProxyCodexMapping && input.key === "__unchanged__" && !input.originalId) throw new Error("API key value is required.")
   if (input.rpmLimit !== undefined && (!Number.isSafeInteger(input.rpmLimit) || input.rpmLimit <= 0)) {
     throw new Error("RPM limit must be a positive whole number.")
   }
@@ -1648,6 +1649,10 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
       planType: input.planType,
       expiresAt: input.expiresAt,
       lastRefresh: input.lastRefresh,
+      cliProxyAuthFile: input.cliProxyAuthFile,
+      cliProxyAuthIndex: input.cliProxyAuthIndex,
+      cliProxyStatus: input.cliProxyStatus,
+      cliProxyStatusMessage: input.cliProxyStatusMessage,
       enabled: input.enabled,
       rpmLimit: input.rpmLimit,
       maxConcurrency: input.maxConcurrency,
@@ -1665,6 +1670,14 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
       maxConcurrency: input.maxConcurrency ?? existing?.maxConcurrency,
       priority: input.priority ?? existing?.priority,
       createdAt: existing?.createdAt || new Date().toISOString(),
+    }
+    if (apiKey.credentialKind === "codex-cli-proxy") {
+      // CLIProxy is the sole owner of the OAuth token lifecycle. A mapping
+      // conversion deliberately writes a replacement document, so leaving
+      // these undefined removes any previously encrypted OAuth material.
+      apiKey.key = ""
+      apiKey.refreshToken = undefined
+      apiKey.idToken = undefined
     }
     transaction.set(providerApiKeyRef(providerId, apiKeyId), storedProviderApiKey(apiKey))
     if (!existing) {
@@ -1946,7 +1959,11 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     email: input.email,
     planType: input.planType,
     expiresAt: input.expiresAt,
-    lastRefresh: input.lastRefresh,
+      lastRefresh: input.lastRefresh,
+      cliProxyAuthFile: input.cliProxyAuthFile,
+      cliProxyAuthIndex: input.cliProxyAuthIndex,
+      cliProxyStatus: input.cliProxyStatus,
+      cliProxyStatusMessage: input.cliProxyStatusMessage,
     enabled: input.enabled,
     rpmLimit: input.rpmLimit,
     maxConcurrency: input.maxConcurrency,
@@ -1964,6 +1981,11 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     maxConcurrency: input.maxConcurrency ?? existing?.maxConcurrency,
     priority: input.priority ?? existing?.priority,
     createdAt: existing?.createdAt || new Date().toISOString(),
+  }
+  if (apiKey.credentialKind === "codex-cli-proxy") {
+    apiKey.key = ""
+    apiKey.refreshToken = undefined
+    apiKey.idToken = undefined
   }
   slot.set(apiKeyId, apiKey)
   state.providerApiKeys.set(providerId, slot)

@@ -5,6 +5,7 @@ import {
   getCodexUsageForAccount,
   parseCodexUsagePayload,
   setCodexUsageClockForTests,
+  setCodexUsageApiCallForTests,
   setCodexUsageRedisForTests,
   type UsageRedis,
 } from "@/lib/codex-usage"
@@ -28,8 +29,9 @@ const account: ProviderApiKey = {
   id: "account-1",
   providerId: "codex",
   name: "Codex",
-  key: "access-token",
-  credentialKind: "codex-oauth",
+  key: "",
+  credentialKind: "codex-cli-proxy",
+  cliProxyAuthIndex: "auth-index-1",
   enabled: true,
   expiresAt: new Date(Date.now() + 3600000).toISOString(),
   createdAt: new Date().toISOString(),
@@ -84,27 +86,28 @@ describe("Codex usage", () => {
     setCodexUsageRedisForTests(redis)
     setCodexUsageClockForTests(() => current)
 
-    const fetchImpl = (async () => {
+    setCodexUsageApiCallForTests(async () => {
       calls += 1
       if (calls > 1) throw new Error("upstream unavailable")
-      return Response.json({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } } })
-    }) as unknown as typeof fetch
+      return { status: 200, body: JSON.stringify({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } } }) }
+    })
 
-    const first = await getCodexUsageForAccount(account, fetchImpl)
-    const cached = await getCodexUsageForAccount(account, fetchImpl)
+    const first = await getCodexUsageForAccount(account)
+    const cached = await getCodexUsageForAccount(account)
     expect(first.fiveHour?.remainingPercent).toBe(94)
     expect(cached.stale).toBe(false)
     expect(calls).toBe(1)
 
     current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
     redis.values.delete("rawroute:codex-usage:v1:lock:default:account-1")
-    const stale = await getCodexUsageForAccount(account, fetchImpl)
-    const retained = await getCodexUsageForAccount(account, fetchImpl)
+    const stale = await getCodexUsageForAccount(account)
+    const retained = await getCodexUsageForAccount(account)
     expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 } })
     expect(retained.stale).toBe(true)
     expect(calls).toBe(2)
 
     setCodexUsageRedisForTests()
     setCodexUsageClockForTests()
+    setCodexUsageApiCallForTests()
   })
 })
