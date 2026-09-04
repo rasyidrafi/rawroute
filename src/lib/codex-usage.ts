@@ -253,6 +253,7 @@ function resultFromCache(cached: CachedCodexUsage, stale: boolean): CodexUsageRe
   return {
     fiveHour: cached.snapshot?.fiveHour || null,
     weekly: cached.snapshot?.weekly || null,
+    ...(cached.snapshot?.unusedResetCredits !== undefined ? { unusedResetCredits: cached.snapshot.unusedResetCredits } : {}),
     fetchedAt: cached.fetchedAt,
     stale,
     ...(cached.error ? { error: cached.error } : {}),

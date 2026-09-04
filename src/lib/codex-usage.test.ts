@@ -109,20 +109,22 @@ describe("Codex usage", () => {
     setCodexUsageApiCallForTests(async () => {
       calls += 1
       if (calls > 1) throw new Error("upstream unavailable")
-      return { status: 200, body: JSON.stringify({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } } }) }
+      return { status: 200, body: JSON.stringify({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } }, rate_limit_reset_credits: { available_count: 2 } }) }
     })
 
     const first = await getCodexUsageForAccount(account)
     const cached = await getCodexUsageForAccount(account)
     expect(first.fiveHour?.remainingPercent).toBe(94)
+    expect(first.unusedResetCredits).toBe(2)
     expect(cached.stale).toBe(false)
+    expect(cached.unusedResetCredits).toBe(2)
     expect(calls).toBe(1)
 
     current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
     redis.values.delete("rawroute:codex-usage:v1:lock:default:account-1")
     const stale = await getCodexUsageForAccount(account)
     const retained = await getCodexUsageForAccount(account)
-    expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 } })
+    expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 }, unusedResetCredits: 2 })
     expect(retained.stale).toBe(true)
     expect(calls).toBe(2)
 
