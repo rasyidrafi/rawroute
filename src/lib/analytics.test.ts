@@ -384,11 +384,17 @@ describe.sequential("usage analytics", () => {
   })
 
   test("uses the budget window as an analytics range and preserves custom hours", async () => {
-    await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:30:00.000Z", end: "2026-08-13T17:45:00.000Z" })
-    const payload = await getDashboardPayload({ preset: "budget" })
-    expect(payload.range.label).toBe("Budget window")
-    expect(payload.range.from).toBe("2026-08-06T09:30:00.000Z")
-    expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
+    try {
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:30:00.000Z", end: "2026-08-13T17:45:00.000Z" })
+      const payload = await getDashboardPayload({ preset: "budget" })
+      expect(payload.range.label).toBe("Budget window")
+      expect(payload.range.from).toBe("2026-08-06T09:30:00.000Z")
+      expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test("keeps complete preset trend axes and supports weekly grouping", async () => {

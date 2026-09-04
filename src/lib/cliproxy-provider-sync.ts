@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy-management"
 import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy-provider-capabilities"
-import { localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
+import { localRedisCompareAndDelete, localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
 import { listProviderApiKeys, listProviderModels, getProvider } from "@/lib/store"
 import { currentWorkspaceId } from "@/lib/workspace-context"
@@ -10,6 +10,8 @@ import type { Model, Provider } from "@/lib/types"
 
 const SYNC_TTL_MS = 5 * 60 * 1000
 const LOCK_TTL_MS = 60 * 1000
+const LOCK_WAIT_MS = 10 * 1000
+const LOCK_RETRY_MS = 100
 const MANAGEMENT_PREFIX = "rr-managed-"
 
 type OpenAICompatKeyEntry = {
@@ -352,13 +354,20 @@ async function reconcile(providerId: string, force: boolean) {
   const projectionStateKey = syncKey(projection.workspaceId, providerId)
 
   const promise = (async () => {
-    const lock = await localRedisSetIfAbsent(redisLockKey(projection.workspaceId, providerId), randomUUID(), LOCK_TTL_MS)
-    if (lock === false) {
+    const lockKey = redisLockKey(projection.workspaceId, providerId)
+    const lockOwner = randomUUID()
+    const deadline = Date.now() + LOCK_WAIT_MS
+    let lock = await localRedisSetIfAbsent(lockKey, lockOwner, LOCK_TTL_MS)
+    while (lock === false && Date.now() < deadline) {
       if (await localRedisGet(redisStateKey(projection.workspaceId, providerId)) === projection.fingerprint) {
         projectionState.set(projectionStateKey, { fingerprint: projection.fingerprint, expiresAt: Date.now() + SYNC_TTL_MS })
         return
       }
-      throw new CliProxyProviderSyncError(`CLIProxy projection sync is already running for provider ${providerId}.`)
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
+      lock = await localRedisSetIfAbsent(lockKey, lockOwner, LOCK_TTL_MS)
+    }
+    if (lock === false) {
+      throw new CliProxyProviderSyncError(`CLIProxy projection sync timed out waiting for provider ${providerId}.`)
     }
     try {
       await applyProjection(projection, force)
@@ -374,6 +383,8 @@ async function reconcile(providerId: string, force: boolean) {
       projectionState.delete(projectionStateKey)
       await localRedisDelete(redisStateKey(projection.workspaceId, providerId))
       throw error
+    } finally {
+      if (lock === true) await localRedisCompareAndDelete(lockKey, lockOwner)
     }
   })()
   projectionInflight.set(stateKey, promise)

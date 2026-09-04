@@ -1,4 +1,4 @@
-import { invalidateCodexUsageCache } from "@/lib/codex-usage"
+import { invalidateCodexUsageCache, parseUnusedCodexResetCredits } from "@/lib/codex-usage"
 import { cliProxyCodexApiCall } from "@/lib/cliproxy-codex"
 import { getLocalRedis } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
@@ -60,8 +60,7 @@ export async function redeemCodexReset(account: ProviderApiKey, confirmation: st
     const usageResponse = await cliProxyCodexApiCall(account, { method: "GET", url: process.env.CODEX_USAGE_URL || "https://chatgpt.com/backend-api/wham/usage", headers })
     if (usageResponse.status < 200 || usageResponse.status >= 300) throw new Error(`Codex usage request failed (${usageResponse.status})`)
     const usage = objectValue(JSON.parse(usageResponse.body) as unknown)
-    const credits = objectValue(usage?.rate_limit_reset_credits)
-    if (numberValue(credits?.available_count) < 1) throw new Error("No unused Codex reset credits are available.")
+    if ((parseUnusedCodexResetCredits(usage) ?? 0) < 1) throw new Error("No unused Codex reset credits are available.")
     const rateLimit = objectValue(usage?.rate_limit) || objectValue(usage?.rate_limits)
     const weekly = objectValue(rateLimit?.secondary_window)
     const weeklyUsed = numberValue(weekly?.used_percent ?? weekly?.percent_used)

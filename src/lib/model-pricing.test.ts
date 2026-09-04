@@ -71,11 +71,11 @@ describe("model pricing catalog", () => {
     const payload = await getDashboardPayload({ preset: "all" })
     expect(payload.models).toEqual(expect.arrayContaining([
       expect.objectContaining({ model: "Shared pricing", requests: 2, costMicros: 200 }),
-      expect.objectContaining({ model: second.gatewayModelId, requests: 1, costMicros: 50 }),
+      expect.objectContaining({ model: second.name, requests: 1, costMicros: 50 }),
     ]))
     expect(payload.models.map((model) => model.model)).not.toContain(first.gatewayModelId)
     expect(payload.models.map((model) => model.model)).not.toContain("shared-alias")
-    expect(payload.keys[0].models).toEqual(expect.arrayContaining(["Shared pricing", second.gatewayModelId]))
+    expect(payload.keys[0].models).toEqual(expect.arrayContaining(["Shared pricing", second.name]))
   })
 
   test("does not rewrite unchanged fixed groups during synchronization", async () => {

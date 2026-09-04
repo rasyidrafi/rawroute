@@ -177,6 +177,8 @@ describe("configuration storage", () => {
       cliProxyAuthFile: "codex-account.json",
       cliProxyAuthIndex: "auth-index-1",
       enabled: true,
+      rpmLimit: 60,
+      maxConcurrency: 4,
     })
 
     expect(account).toMatchObject({
@@ -185,6 +187,8 @@ describe("configuration storage", () => {
       cliProxyAuthFile: "codex-account.json",
       cliProxyAuthIndex: "auth-index-1",
     })
+    expect(account.rpmLimit).toBeUndefined()
+    expect(account.maxConcurrency).toBeUndefined()
   })
 
   test("persists only canonical model fields", async () => {

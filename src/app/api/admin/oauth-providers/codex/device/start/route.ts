@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto"
 
 import { requireAdmin } from "@/lib/auth"
-import { savePendingCliProxyCodexLogin } from "@/lib/codex-cli-login"
-import { startCliProxyCodexLogin } from "@/lib/cliproxy-codex"
+import { deletePendingCliProxyCodexLogin, reservePendingCliProxyCodexLogin, savePendingCliProxyCodexLogin } from "@/lib/codex-cli-login"
+import { cancelCliProxyCodexLogin, startCliProxyCodexLogin } from "@/lib/cliproxy-codex"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
+import { currentWorkspaceId } from "@/lib/workspace-context"
 
 function publicCallback(urlText: string, request: Request) {
   const url = new URL(urlText)
@@ -16,9 +17,18 @@ function publicCallback(urlText: string, request: Request) {
 export async function POST(request: Request) {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }
   try {
-    const login = await startCliProxyCodexLogin()
     const loginId = randomUUID()
-    savePendingCliProxyCodexLogin(loginId, { authFiles: login.existingAuthFiles, expiresAt: Date.now() + 5 * 60_000 })
+    await reservePendingCliProxyCodexLogin(loginId)
+    let login: Awaited<ReturnType<typeof startCliProxyCodexLogin>> | undefined
+    try {
+      login = await startCliProxyCodexLogin()
+      await savePendingCliProxyCodexLogin(loginId, { state: login.state, workspaceId: currentWorkspaceId(), authFiles: login.existingAuthFiles })
+    } catch (error) {
+      if (login) await cancelCliProxyCodexLogin(login.state).catch(() => undefined)
+      await deletePendingCliProxyCodexLogin(loginId)
+      throw error
+    }
+    if (!login) throw new Error("CLIProxy Codex login did not start.")
     writeLog("info", "admin", "CLIProxy Codex login started")
     return Response.json({ loginId, authorizationUrl: publicCallback(login.url, request) })
   } catch (error) {

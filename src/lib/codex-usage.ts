@@ -31,6 +31,7 @@ export interface CodexUsageResult extends CodexUsageSnapshot {
   fetchedAt: string | null
   stale: boolean
   error?: string
+  reauthRequired?: boolean
 }
 
 interface CachedCodexUsage {
@@ -38,6 +39,7 @@ interface CachedCodexUsage {
   fetchedAt: string | null
   retryAt: number
   error?: string
+  reauthRequired?: boolean
 }
 
 export interface UsageRedis {
@@ -215,11 +217,18 @@ export function parseCodexUsagePayload(payload: unknown): CodexUsageSnapshot {
     if (kind && !snapshot[kind]) snapshot[kind] = parsed.quota
   }
 
-  const resetCredits = objectValue(data?.rate_limit_reset_credits)
-  const available = numberValue(resetCredits?.available_count)
-  if (available !== undefined) snapshot.unusedResetCredits = Math.max(0, Math.floor(available))
+  const available = parseUnusedCodexResetCredits(payload)
+  if (available !== undefined) snapshot.unusedResetCredits = available
 
   return snapshot
+}
+
+export function parseUnusedCodexResetCredits(payload: unknown) {
+  const data = objectValue(payload)
+  const normal = unwrapRateLimit(data?.rate_limit ?? data?.rate_limits ?? data)
+  const resetCredits = objectValue(data?.rate_limit_reset_credits) || objectValue(normal?.rate_limit_reset_credits)
+  const available = numberValue(resetCredits?.available_count ?? resetCredits?.unused_count ?? resetCredits?.remaining_count ?? resetCredits?.available)
+  return available === undefined ? undefined : Math.max(0, Math.floor(available))
 }
 
 async function fetchCodexUsage(account: ProviderApiKey): Promise<CodexUsageSnapshot> {
@@ -247,6 +256,7 @@ function resultFromCache(cached: CachedCodexUsage, stale: boolean): CodexUsageRe
     fetchedAt: cached.fetchedAt,
     stale,
     ...(cached.error ? { error: cached.error } : {}),
+    ...(cached.reauthRequired ? { reauthRequired: true } : {}),
   }
 }
 
@@ -262,6 +272,7 @@ function readCache(value: unknown): CachedCodexUsage | undefined {
     fetchedAt,
     retryAt,
     ...(typeof record.error === "string" ? { error: record.error } : {}),
+    ...(record.reauthRequired === true ? { reauthRequired: true } : {}),
   }
 }
 
@@ -304,12 +315,16 @@ async function loadCodexUsageForAccount(
     await redis.set(key, record, { ex: CACHE_RETENTION_SECONDS })
     return resultFromCache(record, false)
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Codex usage unavailable."
+    const reauthRequired = isUnauthorized(error)
+    const message = reauthRequired
+      ? "Authentication token expired. Reauthorize this Codex account."
+      : error instanceof Error ? error.message : "Codex usage unavailable."
     const record: CachedCodexUsage = {
       snapshot: cached?.snapshot || null,
       fetchedAt: cached?.fetchedAt || null,
       retryAt: now() + CODEX_USAGE_CACHE_TTL_SECONDS * 1000,
       error: message,
+      ...(reauthRequired ? { reauthRequired: true } : {}),
     }
     try {
       await redis.set(key, record, { ex: CACHE_RETENTION_SECONDS })

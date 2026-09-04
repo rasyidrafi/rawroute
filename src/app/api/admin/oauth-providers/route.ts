@@ -14,9 +14,10 @@ function publicAccount(account: Awaited<ReturnType<typeof listCodexAccounts>>["a
     enabled: account.enabled,
     expiresAt: account.expiresAt,
     lastRefresh: account.lastRefresh,
-    rpmLimit: account.rpmLimit,
-    maxConcurrency: account.maxConcurrency,
     priority: account.priority,
+    credentialKind: account.credentialKind,
+    cliProxyStatus: account.cliProxyStatus,
+    cliProxyStatusMessage: account.cliProxyStatusMessage,
     createdAt: account.createdAt,
   }
 }

@@ -1678,6 +1678,8 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
       apiKey.key = ""
       apiKey.refreshToken = undefined
       apiKey.idToken = undefined
+      apiKey.rpmLimit = undefined
+      apiKey.maxConcurrency = undefined
     }
     transaction.set(providerApiKeyRef(providerId, apiKeyId), storedProviderApiKey(apiKey))
     if (!existing) {
@@ -1986,6 +1988,8 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     apiKey.key = ""
     apiKey.refreshToken = undefined
     apiKey.idToken = undefined
+    apiKey.rpmLimit = undefined
+    apiKey.maxConcurrency = undefined
   }
   slot.set(apiKeyId, apiKey)
   state.providerApiKeys.set(providerId, slot)

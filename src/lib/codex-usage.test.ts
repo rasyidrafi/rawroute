@@ -79,6 +79,26 @@ describe("Codex usage", () => {
     })
   })
 
+  test("counts reset credits from supported upstream response fields", () => {
+    expect(parseCodexUsagePayload({ rate_limit_reset_credits: { available_count: 3, applicable_available_count: 2 } }).unusedResetCredits).toBe(3)
+    expect(parseCodexUsagePayload({ rate_limit: { rate_limit_reset_credits: { remaining_count: "2" } } }).unusedResetCredits).toBe(2)
+  })
+
+  test("classifies an unauthorized usage response as requiring reauthorization", async () => {
+    const redis = new FakeRedis()
+    setCodexUsageRedisForTests(redis)
+    setCodexUsageApiCallForTests(async () => ({ status: 401, body: JSON.stringify({ error: "token expired" }) }))
+
+    await expect(getCodexUsageForAccount(account)).resolves.toMatchObject({
+      stale: false,
+      reauthRequired: true,
+      error: "Authentication token expired. Reauthorize this Codex account.",
+    })
+
+    setCodexUsageRedisForTests()
+    setCodexUsageApiCallForTests()
+  })
+
   test("serves a cached result for five minutes and retains stale data on failure", async () => {
     const redis = new FakeRedis()
     let current = 1_000_000

@@ -17,6 +17,7 @@ export type AccountUsage = {
   fetchedAt: string | null
   stale: boolean
   error?: string
+  reauthRequired?: boolean
 }
 
 export type UsageResponse = {
@@ -44,6 +45,11 @@ export function getAvailableQuotaWindows(accountUsage?: Pick<AccountUsage, "five
   ].filter((entry): entry is { label: string; quota: QuotaWindow } => Boolean(entry.quota))
 }
 
+export function codexUsageError(accountUsage?: AccountUsage, requestError?: string) {
+  if (accountUsage?.reauthRequired) return "Authentication token expired. Reauthorize this Codex account."
+  return accountUsage?.error || requestError
+}
+
 function QuotaLine({ label, quota, loading }: { label: string; quota?: QuotaWindow; loading: boolean }) {
   const [, setClock] = useState(0)
   const remaining = quota ? Math.round(quota.remainingPercent) : undefined
@@ -63,13 +69,11 @@ function QuotaLine({ label, quota, loading }: { label: string; quota?: QuotaWind
 
 export function CodexQuotaTableCell({ accountUsage, loading, error }: { accountUsage?: AccountUsage; loading: boolean; error?: string }) {
   const windows = getAvailableQuotaWindows(accountUsage)
-  const message = error || (accountUsage?.error && !accountUsage.stale ? accountUsage.error : undefined)
+  const message = codexUsageError(accountUsage, error)
 
   return <TableCell className="min-w-40 bg-muted/20 px-3 py-2">
-    {message && <p className="mb-1 text-xs text-destructive">Usage unavailable: {message}</p>}
-    {loading ? <span className="inline-block h-4 w-20 animate-pulse rounded bg-muted" /> : windows.length ? <div className="grid gap-1.5">
+    {loading ? <span className="inline-block h-4 w-20 animate-pulse rounded bg-muted" /> : !message && windows.length ? <div className="grid gap-1.5">
       {windows.map(({ label, quota }) => <QuotaLine key={label} label={label} quota={quota} loading={false} />)}
-      {accountUsage?.stale && <p className="text-xs text-amber-600 dark:text-amber-400">Data may be stale</p>}
     </div> : <span className="text-sm text-muted-foreground">N/A</span>}
   </TableCell>
 }

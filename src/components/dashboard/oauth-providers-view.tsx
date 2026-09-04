@@ -6,7 +6,7 @@ import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
-import { CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
+import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
@@ -28,6 +28,9 @@ type Account = {
   enabled: boolean
   expiresAt?: string
   lastRefresh?: string
+  credentialKind?: "codex-oauth" | "codex-cli-proxy"
+  cliProxyStatus?: string
+  cliProxyStatusMessage?: string
 }
 
 type OAuthResponse = {
@@ -113,6 +116,12 @@ export function OAuthProvidersView() {
     }
   }
 
+  function cancelCodexLogin() {
+    if (device) void apiPost("/api/admin/oauth-providers/codex/device/cancel", { loginId: device.loginId }).catch(() => undefined)
+    setPolling(false)
+    setDevice(null)
+  }
+
   async function updateAccount(account: Account, enabled: boolean) {
     const key = `update:${account.id}`
     setPending((current) => new Set(current).add(key))
@@ -174,14 +183,19 @@ export function OAuthProvidersView() {
               {data.accounts.map((account) => {
                 const updateKey = `update:${account.id}`
                 const usage = usageData?.accounts[account.id]
+                const rowError = account.cliProxyStatusMessage && ["missing", "error", "expired", "unavailable"].includes(account.cliProxyStatus || "") ? account.cliProxyStatusMessage : codexUsageError(usage, usageError?.message)
+                if (rowError) return <TableRow key={account.id} className="bg-destructive/5">
+                  <TableCell colSpan={6} className="whitespace-normal px-4 py-4"><div className="flex min-w-0 flex-col gap-1"><span className="font-medium text-destructive">{account.name}</span><span className="break-words text-sm text-destructive">{rowError}</span></div></TableCell>
+                  <TableCell><div className="flex justify-end"><ConfirmAction title={`Remove ${account.name}?`} description={account.credentialKind === "codex-cli-proxy" ? "This deletes the CLIProxy OAuth credential. You can reconnect this account afterward." : "This removes the unmatched legacy credential from RawRoute."} pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                </TableRow>
                 return <TableRow key={account.id} className={account.enabled ? undefined : "opacity-60"}>
                     <TableCell><div className="font-medium">{account.name}</div><div className="text-xs text-muted-foreground">{account.email || account.accountId || "Codex account"}</div></TableCell>
                     <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
-                    <TableCell><Badge variant={account.enabled ? "secondary" : "outline"}>{account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
+                    <TableCell><Badge variant={account.enabled ? "secondary" : "outline"} title={account.cliProxyStatusMessage}>{account.cliProxyStatus === "missing" ? "Reconnect required" : account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     <CodexQuotaTableCell accountUsage={usage} loading={usageLoading && !usageData} error={usageError?.message} />
-                    <TableCell>{usageLoading && !usageData ? "…" : usage?.unusedResetCredits ?? "N/A"}</TableCell>
+                    <TableCell>{usageLoading && !usageData ? "…" : (usage?.unusedResetCredits ?? 0) > 0 ? usage?.unusedResetCredits : "Not Available"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
-                    <TableCell><div className="flex justify-end gap-1"><Button aria-busy={pending.has(updateKey)} size="sm" variant="outline" disabled={pending.has(updateKey)} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <LoadingSpinner /> : account.enabled ? "Disable" : "Enable"}</Button><Button aria-busy={pending.has(`reset:${account.id}`)} size="sm" variant="outline" disabled={!usage?.unusedResetCredits || usage.weekly?.remainingPercent !== 0 || pending.has(`reset:${account.id}`)} title="Requires an exhausted weekly quota and an available reset credit" onClick={() => setResetAccount(account)}>{pending.has(`reset:${account.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button><ConfirmAction title={`Remove ${account.name}?`} description="This deletes the stored OAuth credential. You can connect this account again later." pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
+                    <TableCell><div className="flex justify-end gap-1"><Button aria-busy={pending.has(updateKey)} size="sm" variant="outline" disabled={pending.has(updateKey) || account.credentialKind !== "codex-cli-proxy"} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <LoadingSpinner /> : account.enabled ? "Disable" : "Enable"}</Button>{account.credentialKind === "codex-cli-proxy" && (usage?.unusedResetCredits ?? 0) > 0 && <Button aria-busy={pending.has(`reset:${account.id}`)} size="sm" variant="outline" disabled={usage?.weekly?.remainingPercent !== 0 || pending.has(`reset:${account.id}`)} title="Requires an exhausted weekly quota" onClick={() => setResetAccount(account)}>{pending.has(`reset:${account.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}<ConfirmAction title={`Remove ${account.name}?`} description={account.credentialKind === "codex-cli-proxy" ? "This deletes the CLIProxy OAuth credential. You can connect this account again later." : "This removes the unmatched legacy credential from RawRoute. Reconnect it to use this account again."} pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                   </TableRow>
               })}
               {!data.accounts.length && <EmptyRow label="No Codex accounts connected yet." colSpan={7} />}
@@ -190,11 +204,11 @@ export function OAuthProvidersView() {
         </CardContent>
       </Card>
     </div>
-    <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) { setPolling(false); setDevice(null) } }}>
+    <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) cancelCodexLogin() }}>
       <DialogContent>
         <DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>CLIProxy handles the OAuth credential directly. Complete sign-in in the new window while RawRoute waits only to create its workspace mapping.</DialogDescription></DialogHeader>
         {device && <div className="grid gap-4 py-2"><div className="grid gap-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label <span className="font-normal text-muted-foreground">(optional)</span></label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /></div><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button><p className="mt-3 text-xs text-muted-foreground">{polling ? "Waiting for authorization…" : "Login paused."}</p></div></div>}
-        <DialogFooter><Button variant="outline" onClick={() => { setPolling(false); setDevice(null) }}>Cancel</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={cancelCodexLogin}>Cancel</Button></DialogFooter>
       </DialogContent>
     </Dialog>
     <AlertDialog open={Boolean(resetAccount)} onOpenChange={(open) => { if (!open) { setResetAccount(null); setResetConfirmation("") } }}>

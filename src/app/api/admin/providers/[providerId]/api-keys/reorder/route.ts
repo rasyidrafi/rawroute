@@ -15,12 +15,28 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     return jsonError("An ordered API key ID list is required.", 400)
   }
   try {
-    await reorderProviderApiKeys(providerId, body.orderedIds)
     const provider = await getProvider(providerId)
     if (provider?.prefix === "codex") {
       const { accounts } = await listCodexAccounts()
-      await Promise.all(accounts.map((account, index) => setCliProxyCodexAccountPriority(account, accounts.length - index)))
+      const byId = new Map(accounts.map((account) => [account.id, account]))
+      if (accounts.length !== body.orderedIds.length || body.orderedIds.some((id) => !byId.has(id))) throw new Error("Codex account order is out of date.")
+      const mapped = body.orderedIds.flatMap((id, index) => {
+        const account = byId.get(id)!
+        return account.credentialKind === "codex-cli-proxy" ? [{ account, priority: accounts.length - index - 1 }] : []
+      })
+      const changed: typeof mapped = []
+      try {
+        for (const entry of mapped) {
+          await setCliProxyCodexAccountPriority(entry.account, entry.priority)
+          changed.push(entry)
+        }
+        await reorderProviderApiKeys(providerId, body.orderedIds)
+      } catch (error) {
+        await Promise.allSettled(changed.map(({ account }) => setCliProxyCodexAccountPriority(account, account.priority ?? 0)))
+        throw error
+      }
     } else {
+      await reorderProviderApiKeys(providerId, body.orderedIds)
       await syncNonCodexProviderProjection(providerId)
     }
     writeLog("info", "admin", "Provider API keys reordered", { providerId, count: body.orderedIds.length })

@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   cliproxyManagement: vi.fn(),
   cliproxyManagementJson: vi.fn(),
   localRedisDelete: vi.fn(),
+  localRedisCompareAndDelete: vi.fn(),
   localRedisGet: vi.fn(),
   localRedisSet: vi.fn(),
   localRedisSetIfAbsent: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/lib/cliproxy-management", () => ({
   cliproxyManagementJson: mocks.cliproxyManagementJson,
 }))
 vi.mock("@/lib/local-redis", () => ({
+  localRedisCompareAndDelete: mocks.localRedisCompareAndDelete,
   localRedisDelete: mocks.localRedisDelete,
   localRedisGet: mocks.localRedisGet,
   localRedisSet: mocks.localRedisSet,
@@ -63,6 +65,7 @@ beforeEach(() => {
   mocks.currentWorkspaceId.mockReturnValue("workspace-a")
   mocks.localRedisGet.mockResolvedValue(undefined)
   mocks.localRedisDelete.mockResolvedValue(true)
+  mocks.localRedisCompareAndDelete.mockResolvedValue(true)
   mocks.localRedisSet.mockResolvedValue(true)
   mocks.localRedisSetIfAbsent.mockResolvedValue(undefined)
   mocks.getProvider.mockResolvedValue({
@@ -192,4 +195,15 @@ test("uses local projection state on the hot request path", async () => {
   await ensureNonCodexProviderProjection("provider-cache")
 
   expect(mocks.getProvider.mock.calls.length + mocks.listProviderApiKeys.mock.calls.length + mocks.listProviderModels.mock.calls.length).toBe(readsAfterReconcile)
+})
+
+test("releases an acquired distributed projection lock", async () => {
+  mocks.localRedisSetIfAbsent.mockResolvedValue(true)
+
+  await syncNonCodexProviderProjection("provider-a")
+
+  expect(mocks.localRedisCompareAndDelete).toHaveBeenCalledWith(
+    "rawroute:cliproxy-provider-sync:v1:lock:workspace-a:provider-a",
+    expect.any(String),
+  )
 })

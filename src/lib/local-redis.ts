@@ -70,6 +70,17 @@ export async function localRedisDelete(...keys: string[]) {
   return (await boundedCommand(getLocalRedis().del(...keys))) !== undefined
 }
 
+/** Delete a distributed lock only when it is still owned by the caller. */
+export async function localRedisCompareAndDelete(key: string, expectedValue: string) {
+  const result = await boundedCommand(getLocalRedis().eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+    1,
+    key,
+    expectedValue,
+  ))
+  return typeof result === "number" ? result > 0 : false
+}
+
 export async function closeLocalRedis() {
   if (!client) return
   await client.quit().catch(() => client?.disconnect())
