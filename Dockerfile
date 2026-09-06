@@ -11,6 +11,9 @@ COPY . .
 RUN bun run build
 
 FROM oven/bun:1.4.2-slim AS runner
+ARG DEPLOYMENT_VERSION
+LABEL org.opencontainers.image.source="https://github.com/rasyidrafi/rawroute" \
+    org.opencontainers.image.revision=$DEPLOYMENT_VERSION
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

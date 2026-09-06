@@ -1,0 +1,30 @@
+[Unit]
+Description=RawRoute redis
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=docker.io/library/redis:7-alpine
+ContainerName=rawroute-redis
+Network=rawroute.network
+NetworkAlias=redis
+Exec=redis-server --maxmemory 24mb --maxmemory-policy noeviction --save "" --appendonly no
+HealthCmd=redis-cli ping
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthOnFailure=kill
+LogDriver=k8s-file
+LogOpt=max-size=10mb
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=45
+MemoryMax=48M
+MemorySwapMax=64M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

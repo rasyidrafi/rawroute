@@ -27,13 +27,7 @@ services:
     restart: unless-stopped
 
   rawroute:
-    image: rawroute:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}
-        DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-unknown}
+    image: ${RAWROUTE_IMAGE:-docker.io/rasyidrafi/rawroute:latest}
     environment:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}

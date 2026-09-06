@@ -1,0 +1,32 @@
+[Unit]
+Description=RawRoute postgres
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=rawroute-postgres
+Network=rawroute.network
+NetworkAlias=postgres
+EnvironmentFile=/etc/rawroute/postgres.env
+Volume=rawroute-postgres.volume:/var/lib/postgresql/data
+Exec=postgres -c shared_buffers=32MB -c max_connections=20 -c work_mem=1MB -c maintenance_work_mem=16MB -c max_parallel_workers=0
+HealthCmd=pg_isready -U rawroute -d rawroute
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthOnFailure=kill
+LogDriver=k8s-file
+LogOpt=max-size=10mb
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=45
+MemoryMax=160M
+MemorySwapMax=64M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=RawRoute IPv6 loopback listener
+
+[Socket]
+ListenStream=[::1]:8080
+BindIPv6Only=ipv6-only
+
+[Install]
+WantedBy=sockets.target

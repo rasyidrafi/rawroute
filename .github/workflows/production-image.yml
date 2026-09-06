@@ -1,6 +1,9 @@
 name: Production image
 
 on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
   workflow_dispatch:
 
 permissions:
@@ -22,14 +25,18 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run test
-      # next build also checks TypeScript. The VM only loads the finished image.
-      - name: Build production image
-        run: docker build --build-arg DEPLOYMENT_VERSION="$GITHUB_SHA" -t "localhost/rawroute:$GITHUB_SHA" .
-      - name: Export image
-        run: docker save "localhost/rawroute:$GITHUB_SHA" | gzip -1 > rawroute-image.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: docker/login-action@v3
         with:
-          name: rawroute-image-${{ github.sha }}
-          path: rawroute-image.tar.gz
-          retention-days: 7
-          compression-level: 0
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # next build also checks TypeScript. The VM only pulls the finished image.
+      - name: Build production image
+        run: >-
+          docker build --build-arg DEPLOYMENT_VERSION="$GITHUB_SHA"
+          -t "rasyidrafi/rawroute:sha-$GITHUB_SHA"
+          -t rasyidrafi/rawroute:latest .
+      - name: Publish to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker push "rasyidrafi/rawroute:sha-$GITHUB_SHA"
+          docker push rasyidrafi/rawroute:latest

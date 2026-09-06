@@ -1,0 +1,33 @@
+[Unit]
+Description=RawRoute
+Wants=network-online.target
+After=network-online.target
+Wants=rawroute-postgres.service rawroute-redis.service rawroute-cliproxy.service
+After=rawroute-postgres.service rawroute-redis.service rawroute-cliproxy.service
+[Container]
+Image=docker.io/rasyidrafi/rawroute:latest
+Pull=missing
+ContainerName=rawroute
+Network=rawroute.network
+EnvironmentFile=/etc/rawroute/app.env
+Environment=HOSTNAME=::
+PublishPort=127.0.0.1:8080:8080
+HealthCmd=bun -e "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=60s
+HealthRetries=3
+LogDriver=k8s-file
+LogOpt=max-size=10mb
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=45
+MemoryMax=320M
+MemorySwapMax=64M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

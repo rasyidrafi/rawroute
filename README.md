@@ -23,11 +23,21 @@ CLIProxyAPI; it does not proxy or rewrite provider traffic itself.
 
 Requirements: Docker and Docker Compose.
 
+The ready-to-use image is published on [Docker Hub](https://hub.docker.com/r/rasyidrafi/rawroute)
+as `rasyidrafi/rawroute:latest`. Compose pulls it by default; no local build or Bun
+installation is needed. Set `RAWROUTE_IMAGE` to a `sha-<commit>` tag or image digest
+to pin a release. GitHub Actions publishes images after lint, unit tests, the
+production build, and TypeScript checks pass.
+
+For a 1 GB Linux VM, use the [Podman production guide](docs/podman-production.md).
+It includes memory limits, persistent storage, loopback access, and boot startup.
+
 ```bash
 cp .env.example .env.local
 cp cliproxy/config.example.yaml cliproxy/config.yaml
 # Put the same internal key in cliproxy/config.yaml and CLIPROXY_API_KEY.
-docker compose --env-file .env.local up --build
+docker compose --env-file .env.local pull
+docker compose --env-file .env.local up -d
 ```
 
 The dashboard is available at `http://localhost:8080`. Set `RAWROUTE_HOST_PORT`
