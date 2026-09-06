@@ -2,24 +2,24 @@
   "name": "rawroute",
   "version": "1.1.9",
   "private": true,
-  "packageManager": "npm@10.9.2",
+  "packageManager": "bun@1.4.2",
   "engines": {
-    "node": "22.16.0",
-    "npm": "10.9.2"
+    "bun": "1.4.2"
   },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
-    "test": "vitest run",
-    "test:e2e": "playwright test",
-    "reconcile:usage": "tsx scripts/reconcile-usage.ts",
-    "predict:usage": "tsx scripts/predict-missing-usage-cost.ts",
-    "sanitize:usage": "tsx scripts/sanitize-usage-integrity.ts",
-    "delete:gateway-key-data": "tsx scripts/delete-gateway-key-data.ts",
-    "test:local-db": "tsx scripts/local-db-smoke.ts",
-    "backfill:api-key-indexes": "tsx scripts/backfill-api-key-indexes.ts"
+    "dev": "bun --bun next dev",
+    "build": "bun --bun next build",
+    "start": "bun --bun next start",
+    "lint": "bun --bun eslint",
+    "test": "bun --bun vitest run",
+    "test:e2e": "bun --bun playwright test",
+    "reconcile:usage": "bun scripts/reconcile-usage.ts",
+    "predict:usage": "bun scripts/predict-missing-usage-cost.ts",
+    "sanitize:usage": "bun scripts/sanitize-usage-integrity.ts",
+    "delete:gateway-key-data": "bun scripts/delete-gateway-key-data.ts",
+    "test:local-db": "bun scripts/local-db-smoke.ts",
+    "backfill:api-key-indexes": "bun scripts/backfill-api-key-indexes.ts",
+    "typecheck": "bun --bun tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -60,14 +60,9 @@
     "eslint-config-next": "16.3.0",
     "shadcn": "^4.16.2",
     "tailwindcss": "^4",
-    "tsx": "^4.20.3",
     "typescript": "^5",
     "vitest": "^3.2.4"
   },
-  "ignoreScripts": [
-    "sharp",
-    "unrs-resolver"
-  ],
   "trustedDependencies": [
     "protobufjs",
     "sharp",

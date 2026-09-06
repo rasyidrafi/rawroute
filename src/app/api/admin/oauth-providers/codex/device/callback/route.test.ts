@@ -38,7 +38,7 @@ test("accepts the registered localhost Codex callback and forwards its code", as
 })
 
 test("rejects public and mismatched callback URLs", async () => {
-  const publicResponse = await POST(request("http://8.219.106.148:18080/codex/callback?code=secret-code&state=oauth-state"))
+  const publicResponse = await POST(request("http://203.0.113.10:8080/codex/callback?code=secret-code&state=oauth-state"))
   const wrongStateResponse = await POST(request("http://localhost:1455/auth/callback?code=secret-code&state=other-state"))
 
   expect(publicResponse.status).toBe(400)

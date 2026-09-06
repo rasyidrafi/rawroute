@@ -15,21 +15,21 @@ python3 prepare_ai_review_bundle.py . --output-dir ./ai-review-output
 python3 prepare_ai_review_bundle.py . --output-dir ./ai-review-output --dry-run
 ```
 
-Use compatible existing Linux x64 Node 22 dependencies only when they are known-good:
+Use compatible existing Linux x64 Bun 1.4.2 dependencies only when they are known-good:
 
 ```sh
 python3 prepare_ai_review_bundle.py . --include-dependencies --dependency-source existing
 ```
 
 Prefer Docker-built dependencies for builds, tests, or benchmarks in an offline Linux
-x64 Node 22 receiver:
+x64 Bun 1.4.2 receiver:
 
 ```sh
 python3 prepare_ai_review_bundle.py . \
   --output-dir ./ai-review-output \
   --include-dependencies \
   --dependency-source docker \
-  --target-node-version 22.16.0
+  --target-bun-version 1.4.2
 ```
 
 Lifecycle scripts are disabled by default. Enable them only when native binaries or

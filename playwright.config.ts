@@ -12,12 +12,12 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
     {
-      command: "npx tsx tests/e2e/codex-auth-mock.ts",
+      command: "bun tests/e2e/codex-auth-mock.ts",
       url: "http://127.0.0.1:3211/health",
       reuseExistingServer: false,
     },
     {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3100",
+      command: "bun run dev --hostname 127.0.0.1 --port 3100",
       url: "http://127.0.0.1:3100/login",
       reuseExistingServer: false,
       env: {

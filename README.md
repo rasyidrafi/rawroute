@@ -30,6 +30,9 @@ cp cliproxy/config.example.yaml cliproxy/config.yaml
 docker compose --env-file .env.local up --build
 ```
 
+The dashboard is available at `http://localhost:8080`. Set `RAWROUTE_HOST_PORT`
+and `RAWROUTE_PUBLIC_URL` to use a different host port.
+
 Compose pulls `eceasy/cli-proxy-api:latest` from Docker Hub by default. Set `CLI_PROXY_IMAGE` in `.env.local` to use another published Docker Hub or GCR image/tag.
 
 `Enable CLIProxy prompt cache key support` is an opt-in provider setting. It
@@ -63,24 +66,33 @@ OAuth callback paths needed by the dashboard are routed through RawRoute to the 
 
 The ownership and feature-coverage audit is documented in [`docs/cliproxy-coverage.md`](docs/cliproxy-coverage.md). It records which behavior stays native to CLIProxyAPI and which behavior RawRoute adds around it.
 
+## Local development
+
+Install Bun 1.4.2, then run:
+
+```bash
+bun install --frozen-lockfile
+bun run dev
+```
+
+The development server listens on `http://localhost:3000`. For local development,
+set database and Redis URLs to services reachable from your host. Compose service
+names in `.env.example` resolve only inside the Compose network.
+
+Bun runs the application, build tools, tests, and maintenance scripts. Docker uses
+the same pinned Bun version. `node:` imports use Bun's compatibility APIs and do
+not require a separate Node.js installation.
+
 ## Verification
 
 ```bash
-npm install
-npm run lint
-npm test
-npx tsc --noEmit
-npm run build
+bun install --frozen-lockfile
+bun run lint
+bun run test
+bun run typecheck
+bun run build
 docker compose --env-file .env.local config
 ```
-
-For deployment, run the zero-downtime handoff script from this directory:
-
-```bash
-./redeploy-rawroute-18080.sh
-```
-
-It builds the image, copies the live environment without printing secrets, preflights the new image on `:18081`, verifies health/browser/Traefik/public routes, drains the old `:18080` container, switches the direct port through a temporary NAT handoff, and retains the previous container for rollback. It prompts for sudo when needed. Override `RAWROUTE_PREFLIGHT_PORT`, `RAWROUTE_VERIFY_DOMAINS`, or other `RAWROUTE_*` settings when deploying a different environment. The detailed safety requirements remain in `AGENTS.md`.
 
 PostgreSQL is the sole durable RawRoute data store. All workspace documents, provider/model catalogs, aliases, budgets, pricing, usage events, and rollups use the scoped canonical layout. Redis is only a disposable runtime cache for lookup, quota, and lock state; it is safe to flush after a deployment.
 

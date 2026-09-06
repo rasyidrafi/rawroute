@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create safe, portable review bundles for Node.js repositories."""
+"""Create safe, portable review bundles for Bun repositories."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from typing import Any, Iterable, Sequence
 
 
 VERSION = "1.0.0"
-DEFAULT_NODE = "22.16.0"
+DEFAULT_BUN = "1.4.2"
 MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_SOURCE_BYTES = 500 * 1024 * 1024
 TEXT_SCAN_BYTES = 8 * 1024 * 1024
@@ -56,7 +56,7 @@ class PackageMetadata:
     manager: str = "ambiguous"
     manager_version: str | None = None
     package_manager_field: str | None = None
-    node_engine: str | None = None
+    bun_engine: str | None = None
     package_jsons: list[str] = field(default_factory=list)
     lockfiles: list[str] = field(default_factory=list)
     workspaces: list[str] = field(default_factory=list)
@@ -151,7 +151,7 @@ def validate_project_name(value: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Create a secret-scanned Node.js repository bundle for isolated AI review.",
+        description="Create a secret-scanned Bun repository bundle for isolated AI review.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   python prepare_ai_review_bundle.py . --output-dir ./ai-review-output
@@ -171,7 +171,7 @@ verification execute untrusted package or project code only when explicitly requ
     parser.add_argument(
         "--dependency-source", choices=("auto", "existing", "docker"), default="auto"
     )
-    parser.add_argument("--target-node-version", default=DEFAULT_NODE)
+    parser.add_argument("--target-bun-version", default=DEFAULT_BUN)
     parser.add_argument("--target-platform", default="linux")
     parser.add_argument("--target-arch", default="x64")
     parser.add_argument("--include-git-history", action="store_true")
@@ -240,7 +240,7 @@ def detect_metadata(repo: Path) -> PackageMetadata:
     metadata = PackageMetadata()
     packages = discover_package_jsons(repo)
     metadata.package_jsons = [relative_posix(path, repo) for path in packages]
-    metadata.node_engine = str(root_package.get("engines", {}).get("node") or "") or None
+    metadata.bun_engine = str(root_package.get("engines", {}).get("bun") or "") or None
     scripts = root_package.get("scripts", {})
     if isinstance(scripts, dict):
         metadata.scripts = {
@@ -586,7 +586,7 @@ def select_sources(
     return selection
 
 
-def review_template(metadata: PackageMetadata, target_node: str) -> str:
+def review_template(metadata: PackageMetadata, target_bun: str) -> str:
     commands = "\n".join(
         f"- `{metadata.manager} run {name}`: {command}"
         for name, command in metadata.scripts.items()
@@ -606,7 +606,7 @@ Rank security, correctness, reliability, performance, cost, and architecture.
 
 # Runtime and Deployment
 
-- Target: Linux x64, Node.js {target_node}
+- Target: Linux x64, Bun {target_bun}
 - Package manager: {metadata.manager}{' ' + metadata.manager_version if metadata.manager_version else ''}
 - Add database, hosting, CPU, RAM, traffic, concurrency, and latency targets.
 
@@ -649,7 +649,7 @@ def bundle_info(metadata: PackageMetadata, args: argparse.Namespace) -> str:
     commands = [name for name in ("lint", "typecheck", "test", "build") if name in metadata.scripts]
     return f"""# Bundle Information
 
-- Target: {args.target_platform} {args.target_arch}, Node.js {args.target_node_version}
+- Target: {args.target_platform} {args.target_arch}, Bun {args.target_bun_version}
 - Detected package manager: {metadata.manager}{' ' + metadata.manager_version if metadata.manager_version else ''}
 - Source ZIP intentionally excludes `.git` and `node_modules`.
 - {dependency_note}
@@ -659,8 +659,7 @@ Extract the source ZIP first. If a dependency archive is present, extract it at 
 source root so its `node_modules` or package-manager artifacts retain Unix modes and links.
 
 Secret scanning is heuristic and cannot prove that all sensitive data was removed.
-Review `AI_REVIEW_CONTEXT.md` before upload. Bun-native projects can be reviewed as
-source, but a Node-only receiver cannot perform Bun-native runtime testing.
+Review `AI_REVIEW_CONTEXT.md` before upload. Runtime testing requires Bun.
 """
 
 
@@ -795,9 +794,9 @@ def validate_existing_dependencies(repo: Path, metadata: PackageMetadata, args: 
         raise BundleError("Existing dependencies are not proven Linux x64 compatible.", EXIT_DEPENDENCY)
     if args.target_platform != "linux" or args.target_arch != "x64":
         raise BundleError("Existing dependency packaging currently requires linux/x64.", EXIT_DEPENDENCY)
-    node = run_command(["node", "--version"])
-    if node.returncode != 0 or not node.stdout.strip().startswith("v22."):
-        raise BundleError("Existing dependencies require a locally installed Node 22 runtime.", EXIT_DEPENDENCY)
+    bun = run_command(["bun", "--version"])
+    if bun.returncode != 0 or bun.stdout.strip() != args.target_bun_version:
+        raise BundleError("Existing dependencies require the target Bun runtime version.", EXIT_DEPENDENCY)
     paths = dependency_paths(repo, metadata)
     if not paths:
         raise BundleError("No existing dependency installation was found.", EXIT_DEPENDENCY)
@@ -808,25 +807,12 @@ def validate_existing_dependencies(repo: Path, metadata: PackageMetadata, args: 
 
 
 def install_command(metadata: PackageMetadata, install_scripts: bool) -> list[str]:
-    if metadata.manager == "npm":
-        command = ["npm", "ci"]
-        if not install_scripts:
-            command.append("--ignore-scripts")
-        return command
-    if metadata.manager == "pnpm":
-        command = ["pnpm", "install", "--frozen-lockfile"]
-        if not install_scripts:
-            command.append("--ignore-scripts")
-        return command
-    if metadata.manager == "yarn":
-        command = ["yarn", "install", "--immutable"]
-        if not install_scripts:
-            command.extend(["--mode", "skip-builds"])
-        return command
-    raise BundleError(
-        "Bun-native dependency preparation is unavailable in the Node-only target.",
-        EXIT_DEPENDENCY,
-    )
+    if metadata.manager != "bun":
+        raise BundleError("Dependency preparation requires a Bun lockfile.", EXIT_DEPENDENCY)
+    command = ["bun", "install", "--frozen-lockfile"]
+    if not install_scripts:
+        command.append("--ignore-scripts")
+    return command
 
 
 def safe_extract_zip(source: Path, destination: Path) -> None:
@@ -864,18 +850,9 @@ def docker_prepare_dependencies(
     source_root = staging_root / "dependency-source"
     source_root.mkdir()
     safe_extract_zip(source_zip, source_root)
-    image_name = f"node:{args.target_node_version}-bookworm"
+    image_name = f"oven/bun:{args.target_bun_version}-slim"
     install = install_command(metadata, args.install_scripts)
-    shell_script: list[str] = []
-    if metadata.manager in {"pnpm", "yarn"}:
-        shell_script.extend(["corepack", "enable", "&&"])
-        if metadata.manager_version:
-            shell_script.extend([
-                "corepack", "prepare", f"{metadata.manager}@{metadata.manager_version}",
-                "--activate", "&&",
-            ])
-    shell_script.extend(install)
-    command_text = " ".join(shell_script)
+    command_text = " ".join(install)
     docker_argv = [
         "docker", "run", "--rm", "--platform=linux/amd64",
         "-e", "CI=1", "-v", f"{source_root}:/workspace", "-w", "/workspace",
@@ -943,7 +920,7 @@ def run_docker_verification(
         with tarfile.open(dependency_tar, "r:gz") as archive:
             verify_dependency_tar(dependency_tar, metadata)
             archive.extractall(root, filter="data")
-    image_name = f"node:{args.target_node_version}-bookworm"
+    image_name = f"oven/bun:{args.target_bun_version}-slim"
     actions: list[dict[str, Any]] = []
     report_lines = ["AI review bundle verification", f"Image: {image_name}", ""]
     for script in ("typecheck", "test", "lint", "build"):
@@ -952,7 +929,7 @@ def run_docker_verification(
         argv = [
             "docker", "run", "--rm", "--network=none", "--platform=linux/amd64",
             "-e", "CI=1", "-v", f"{root}:/workspace", "-w", "/workspace",
-            image_name, metadata.manager, "run", script,
+            image_name, "bun", "--bun", "run", script,
         ]
         result = run_command(argv, timeout=600)
         actions.append({"script": script, "exit_code": result.returncode})
@@ -964,7 +941,7 @@ def run_docker_verification(
 
 def installed_versions() -> dict[str, str | None]:
     versions: dict[str, str | None] = {}
-    for command in ("node", "npm", "pnpm", "yarn", "bun"):
+    for command in ("bun",):
         if shutil.which(command) is None:
             versions[command] = None
             continue
@@ -982,7 +959,7 @@ def planned_names(name: str, args: argparse.Namespace) -> list[str]:
         f"{name}-review-template.md",
     ]
     if args.include_dependencies:
-        names.append(f"{name}-dependencies-linux-x64-node22.tar.gz")
+        names.append(f"{name}-dependencies-linux-x64-bun.tar.gz")
     if args.include_git_history:
         names.append(f"{name}-history.git.bundle")
     if args.run_verification:
@@ -1015,7 +992,7 @@ def print_dry_run(
         print("Ambiguities: " + "; ".join(metadata.ambiguities))
     print(f"Dependency strategy: {'none' if not args.include_dependencies else args.dependency_source}")
     if args.include_dependencies and args.dependency_source in {"auto", "docker"}:
-        print(f"Planned Docker image: node:{args.target_node_version}-bookworm")
+        print(f"Planned Docker image: oven/bun:{args.target_bun_version}-slim")
         print("Install scripts: " + ("enabled" if args.install_scripts else "disabled"))
     print("Planned outputs:")
     for filename in planned_names(name, args):
@@ -1068,9 +1045,9 @@ def manifest_data(
             "declaration": metadata.package_manager_field,
             "ambiguities": metadata.ambiguities,
         },
-        "node_engine": metadata.node_engine,
+        "bun_engine": metadata.bun_engine,
         "target": {
-            "node": args.target_node_version,
+            "bun": args.target_bun_version,
             "platform": args.target_platform,
             "arch": args.target_arch,
         },
@@ -1107,9 +1084,7 @@ def manifest_data(
         "output_artifact_names": planned_names(name, args),
         "artifacts": [artifact_record(path) for path in artifact_paths],
         "warnings": selection.warnings,
-        "limitations": ([
-            "Bun-native runtime testing is unavailable in the Node-only receiving environment."
-        ] if metadata.bun_native else []),
+        "limitations": [],
     }
 
 
@@ -1155,7 +1130,7 @@ def prepare(args: argparse.Namespace) -> list[Path]:
     review_content = (
         args.review_file.read_text(encoding="utf-8")
         if args.review_file
-        else review_template(metadata, args.target_node_version)
+        else review_template(metadata, args.target_bun_version)
     )
     review_findings = scan_text("AI_REVIEW_CONTEXT.md", review_content)
     if review_findings:
@@ -1186,7 +1161,7 @@ def prepare(args: argparse.Namespace) -> list[Path]:
                         source_mode = "existing"
                     except BundleError:
                         source_mode = "docker"
-            dependency_path = staging / f"{name}-dependencies-linux-x64-node22.tar.gz"
+            dependency_path = staging / f"{name}-dependencies-linux-x64-bun.tar.gz"
             if source_mode == "existing":
                 validate_existing_dependencies(repo, metadata, args)
                 dependency_root = repo
