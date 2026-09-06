@@ -90,6 +90,19 @@ Run maintenance jobs and checks one at a time. Avoid development servers,
 local builds, and browser automation on this VM. Larger datasets and more
 concurrent requests may require a larger VM or external PostgreSQL.
 
+## Verified deployment
+
+On 2026-09-06, image revision `33190c9` ran on this Debian VM with 853 MiB of
+usable RAM. After login, dashboard rendering, and 100 mixed health/workspace
+requests at concurrency four, the services used 160 MiB combined and the VM had
+386 MiB available. Every request succeeded; the slowest took 196 ms.
+
+IPv4 and IPv6 localhost health passed. A created workspace survived PostgreSQL
+and app restarts, and systemd recovered the app after a forced process failure.
+These checks used a fresh database and local administrative endpoints. Provider
+inference requires configured credentials and has not been load-tested. Browser
+testing remains manual.
+
 ## Verification and recovery
 
 ```bash
