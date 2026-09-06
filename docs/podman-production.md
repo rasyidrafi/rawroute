@@ -1,8 +1,8 @@
 # Production on a 1 GB VM
 
 Use Podman 5 or newer with systemd and cgroup v2. The service files run rootful
-containers and enforce memory limits through systemd. Only RawRoute is published,
-on `127.0.0.1:8080`. An optional systemd socket proxy also serves `[::1]:8080`.
+containers and enforce memory limits through systemd. RawRoute is published on all
+IPv4 interfaces at port 8080. An optional systemd socket proxy also serves `[::1]:8080`.
 PostgreSQL, Redis, and CLIProxyAPI remain on the private container network.
 
 ## Build and publish
@@ -133,7 +133,10 @@ sudo podman exec rawroute-postgres pg_dump -U rawroute -d rawroute -Fc > rawrout
 sudo podman volume export rawroute-cliproxy-auth > rawroute-cliproxy-auth.tar
 ```
 
-To access a localhost-only installation from another computer, use an SSH tunnel:
+The service accepts IPv4 traffic on port 8080. Keep host firewall rules restrictive,
+or place it behind a TLS reverse proxy before exposing it to the Internet.
+
+To access the IPv6 localhost listener from another computer, use an SSH tunnel:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 your-user@your-vm
