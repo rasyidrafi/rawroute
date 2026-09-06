@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import { checkBudget, getBudgetAdmission, getBudgetRequestState, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
 import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
 import type { UsageEvent } from "@/lib/types"
@@ -126,6 +126,23 @@ describe.sequential("usage analytics", () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.every((session) => session.startedAt && session.endedAt)).toBe(true)
     expect((await getBudgetWindow()).bypassLimits).toBe(false)
+  })
+
+  test("allows only selected models past a budget limit and continues counting their usage", async () => {
+    const key = await createApiKey("Beyond limit")
+    expect(await getBudgetBeyondLimitsSettings()).toMatchObject({ enabled: false, modelIds: [], updatedAt: "" })
+    const allowed = await configureTestPricing({ modelId: "allowed-model", gatewayModelId: "test/allowed", upstreamModel: "allowed", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
+    const blocked = await configureTestPricing({ modelId: "blocked-model", gatewayModelId: "test/blocked", upstreamModel: "blocked", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 100, enabled: true })
+    await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: allowed.id, gatewayModelId: allowed.gatewayModelId, protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 100 } })
+
+    await setBudgetBeyondLimitsSettings({ enabled: true, modelIds: [allowed.gatewayModelId] })
+    expect(await getBudgetBeyondLimitsSettings()).toMatchObject({ enabled: true, modelIds: [allowed.gatewayModelId] })
+    await expect(getBudgetAdmission(key.id, allowed.gatewayModelId, allowed.id)).resolves.toBeUndefined()
+    await expect(getBudgetAdmission(key.id, blocked.gatewayModelId, blocked.id)).rejects.toThrow("budget")
+
+    await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: allowed.id, gatewayModelId: allowed.gatewayModelId, protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 25 } })
+    expect((await getBudgetRows()).find((row) => row.apiKeyId === key.id)?.spentMicros).toBe(125)
   })
 
   test("tracks Unlimited Mode usage from the active session in budgets and usage payloads", async () => {

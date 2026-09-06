@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getLocalFirestore, listLocalDocuments, type Firestore, type LocalQuery } from "@/lib/local-db"
 
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
-import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "@/lib/store"
+import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels, listProviders } from "@/lib/store"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
@@ -11,7 +11,7 @@ import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSamp
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
 import { writeLog } from "@/lib/logger"
 import { listSharedModelsForRecipient } from "@/lib/model-shares"
-import type { BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
+import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 import { listWorkspaces } from "@/lib/workspaces"
 
@@ -22,6 +22,7 @@ interface AnalyticsMemoryState {
   budgets: Map<string, GatewayKeyBudget>
   budgetCounters: Map<string, { spentMicros: number; lastUsedAt?: string }>
   bypassSessions: Map<string, BudgetBypassSession>
+  beyondLimits?: BudgetBeyondLimitsSettings
   window?: BudgetWindow
 }
 declare global { var __rawrouteAnalyticsMemory: Map<string, AnalyticsMemoryState> | undefined }
@@ -94,6 +95,8 @@ const bypassSessionCache = new Map<string, TimedValue<BudgetBypassSession | null
 const bypassSessionInflight = new Map<string, Promise<BudgetBypassSession | undefined>>()
 const bypassSessionListCache = new Map<string, TimedValue<BudgetBypassSession[]>>()
 const bypassSessionListInflight = new Map<string, Promise<BudgetBypassSession[]>>()
+const beyondLimitsCache = new Map<string, TimedValue<BudgetBeyondLimitsSettings>>()
+const beyondLimitsInflight = new Map<string, Promise<BudgetBeyondLimitsSettings>>()
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
 const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
 const dashboardModelLabelCache = new Map<string, TimedValue<Map<string, string>>>()
@@ -388,6 +391,8 @@ function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean 
   clearWorkspaceEntries(bypassSessionInflight, workspaceId)
   clearWorkspaceEntries(bypassSessionListCache, workspaceId)
   clearWorkspaceEntries(bypassSessionListInflight, workspaceId)
+  beyondLimitsCache.delete(workspaceId)
+  beyondLimitsInflight.delete(workspaceId)
   clearWorkspaceEntries(dashboardCache, workspaceId)
   clearWorkspaceEntries(dashboardInflight, workspaceId)
 }
@@ -412,9 +417,11 @@ function rollupsRef() { return workspaceRef().collection("usageRollups") }
 function budgetsRef() { return workspaceRef().collection("budgets") }
 function budgetCountersRef() { return workspaceRef().collection("budgetCounters") }
 function bypassSessionsRef() { return workspaceRef().collection("budgetBypassSessions") }
+function beyondLimitsRef() { return workspaceRef().collection("budgetSettings").doc("beyondLimits") }
 function windowRef() { return workspaceRef().collection("budgetWindows").doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
 function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
+function defaultBeyondLimitsSettings(): BudgetBeyondLimitsSettings { return { enabled: false, modelIds: [], updatedAt: "" } }
 function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
 function sharedWorkspaceBudgetId(workspaceId: string) { return `shared-workspace:${workspaceId}` }
 function sharedWorkspaceIdFromBudgetId(value: string) { return value.startsWith("shared-workspace:") ? value.slice("shared-workspace:".length) : undefined }
@@ -868,6 +875,49 @@ export async function listBudgetBypassSessions(limit = 50, currentWindow?: Budge
   })
   bypassSessionListInflight.set(cacheId, promise)
   return promise
+}
+
+function normalizeBeyondLimitsSettings(value: Partial<BudgetBeyondLimitsSettings> | undefined): BudgetBeyondLimitsSettings {
+  const fallback = defaultBeyondLimitsSettings()
+  return {
+    enabled: value?.enabled === true,
+    modelIds: [...new Set((value?.modelIds || []).filter((id): id is string => typeof id === "string" && id.trim().length > 0))],
+    updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : fallback.updatedAt,
+  }
+}
+
+export async function getBudgetBeyondLimitsSettings(): Promise<BudgetBeyondLimitsSettings> {
+  if (isMemory()) return normalizeBeyondLimitsSettings(memoryState().beyondLimits)
+  const workspaceId = currentWorkspaceId()
+  const cached = beyondLimitsCache.get(workspaceId)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = beyondLimitsInflight.get(workspaceId)
+  if (existing) return existing
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const promise = beyondLimitsRef().get().then((snapshot) => {
+    const settings = normalizeBeyondLimitsSettings(snapshot.exists ? snapshot.data() as Partial<BudgetBeyondLimitsSettings> : undefined)
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+      boundedSet(beyondLimitsCache, workspaceId, { value: settings, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+    }
+    return settings
+  }).finally(() => {
+    if (beyondLimitsInflight.get(workspaceId) === promise) beyondLimitsInflight.delete(workspaceId)
+  })
+  beyondLimitsInflight.set(workspaceId, promise)
+  return promise
+}
+
+export async function setBudgetBeyondLimitsSettings(input: Pick<BudgetBeyondLimitsSettings, "enabled" | "modelIds">): Promise<BudgetBeyondLimitsSettings> {
+  const settings: BudgetBeyondLimitsSettings = {
+    enabled: input.enabled === true,
+    modelIds: [...new Set(input.modelIds.filter((id) => typeof id === "string" && id.trim().length > 0))],
+    updatedAt: new Date().toISOString(),
+  }
+  if (isMemory()) memoryState().beyondLimits = settings
+  else await beyondLimitsRef().set(settings)
+  invalidateBudgetReadCaches()
+  boundedSet(beyondLimitsCache, currentWorkspaceId(), { value: settings, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+  return settings
 }
 
 function codexBudgetWindowSyncKey(accountId: string) {
@@ -1846,7 +1896,11 @@ export async function getBudgetRequestState(
   if (!pricing) throw new BudgetPricingUnavailableError("This API key cannot call a model without configured pricing.")
 
   const spentMicros = await budgetSpentMicros(budget, window)
-  if (spentMicros >= budget.weeklyLimitMicros) throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
+  if (spentMicros >= budget.weeklyLimitMicros) {
+    const beyondLimits = await getBudgetBeyondLimitsSettings()
+    if (beyondLimits.enabled && beyondLimits.modelIds.includes(gatewayModelId)) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
+    throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
+  }
   return {
     usageContext,
     pricing,
@@ -2019,10 +2073,13 @@ async function loadBudgetRows(
 }
 
 export async function getBudgetAdminData() {
-  const [keys, window, codex] = await Promise.all([
+  const [keys, window, codex, models, providers, beyondLimits] = await Promise.all([
     budgetSelectableKeys(),
     getBudgetWindow(),
     listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
+    listModels(),
+    listProviders(),
+    getBudgetBeyondLimitsSettings(),
   ])
   const [{ rows }, bypassSessions] = await Promise.all([
     loadBudgetRows(keys, window, undefined, { freshUsage: true }),
@@ -2032,6 +2089,11 @@ export async function getBudgetAdminData() {
     budgets: rows,
     bypassSessions,
     window,
+    beyondLimits,
+    modelOptions: models
+      .filter((model) => model.enabled && providers.some((provider) => provider.id === model.providerId && provider.enabled))
+      .map((model) => ({ id: model.gatewayModelId || model.id, name: model.name, provider: providers.find((provider) => provider.id === model.providerId)?.name || "Unknown provider" }))
+      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
     apiKeys: keys.map((key) => ({ id: key.id, name: key.name })),
     codexAccounts: codex.accounts.map((account) => ({ id: account.id, name: account.name, ...(account.planType ? { planType: account.planType } : {}) })),
   }

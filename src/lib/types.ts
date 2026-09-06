@@ -306,6 +306,12 @@ export interface BudgetBypassSession {
   endedAt: string | null
 }
 
+export interface BudgetBeyondLimitsSettings {
+  enabled: boolean
+  modelIds: string[]
+  updatedAt: string
+}
+
 export interface DashboardQuery {
   preset: "today" | "yesterday" | "week" | "lastWeek" | "month" | "lastMonth" | "year" | "all" | "custom" | "budget"
   from?: string
