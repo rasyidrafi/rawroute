@@ -1,0 +1,35 @@
+name: Production image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run test
+      # next build also checks TypeScript. The VM only loads the finished image.
+      - name: Build production image
+        run: docker build --build-arg DEPLOYMENT_VERSION="$GITHUB_SHA" -t "localhost/rawroute:$GITHUB_SHA" .
+      - name: Export image
+        run: docker save "localhost/rawroute:$GITHUB_SHA" | gzip -1 > rawroute-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rawroute-image-${{ github.sha }}
+          path: rawroute-image.tar.gz
+          retention-days: 7
+          compression-level: 0
