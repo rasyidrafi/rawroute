@@ -7,7 +7,7 @@ import { writeLog } from "@/lib/logger"
 import { resolveSharedModelForRecipient } from "@/lib/model-shares"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
-import { listAliases, listModels, listProviders } from "@/lib/store"
+import { listAliases, listCombos, listModels, listProviders } from "@/lib/store"
 import type { Protocol, UsageEvent } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
 import { getWorkspace } from "@/lib/workspaces"
@@ -337,8 +337,8 @@ async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, mo
 }
 
 async function canonicalModelsResponse() {
-  const [models, providers, aliases] = await Promise.all([listModels(), listProviders(), listAliases()])
-  return Response.json({ object: "list", data: catalogModels(providers, models, aliases) }, { headers: { "cache-control": "no-store" } })
+  const [models, providers, aliases, combos] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos()])
+  return Response.json({ object: "list", data: catalogModels(providers, models, aliases, combos) }, { headers: { "cache-control": "no-store" } })
 }
 
 export function isTerminalStreamEvent(eventName: string, parsed: Record<string, unknown> | undefined) {
@@ -427,7 +427,7 @@ export async function proxyGatewayRequest(request: Request, path = new URL(reque
     writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: protocolForLogPath(path) })
     return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
   }
-  return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey))
+  return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey)).then(responseWithoutComboHeaders)
 }
 
 async function releaseBudgetReservationWithLog(reservation: BudgetReservation | undefined) {
@@ -438,7 +438,50 @@ async function releaseBudgetReservationWithLog(reservation: BudgetReservation | 
   }
 }
 
+function responseWithoutComboHeaders(response: Response) {
+  const headers = responseHeaders(response.headers)
+  headers.delete("x-rawroute-combo-terminal")
+  headers.delete("x-rawroute-combo-member-unavailable")
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+}
+
+function comboRetryable(response: Response) {
+  if (response.headers.get("x-rawroute-combo-terminal") === "1") return false
+  if (response.headers.get("x-rawroute-combo-member-unavailable") === "1") return true
+  return response.status === 408 || response.status === 429 || response.status >= 500
+}
+
 async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }) {
+  const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
+  if (!isInference) return proxyGatewaySingleRequest(request, path, apiKey)
+  const rawBody = new Uint8Array(await request.clone().arrayBuffer())
+  let payload: Record<string, unknown> | undefined
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(rawBody)) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>
+  } catch {}
+  const requestedModel = typeof payload?.model === "string" ? payload.model.trim() : ""
+  if (!requestedModel) return proxyGatewaySingleRequest(request, path, apiKey)
+  const combo = (await listCombos()).find((entry) => entry.combo === requestedModel)
+  if (!combo) return proxyGatewaySingleRequest(request, path, apiKey)
+
+  let lastResponse: Response | undefined
+  for (const memberModelId of combo.memberModelIds) {
+    const memberRequest = new Request(request.url, {
+      method: request.method,
+      headers: new Headers(request.headers),
+      body: JSON.stringify({ ...payload, model: memberModelId }),
+      signal: request.signal,
+    })
+    const response = await proxyGatewaySingleRequest(memberRequest, path, apiKey)
+    if (response.ok || !comboRetryable(response)) return responseWithoutComboHeaders(response)
+    lastResponse = response
+    writeLog("warn", "gateway", "Combo member failed, trying next", { combo: combo.combo, memberModelId, status: response.status })
+  }
+  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
+}
+
+async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }) {
   const supplied = suppliedGatewayKey(request)
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
@@ -462,7 +505,13 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       ? error
       : new GatewayModelResolutionError("Model resolver is unavailable.", 503, "model_resolver_unavailable")
     writeLog(resolution.status === 400 ? "warn" : "error", "gateway", "Model resolution failed", { model: estimate.model, error: error instanceof Error ? error.message : "Unknown error" })
-    return new Response(JSON.stringify({ error: { message: resolution.message, code: resolution.code } }), { status: resolution.status, headers: { "content-type": "application/json" } })
+    return new Response(JSON.stringify({ error: { message: resolution.message, code: resolution.code } }), {
+      status: resolution.status,
+      headers: {
+        "content-type": "application/json",
+        ...(resolution.code === "model_not_found" ? { "x-rawroute-combo-member-unavailable": "1" } : {}),
+      },
+    })
   }
   const payload = objectValue(parsed) || {}
   const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path)
@@ -489,13 +538,13 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
         )
   } catch (error) {
     if (error instanceof BudgetDeniedError) {
-      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds) } })
+      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" } })
     }
     if (error instanceof BudgetPricingUnavailableError) {
-      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json" } })
+      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
     }
     writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
-    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json" } })
+    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
   }
 
   try {
@@ -505,11 +554,11 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       writeLog("warn", "gateway", "Budget admission denied", { apiKeyId: apiKey.id, error: error.message })
       return new Response(JSON.stringify({ error: { message: error.message } }), {
         status: error.status,
-        headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds) },
+        headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" },
       })
     }
     writeLog("error", "gateway", "Shared budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
-    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json" } })
+    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
   }
 
   const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
@@ -530,7 +579,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     await releaseBudgetReservationWithLog(reservation)
     await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
     writeLog("error", "gateway", "Upstream request failed", { provider, model: resolvedModel.pricingGatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
-    throw error
+    return new Response(JSON.stringify({ error: { message: "Upstream request failed." } }), { status: 502, headers: { "content-type": "application/json" } })
   }
   if (response.ok && response.body && response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
     const [downstream, monitor] = response.body.tee()

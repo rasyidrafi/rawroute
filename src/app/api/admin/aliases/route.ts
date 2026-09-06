@@ -3,7 +3,7 @@ import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getSharedModelForRecipient, listSharedModelsForRecipient } from "@/lib/model-shares"
-import { listAliases, listModels, listProviders, upsertAlias } from "@/lib/store"
+import { listAliases, listCombos, listModels, listProviders, upsertAlias } from "@/lib/store"
 import type { ModelAlias } from "@/lib/types"
 
 
@@ -13,7 +13,7 @@ export async function GET() {
   } catch {
     return jsonError("Unauthorized", 401)
   }
-  const [aliases, models, providers, sharedModels] = await Promise.all([listAliases(), listModels(), listProviders(), listSharedModelsForRecipient()])
+  const [aliases, combos, models, providers, sharedModels] = await Promise.all([listAliases(), listCombos(), listModels(), listProviders(), listSharedModelsForRecipient()])
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const availableModels = models
     .filter((model) => {
@@ -21,7 +21,7 @@ export async function GET() {
       return Boolean(provider && provider.enabled !== false && model.enabled)
     })
   const availableProviders = providers.filter((provider) => provider.enabled !== false)
-  return Response.json({ aliases, models: availableModels, providers: availableProviders, sharedModels })
+  return Response.json({ aliases, combos, models: availableModels, providers: availableProviders, sharedModels })
 }
 
 export async function POST(request: Request) {

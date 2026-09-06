@@ -91,6 +91,15 @@ export interface ModelAlias {
   createdAt: string
 }
 
+/** A named, ordered fallback chain of resolvable gateway model IDs. */
+export interface ModelCombo {
+  id: string
+  combo: string
+  name: string
+  memberModelIds: string[]
+  createdAt: string
+}
+
 export interface ModelShare {
   id: string
   ownerWorkspaceId: string
@@ -361,6 +370,7 @@ export interface AppData {
   providerApiKeys: ProviderApiKey[]
   models: Model[]
   aliases: ModelAlias[]
+  combos: ModelCombo[]
   apiKeys: ApiKey[]
 }
 

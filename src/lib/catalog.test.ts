@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 
 import { catalogLiteLlmModelInfo, catalogModels } from "@/lib/catalog"
-import type { Model, ModelAlias, Provider } from "@/lib/types"
+import type { Model, ModelAlias, ModelCombo, Provider } from "@/lib/types"
 
 const provider = { id: "p", prefix: "p", protocol: "openai-chat", enabled: true } as Provider
 const model = { id: "p/model", providerId: "p", enabled: true, createdAt: "2026-01-01T00:00:00Z" } as Model
@@ -10,6 +10,14 @@ const alias: ModelAlias = {
   alias: "my-cool-model",
   name: "My Cool Model",
   targetModelId: "p/model",
+  createdAt: "2026-01-01T00:00:00Z",
+}
+
+const combo: ModelCombo = {
+  id: "combo-1",
+  combo: "coding-fallback",
+  name: "Coding fallback",
+  memberModelIds: ["p/model"],
   createdAt: "2026-01-01T00:00:00Z",
 }
 
@@ -48,6 +56,10 @@ test("catalog excludes aliases whose target model is disabled, missing, or whose
   expect(catalogModels([provider], [disabledModel], [alias])).toEqual([])
   expect(catalogModels([provider], [], [alias])).toEqual([])
   expect(catalogModels([{ ...provider, enabled: false }], [model], [alias])).toEqual([])
+})
+
+test("catalog includes a combo with an available member", () => {
+  expect(catalogModels([provider], [model], [], [combo]).map((entry) => entry.id)).toEqual(["p/model", "coding-fallback"])
 })
 
 test("LiteLLM catalog returns model discovery metadata", () => {

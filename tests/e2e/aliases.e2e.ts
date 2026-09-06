@@ -48,23 +48,24 @@ async function seedProviderAndModel(page: Page) {
   expect(providerResponse.ok()).toBe(true)
   const providerId = (await providerResponse.json()).providerId as string
 
-  const modelResponse = await page.request.post(`/api/admin/providers/${providerId}/models`, {
-    data: {
-      model: {
-        gatewayModelId: "target-model",
-        name: "Target Model",
-        upstreamModel: "upstream/target-model",
-      },
-    },
-  })
-  expect(modelResponse.ok()).toBe(true)
+  const detail = await page.request.get(`/api/admin/providers/${providerId}`)
+  expect(detail.ok()).toBe(true)
+  const existingModels = new Set(((await detail.json()).models as Array<{ gatewayModelId: string }>).map((model) => model.gatewayModelId))
+  for (const model of [
+    { gatewayModelId: "target-model", name: "Target Model", upstreamModel: "upstream/target-model" },
+    { gatewayModelId: "target-model-2", name: "Target Model Two", upstreamModel: "upstream/target-model-2" },
+  ]) {
+    if (existingModels.has(`alias-target/${model.gatewayModelId}`)) continue
+    const modelResponse = await page.request.post(`/api/admin/providers/${providerId}/models`, { data: { model } })
+    expect(modelResponse.ok()).toBe(true)
+  }
 }
 
 test("Alias menu creates, deduplicates and deletes a model alias", async ({ page }) => {
   await authenticate(page)
   await seedProviderAndModel(page)
   await page.goto("/dashboard/aliases")
-  await expect(page.getByRole("link", { name: "Alias" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Model routing" })).toBeVisible()
   await expect(page.getByText("No aliases yet.")).toBeVisible()
 
   await page.getByRole("button", { name: "Add alias" }).click()
@@ -99,6 +100,39 @@ test("Alias menu creates, deduplicates and deletes a model alias", async ({ page
   await page.getByRole("button", { name: "Delete My Cool Model Edited?" }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
   await expect(page.getByText("No aliases yet.")).toBeVisible()
+
+  await restoreDefaultPassword(page)
+})
+
+test("Model routing menu creates, reorders and deletes a fallback combo", async ({ page }) => {
+  await authenticate(page)
+  await seedProviderAndModel(page)
+  await page.goto("/dashboard/aliases")
+  await expect(page.getByText("No combos yet.")).toBeVisible()
+
+  await page.getByRole("main").getByRole("button", { name: "Add combo" }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByPlaceholder("my-coding-fallback").fill("coding-fallback")
+  await dialog.getByPlaceholder("My coding fallback").fill("Coding fallback")
+  await dialog.getByRole("combobox").click()
+  await page.getByRole("option", { name: /alias-target\/target-model/ }).click()
+  await dialog.getByRole("button", { name: "Add model" }).click()
+  await dialog.getByRole("combobox").click()
+  await page.getByRole("option", { name: /alias-target\/target-model-2/ }).click()
+  await dialog.getByRole("button", { name: "Add model" }).click()
+  await dialog.getByRole("button", { name: "Add combo" }).click()
+
+  await expect(page.getByText("coding-fallback")).toBeVisible()
+  await expect(page.getByText("alias-target/target-model-2")).toBeVisible()
+
+  await page.getByRole("button", { name: "Edit Coding fallback" }).click()
+  await dialog.getByRole("button", { name: "Move alias-target/target-model-2 up" }).click()
+  await dialog.getByRole("button", { name: "Save changes" }).click()
+  await expect(page.getByRole("row").filter({ hasText: "Coding fallback" }).locator("ol li")).toHaveText(["alias-target/target-model-2", "alias-target/target-model"])
+
+  await page.getByRole("button", { name: "Delete Coding fallback?" }).click()
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
+  await expect(page.getByText("No combos yet.")).toBeVisible()
 
   await restoreDefaultPassword(page)
 })

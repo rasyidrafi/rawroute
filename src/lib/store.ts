@@ -4,7 +4,7 @@ import { type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, t
 import { gatewayModelId, cleanAliasId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
-import type { ApiKey, AppData, Model, ModelAlias, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
+import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
 import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, workspaceContext } from "@/lib/workspace-context"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
@@ -47,6 +47,7 @@ interface WorkspaceCacheState {
   providerModelsCache: Map<string, ReadCache<Model[]>>
   modelsCache: ReadCache<Model[]>
   aliasesCache: ReadCache<ModelAlias[]>
+  combosCache: ReadCache<ModelCombo[]>
   apiKeysCache: ReadCache<ApiKey[]>
   apiKeyHashIndex?: Map<string, ApiKey>
   generation: number
@@ -76,6 +77,7 @@ function workspaceCacheState() {
     providerModelsCache: new Map(),
     modelsCache: { expiresAt: 0 },
     aliasesCache: { expiresAt: 0 },
+    combosCache: { expiresAt: 0 },
     apiKeysCache: { expiresAt: 0 },
     generation: 0,
   }
@@ -257,6 +259,17 @@ function aliasFromSnapshot(snapshot: DocumentSnapshot): ModelAlias {
   return { ...snapshot.data(), id: snapshot.id } as ModelAlias
 }
 
+function comboFromSnapshot(snapshot: DocumentSnapshot): ModelCombo {
+  const data = snapshot.data() as Partial<ModelCombo>
+  return {
+    id: snapshot.id,
+    combo: data.combo || "",
+    name: data.name || "",
+    memberModelIds: Array.isArray(data.memberModelIds) ? data.memberModelIds.filter((member): member is string => typeof member === "string") : [],
+    createdAt: data.createdAt || "",
+  }
+}
+
 function storedProvider(provider: Provider) {
   return stripUndefined({
     name: provider.name,
@@ -360,12 +373,18 @@ function storedAlias(alias: ModelAlias) {
   return stripUndefined(data)
 }
 
+function storedCombo(combo: ModelCombo) {
+  const { id, ...data } = combo
+  void id
+  return stripUndefined(data)
+}
+
 export function isMemoryBackend() {
   return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test"
 }
 
-type RoutingData = Pick<AppData, "sessionSecret" | "providers" | "providerApiKeys" | "models" | "aliases">
-type CatalogData = Pick<AppData, "providers" | "models" | "aliases">
+type RoutingData = Pick<AppData, "sessionSecret" | "providers" | "providerApiKeys" | "models" | "aliases" | "combos">
+type CatalogData = Pick<AppData, "providers" | "models" | "aliases" | "combos">
 interface DataCache<T> { data: T; expiresAt: number; revision?: string; fullRefreshAt?: number }
 
 function clearReadCache<T>(cache: ReadCache<T>) {
@@ -505,6 +524,7 @@ function invalidateRoutingCaches() {
   clearReadCache(state.allProviderApiKeysCache)
   clearReadCache(state.modelsCache)
   clearReadCache(state.aliasesCache)
+  clearReadCache(state.combosCache)
   clearReadCache(state.apiKeysCache)
   clearReadCacheMap(state.providerApiKeysCache)
   clearReadCacheMap(state.providerModelsCache)
@@ -560,6 +580,13 @@ function validateAliasInput(input: Partial<ModelAlias> & { originalId?: string }
   }
 }
 
+function validateComboInput(input: Partial<ModelCombo> & { originalId?: string }) {
+  if (!input.originalId && (typeof input.name !== "string" || !input.name.trim())) throw new Error("Combo name is required.")
+  if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) throw new Error("Combo name must be between 1 and 80 characters.")
+  if (input.combo !== undefined && (typeof input.combo !== "string" || !cleanAliasId(input.combo))) throw new Error("Combo gateway ID is required.")
+  if (input.memberModelIds !== undefined && (!Array.isArray(input.memberModelIds) || input.memberModelIds.some((member) => typeof member !== "string" || !member.trim()))) throw new Error("Combo models are invalid.")
+}
+
 function assertModelMutationAllowed(existing: Model | undefined) {
   if (existing?.source === "builtin") {
     throw new Error("Built-in models are fixed and cannot be edited.")
@@ -576,6 +603,8 @@ interface MemoryState {
   providerApiKeys: Map<string, Map<string, ProviderApiKey>>
   models: Map<string, Map<string, Model>>
   aliases: Map<string, ModelAlias>
+  combos: Map<string, ModelCombo>
+  gatewayIds: Map<string, string>
   apiKeys: Map<string, ApiKey>
   apiKeyIndexes: Map<string, string>
   initialized: boolean
@@ -588,7 +617,7 @@ function memoryRoot(): MemoryRoot {
 }
 
 function newMemoryState(): MemoryState {
-  return { meta: memoryRoot().meta, providers: new Map(), providerApiKeys: new Map(), models: new Map(), aliases: new Map(), apiKeys: new Map(), apiKeyIndexes: new Map(), initialized: false }
+  return { meta: memoryRoot().meta, providers: new Map(), providerApiKeys: new Map(), models: new Map(), aliases: new Map(), combos: new Map(), gatewayIds: new Map(), apiKeys: new Map(), apiKeyIndexes: new Map(), initialized: false }
 }
 
 function ensureMemorySeeded(workspaceId = currentWorkspaceId()): MemoryState {
@@ -617,6 +646,7 @@ function memorySnapshot(state: MemoryState) {
     providerApiKeys: new Map(state.providerApiKeys),
     models: new Map(state.models),
     aliases: new Map(state.aliases),
+    combos: new Map(state.combos),
     apiKeys: new Map(state.apiKeys),
     apiKeyIndexes: new Map(state.apiKeyIndexes),
   }
@@ -719,6 +749,18 @@ function aliasesRef() {
 
 function aliasRef(aliasId: string) {
   return aliasesRef().doc(aliasId)
+}
+
+function combosRef() {
+  return workspaceRootRef().collection("combos")
+}
+
+function comboRef(comboId: string) {
+  return combosRef().doc(comboId)
+}
+
+function gatewayIdRef(id: string) {
+  return workspaceRootRef().collection("gatewayIds").doc(Buffer.from(id, "utf8").toString("base64url"))
 }
 
 function apiKeysRef() {
@@ -1165,6 +1207,28 @@ export async function deleteAlias(aliasId: string): Promise<void> {
   invalidateRoutingCaches()
 }
 
+export async function listCombos(): Promise<ModelCombo[]> {
+  if (isMemoryBackend()) return [...ensureMemorySeeded().combos.values()].sort(compareCombos)
+  return cachedRead(workspaceCacheState().combosCache, firestoreListCombos)
+}
+
+function compareCombos(left: ModelCombo, right: ModelCombo) {
+  return left.combo.localeCompare(right.combo, undefined, { sensitivity: "base", numeric: true })
+}
+
+export async function upsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
+  validateComboInput(input)
+  const combo = isMemoryBackend() ? memoryUpsertCombo(input) : await firestoreUpsertCombo(input)
+  invalidateRoutingCaches()
+  return combo
+}
+
+export async function deleteCombo(comboId: string): Promise<void> {
+  if (isMemoryBackend()) memoryDeleteCombo(comboId)
+  else await firestoreDeleteCombo(comboId)
+  invalidateRoutingCaches()
+}
+
 export async function listApiKeys(): Promise<ApiKey[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().apiKeys.values()]
@@ -1278,6 +1342,7 @@ function clearConfigurationSourceCaches(state: WorkspaceCacheState, includeMeta 
   clearReadCache(state.allProviderApiKeysCache)
   clearReadCache(state.modelsCache)
   clearReadCache(state.aliasesCache)
+  clearReadCache(state.combosCache)
   clearReadCacheMap(state.providerApiKeysCache)
   clearReadCacheMap(state.providerModelsCache)
   if (includeMeta) {
@@ -1319,8 +1384,8 @@ function reusableConfigurationCache<T>(cache: DataCache<T> | undefined, revision
 }
 
 async function loadCatalogSource(): Promise<CatalogData> {
-  const [providers, models, aliases] = await Promise.all([listProviders(), listModels(), listAliases()])
-  return { providers, models, aliases }
+  const [providers, models, aliases, combos] = await Promise.all([listProviders(), listModels(), listAliases(), listCombos()])
+  return { providers, models, aliases, combos }
 }
 
 async function readSharedCatalogData(): Promise<CatalogData> {
@@ -1328,8 +1393,8 @@ async function readSharedCatalogData(): Promise<CatalogData> {
   const now = Date.now()
   if (state.catalogDataCache && state.catalogDataCache.expiresAt > now) return state.catalogDataCache.data
   if (state.routingDataCache && state.routingDataCache.expiresAt > now) {
-    const { providers, models, aliases } = state.routingDataCache.data
-    return { providers, models, aliases }
+    const { providers, models, aliases, combos } = state.routingDataCache.data
+    return { providers, models, aliases, combos }
   }
   if (!state.catalogDataReadPromise) {
     const generation = state.generation
@@ -1368,9 +1433,9 @@ async function readSharedRoutingData(): Promise<RoutingData> {
       const fullRefreshAt = Date.now() + routingFullRefreshIntervalMs
       if (generation === state.generation) {
         state.routingDataCache = { data: loaded.data, revision: loaded.revision, expiresAt: Date.now() + cacheTtlMs, fullRefreshAt }
-        const { providers, models, aliases } = loaded.data
+        const { providers, models, aliases, combos } = loaded.data
         state.catalogDataCache = {
-          data: { providers, models, aliases },
+          data: { providers, models, aliases, combos },
           revision: loaded.revision,
           expiresAt: Date.now() + cacheTtlMs,
           fullRefreshAt,
@@ -1533,6 +1598,85 @@ async function firestoreGetProvider(providerId: string): Promise<Provider | unde
   return snapshot.exists ? providerFromSnapshot(snapshot) : undefined
 }
 
+function gatewayIdOwner(kind: "alias" | "combo" | "model", id: string) {
+  return `${kind}:${id}`
+}
+
+function normalizedGatewayId(id: string) {
+  return cleanAliasId(id)
+}
+
+async function assertFirestoreGatewayIdAvailable(transaction: Transaction, id: string, owner: string) {
+  const normalizedId = normalizedGatewayId(id)
+  if (!normalizedId) throw new Error("Gateway model ID is required.")
+  const [reservation, aliases, combos, providers] = await Promise.all([
+    transaction.get(gatewayIdRef(normalizedId)),
+    transaction.get(aliasesRef()),
+    transaction.get(combosRef()),
+    transaction.get(providersRef()),
+  ])
+  const modelSnapshots = await Promise.all(providers.docs.map(async (provider) => ({ providerId: provider.id, snapshot: await transaction.get(modelsRef(provider.id)) })))
+  const claimedBy = reservation.exists ? reservation.data()?.owner : undefined
+  if (typeof claimedBy === "string" && claimedBy !== owner) throw new Error("Gateway model ID is already in use.")
+  for (const alias of aliases.docs) {
+    if (normalizedGatewayId(aliasFromSnapshot(alias).alias) !== normalizedId) continue
+    if (gatewayIdOwner("alias", alias.id) !== owner) throw new Error("Gateway model ID is already in use.")
+  }
+  for (const combo of combos.docs) {
+    if (normalizedGatewayId(comboFromSnapshot(combo).combo) !== normalizedId) continue
+    if (gatewayIdOwner("combo", combo.id) !== owner) throw new Error("Gateway model ID is already in use.")
+  }
+  for (const { providerId, snapshot } of modelSnapshots) {
+    for (const model of snapshot.docs) {
+      if (normalizedGatewayId(modelFromSnapshot(model, providerId).gatewayModelId) !== normalizedId) continue
+      if (gatewayIdOwner("model", `${providerId}:${model.id}`) !== owner) throw new Error("Gateway model ID is already in use.")
+    }
+  }
+  return normalizedId
+}
+
+async function firestoreGatewayIdReservation(transaction: Transaction, id: string, owner: string) {
+  const normalizedId = normalizedGatewayId(id)
+  if (!normalizedId) return undefined
+  const snapshot = await transaction.get(gatewayIdRef(normalizedId))
+  return snapshot.exists && snapshot.data()?.owner === owner ? normalizedId : undefined
+}
+
+function reserveFirestoreGatewayId(transaction: Transaction, id: string, owner: string) {
+  transaction.set(gatewayIdRef(id), { owner })
+}
+
+function releaseFirestoreGatewayId(transaction: Transaction, id: string | undefined) {
+  if (id) transaction.delete(gatewayIdRef(id))
+}
+
+function assertMemoryGatewayIdAvailable(state: MemoryState, id: string, owner: string) {
+  const normalizedId = normalizedGatewayId(id)
+  if (!normalizedId) throw new Error("Gateway model ID is required.")
+  const claimedBy = state.gatewayIds.get(normalizedId)
+  if (claimedBy && claimedBy !== owner) throw new Error("Gateway model ID is already in use.")
+  for (const alias of state.aliases.values()) {
+    if (normalizedGatewayId(alias.alias) === normalizedId && gatewayIdOwner("alias", alias.id) !== owner) throw new Error("Gateway model ID is already in use.")
+  }
+  for (const combo of state.combos.values()) {
+    if (normalizedGatewayId(combo.combo) === normalizedId && gatewayIdOwner("combo", combo.id) !== owner) throw new Error("Gateway model ID is already in use.")
+  }
+  for (const [providerId, models] of state.models) {
+    for (const model of models.values()) {
+      if (normalizedGatewayId(model.gatewayModelId || model.id) === normalizedId && gatewayIdOwner("model", `${providerId}:${model.id}`) !== owner) throw new Error("Gateway model ID is already in use.")
+    }
+  }
+  return normalizedId
+}
+
+function reserveMemoryGatewayId(state: MemoryState, id: string, owner: string) {
+  state.gatewayIds.set(id, owner)
+}
+
+function releaseMemoryGatewayId(state: MemoryState, id: string, owner: string) {
+  if (state.gatewayIds.get(id) === owner) state.gatewayIds.delete(id)
+}
+
 async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
   const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
@@ -1548,6 +1692,19 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
 
     const existingModels = existing && existing.prefix !== desiredPrefix
       ? await transaction.get(modelsRef(existing.id))
+      : undefined
+    const migratedModels = existingModels
+      ? migrateProviderModels(existingModels.docs.map((snapshot) => modelFromSnapshot(snapshot, id)), desiredPrefix)
+      : undefined
+    const migratedReservations = migratedModels
+      ? await Promise.all([...migratedModels.values()].map(async (model) => {
+          const owner = gatewayIdOwner("model", `${id}:${model.id}`)
+          const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, model.gatewayModelId, owner)
+          const previous = existingModels!.docs.find((snapshot) => snapshot.id === model.id)!
+          const previousId = normalizedGatewayId(modelFromSnapshot(previous, id).gatewayModelId)
+          const previousReservation = previousId !== normalizedId ? await firestoreGatewayIdReservation(transaction, previousId, owner) : undefined
+          return { model, owner, normalizedId, previousReservation }
+        }))
       : undefined
     const providerInput = stripUndefined({
       name: input.name,
@@ -1578,10 +1735,11 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
       enabledModelCount: existing?.enabledModelCount ?? 0,
     } as Provider
     transaction.set(providerRef(id), storedProvider(provider))
-    if (existingModels) {
-      const models = existingModels.docs.map((snapshot) => modelFromSnapshot(snapshot, id))
-      for (const model of migrateProviderModels(models, provider.prefix).values()) {
+    if (migratedReservations) {
+      for (const { model, owner, normalizedId, previousReservation } of migratedReservations) {
         transaction.set(modelRef(id, model.id), storedModel(model))
+        reserveFirestoreGatewayId(transaction, normalizedId, owner)
+        releaseFirestoreGatewayId(transaction, previousReservation)
       }
     }
     bumpRoutingRevision(transaction)
@@ -1596,8 +1754,13 @@ async function firestoreDeleteProvider(providerId: string): Promise<void> {
       transaction.get(providerApiKeysRef(providerId)),
       transaction.get(modelsRef(providerId)),
     ])
+    const modelReservations = await Promise.all(models.docs.map(async (doc) => {
+      const model = modelFromSnapshot(doc, providerId)
+      return firestoreGatewayIdReservation(transaction, model.gatewayModelId, gatewayIdOwner("model", `${providerId}:${model.id}`))
+    }))
     apiKeys.docs.forEach((doc) => transaction.delete(doc.ref))
     models.docs.forEach((doc) => transaction.delete(doc.ref))
+    modelReservations.forEach((reservation) => releaseFirestoreGatewayId(transaction, reservation))
     transaction.delete(providerRef(providerId))
     bumpRoutingRevision(transaction)
   })
@@ -1731,7 +1894,8 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     const existing = existingSnapshot?.exists ? modelFromSnapshot(existingSnapshot, providerId) : undefined
     if (input.originalId && !existing) throw new Error("Model not found.")
     assertModelMutationAllowed(existing)
-    const gatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
+    const rawGatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
+    const gatewayModelId = normalizedGatewayId(rawGatewayModelId)
     const name = input.name || existing?.name || ""
     const upstreamModel = input.upstreamModel || existing?.upstreamModel || ""
     if (!name || !upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
@@ -1740,6 +1904,12 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     if (gatewayMatches.docs.some((document) => document.id !== input.originalId)) throw new Error("Gateway model ID is already in use.")
 
     const modelId = existing ? input.originalId! : modelsRef(providerId).doc().id
+    const owner = gatewayIdOwner("model", `${providerId}:${modelId}`)
+    const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, gatewayModelId, owner)
+    const previousId = existing ? normalizedGatewayId(existing.gatewayModelId || existing.id) : undefined
+    const previousReservation = previousId && previousId !== normalizedId
+      ? await firestoreGatewayIdReservation(transaction, previousId, owner)
+      : undefined
     const inputWithoutIds = stripUndefined({
       name: input.name,
       upstreamModel: input.upstreamModel,
@@ -1759,6 +1929,8 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(modelRef(providerId, modelId), storedModel(model))
+    reserveFirestoreGatewayId(transaction, normalizedId, owner)
+    releaseFirestoreGatewayId(transaction, previousReservation)
     if (!existing) {
       transaction.update(providerRef(providerId), { modelCount: FieldValue.increment(1), enabledModelCount: FieldValue.increment(model.enabled ? 1 : 0) })
     } else if (existing.enabled !== model.enabled) {
@@ -1777,7 +1949,9 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
     if (!snapshot.exists) return
     const model = modelFromSnapshot(snapshot, providerId)
     if (model.source === "builtin") throw new Error("Built-in models cannot be deleted.")
+    const reservation = await firestoreGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
     transaction.delete(ref)
+    releaseFirestoreGatewayId(transaction, reservation)
     transaction.update(providerRef(providerId), {
       modelCount: FieldValue.increment(-1),
       enabledModelCount: FieldValue.increment(model.enabled ? -1 : 0),
@@ -1804,6 +1978,12 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
     if (aliasMatches.docs.some((document) => document.id !== input.originalId)) throw new Error("Alias is already in use.")
 
     const aliasId = existing ? input.originalId! : aliasesRef().doc().id
+    const owner = gatewayIdOwner("alias", aliasId)
+    const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, normalizedAlias, owner)
+    const previousId = existing ? normalizedGatewayId(existing.alias) : undefined
+    const previousReservation = previousId && previousId !== normalizedId
+      ? await firestoreGatewayIdReservation(transaction, previousId, owner)
+      : undefined
     const inputWithoutIds = { ...input }
     delete inputWithoutIds.id
     delete inputWithoutIds.originalId
@@ -1818,6 +1998,8 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(aliasRef(aliasId), storedAlias(alias))
+    reserveFirestoreGatewayId(transaction, normalizedId, owner)
+    releaseFirestoreGatewayId(transaction, previousReservation)
     bumpRoutingRevision(transaction)
     return alias
   })
@@ -1829,7 +2011,62 @@ async function firestoreDeleteAlias(aliasId: string): Promise<void> {
     const ref = aliasRef(aliasId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
+    const alias = aliasFromSnapshot(snapshot)
+    const reservation = await firestoreGatewayIdReservation(transaction, alias.alias, gatewayIdOwner("alias", alias.id))
     transaction.delete(ref)
+    releaseFirestoreGatewayId(transaction, reservation)
+    bumpRoutingRevision(transaction)
+  })
+}
+
+async function firestoreListCombos(): Promise<ModelCombo[]> {
+  const snapshot = await combosRef().get()
+  return snapshot.docs.map(comboFromSnapshot).sort(compareCombos)
+}
+
+async function firestoreUpsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
+  const firestore = getLocalDatabase()
+  return firestore.runTransaction(async (transaction) => {
+    const existingSnapshot = input.originalId ? await transaction.get(comboRef(input.originalId)) : undefined
+    const existing = existingSnapshot?.exists ? comboFromSnapshot(existingSnapshot) : undefined
+    if (input.originalId && !existing) throw new Error("Combo not found.")
+    const normalizedCombo = cleanAliasId(input.combo || existing?.combo || "")
+    if (!normalizedCombo) throw new Error("Combo gateway ID is required.")
+    const matches = await transaction.get(combosRef().where("combo", "==", normalizedCombo).limit(2))
+    if (matches.docs.some((document) => document.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
+    const comboId = existing ? input.originalId! : combosRef().doc().id
+    const owner = gatewayIdOwner("combo", comboId)
+    const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, normalizedCombo, owner)
+    const previousId = existing ? normalizedGatewayId(existing.combo) : undefined
+    const previousReservation = previousId && previousId !== normalizedId
+      ? await firestoreGatewayIdReservation(transaction, previousId, owner)
+      : undefined
+    const memberModelIds = input.memberModelIds === undefined ? existing?.memberModelIds || [] : input.memberModelIds.map((member) => member.trim())
+    const combo: ModelCombo = {
+      id: comboId,
+      combo: normalizedCombo,
+      name: input.name?.trim() || existing?.name || "",
+      memberModelIds,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    }
+    transaction.set(comboRef(comboId), storedCombo(combo))
+    reserveFirestoreGatewayId(transaction, normalizedId, owner)
+    releaseFirestoreGatewayId(transaction, previousReservation)
+    bumpRoutingRevision(transaction)
+    return combo
+  })
+}
+
+async function firestoreDeleteCombo(comboId: string): Promise<void> {
+  const firestore = getLocalDatabase()
+  await firestore.runTransaction(async (transaction) => {
+    const ref = comboRef(comboId)
+    const snapshot = await transaction.get(ref)
+    if (!snapshot.exists) return
+    const combo = comboFromSnapshot(snapshot)
+    const reservation = await firestoreGatewayIdReservation(transaction, combo.combo, gatewayIdOwner("combo", combo.id))
+    transaction.delete(ref)
+    releaseFirestoreGatewayId(transaction, reservation)
     bumpRoutingRevision(transaction)
   })
 }
@@ -1929,14 +2166,30 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
   } as Provider
   const existingModels = existing && existing.prefix !== provider.prefix ? state.models.get(id) : undefined
   const migratedModels = existingModels ? migrateProviderModels(existingModels.values(), provider.prefix) : undefined
+  const migratedReservations = migratedModels ? [...migratedModels.values()].map((model) => {
+    const owner = gatewayIdOwner("model", `${id}:${model.id}`)
+    const normalizedId = assertMemoryGatewayIdAvailable(state, model.gatewayModelId, owner)
+    const previous = existingModels!.get(model.id)!
+    const previousId = normalizedGatewayId(previous.gatewayModelId || previous.id)
+    return { owner, normalizedId, previousId, model }
+  }) : undefined
   state.providers.set(id, provider)
   if (migratedModels) state.models.set(id, migratedModels)
+  if (migratedReservations) {
+    for (const { owner, normalizedId, previousId } of migratedReservations) {
+      reserveMemoryGatewayId(state, normalizedId, owner)
+      if (previousId !== normalizedId) releaseMemoryGatewayId(state, previousId, owner)
+    }
+  }
 
   return provider
 }
 
 function memoryDeleteProvider(providerId: string): void {
   const state = ensureMemorySeeded()
+  for (const model of state.models.get(providerId)?.values() || []) {
+    releaseMemoryGatewayId(state, normalizedGatewayId(model.gatewayModelId || model.id), gatewayIdOwner("model", `${providerId}:${model.id}`))
+  }
   state.providers.delete(providerId)
   state.providerApiKeys.delete(providerId)
   state.models.delete(providerId)
@@ -2034,13 +2287,17 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
   if (input.originalId && !existing) throw new Error("Model not found.")
   assertModelMutationAllowed(existing)
   const modelId = existing ? input.originalId! : crypto.randomUUID()
-  const gatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
+  const rawGatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
+  const gatewayModelId = normalizedGatewayId(rawGatewayModelId)
   const name = input.name || existing?.name || ""
   const upstreamModel = input.upstreamModel || existing?.upstreamModel || ""
   if (!name || !upstreamModel || !gatewayModelId) throw new Error("Model fields are incomplete.")
   for (const model of slot.values()) {
     if (model.id !== input.originalId && (model.gatewayModelId || model.id) === gatewayModelId) throw new Error("Gateway model ID is already in use.")
   }
+  const owner = gatewayIdOwner("model", `${providerId}:${modelId}`)
+  const normalizedId = assertMemoryGatewayIdAvailable(state, gatewayModelId, owner)
+  const previousId = existing ? normalizedGatewayId(existing.gatewayModelId || existing.id) : undefined
   const inputWithoutIds = stripUndefined({
     name: input.name,
     upstreamModel: input.upstreamModel,
@@ -2061,6 +2318,8 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
   }
   slot.set(modelId, model)
   state.models.set(providerId, slot)
+  reserveMemoryGatewayId(state, normalizedId, owner)
+  if (previousId && previousId !== normalizedId) releaseMemoryGatewayId(state, previousId, owner)
   if (!existing) {
     state.providers.set(providerId, {
       ...provider,
@@ -2086,6 +2345,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
   if (!model || !slot) return
   if (model.source === "builtin") throw new Error("Built-in models cannot be deleted.")
   slot.delete(modelId)
+  releaseMemoryGatewayId(state, normalizedGatewayId(model.gatewayModelId || model.id), gatewayIdOwner("model", `${providerId}:${model.id}`))
   state.providers.set(providerId, {
     ...provider,
     modelCount: Math.max(0, provider.modelCount - 1),
@@ -2104,6 +2364,9 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
     if (alias.id !== input.originalId && (alias.alias || alias.id) === normalizedAlias) throw new Error("Alias is already in use.")
   }
   const aliasId = existing ? input.originalId! : crypto.randomUUID()
+  const owner = gatewayIdOwner("alias", aliasId)
+  const normalizedId = assertMemoryGatewayIdAvailable(state, normalizedAlias, owner)
+  const previousId = existing ? normalizedGatewayId(existing.alias) : undefined
   const inputWithoutIds = { ...input }
   delete inputWithoutIds.id
   delete inputWithoutIds.originalId
@@ -2118,14 +2381,51 @@ function memoryUpsertAlias(input: Partial<ModelAlias> & { originalId?: string })
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
   state.aliases.set(aliasId, alias)
+  reserveMemoryGatewayId(state, normalizedId, owner)
+  if (previousId && previousId !== normalizedId) releaseMemoryGatewayId(state, previousId, owner)
 
   return alias
 }
 
 function memoryDeleteAlias(aliasId: string): void {
   const state = ensureMemorySeeded()
+  const alias = state.aliases.get(aliasId)
+  if (alias) releaseMemoryGatewayId(state, normalizedGatewayId(alias.alias), gatewayIdOwner("alias", alias.id))
   state.aliases.delete(aliasId)
 
+}
+
+function memoryUpsertCombo(input: Partial<ModelCombo> & { originalId?: string }): ModelCombo {
+  const state = ensureMemorySeeded()
+  const existing = input.originalId ? state.combos.get(input.originalId) : undefined
+  if (input.originalId && !existing) throw new Error("Combo not found.")
+  const normalizedCombo = cleanAliasId(input.combo || existing?.combo || "")
+  if (!normalizedCombo) throw new Error("Combo gateway ID is required.")
+  for (const combo of state.combos.values()) {
+    if (combo.id !== input.originalId && combo.combo === normalizedCombo) throw new Error("Combo gateway ID is already in use.")
+  }
+  const comboId = existing ? input.originalId! : crypto.randomUUID()
+  const owner = gatewayIdOwner("combo", comboId)
+  const normalizedId = assertMemoryGatewayIdAvailable(state, normalizedCombo, owner)
+  const previousId = existing ? normalizedGatewayId(existing.combo) : undefined
+  const combo: ModelCombo = {
+    id: comboId,
+    combo: normalizedCombo,
+    name: input.name?.trim() || existing?.name || "",
+    memberModelIds: input.memberModelIds === undefined ? existing?.memberModelIds || [] : input.memberModelIds.map((member) => member.trim()),
+    createdAt: existing?.createdAt || new Date().toISOString(),
+  }
+  state.combos.set(combo.id, combo)
+  reserveMemoryGatewayId(state, normalizedId, owner)
+  if (previousId && previousId !== normalizedId) releaseMemoryGatewayId(state, previousId, owner)
+  return combo
+}
+
+function memoryDeleteCombo(comboId: string): void {
+  const state = ensureMemorySeeded()
+  const combo = state.combos.get(comboId)
+  if (combo) releaseMemoryGatewayId(state, normalizedGatewayId(combo.combo), gatewayIdOwner("combo", combo.id))
+  state.combos.delete(comboId)
 }
 
 function memoryCreateApiKey(name: string, customKey?: string): ApiKey {

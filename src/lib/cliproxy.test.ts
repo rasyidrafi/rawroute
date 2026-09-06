@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createGatewayUsageEvent: vi.fn(),
   recordUsageEvent: vi.fn(),
   listAliases: vi.fn(),
+  listCombos: vi.fn(),
   listModels: vi.fn(),
   listProviders: vi.fn(),
   writeLog: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("@/lib/cliproxy-provider-sync", () => ({
 vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
 vi.mock("@/lib/store", () => ({
   listAliases: mocks.listAliases,
+  listCombos: mocks.listCombos,
   listModels: mocks.listModels,
   listProviders: mocks.listProviders,
 }))
@@ -63,6 +65,7 @@ beforeEach(() => {
   mocks.recordUsageEvent.mockResolvedValue(undefined)
   mocks.ensureNonCodexProviderProjection.mockResolvedValue(undefined)
   mocks.listAliases.mockResolvedValue([])
+  mocks.listCombos.mockResolvedValue([])
   mocks.listModels.mockResolvedValue([{
     id: "codex-model",
     providerId: "codex",
@@ -129,6 +132,59 @@ test("returns 429 when budget reservation is denied", async () => {
     error: "Weekly budget exceeded.",
   })
   expect(globalThis.fetch).not.toHaveBeenCalled()
+})
+
+test("tries combo members in order after an upstream failure", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([
+    { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
+    { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
+  ])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  globalThis.fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json({ error: { message: "rate limited" } }, { status: 429 }))
+    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "coding-fallback", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(200)
+  await expect(response.json()).resolves.toEqual({ id: "response-from-b" })
+  const forwardedModels = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)
+  expect(forwardedModels).toEqual(["rr-ws-default-p-p/a", "rr-ws-default-p-p/b"])
+})
+
+test("skips an unavailable combo member and does not expose its internal retry marker", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([
+    { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
+  ])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/disabled", "p/b"], createdAt: new Date().toISOString() }])
+  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ id: "response-from-b" })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "coding-fallback", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(200)
+  expect(response.headers.has("x-rawroute-combo-member-unavailable")).toBe(false)
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+})
+
+test("does not expose the unavailable-member marker outside a combo", async () => {
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "missing/model", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(400)
+  expect(response.headers.has("x-rawroute-combo-member-unavailable")).toBe(false)
 })
 
 test("normalizes reasoning_effort before forwarding Responses requests", async () => {

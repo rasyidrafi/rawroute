@@ -1,4 +1,4 @@
-import type { Model, ModelAlias, Provider } from "@/lib/types"
+import type { Model, ModelAlias, ModelCombo, Provider } from "@/lib/types"
 
 function enabledProviderIndex(providers: Provider[]) {
   const index = new Map<string, Provider>()
@@ -10,7 +10,7 @@ function modelGatewayId(model: Model) {
   return model.gatewayModelId || model.id
 }
 
-export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = []) {
+export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = [], combos: ModelCombo[] = []) {
   const enabledProviders = enabledProviderIndex(providers)
   const enabledModels = new Map<string, { model: Model; provider: Provider }>()
   const entries: Array<{ id: string; object: "model"; created: number; owned_by: string; protocol: string }> = []
@@ -39,6 +39,17 @@ export function catalogModels(providers: Provider[], models: Model[], aliases: M
       created: Math.floor(Date.parse(alias.createdAt) / 1000),
       owned_by: target.provider.prefix,
       protocol: target.provider.protocol,
+    })
+  }
+  const availableAliases = new Set(aliases.filter((alias) => enabledModels.has(alias.targetModelId) || Boolean(alias.sharedModelId)).map((alias) => alias.alias))
+  for (const combo of combos) {
+    if (!combo.memberModelIds.some((member) => enabledModels.has(member) || availableAliases.has(member))) continue
+    entries.push({
+      id: combo.combo,
+      object: "model",
+      created: Math.floor(Date.parse(combo.createdAt) / 1000),
+      owned_by: "rawroute",
+      protocol: "openai-chat",
     })
   }
   return entries
