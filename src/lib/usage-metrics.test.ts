@@ -86,6 +86,39 @@ describe("usage metric extraction", () => {
     })).toMatchObject({ costMicros: 100, pricingConfidence: "assumed" })
   })
 
+  test("keeps complete token usage usable when cache-write metadata is omitted", () => {
+    const normalized = normalizeUsageMetrics({ input: 27_340, cached: 26_368, output: 207 })
+    expect(normalized).toMatchObject({ usageAvailable: true, usageCompleteness: "complete", cacheReadTokens: 26_368, cacheCreationTokens: 0 })
+    expect(calculateCostMicros(normalized, {
+      inputMicrosPerMillion: 10_000_000,
+      outputMicrosPerMillion: 50_000_000,
+      cacheReadMicrosPerMillion: 1_000_000,
+      cacheCreationMicrosPerMillion: 12_500_000,
+    })).toMatchObject({ costMicros: 46_438, pricingConfidence: "assumed" })
+    expect((normalized as { cacheCreationProvided?: boolean }).cacheCreationProvided).toBe(false)
+  })
+
+  test("treats an explicit zero cache-write count as known", () => {
+    const normalized = normalizeUsageMetrics({ input: 27_340, cached: 26_368, cacheCreation: 0, output: 207 })
+    expect(calculateCostMicros(normalized, {
+      inputMicrosPerMillion: 10_000_000,
+      outputMicrosPerMillion: 50_000_000,
+      cacheReadMicrosPerMillion: 1_000_000,
+      cacheCreationMicrosPerMillion: 12_500_000,
+    })).toMatchObject({ costMicros: 46_438, pricingConfidence: "exact" })
+  })
+
+  test("keeps missing cache-read metadata ambiguous", () => {
+    const normalized = normalizeUsageMetrics({ input: 27_340, output: 207, cacheCreation: 0 })
+    expect(calculateCostMicros(normalized, {
+      inputMicrosPerMillion: 10_000_000,
+      outputMicrosPerMillion: 50_000_000,
+      cacheReadMicrosPerMillion: 1_000_000,
+      cacheCreationMicrosPerMillion: 12_500_000,
+    })).toMatchObject({ costMicros: 283_750, pricingConfidence: "assumed" })
+    expect((normalized as { cacheReadProvided?: boolean }).cacheReadProvided).toBe(false)
+  })
+
   test("sanitizes negative and overflowing provider counts", () => {
     const normalized = normalizeUsageMetrics({ input: -4, output: Number.MAX_VALUE })
     expect(normalized).toMatchObject({ inputTokens: 0, outputTokens: Number.MAX_SAFE_INTEGER, usageCompleteness: "partial" })

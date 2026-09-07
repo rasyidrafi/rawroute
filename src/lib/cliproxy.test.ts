@@ -232,6 +232,31 @@ test("accepts terminal stream events even when usage is missing", async () => {
   await expect(collectStreamUsage(stream)).resolves.toMatchObject({ completedNormally: true, terminalEventSeen: true, usage: undefined })
 })
 
+test("merges Anthropic input and cache usage from separate stream events", async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode([
+        "event: message_start",
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":120,"cache_creation_input_tokens":30,"cache_read_input_tokens":850}}}',
+        "",
+        "event: message_delta",
+        'data: {"type":"message_delta","usage":{"output_tokens":4}}',
+        "",
+        "event: message_stop",
+        'data: {"type":"message_stop"}',
+        "",
+      ].join("\n")))
+      controller.close()
+    },
+  })
+
+  await expect(collectStreamUsage(stream)).resolves.toMatchObject({
+    completedNormally: true,
+    terminalEventSeen: true,
+    usage: { input: 1_000, cached: 850, cacheCreation: 30, output: 4 },
+  })
+})
+
 test("marks a stream without a terminal event as incomplete", async () => {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {

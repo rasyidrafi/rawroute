@@ -174,6 +174,46 @@ describe("model pricing catalog", () => {
     expect(admissionAfterRepricing?.key).not.toBe(admissionBeforeRepricing?.key)
   })
 
+  test("repricing removes an inflated complete estimate without inventing exact cache pricing", async () => {
+    const providerEntry = await upsertProvider(provider("cx"))
+    const model = await upsertModel(providerEntry.id, { id: "astra", name: "Astra", gatewayModelId: "cx/gpt-6-astra", upstreamModel: "gpt-6-astra" })
+    const group = (await syncModelPricingGroups()).find((entry) => entry.name === "Astra")!
+    await savePricingVersion({ groupId: group.id, mode: "new", rates: { inputMicrosPerMillion: 9_000_000, outputMicrosPerMillion: 50_000_000, cacheReadMicrosPerMillion: 1_000_000, cacheCreationMicrosPerMillion: 12_500_000 }, contextTiers: [] })
+    const completedAt = new Date().toISOString()
+    const key = await createApiKey("Historical Astra")
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
+    await recordUsageEvent({
+      id: "inflated-astra",
+      gatewayKeyId: key.id,
+      providerModelId: model.id,
+      gatewayModelId: model.gatewayModelId,
+      protocol: "openai-responses",
+      startedAt: completedAt,
+      completedAt,
+      status: 200,
+      durationMs: 1,
+      inputTokens: 27_340,
+      outputTokens: 207,
+      cacheReadTokens: 26_368,
+      cacheCreationTokens: 0,
+      totalTokens: 27_547,
+      costMicros: 270_947,
+      pricingConfidence: "assumed",
+      usageAvailable: true,
+      usageCompleteness: "complete",
+      costSource: "reservation",
+    })
+
+    const replacement = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 10_000_000, outputMicrosPerMillion: 50_000_000, cacheReadMicrosPerMillion: 1_000_000, cacheCreationMicrosPerMillion: 12_500_000 }, contextTiers: [] })
+    await repriceUsageForGroup(replacement.job!.id)
+
+    const event = (await listUsageEvents()).find((entry) => entry.id === "inflated-astra")
+    expect(event).toMatchObject({ costMicros: 46_438, pricingConfidence: "assumed", costSource: "configured-pricing", usageCompleteness: "complete" })
+    expect((await listUsageRollups("hourly")).reduce((total, rollup) => total + rollup.costMicros, 0)).toBe(46_438)
+    expect((await getDashboardPayload({ preset: "all" })).summary).toMatchObject({ costMicros: 46_438, pricedRequests: 0, unpricedRequests: 1 })
+    expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(46_438)
+  })
+
   test("keeps requests without recorded usage unpriced during repricing", async () => {
     const providerEntry = await upsertProvider(provider("cx"))
     const model = await upsertModel(providerEntry.id, { id: "first", name: "First", gatewayModelId: "cx/gpt-5.6-sol", upstreamModel: "gpt-5.6-sol" })

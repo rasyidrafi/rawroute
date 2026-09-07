@@ -745,7 +745,13 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     catch { pricing = undefined }
   }
   const calculated = calculateCostMicros(normalized, pricing)
-  const suppliedAssumption = calculated.pricingConfidence !== "exact" && pricing && Number.isSafeInteger(input.assumedCostMicros) && Number(input.assumedCostMicros) > 0
+  // Pricing confidence describes whether every pricing-relevant field was
+  // observed. It does not describe whether the provider returned enough token
+  // usage to justify replacing the measured calculation with a request
+  // estimate. An omitted cache field keeps the confidence assumed, but a
+  // complete input/output pair still gives us the measured settlement basis.
+  const fallbackEligible = input.status >= 200 && input.status < 300 && normalized.usageCompleteness !== "complete"
+  const suppliedAssumption = fallbackEligible && pricing && Number.isSafeInteger(input.assumedCostMicros) && Number(input.assumedCostMicros) > 0
     ? Number(input.assumedCostMicros)
     : undefined
   // A partial response gives us a useful lower-bound calculation. The request
@@ -2643,11 +2649,18 @@ function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingV
   }
   const normalized = normalizeUsageMetrics({ input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens })
   const calculated = calculateCostMicros(normalized, version)
+  // Persisted events do not retain cache-field presence. If the original
+  // event was complete but pricing was assumed, recalculating the token-based
+  // amount is safe, while promoting it to exact would invent certainty that
+  // the source record did not have.
+  const pricingConfidence = event.pricingConfidence === "assumed" && calculated.pricingConfidence !== "unpriced"
+    ? "assumed" as const
+    : calculated.pricingConfidence
   const after: UsageEvent = {
     ...event,
     ...normalized,
     costMicros: calculated.costMicros,
-    pricingConfidence: calculated.pricingConfidence,
+    pricingConfidence,
     costSource: calculated.pricingConfidence === "unpriced" ? event.costSource : "configured-pricing",
     pricingGroupId: groupId,
     pricingVersionId: version.id,

@@ -64,6 +64,129 @@ describe.sequential("usage analytics", () => {
     expect((await listUsageRollups()).map((rollup) => rollup.granularity).sort()).toEqual(["daily", "hourly"])
   })
 
+  test("settles complete Astra usage from tokens instead of the oversized request estimate", async () => {
+    const key = await createApiKey("Astra measured usage")
+    const model = await configureTestPricing({
+      modelId: "astra-model",
+      gatewayModelId: "codex/gpt-6-astra",
+      upstreamModel: "gpt-6-astra",
+      inputMicrosPerMillion: 10_000_000,
+      outputMicrosPerMillion: 50_000_000,
+      cacheReadMicrosPerMillion: 1_000_000,
+      cacheCreationMicrosPerMillion: 12_500_000,
+    })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1_000_000, enabled: true })
+
+    const startedAt = new Date(Date.now() - 10).toISOString()
+    const first = await recordGatewayUsage({
+      id: "astra-first",
+      gatewayKeyId: key.id,
+      providerModelId: model.id,
+      gatewayModelId: model.gatewayModelId,
+      protocol: "openai-responses",
+      startedAt,
+      status: 200,
+      durationMs: 10,
+      requestBodyBytes: 119_862,
+      metrics: { input: 27_340, cached: 26_368, output: 207 },
+      assumedCostMicros: 270_947,
+    })
+    const second = await recordGatewayUsage({
+      id: "astra-second",
+      gatewayKeyId: key.id,
+      providerModelId: model.id,
+      gatewayModelId: model.gatewayModelId,
+      protocol: "openai-responses",
+      startedAt,
+      status: 200,
+      durationMs: 10,
+      metrics: { input: 26_465, cached: 26_112, output: 37 },
+      assumedCostMicros: 263_939,
+    })
+
+    expect(first).toMatchObject({
+      costMicros: 46_438,
+      pricingConfidence: "assumed",
+      costSource: "configured-pricing",
+      usageCompleteness: "complete",
+    })
+    expect(second).toMatchObject({
+      costMicros: 31_492,
+      pricingConfidence: "assumed",
+      costSource: "configured-pricing",
+      usageCompleteness: "complete",
+    })
+    expect((await getDashboardPayload({ preset: "all" })).summary).toMatchObject({ costMicros: 77_930, unpricedRequests: 2 })
+    expect((await getBudgetRows()).find((row) => row.apiKeyId === key.id)?.spentMicros).toBe(77_930)
+  })
+
+  test("keeps complete usage token-based while preserving cache uncertainty", async () => {
+    const key = await createApiKey("Cache metadata")
+    const model = await configureTestPricing({
+      modelId: "cache-metadata-model",
+      gatewayModelId: "test/cache-metadata",
+      upstreamModel: "cache-metadata",
+      inputMicrosPerMillion: 10_000_000,
+      outputMicrosPerMillion: 50_000_000,
+      cacheReadMicrosPerMillion: 1_000_000,
+      cacheCreationMicrosPerMillion: 12_500_000,
+    })
+
+    const base = {
+      gatewayKeyId: key.id,
+      providerModelId: model.id,
+      gatewayModelId: model.gatewayModelId,
+      protocol: "openai-responses" as const,
+      startedAt: new Date().toISOString(),
+      status: 200,
+      durationMs: 1,
+    }
+    const explicitZero = await recordGatewayUsage({
+      ...base,
+      id: "cache-zero",
+      metrics: { input: 27_340, cached: 26_368, cacheCreation: 0, output: 207 },
+      assumedCostMicros: 999_999,
+    })
+    const missingRead = await recordGatewayUsage({
+      ...base,
+      id: "cache-read-missing",
+      metrics: { input: 27_340, cacheCreation: 0, output: 207 },
+      assumedCostMicros: 999_999,
+    })
+
+    expect(explicitZero).toMatchObject({ costMicros: 46_438, pricingConfidence: "exact", costSource: "configured-pricing", usageCompleteness: "complete" })
+    expect(missingRead).toMatchObject({ costMicros: 283_750, pricingConfidence: "assumed", costSource: "configured-pricing", usageCompleteness: "complete" })
+  })
+
+  test("uses the supplied estimate only for missing or partial successful usage", async () => {
+    const key = await createApiKey("Fallback usage")
+    const model = await configureTestPricing({
+      modelId: "fallback-model",
+      gatewayModelId: "test/fallback",
+      upstreamModel: "fallback",
+      inputMicrosPerMillion: 1_000_000,
+      outputMicrosPerMillion: 2_000_000,
+      cacheReadMicrosPerMillion: 0,
+      cacheCreationMicrosPerMillion: 0,
+    })
+    const common = {
+      gatewayKeyId: key.id,
+      providerModelId: model.id,
+      gatewayModelId: model.gatewayModelId,
+      protocol: "openai-chat" as const,
+      startedAt: new Date().toISOString(),
+      status: 200,
+      durationMs: 1,
+      assumedCostMicros: 1_000,
+    }
+
+    const partial = await recordGatewayUsage({ ...common, id: "partial-fallback", metrics: { input: 100 } })
+    const missing = await recordGatewayUsage({ ...common, id: "missing-fallback", metrics: undefined })
+
+    expect(partial).toMatchObject({ costMicros: 1_000, pricingConfidence: "assumed", costSource: "reservation", usageCompleteness: "partial" })
+    expect(missing).toMatchObject({ costMicros: 1_000, pricingConfidence: "assumed", costSource: "reservation", usageCompleteness: "missing" })
+  })
+
   test("keeps failed requests out of pricing-confidence totals", async () => {
     const key = await createApiKey("Failed request")
     await recordGatewayUsage({
@@ -82,6 +205,50 @@ describe.sequential("usage analytics", () => {
     expect(payload.summary.costMicros).toBe(0)
     expect(payload.summary.pricedRequests).toBe(0)
     expect(payload.summary.unpricedRequests).toBe(0)
+  })
+
+  test("does not settle a failed request with its supplied estimate", async () => {
+    const key = await createApiKey("Failed estimate")
+    const model = await configureTestPricing({
+      modelId: "failed-estimate-model",
+      gatewayModelId: "test/failed-estimate",
+      upstreamModel: "failed-estimate",
+      inputMicrosPerMillion: 1_000_000,
+      outputMicrosPerMillion: 2_000_000,
+      cacheReadMicrosPerMillion: 1_000_000,
+      cacheCreationMicrosPerMillion: 12_500_000,
+    })
+
+    const event = await recordGatewayUsage({
+      gatewayKeyId: key.id,
+      providerModelId: model.id,
+      gatewayModelId: model.gatewayModelId,
+      protocol: "openai-chat",
+      startedAt: new Date().toISOString(),
+      status: 502,
+      durationMs: 1,
+      metrics: { input: 100, output: 10 },
+      assumedCostMicros: 999_999,
+    })
+
+    expect(event).toMatchObject({ costMicros: 120, pricingConfidence: "assumed", costSource: "configured-pricing", usageCompleteness: "complete" })
+  })
+
+  test("does not bill an estimate when the model is unpriced", async () => {
+    const key = await createApiKey("Unpriced model")
+    const event = await recordGatewayUsage({
+      gatewayKeyId: key.id,
+      gatewayModelId: "test/no-pricing",
+      protocol: "openai-chat",
+      startedAt: new Date().toISOString(),
+      status: 200,
+      durationMs: 1,
+      metrics: { input: 100, output: 10 },
+      assumedCostMicros: 999_999,
+    })
+
+    expect(event).toMatchObject({ costMicros: 0, pricingConfidence: "unpriced", usageCompleteness: "complete" })
+    expect(event.costSource).toBeUndefined()
   })
 
   test("public dashboard shows key names without exposing credentials", async () => {
