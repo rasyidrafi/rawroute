@@ -27,6 +27,33 @@ test("synthetic CLIProxy cooldown never exposes a long retry delay", async ({ re
   await expect(response.json()).resolves.toMatchObject({ error: { code: "upstream_unavailable" } })
 })
 
+test("Codex cooldown never reaches OpenCode as a retry instruction", async ({ request }) => {
+  await request.post("http://127.0.0.1:3211/routing-mode", { data: { mode: "codex-cooldown" } })
+  const [model] = await codexModels(request)
+
+  const response = await request.post("/v1/responses", {
+    headers: { authorization: "Bearer sk-local-change-me" },
+    data: { model, input: "hello", stream: true },
+  })
+
+  expect(response.status()).toBe(503)
+  expect(response.headers()["retry-after"]).toBeUndefined()
+  await expect(response.json()).resolves.toMatchObject({ error: { code: "upstream_unavailable" } })
+})
+
+test("ambiguous upstream 429 cannot impose a retry deadline", async ({ request }) => {
+  await request.post("http://127.0.0.1:3211/routing-mode", { data: { mode: "ambiguous-429" } })
+  const [model] = await codexModels(request)
+
+  const response = await request.post("/v1/responses", {
+    headers: { authorization: "Bearer sk-local-change-me" },
+    data: { model, input: "hello", stream: true },
+  })
+
+  expect(response.status()).toBe(503)
+  expect(response.headers()["retry-after"]).toBeUndefined()
+})
+
 test("combo immediately falls back instead of forwarding model cooldown", async ({ request }) => {
   await authenticate(request)
   await request.post("http://127.0.0.1:3211/routing-mode", { data: { mode: "cooldown-once" } })

@@ -11,8 +11,6 @@ import { listAliases, listCombos, listModels, listProviders } from "@/lib/store"
 import type { Protocol, UsageEvent } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
 import { getWorkspace } from "@/lib/workspaces"
-import { acquireComboCircuit, settleComboCircuit } from "@/lib/combo-circuit"
-import { recoverCodexQuota } from "@/lib/codex-recovery"
 import { upstreamFailure } from "@/lib/upstream-failure"
 
 const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
@@ -455,6 +453,7 @@ function routingErrorCode(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
   if (typeof record.code === "string") return record.code.trim().toLowerCase()
+  if (typeof record.type === "string") return record.type.trim().toLowerCase()
   return routingErrorCode(record.error)
 }
 
@@ -463,6 +462,12 @@ function routingErrorMessage(value: unknown): string {
   const record = value as Record<string, unknown>
   const own = typeof record.message === "string" ? record.message : ""
   return `${own} ${routingErrorMessage(record.error)}`.trim()
+}
+
+function confirmedLimitError(code: string | undefined, message: string) {
+  const normalizedCode = code?.replace(/[-:]/g, "_") || ""
+  if (["usage_limit_reached", "insufficient_quota", "quota_exceeded", "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "requests_per_minute_exceeded"].includes(normalizedCode)) return true
+  return ["usage limit reached", "quota exceeded", "quota exhausted", "insufficient quota", "rate limit exceeded", "requests per minute", "request per minute", "too many requests", "weekly budget exceeded"].some((phrase) => message.includes(phrase))
 }
 
 async function normalizeRoutingFailure(response: Response) {
@@ -481,8 +486,10 @@ async function normalizeRoutingFailure(response: Response) {
     : undefined
   const code = routingErrorCode(payload)
   const message = routingErrorMessage(payload).toLowerCase()
-  const syntheticCooldown = code === "model_cooldown" || message.includes("credentials for model") && message.includes("cooling down")
-  if (!syntheticCooldown) return new Response(body, { status: response.status, statusText: response.statusText, headers })
+  const syntheticCooldownCodes = new Set(["model_cooldown", "codex_cooldown", "combo_cooldown", "combo_rate_limited"])
+  const syntheticCooldown = Boolean(code && syntheticCooldownCodes.has(code)) || message.includes("cooldown is still active") || message.includes("credentials for model") && message.includes("cooling down")
+  const confirmedLimit = response.headers.get("x-rawroute-combo-terminal") === "1" || confirmedLimitError(code, message)
+  if (!syntheticCooldown && confirmedLimit) return new Response(body, { status: response.status, statusText: response.statusText, headers })
 
   headers.delete("retry-after")
   headers.set("content-type", "application/json")
@@ -504,30 +511,16 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   if (!combo) return proxyGatewaySingleRequest(request, path, apiKey)
 
   let lastResponse: Response | undefined
-  let earliestRetry = Infinity
   for (const memberModelId of combo.memberModelIds) {
     if (request.signal.aborted) throw request.signal.reason
     const resolved = await resolveGatewayModel(memberModelId).catch(() => undefined)
-    const ticket = await acquireComboCircuit(resolved?.forwardedModel || memberModelId)
-    if (!ticket.allowed) {
-      earliestRetry = Math.min(earliestRetry, ticket.retryAt)
-      continue
-    }
-    const codex = resolved?.forwardedModel.startsWith("rr-codex-") === true
     const memberRequest = new Request(request.url, {
       method: request.method,
       headers: new Headers(request.headers),
       body: JSON.stringify({ ...payload, model: memberModelId }),
       signal: request.signal,
     })
-    let response: Response
-    try {
-      response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved, ticket.probe && codex, ticket.retryAt))
-    } catch (error) {
-      await settleComboCircuit(ticket, request.signal.aborted ? undefined : new Response(null, { status: 502 }))
-      throw error
-    }
-    await settleComboCircuit(ticket, response, codex)
+    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved))
     if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
       return responseWithoutComboHeaders(response)
@@ -536,10 +529,10 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     lastResponse = response
     writeLog("warn", "gateway", "Combo member failed, trying next", { combo: combo.combo, memberModelId, status: response.status })
   }
-  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "All combo members are rate limited.", code: "combo_rate_limited" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": String(Number.isFinite(earliestRetry) ? Math.max(1, Math.ceil((earliestRetry - Date.now()) / 1000)) : 30) } }))
+  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
 }
 
-async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }, preResolved?: ResolvedGatewayModel, recoverQuota = false, retryAt = 0) {
+async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }, preResolved?: ResolvedGatewayModel) {
   const supplied = suppliedGatewayKey(request)
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
@@ -620,15 +613,6 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   }
 
   const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
-  if (recoverQuota && resolvedModel.providerId) {
-    const owner = resolvedModel.shared ? await getWorkspace(resolvedModel.shared.ownerWorkspaceId) : undefined
-    const recover = () => recoverCodexQuota(resolvedModel.providerId!, resolvedModel.upstreamModel)
-    const recovered = owner ? await runInWorkspace(owner, recover) : !resolvedModel.shared && await recover()
-    if (!recovered && retryAt > Date.now()) {
-      await releaseBudgetReservationWithLog(reservation)
-      return Response.json({ error: { code: "codex_cooldown", message: "Codex cooldown is still active." } }, { status: 429, headers: { "retry-after": String(Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))) } })
-    }
-  }
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
   const provider = resolvedModel.providerName || resolvedModel.providerId || "RawRoute"

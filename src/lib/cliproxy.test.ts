@@ -13,12 +13,7 @@ const mocks = vi.hoisted(() => ({
   listProviders: vi.fn(),
   writeLog: vi.fn(),
   ensureNonCodexProviderProjection: vi.fn(),
-  acquireComboCircuit: vi.fn(),
-  settleComboCircuit: vi.fn(),
-  recoverCodexQuota: vi.fn(),
 }))
-vi.mock("@/lib/combo-circuit", () => ({ acquireComboCircuit: mocks.acquireComboCircuit, settleComboCircuit: mocks.settleComboCircuit }))
-vi.mock("@/lib/codex-recovery", () => ({ recoverCodexQuota: mocks.recoverCodexQuota }))
 
 vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
 vi.mock("@/lib/analytics", () => ({
@@ -59,8 +54,6 @@ const originalFetch = globalThis.fetch
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.acquireComboCircuit.mockResolvedValue({ allowed: true, probe: false })
-  mocks.settleComboCircuit.mockResolvedValue(undefined)
   mocks.authenticateProxyKey.mockResolvedValue({
     workspace: { id: "default", storageMode: "scoped" },
     apiKey: { id: "gateway-key", name: "Gateway" },
@@ -120,39 +113,6 @@ test("logs invalid gateway authentication failures", async () => {
 
   expect(response.status).toBe(401)
   expect(mocks.writeLog).toHaveBeenCalledWith("warn", "gateway", "Request rejected: invalid API key", { protocol: "openai-responses" })
-})
-
-test("cooling combo members are skipped without executing an upstream request", async () => {
-  mocks.listCombos.mockResolvedValue([{ combo: "fallback", memberModelIds: ["codex/gpt-5", "codex/gpt-5"] }])
-  mocks.acquireComboCircuit.mockResolvedValueOnce({ allowed: false, retryAt: Date.now() + 60_000 })
-  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
-    method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback", input: "hello" }),
-  }))
-  expect(response.status).toBe(200)
-  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
-})
-
-test("all cooling members return a retry deadline without upstream traffic", async () => {
-  mocks.listCombos.mockResolvedValue([{ combo: "fallback", memberModelIds: ["codex/gpt-5"] }])
-  mocks.acquireComboCircuit.mockResolvedValue({ allowed: false, retryAt: Date.now() + 60_000 })
-  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
-    method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback" }),
-  }))
-  expect(response.status).toBe(429)
-  expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0)
-  expect(globalThis.fetch).not.toHaveBeenCalled()
-})
-
-test("half-open Codex member checks recovery before its inference probe", async () => {
-  mocks.listCombos.mockResolvedValue([{ combo: "fallback", memberModelIds: ["codex/gpt-5"] }])
-  mocks.acquireComboCircuit.mockResolvedValue({ allowed: true, probe: true, retryAt: Date.now() + 60_000 })
-  mocks.recoverCodexQuota.mockResolvedValue(true)
-  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
-    method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback" }),
-  }))
-  expect(response.status).toBe(200)
-  expect(mocks.recoverCodexQuota).toHaveBeenCalledWith("codex", "gpt-5")
-  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
 })
 
 test("returns 429 when budget reservation is denied", async () => {
@@ -256,6 +216,22 @@ test("does not expose a synthetic cooldown or non-limit Retry-After to clients",
   await expect(response.json()).resolves.toEqual({ error: { code: "upstream_unavailable", message: "Upstream routing is temporarily unavailable." } })
 })
 
+test("does not expose Codex cooldown retry instructions", async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+    error: { code: "codex_cooldown", message: "Codex cooldown is still active." },
+  }, { status: 429, headers: { "retry-after": "3700" } })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello" }),
+  }))
+
+  expect(response.status).toBe(503)
+  expect(response.headers.has("retry-after")).toBe(false)
+  await expect(response.json()).resolves.toMatchObject({ error: { code: "upstream_unavailable" } })
+})
+
 test("preserves Retry-After only for an upstream rate limit", async () => {
   globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
     error: { code: "rate_limit_exceeded", message: "Requests per minute exceeded" },
@@ -269,6 +245,21 @@ test("preserves Retry-After only for an upstream rate limit", async () => {
 
   expect(response.status).toBe(429)
   expect(response.headers.get("retry-after")).toBe("12")
+})
+
+test("does not trust an unclassified upstream 429 as proof of exhausted usage", async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+    error: { code: "upstream_error", message: "Temporary provider failure" },
+  }, { status: 429, headers: { "retry-after": "3700" } })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello" }),
+  }))
+
+  expect(response.status).toBe(503)
+  expect(response.headers.has("retry-after")).toBe(false)
 })
 
 test("skips an unavailable combo member and does not expose its internal retry marker", async () => {

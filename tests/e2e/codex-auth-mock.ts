@@ -3,7 +3,7 @@ import { createServer } from "node:http"
 type State = {
   pollCount: number
   routingAttempts: number
-  routingMode?: "cooldown-once" | "always-cooldown"
+  routingMode?: "cooldown-once" | "always-cooldown" | "codex-cooldown" | "ambiguous-429"
   upstreamBody?: Record<string, unknown>
   upstreamHeaders?: Record<string, string>
 }
@@ -61,9 +61,13 @@ async function handleRequest(request: Request) {
     }
     if (url.pathname === "/cliproxy/v1/responses" && request.method === "POST") {
       state.routingAttempts += 1
-      const shouldCooldown = state.routingMode === "always-cooldown" || state.routingMode === "cooldown-once" && state.routingAttempts === 1
+      if (state.routingMode === "ambiguous-429") {
+        return Response.json({ error: { code: "upstream_error", message: "Temporary provider failure" } }, { status: 429, headers: { "retry-after": "3700" } })
+      }
+      const shouldCooldown = state.routingMode === "always-cooldown" || state.routingMode === "codex-cooldown" || state.routingMode === "cooldown-once" && state.routingAttempts === 1
       if (shouldCooldown) {
-        return Response.json({ error: { code: "model_cooldown", message: "All credentials for model are cooling down", reset_seconds: 3700 } }, {
+        const codexCooldown = state.routingMode === "codex-cooldown"
+        return Response.json({ error: { code: codexCooldown ? "codex_cooldown" : "model_cooldown", message: codexCooldown ? "Codex cooldown is still active." : "All credentials for model are cooling down", reset_seconds: 3700 } }, {
           status: 429,
           headers: { "retry-after": "3700" },
         })
