@@ -12,7 +12,7 @@
     "start": "bun --bun next start",
     "lint": "bun --bun eslint",
     "test": "bun --bun vitest run",
-    "test:e2e": "bun --bun playwright test",
+    "test:e2e": "bunx playwright test",
     "reconcile:usage": "bun scripts/reconcile-usage.ts",
     "predict:usage": "bun scripts/predict-missing-usage-cost.ts",
     "sanitize:usage": "bun scripts/sanitize-usage-integrity.ts",
