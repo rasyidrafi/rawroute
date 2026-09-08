@@ -13,7 +13,12 @@ const mocks = vi.hoisted(() => ({
   listProviders: vi.fn(),
   writeLog: vi.fn(),
   ensureNonCodexProviderProjection: vi.fn(),
+  acquireComboCircuit: vi.fn(),
+  settleComboCircuit: vi.fn(),
+  recoverCodexQuota: vi.fn(),
 }))
+vi.mock("@/lib/combo-circuit", () => ({ acquireComboCircuit: mocks.acquireComboCircuit, settleComboCircuit: mocks.settleComboCircuit }))
+vi.mock("@/lib/codex-recovery", () => ({ recoverCodexQuota: mocks.recoverCodexQuota }))
 
 vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
 vi.mock("@/lib/analytics", () => ({
@@ -54,6 +59,8 @@ const originalFetch = globalThis.fetch
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.acquireComboCircuit.mockResolvedValue({ allowed: true, probe: false })
+  mocks.settleComboCircuit.mockResolvedValue(undefined)
   mocks.authenticateProxyKey.mockResolvedValue({
     workspace: { id: "default", storageMode: "scoped" },
     apiKey: { id: "gateway-key", name: "Gateway" },
@@ -98,7 +105,7 @@ test("restores the pre-rewrite request and completion console logs", async () =>
   await response.text()
 
   const messages = mocks.writeLog.mock.calls.map((call) => call[2])
-  expect(messages).toContain("POST PROVIDER:Codex MODEL:codex/gpt-5 -> gpt-5 FMT:openai-responses -> openai-responses ACC:Gateway THINK:low MSG:2 TOOL:2")
+  expect(messages).toContain("POST PROVIDER:Codex MODEL:codex/gpt-5 -> gpt-5 FMT:openai-responses -> openai-responses KEY:Gateway THINK:low MSG:2 TOOL:2")
   expect(messages.some((message) => typeof message === "string" && /^DONE \d+ms/.test(message))).toBe(true)
 })
 
@@ -113,6 +120,39 @@ test("logs invalid gateway authentication failures", async () => {
 
   expect(response.status).toBe(401)
   expect(mocks.writeLog).toHaveBeenCalledWith("warn", "gateway", "Request rejected: invalid API key", { protocol: "openai-responses" })
+})
+
+test("cooling combo members are skipped without executing an upstream request", async () => {
+  mocks.listCombos.mockResolvedValue([{ combo: "fallback", memberModelIds: ["codex/gpt-5", "codex/gpt-5"] }])
+  mocks.acquireComboCircuit.mockResolvedValueOnce({ allowed: false, retryAt: Date.now() + 60_000 })
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback", input: "hello" }),
+  }))
+  expect(response.status).toBe(200)
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+})
+
+test("all cooling members return a retry deadline without upstream traffic", async () => {
+  mocks.listCombos.mockResolvedValue([{ combo: "fallback", memberModelIds: ["codex/gpt-5"] }])
+  mocks.acquireComboCircuit.mockResolvedValue({ allowed: false, retryAt: Date.now() + 60_000 })
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback" }),
+  }))
+  expect(response.status).toBe(503)
+  expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0)
+  expect(globalThis.fetch).not.toHaveBeenCalled()
+})
+
+test("half-open Codex member checks recovery before its inference probe", async () => {
+  mocks.listCombos.mockResolvedValue([{ combo: "fallback", memberModelIds: ["codex/gpt-5"] }])
+  mocks.acquireComboCircuit.mockResolvedValue({ allowed: true, probe: true, retryAt: Date.now() + 60_000 })
+  mocks.recoverCodexQuota.mockResolvedValue(true)
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback" }),
+  }))
+  expect(response.status).toBe(200)
+  expect(mocks.recoverCodexQuota).toHaveBeenCalledWith("codex", "gpt-5")
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
 })
 
 test("returns 429 when budget reservation is denied", async () => {
@@ -340,7 +380,7 @@ test("logs the received protocol and the saved provider protocol", async () => {
   await response.text()
 
   const messages = mocks.writeLog.mock.calls.map((call) => call[2])
-  expect(messages).toContain("POST PROVIDER:Nara MODEL:nara/grok-4.5 -> grok-4.5 FMT:anthropic-messages -> openai-chat ACC:Gateway MSG:1")
+  expect(messages).toContain("POST PROVIDER:Nara MODEL:nara/grok-4.5 -> grok-4.5 FMT:anthropic-messages -> openai-chat KEY:Gateway MSG:1")
 })
 
 test("lets CLIProxy translate every supported client/provider protocol direction", async () => {

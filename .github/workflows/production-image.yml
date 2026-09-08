@@ -16,6 +16,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      COMBO_TEST_REDIS_URL: redis://127.0.0.1:6379
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

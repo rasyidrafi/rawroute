@@ -11,6 +11,9 @@ import { listAliases, listCombos, listModels, listProviders } from "@/lib/store"
 import type { Protocol, UsageEvent } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
 import { getWorkspace } from "@/lib/workspaces"
+import { acquireComboCircuit, settleComboCircuit } from "@/lib/combo-circuit"
+import { recoverCodexQuota } from "@/lib/codex-recovery"
+import { upstreamFailure } from "@/lib/upstream-failure"
 
 const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 
@@ -102,7 +105,7 @@ function requestSummary(provider: string, gatewayModel: string, upstreamModel: s
     `POST PROVIDER:${provider}`,
     `MODEL:${gatewayModel} -> ${upstreamModel}`,
     `FMT:${receivedProtocol} -> ${upstreamProtocol}`,
-    `ACC:${account}`,
+    `KEY:${account}`,
   ]
   if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
   parts.push(`MSG:${requestItemCount(payload, receivedProtocol)}`)
@@ -466,22 +469,42 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   if (!combo) return proxyGatewaySingleRequest(request, path, apiKey)
 
   let lastResponse: Response | undefined
+  let earliestRetry = Infinity
   for (const memberModelId of combo.memberModelIds) {
+    if (request.signal.aborted) throw request.signal.reason
+    const resolved = await resolveGatewayModel(memberModelId).catch(() => undefined)
+    const ticket = await acquireComboCircuit(resolved?.forwardedModel || memberModelId)
+    if (!ticket.allowed) {
+      earliestRetry = Math.min(earliestRetry, ticket.retryAt)
+      continue
+    }
+    const codex = resolved?.forwardedModel.startsWith("rr-codex-") === true
     const memberRequest = new Request(request.url, {
       method: request.method,
       headers: new Headers(request.headers),
       body: JSON.stringify({ ...payload, model: memberModelId }),
       signal: request.signal,
     })
-    const response = await proxyGatewaySingleRequest(memberRequest, path, apiKey)
-    if (response.ok || !comboRetryable(response)) return responseWithoutComboHeaders(response)
+    let response: Response
+    try {
+      response = await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved, ticket.probe && codex, ticket.retryAt)
+    } catch (error) {
+      await settleComboCircuit(ticket, request.signal.aborted ? undefined : new Response(null, { status: 502 }))
+      throw error
+    }
+    await settleComboCircuit(ticket, response, codex)
+    if (response.ok || !comboRetryable(response)) {
+      if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
+      return responseWithoutComboHeaders(response)
+    }
+    if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
     lastResponse = response
     writeLog("warn", "gateway", "Combo member failed, trying next", { combo: combo.combo, memberModelId, status: response.status })
   }
-  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
+  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "All combo members are temporarily unavailable.", code: "combo_cooldown" } }), { status: 503, headers: { "content-type": "application/json", "retry-after": String(Number.isFinite(earliestRetry) ? Math.max(1, Math.ceil((earliestRetry - Date.now()) / 1000)) : 30) } }))
 }
 
-async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }) {
+async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }, preResolved?: ResolvedGatewayModel, recoverQuota = false, retryAt = 0) {
   const supplied = suppliedGatewayKey(request)
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
@@ -499,7 +522,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   const protocol = protocolForPath(path)
   let resolvedModel: ResolvedGatewayModel
   try {
-    resolvedModel = await resolveGatewayModel(estimate.model)
+    resolvedModel = preResolved || await resolveGatewayModel(estimate.model)
   } catch (error) {
     const resolution = error instanceof GatewayModelResolutionError
       ? error
@@ -562,6 +585,15 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   }
 
   const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
+  if (recoverQuota && resolvedModel.providerId) {
+    const owner = resolvedModel.shared ? await getWorkspace(resolvedModel.shared.ownerWorkspaceId) : undefined
+    const recover = () => recoverCodexQuota(resolvedModel.providerId!, resolvedModel.upstreamModel)
+    const recovered = owner ? await runInWorkspace(owner, recover) : !resolvedModel.shared && await recover()
+    if (!recovered && retryAt > Date.now()) {
+      await releaseBudgetReservationWithLog(reservation)
+      return Response.json({ error: { code: "codex_cooldown", message: "Codex cooldown is still active." } }, { status: 429, headers: { "retry-after": String(Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))) } })
+    }
+  }
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
   const provider = resolvedModel.providerName || resolvedModel.providerId || "RawRoute"
@@ -605,7 +637,11 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
     .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
   if (response.ok) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, undefined, usage))
-  else writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`)
+  else {
+    const failure = await upstreamFailure(response)
+    if (!response.headers.has("retry-after") && failure.retrySeconds) response.headers.set("retry-after", String(failure.retrySeconds))
+    writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`, { provider, model: resolvedModel.pricingGatewayModelId, source: "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: response.headers.get("retry-after") || "unspecified" })
+  }
   await releaseBudgetReservationWithLog(reservation)
   return response
 }

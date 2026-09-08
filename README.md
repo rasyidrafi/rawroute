@@ -54,6 +54,32 @@ Replace all placeholder credentials before production use. The dashboard login i
 
 ## Wrapper behavior
 
+Combos skip members after upstream 429, 408, or 5xx responses. Redis stores
+cooldowns by workspace and resolved model, shared across gateway instances.
+The gateway honors `Retry-After` and falls back to a 30-second exponential
+delay capped at five minutes when no deadline is supplied. One request probes
+a member when its cooldown expires; concurrent requests continue to fallback.
+If every member is cooling down, the gateway returns 503 with `Retry-After`.
+Budget rejections remain terminal and do not mark a provider unhealthy. If
+Redis is unavailable, combos retain their original ordered fallback behavior.
+
+For Codex combo members, a long quota cooldown can be checked early after one
+minute. A fresh usage response must explicitly allow requests before RawRoute
+uses CLIProxyAPI's account-specific `/v0/management/reset-quota` endpoint.
+Only mapped, enabled accounts with a recorded `usage_limit_reached` error are
+eligible. Checks are limited to once per account per five minutes. The next
+inference request determines whether routing recovers or returns to cooldown.
+This requires CLIProxyAPI support for `reset-quota`, present in v7.2.151.
+Recovery runs on combo traffic, not a background timer or the dashboard.
+
+Gateway logs label the caller as `KEY`, and failed requests include a safe
+error code and retry deadline. The Codex quota view also indicates a recorded
+inference quota restriction even when the usage endpoint reports availability.
+
+The focused Redis integration test runs in CI. To run it against a test Redis
+without a Next.js build, set `COMBO_TEST_REDIS_URL` and run
+`bun run test src/lib/combo-circuit.test.ts --maxWorkers=1`.
+
 RawRoute authenticates its gateway keys, resolves its retained aliases, applies its custom model pricing, reserves each key's RawRoute budget, and records usage. Requests that would exceed the configured budget are rejected with `429` before they reach CLIProxyAPI. The original dashboard and RawRoute-owned feature APIs remain available without exposing CLIProxyAPI management endpoints.
 
 For direct OpenAI/Codex models, successful responses with complete usage are

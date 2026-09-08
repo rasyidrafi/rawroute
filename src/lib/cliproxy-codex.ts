@@ -236,6 +236,7 @@ export async function cliProxyCodexApiCall(account: ProviderApiKey, input: { met
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ auth_index: account.cliProxyAuthIndex, method: input.method, url: input.url, header: input.headers, data: input.data }),
+    signal: AbortSignal.timeout(10_000),
   })
   const payload = await response.json().catch(() => undefined) as { status_code?: unknown; body?: unknown } | undefined
   if (!response.ok) throw new Error(`CLIProxy API call failed (${response.status}).`)

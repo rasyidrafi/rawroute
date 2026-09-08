@@ -67,13 +67,15 @@ function QuotaLine({ label, quota, loading }: { label: string; quota?: QuotaWind
   </div>
 }
 
-export function CodexQuotaTableCell({ accountUsage, loading, error }: { accountUsage?: AccountUsage; loading: boolean; error?: string }) {
+export function CodexQuotaTableCell({ accountUsage, loading, error, routingStatus }: { accountUsage?: AccountUsage; loading: boolean; error?: string; routingStatus?: string }) {
   const windows = getAvailableQuotaWindows(accountUsage)
   const message = codexUsageError(accountUsage, error)
 
   return <TableCell className="min-w-40 bg-muted/20 px-3 py-2">
     {loading ? <span className="inline-block h-4 w-20 animate-pulse rounded bg-muted" /> : !message && windows.length ? <div className="grid gap-1.5">
       {windows.map(({ label, quota }) => <QuotaLine key={label} label={label} quota={quota} loading={false} />)}
+      {routingStatus?.includes("usage_limit_reached") && <span className="text-xs text-amber-600">Last inference hit a quota limit. Routing may still be cooling down.</span>}
+      {accountUsage?.stale && <span className="text-xs text-muted-foreground">Usage is from an earlier check.</span>}
     </div> : <span className="text-sm text-muted-foreground">N/A</span>}
   </TableCell>
 }
