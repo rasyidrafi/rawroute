@@ -17,6 +17,13 @@ api-keys:
 debug: false
 logging-to-file: true
 usage-statistics-enabled: true
+# RawRoute owns cross-model fallback. Do not let CLIProxy turn transient
+# provider failures into long-lived model cooldown responses.
+request-retry: 0
+max-retry-credentials: 0
+max-retry-interval: 0
+disable-cooling: true
+transient-error-cooldown-seconds: -1
 plugins:
   enabled: false
 # Prefer the highest-priority available credential when multiple auth files match.

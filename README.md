@@ -82,6 +82,11 @@ without a Next.js build, set `COMBO_TEST_REDIS_URL` and run
 
 RawRoute authenticates its gateway keys, resolves its retained aliases, applies its custom model pricing, reserves each key's RawRoute budget, and records usage. Requests that would exceed the configured budget are rejected with `429` before they reach CLIProxyAPI. The original dashboard and RawRoute-owned feature APIs remain available without exposing CLIProxyAPI management endpoints.
 
+Model combos try each member in order for every non-terminal upstream failure.
+Synthetic CLIProxy `model_cooldown` responses are returned as `503` without
+`Retry-After`; only an actual RawRoute budget denial or upstream `429` retains a
+rate-limit retry signal.
+
 For direct OpenAI/Codex models, successful responses with complete usage are
 used to calibrate later missing-usage estimates against serialized request-body
 size. Settlement uses the nearby-history median (p50); admission reservations

@@ -26,6 +26,7 @@ export default defineConfig({
         DEFAULT_PROXY_API_KEY: "sk-local-change-me",
         CODEX_AUTH_BASE_URL: "http://127.0.0.1:3211",
         CODEX_BASE_URL: "http://127.0.0.1:3211/codex",
+        CLIPROXY_URL: "http://127.0.0.1:3211/cliproxy",
       },
     },
   ],

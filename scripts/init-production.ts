@@ -54,6 +54,11 @@ api-keys:
 debug: false
 logging-to-file: false
 usage-statistics-enabled: true
+request-retry: 0
+max-retry-credentials: 0
+max-retry-interval: 0
+disable-cooling: true
+transient-error-cooldown-seconds: -1
 plugins:
   enabled: false
 routing:

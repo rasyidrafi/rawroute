@@ -195,9 +195,10 @@ function protocolForLogPath(path: string): Protocol | "catalog" {
   return protocolForPath(path)
 }
 
-async function actualResponseUsage(response: Response) {
-  if (!response.headers.get("content-type")?.toLowerCase().includes("json")) return undefined
-  const payload = await response.clone().json().catch(() => undefined) as Record<string, unknown> | undefined
+function actualResponseUsage(body: Uint8Array, contentType: string | null) {
+  if (!contentType?.toLowerCase().includes("json")) return undefined
+  let payload: Record<string, unknown> | undefined
+  try { payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown> } catch { return undefined }
   return payload ? extractUsageMetrics(payload) : undefined
 }
 
@@ -430,7 +431,9 @@ export async function proxyGatewayRequest(request: Request, path = new URL(reque
     writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: protocolForLogPath(path) })
     return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
   }
-  return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey)).then(responseWithoutComboHeaders)
+  return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey))
+    .then(normalizeRoutingFailure)
+    .then(responseWithoutComboHeaders)
 }
 
 async function releaseBudgetReservationWithLog(reservation: BudgetReservation | undefined) {
@@ -448,10 +451,42 @@ function responseWithoutComboHeaders(response: Response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
-function comboRetryable(response: Response) {
-  if (response.headers.get("x-rawroute-combo-terminal") === "1") return false
-  if (response.headers.get("x-rawroute-combo-member-unavailable") === "1") return true
-  return response.status === 408 || response.status === 429 || response.status >= 500
+function routingErrorCode(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (typeof record.code === "string") return record.code.trim().toLowerCase()
+  return routingErrorCode(record.error)
+}
+
+function routingErrorMessage(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return ""
+  const record = value as Record<string, unknown>
+  const own = typeof record.message === "string" ? record.message : ""
+  return `${own} ${routingErrorMessage(record.error)}`.trim()
+}
+
+async function normalizeRoutingFailure(response: Response) {
+  const headers = responseHeaders(response.headers)
+  if (response.status !== 429) {
+    // Retry-After on a server/auth/routing failure makes coding clients treat a
+    // recoverable provider error as quota exhaustion and can stall for hours.
+    if (!headers.has("retry-after")) return response
+    headers.delete("retry-after")
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+  }
+
+  const body = new Uint8Array(await response.arrayBuffer())
+  const payload = response.headers.get("content-type")?.toLowerCase().includes("json")
+    ? (() => { try { return JSON.parse(new TextDecoder().decode(body)) as unknown } catch { return undefined } })()
+    : undefined
+  const code = routingErrorCode(payload)
+  const message = routingErrorMessage(payload).toLowerCase()
+  const syntheticCooldown = code === "model_cooldown" || message.includes("credentials for model") && message.includes("cooling down")
+  if (!syntheticCooldown) return new Response(body, { status: response.status, statusText: response.statusText, headers })
+
+  headers.delete("retry-after")
+  headers.set("content-type", "application/json")
+  return Response.json({ error: { code: "upstream_unavailable", message: "Upstream routing is temporarily unavailable." } }, { status: 503, headers })
 }
 
 async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }) {
@@ -487,13 +522,13 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     })
     let response: Response
     try {
-      response = await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved, ticket.probe && codex, ticket.retryAt)
+      response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved, ticket.probe && codex, ticket.retryAt))
     } catch (error) {
       await settleComboCircuit(ticket, request.signal.aborted ? undefined : new Response(null, { status: 502 }))
       throw error
     }
     await settleComboCircuit(ticket, response, codex)
-    if (response.ok || !comboRetryable(response)) {
+    if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
       return responseWithoutComboHeaders(response)
     }
@@ -501,7 +536,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     lastResponse = response
     writeLog("warn", "gateway", "Combo member failed, trying next", { combo: combo.combo, memberModelId, status: response.status })
   }
-  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "All combo members are temporarily unavailable.", code: "combo_cooldown" } }), { status: 503, headers: { "content-type": "application/json", "retry-after": String(Number.isFinite(earliestRetry) ? Math.max(1, Math.ceil((earliestRetry - Date.now()) / 1000)) : 30) } }))
+  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "All combo members are rate limited.", code: "combo_rate_limited" } }), { status: 429, headers: { "content-type": "application/json", "retry-after": String(Number.isFinite(earliestRetry) ? Math.max(1, Math.ceil((earliestRetry - Date.now()) / 1000)) : 30) } }))
 }
 
 async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }, preResolved?: ResolvedGatewayModel, recoverQuota = false, retryAt = 0) {
@@ -633,17 +668,18 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     })()
     return trackedResponse
   }
-  const usage = await actualResponseUsage(response)
+  const responseBody = new Uint8Array(await response.arrayBuffer())
+  const usage = actualResponseUsage(responseBody, response.headers.get("content-type"))
   await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
     .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
   if (response.ok) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, undefined, usage))
   else {
-    const failure = await upstreamFailure(response)
+    const failure = await upstreamFailure(new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }))
     if (!response.headers.has("retry-after") && failure.retrySeconds) response.headers.set("retry-after", String(failure.retrySeconds))
     writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`, { provider, model: resolvedModel.pricingGatewayModelId, source: "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: response.headers.get("retry-after") || "unspecified" })
   }
   await releaseBudgetReservationWithLog(reservation)
-  return response
+  return new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
 }
 
 type GatewayUsageRecordingInput = {

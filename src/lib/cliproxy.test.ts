@@ -138,7 +138,7 @@ test("all cooling members return a retry deadline without upstream traffic", asy
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST", headers: { authorization: "Bearer key" }, body: JSON.stringify({ model: "fallback" }),
   }))
-  expect(response.status).toBe(503)
+  expect(response.status).toBe(429)
   expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0)
   expect(globalThis.fetch).not.toHaveBeenCalled()
 })
@@ -195,6 +195,80 @@ test("tries combo members in order after an upstream failure", async () => {
   await expect(response.json()).resolves.toEqual({ id: "response-from-b" })
   const forwardedModels = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)
   expect(forwardedModels).toEqual(["rr-ws-default-p-p/a", "rr-ws-default-p-p/b"])
+})
+
+test("falls back after a non-terminal provider error regardless of status class", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([
+    { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
+    { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
+  ])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  globalThis.fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json({ error: { message: "credential rejected" } }, { status: 403, headers: { "retry-after": "3700" } }))
+    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "coding-fallback", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(200)
+  expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+})
+
+test("treats CLIProxy model cooldown as an immediate fallback signal", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([
+    { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
+    { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
+  ])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  globalThis.fetch = vi.fn()
+    .mockResolvedValueOnce(Response.json({ error: { code: "model_cooldown", message: "All credentials for model p/a are cooling down" } }, { status: 429, headers: { "retry-after": "3700" } }))
+    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "coding-fallback", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(200)
+  expect(response.headers.has("retry-after")).toBe(false)
+  expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+})
+
+test("does not expose a synthetic cooldown or non-limit Retry-After to clients", async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+    error: { code: "model_cooldown", message: "All credentials for model codex/gpt-5 are cooling down" },
+  }, { status: 429, headers: { "retry-after": "3700" } })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello" }),
+  }))
+
+  expect(response.status).toBe(503)
+  expect(response.headers.has("retry-after")).toBe(false)
+  await expect(response.json()).resolves.toEqual({ error: { code: "upstream_unavailable", message: "Upstream routing is temporarily unavailable." } })
+})
+
+test("preserves Retry-After only for an upstream rate limit", async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+    error: { code: "rate_limit_exceeded", message: "Requests per minute exceeded" },
+  }, { status: 429, headers: { "retry-after": "12" } })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello" }),
+  }))
+
+  expect(response.status).toBe(429)
+  expect(response.headers.get("retry-after")).toBe("12")
 })
 
 test("skips an unavailable combo member and does not expose its internal retry marker", async () => {

@@ -59,7 +59,7 @@ export function retryTime(response: Response, failures: number, now = Date.now()
 export async function settleComboCircuit(ticket: CircuitTicket, response?: Response, recoverable = false) {
   const retryable = response && !response.headers.has("x-rawroute-combo-terminal") &&
     !response.headers.has("x-rawroute-combo-member-unavailable") &&
-    (response.status === 408 || response.status === 429 || response.status >= 500)
+    response.status === 429
   const state = retryable ? JSON.stringify({
     failures: ticket.failures + 1,
     retryAt: retryTime(response, ticket.failures),

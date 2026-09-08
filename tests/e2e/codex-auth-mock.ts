@@ -2,11 +2,13 @@ import { createServer } from "node:http"
 
 type State = {
   pollCount: number
+  routingAttempts: number
+  routingMode?: "cooldown-once" | "always-cooldown"
   upstreamBody?: Record<string, unknown>
   upstreamHeaders?: Record<string, string>
 }
 
-const state: State = { pollCount: 0 }
+const state: State = { pollCount: 0, routingAttempts: 0 }
 const idToken = `header.${Buffer.from(JSON.stringify({
   email: "codex@example.com",
   exp: Math.floor(Date.now() / 1000) + 3600,
@@ -22,8 +24,16 @@ async function handleRequest(request: Request) {
     if (url.pathname === "/health") return new Response("ok")
     if (url.pathname === "/reset" && request.method === "POST") {
       state.pollCount = 0
+      state.routingAttempts = 0
+      state.routingMode = undefined
       state.upstreamBody = undefined
       state.upstreamHeaders = undefined
+      return json({ ok: true })
+    }
+    if (url.pathname === "/routing-mode" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { mode?: State["routingMode"] }
+      state.routingAttempts = 0
+      state.routingMode = body.mode
       return json({ ok: true })
     }
     if (url.pathname === "/debug") return json(state)
@@ -46,6 +56,19 @@ async function handleRequest(request: Request) {
       state.upstreamBody = await request.json() as Record<string, unknown>
       state.upstreamHeaders = Object.fromEntries(request.headers.entries())
       return new Response("data: {\"type\":\"response.completed\"}\n\n", {
+        headers: { "content-type": "text/event-stream" },
+      })
+    }
+    if (url.pathname === "/cliproxy/v1/responses" && request.method === "POST") {
+      state.routingAttempts += 1
+      const shouldCooldown = state.routingMode === "always-cooldown" || state.routingMode === "cooldown-once" && state.routingAttempts === 1
+      if (shouldCooldown) {
+        return Response.json({ error: { code: "model_cooldown", message: "All credentials for model are cooling down", reset_seconds: 3700 } }, {
+          status: 429,
+          headers: { "retry-after": "3700" },
+        })
+      }
+      return new Response("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n", {
         headers: { "content-type": "text/event-stream" },
       })
     }

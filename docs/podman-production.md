@@ -61,6 +61,20 @@ units do not need `systemctl enable`. PostgreSQL data and CLIProxyAPI credential
 live in named Podman volumes and survive container replacement. No provider
 credentials are seeded; add an account or provider through the dashboard.
 
+When upgrading an installation created before RawRoute owned model-combo
+fallback, add these values to `/etc/rawroute/cliproxy.yaml` and restart
+`rawroute-cliproxy.service`. They prevent transient provider failures from being
+reported to coding clients as long-lived quota cooldowns while still allowing
+CLIProxy to try every configured credential during the current request.
+
+```yaml
+request-retry: 0
+max-retry-credentials: 0
+max-retry-interval: 0
+disable-cooling: true
+transient-error-cooldown-seconds: -1
+```
+
 For IPv6 localhost access, install the socket proxy. It avoids depending on
 IPv6 loopback NAT support in the host's container firewall.
 
