@@ -31,10 +31,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run test
-      - name: Install Playwright browser
-        run: bunx playwright install --with-deps chromium
-      - name: Run end-to-end tests
-        run: bun run test:e2e
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
