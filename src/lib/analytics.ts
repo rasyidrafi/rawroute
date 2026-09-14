@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getLocalFirestore, listLocalDocuments, type Firestore, type LocalQuery } from "@/lib/local-db"
 
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
-import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels, listProviders } from "@/lib/store"
+import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/lib/store"
 import { listCodexAccounts } from "@/lib/codex"
 import { getCodexUsageForAccount } from "@/lib/codex-usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
@@ -1904,7 +1904,8 @@ export async function getBudgetRequestState(
   const spentMicros = await budgetSpentMicros(budget, window)
   if (spentMicros >= budget.weeklyLimitMicros) {
     const beyondLimits = await getBudgetBeyondLimitsSettings()
-    if (beyondLimits.enabled && beyondLimits.modelIds.includes(gatewayModelId)) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
+    const requestedModel = typeof payload?.model === "string" ? payload.model : ""
+    if (beyondLimits.enabled && (beyondLimits.modelIds.includes(gatewayModelId) || (requestedModel && beyondLimits.modelIds.includes(requestedModel)))) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
     throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
   }
   return {
@@ -2079,12 +2080,14 @@ async function loadBudgetRows(
 }
 
 export async function getBudgetAdminData() {
-  const [keys, window, codex, models, providers, beyondLimits] = await Promise.all([
+  const [keys, window, codex, models, providers, aliases, combos, beyondLimits] = await Promise.all([
     budgetSelectableKeys(),
     getBudgetWindow(),
     listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
     listModels(),
     listProviders(),
+    listAliases(),
+    listCombos(),
     getBudgetBeyondLimitsSettings(),
   ])
   const [{ rows }, bypassSessions] = await Promise.all([
@@ -2096,9 +2099,13 @@ export async function getBudgetAdminData() {
     bypassSessions,
     window,
     beyondLimits,
-    modelOptions: models
+    modelOptions: [
+      ...models
       .filter((model) => model.enabled && providers.some((provider) => provider.id === model.providerId && provider.enabled))
-      .map((model) => ({ id: model.gatewayModelId || model.id, name: model.name, provider: providers.find((provider) => provider.id === model.providerId)?.name || "Unknown provider" }))
+      .map((model) => ({ id: model.gatewayModelId || model.id, name: model.name, provider: providers.find((provider) => provider.id === model.providerId)?.name || "Unknown provider" })),
+      ...aliases.map((alias) => ({ id: alias.alias, name: alias.name || alias.alias, provider: "Alias" })),
+      ...combos.map((combo) => ({ id: combo.combo, name: combo.name || combo.combo, provider: "Combo" })),
+    ]
       .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
     apiKeys: keys.map((key) => ({ id: key.id, name: key.name })),
     codexAccounts: codex.accounts.map((account) => ({ id: account.id, name: account.name, ...(account.planType ? { planType: account.planType } : {}) })),
