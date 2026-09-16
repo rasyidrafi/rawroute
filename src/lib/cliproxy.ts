@@ -2,13 +2,14 @@ import { authenticateProxyKey } from "@/lib/auth"
 import { BudgetDeniedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
+import { providerResponsesUrl } from "@/lib/cliproxy-provider-capabilities"
 import { catalogModels } from "@/lib/catalog"
 import { writeLog } from "@/lib/logger"
 import { resolveSharedModelForRecipient } from "@/lib/model-shares"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
-import { listAliases, listCombos, listModels, listProviders } from "@/lib/store"
-import type { Protocol, UsageEvent } from "@/lib/types"
+import { listAliases, listCombos, listModels, listProviderApiKeys, listProviders } from "@/lib/store"
+import type { AuthType, Protocol, ProviderApiKey, UsageEvent } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
 import { getWorkspace } from "@/lib/workspaces"
 import { upstreamFailure } from "@/lib/upstream-failure"
@@ -209,6 +210,7 @@ interface ResolvedGatewayModel {
   providerId?: string
   providerName?: string
   promptCacheKey: boolean
+  nativeResponses?: { baseUrl: string; authType: AuthType; headers: Record<string, string>; apiKeys: ProviderApiKey[] }
   shared?: { id: string; ownerWorkspaceId: string; ownerWorkspaceName: string; consumerWorkspaceId: string; consumerWorkspaceName: string; sourceGatewayModelId: string; sourceModelId: string }
 }
 
@@ -261,7 +263,10 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
       const forwardedModel = provider.prefix === "codex"
         ? `${codexWorkspacePrefix(currentWorkspaceId())}/${upstreamModel}`
         : `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
-      if (provider.prefix !== "codex") await ensureNonCodexProviderProjection(provider.id)
+      const nativeResponses = provider.prefix !== "codex" && provider.protocol === "openai-responses"
+        ? { baseUrl: provider.baseUrl, authType: provider.authType, headers: provider.headers || {}, apiKeys: await listProviderApiKeys(provider.id) }
+        : undefined
+      if (provider.prefix !== "codex" && !nativeResponses) await ensureNonCodexProviderProjection(provider.id)
       return {
         forwardedModel,
         upstreamModel,
@@ -271,6 +276,7 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
         providerId: target.providerId,
         providerName: provider.name,
         promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
+        nativeResponses,
         shared: {
           id: shared.share.id,
           ownerWorkspaceId: shared.owner.id,
@@ -309,8 +315,10 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
   } else {
     // RawRoute owns the external provider/model resolver. CLIProxy receives a
     // workspace/provider-scoped transport model only after this local lookup.
-    await ensureNonCodexProviderProjection(provider.id)
-    forwardedModel = `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
+    if (provider.protocol !== "openai-responses") {
+      await ensureNonCodexProviderProjection(provider.id)
+      forwardedModel = `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
+    }
   }
 
   return {
@@ -322,7 +330,57 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
     providerId: target.providerId,
     providerName: provider.name,
     promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
+    ...(provider.prefix !== "codex" && provider.protocol === "openai-responses" ? {
+      nativeResponses: { baseUrl: provider.baseUrl, authType: provider.authType, headers: provider.headers || {}, apiKeys: await listProviderApiKeys(provider.id) },
+    } : {}),
   }
+}
+
+function chatToResponses(payload: Record<string, unknown>) {
+  const translated = { ...payload, input: payload.messages }
+  delete translated.messages
+  if (!Object.hasOwn(translated, "max_output_tokens")) translated.max_output_tokens = translated.max_completion_tokens ?? translated.max_tokens
+  delete translated.max_completion_tokens
+  delete translated.max_tokens
+  return normalizeResponsesRequest(translated)
+}
+
+function anthropicToResponses(payload: Record<string, unknown>) {
+  const translated = { ...payload, input: payload.messages, max_output_tokens: payload.max_tokens }
+  delete translated.messages
+  delete translated.max_tokens
+  if (typeof payload.system === "string") translated.instructions = payload.system
+  delete translated.system
+  return normalizeResponsesRequest(translated)
+}
+
+function nativeResponsesBody(body: Uint8Array, model: string, ingress: Protocol) {
+  const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
+  payload.model = model
+  const translated = ingress === "openai-chat"
+    ? chatToResponses(payload)
+    : ingress === "anthropic-messages" ? anthropicToResponses(payload) : normalizeResponsesRequest(payload)
+  return JSON.stringify(translated)
+}
+
+async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewayModel, body: Uint8Array, ingress: Protocol) {
+  const config = resolved.nativeResponses!
+  const keys = config.authType === "none" ? [undefined] : config.apiKeys.filter((key) => key.enabled && key.key.trim())
+  if (!keys.length) return Response.json({ error: { message: "No enabled provider credentials are available." } }, { status: 503 })
+  let last: Response | undefined
+  for (const key of keys) {
+    const headers = new Headers(config.headers)
+    headers.set("content-type", "application/json")
+    headers.set("accept", request.headers.get("accept") || "application/json")
+    if (config.authType === "bearer" && key) headers.set("authorization", `Bearer ${key.key}`)
+    const response = await fetch(providerResponsesUrl(config.baseUrl), {
+      method: "POST", headers, body: nativeResponsesBody(body, resolved.upstreamModel, ingress), signal: request.signal, cache: "no-store",
+    })
+    if (response.ok || keys.length === 1) return passthroughResponse(response)
+    if (last) await last.body?.cancel().catch(() => undefined)
+    last = response
+  }
+  return passthroughResponse(last!)
 }
 
 async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string) {
@@ -622,10 +680,12 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   })
   let response: Response
   try {
-    response = await proxyToCliProxy(request, path, {
-      body: Buffer.from(forwardedBody),
-      headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" },
-    })
+    response = resolvedModel.nativeResponses
+      ? await proxyToNativeResponses(request, resolvedModel, body, protocol)
+      : await proxyToCliProxy(request, path, {
+          body: Buffer.from(forwardedBody),
+          headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" },
+        })
   } catch (error) {
     await releaseBudgetReservationWithLog(reservation)
     await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
@@ -660,7 +720,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   else {
     const failure = await upstreamFailure(new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }))
     if (!response.headers.has("retry-after") && failure.retrySeconds) response.headers.set("retry-after", String(failure.retrySeconds))
-    writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`, { provider, model: resolvedModel.pricingGatewayModelId, source: "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: response.headers.get("retry-after") || "unspecified" })
+    writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`, { provider, model: resolvedModel.pricingGatewayModelId, source: resolvedModel.nativeResponses ? "provider" : "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: response.headers.get("retry-after") || "unspecified" })
   }
   await releaseBudgetReservationWithLog(reservation)
   return new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })

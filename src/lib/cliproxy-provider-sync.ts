@@ -59,6 +59,7 @@ type Projection = {
   namespace: string
   namePrefix: string
   kind: "openai" | "claude" | undefined
+  executorMode: "openai-chat" | "openai-responses-native" | "anthropic-messages" | "none"
   openai: OpenAICompatProjection[]
   claude: ClaudeProjection[]
   fingerprint: string
@@ -155,6 +156,7 @@ function projectionFingerprint(projection: ProjectionShape) {
     providerId: projection.providerId,
     namespace: projection.namespace,
     kind: projection.kind,
+    executorMode: projection.executorMode,
     openai: projection.openai.map((entry) => ({
       ...entry,
       "api-key-entries": entry["api-key-entries"]?.map((key) => ({ "api-key-sha256": digest(key["api-key"]) })),
@@ -178,17 +180,21 @@ async function desiredProjection(providerId: string): Promise<Projection> {
   const namePrefix = managedNamePrefix(workspaceId, providerId)
   const provider = await getProvider(providerId)
   if (!provider || provider.prefix === "codex") {
-    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind: undefined, openai: [], claude: [] })
+    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind: undefined, executorMode: "none", openai: [], claude: [] })
   }
 
   const [apiKeys, models] = await Promise.all([listProviderApiKeys(providerId), listProviderModels(providerId)])
   const mappedModels = provider.enabled ? projectionModels(provider, models) : []
-  const kind = provider.protocol === "anthropic-messages" ? "claude" : "openai"
+  const kind = provider.protocol === "anthropic-messages" ? "claude" : provider.protocol === "openai-chat" ? "openai" : undefined
+  const executorMode = provider.protocol === "openai-responses" ? "openai-responses-native" : provider.protocol
   const baseUrl = normalizeProviderBaseUrl(provider.protocol, provider.baseUrl)
   const enabledKeys = apiKeys.filter((apiKey) => apiKey.enabled && apiKey.key.trim())
   const headers = Object.keys(provider.headers || {}).length ? cleanHeaders(provider.headers) : undefined
   if (!provider.enabled || mappedModels.length === 0) {
-    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai: [], claude: [] })
+    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, executorMode, openai: [], claude: [] })
+  }
+  if (provider.protocol === "openai-responses") {
+    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, executorMode, openai: [], claude: [] })
   }
 
   validateProviderCliProxyCompatibility({ protocol: provider.protocol, baseUrl, authType: provider.authType })
@@ -204,11 +210,11 @@ async function desiredProjection(providerId: string): Promise<Projection> {
       ...(provider.supportPromptCacheKey === true && kind === "openai" ? { "support-prompt-cache-key": true as const } : {}),
       ...(headers ? { headers } : {}),
     } satisfies OpenAICompatProjection
-    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai: [entry], claude: [] })
+    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, executorMode, openai: [entry], claude: [] })
   }
 
   if (!enabledKeys.length) {
-    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai: [], claude: [] })
+    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, executorMode, openai: [], claude: [] })
   }
 
   if (kind === "openai") {
@@ -223,7 +229,7 @@ async function desiredProjection(providerId: string): Promise<Projection> {
       ...(provider.supportPromptCacheKey === true ? { "support-prompt-cache-key": true as const } : {}),
       ...(headers ? { headers } : {}),
     } satisfies OpenAICompatProjection))
-    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai, claude: [] })
+    return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, executorMode, openai, claude: [] })
   }
 
   const claude = enabledKeys.map((apiKey, index) => ({
@@ -234,7 +240,7 @@ async function desiredProjection(providerId: string): Promise<Projection> {
     models: mappedModels,
     ...(headers ? { headers } : {}),
   } satisfies ClaudeProjection))
-  return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, openai: [], claude })
+  return withFingerprint({ workspaceId, providerId, namespace, namePrefix, kind, executorMode, openai: [], claude })
 }
 
 function entryName(entry: RemoteEntry) {

@@ -143,6 +143,19 @@ test("projects prompt cache key support only when the provider opts in", async (
   expect(entries.slice(1).every((entry) => entry["support-prompt-cache-key"] === true)).toBe(true)
 })
 
+test("removes a stale Chat projection when a provider changes to Responses", async () => {
+  await syncNonCodexProviderProjection("provider-a")
+  mocks.cliproxyManagement.mockClear()
+  mocks.getProvider.mockResolvedValue({ id: "provider-a", name: "Bynara", prefix: "bynara", baseUrl: "https://api.bynara.example/v1", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true })
+
+  await syncNonCodexProviderProjection("provider-a")
+
+  const openaiPut = mocks.cliproxyManagement.mock.calls.find(([path, init]) => path.endsWith("/openai-compatibility") && init.method === "PUT")
+  if (!openaiPut) throw new Error("stale OpenAI-compatible projection was not removed")
+  const entries = JSON.parse(String(openaiPut[1].body)) as Array<Record<string, unknown>>
+  expect(entries).toEqual([expect.objectContaining({ name: "unmanaged-openrouter" })])
+})
+
 test("projects Anthropic credentials with fill-first priority", async () => {
   mocks.getProvider.mockResolvedValue({
     id: "provider-a",

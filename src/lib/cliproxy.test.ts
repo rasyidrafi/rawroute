@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   listCombos: vi.fn(),
   listModels: vi.fn(),
   listProviders: vi.fn(),
+  listProviderApiKeys: vi.fn(),
   writeLog: vi.fn(),
   ensureNonCodexProviderProjection: vi.fn(),
 }))
@@ -41,6 +42,7 @@ vi.mock("@/lib/store", () => ({
   listCombos: mocks.listCombos,
   listModels: mocks.listModels,
   listProviders: mocks.listProviders,
+  listProviderApiKeys: mocks.listProviderApiKeys,
 }))
 vi.mock("@/lib/workspace-context", () => ({
   currentWorkspaceId: () => "default",
@@ -77,6 +79,7 @@ beforeEach(() => {
     createdAt: new Date().toISOString(),
   }])
   mocks.listProviders.mockResolvedValue([{ id: "codex", name: "Codex", prefix: "codex", enabled: true }])
+  mocks.listProviderApiKeys.mockResolvedValue([])
   globalThis.fetch = vi.fn(async () => Response.json({ id: "response-1" })) as typeof fetch
 })
 
@@ -424,6 +427,66 @@ test("routes non-Codex models through a workspace/provider namespace", async () 
   expect(forwarded.model).toBe("rr-ws-default-p-provider-a/model-a")
 })
 
+test("forwards external Responses providers directly and preserves xhigh", async () => {
+  const provider = { id: "provider-a", name: "Halotec", prefix: "ht", baseUrl: "https://api.example.test/v1/", protocol: "openai-responses", authType: "bearer", headers: { "x-tenant": "rawroute" }, enabled: true }
+  mocks.listProviders.mockResolvedValue([provider])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key-a", key: "provider-secret", enabled: true, priority: 1, createdAt: "2026-01-01T00:00:00.000Z" }])
+  mocks.listModels.mockResolvedValue([{ id: "model-a", providerId: provider.id, gatewayModelId: "ht/gpt-5.6-luna", name: "Luna", upstreamModel: "gpt-5.6-luna", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }])
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "ht/gpt-5.6-luna", input: [{ role: "user", content: "hello" }], reasoning: { effort: "xhigh", summary: "auto" }, include: ["reasoning.encrypted_content"], stream: false }),
+  }))
+  await response.text()
+
+  expect(mocks.ensureNonCodexProviderProjection).not.toHaveBeenCalled()
+  const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+  expect(String(call[0])).toBe("https://api.example.test/v1/responses")
+  const forwarded = JSON.parse(String(call[1]?.body)) as Record<string, unknown>
+  expect(forwarded).toMatchObject({ model: "gpt-5.6-luna", reasoning: { effort: "xhigh", summary: "auto" }, include: ["reasoning.encrypted_content"] })
+  expect(forwarded).not.toHaveProperty("reasoning_effort")
+  expect(mocks.writeLog.mock.calls.map((entry) => entry[2])).toContain("POST PROVIDER:Halotec MODEL:ht/gpt-5.6-luna -> gpt-5.6-luna FMT:openai-responses -> openai-responses KEY:Gateway THINK:xhigh MSG:1")
+})
+
+test("translates Chat ingress once before calling a Responses provider", async () => {
+  const provider = { id: "provider-a", name: "Responses", prefix: "r", baseUrl: "https://api.example.test", protocol: "openai-responses", authType: "none", headers: {}, enabled: true }
+  mocks.listProviders.mockResolvedValue([provider])
+  mocks.listModels.mockResolvedValue([{ id: "model-a", providerId: provider.id, gatewayModelId: "r/model-a", name: "A", upstreamModel: "model-a", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }])
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "r/model-a", messages: [{ role: "user", content: "hello" }], reasoning_effort: "xhigh" }) }))
+  await response.text()
+  const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+  expect(String(call[0])).toBe("https://api.example.test/v1/responses")
+  expect(JSON.parse(String(call[1]?.body))).toMatchObject({ model: "model-a", input: [{ role: "user", content: "hello" }], reasoning: { effort: "xhigh" } })
+})
+
+test("streams native Responses SSE while collecting terminal usage", async () => {
+  const provider = { id: "provider-a", name: "Responses", prefix: "r", baseUrl: "https://api.example.test/v1", protocol: "openai-responses", authType: "none", headers: {}, enabled: true }
+  mocks.listProviders.mockResolvedValue([provider])
+  mocks.listModels.mockResolvedValue([{ id: "model-a", providerId: provider.id, gatewayModelId: "r/model-a", name: "A", upstreamModel: "model-a", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }])
+  globalThis.fetch = vi.fn(async (_url, init) => {
+    expect(JSON.parse(String(init?.body))).toMatchObject({ reasoning: { effort: "xhigh" }, stream: true })
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello"}\n\n'))
+        controller.enqueue(new TextEncoder().encode('event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":1}}}\n\n'))
+        controller.close()
+      },
+    }), { headers: { "content-type": "text/event-stream" } })
+  }) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "r/model-a", input: "hello", reasoning_effort: "xhigh", stream: true }),
+  }))
+  const reader = response.body!.getReader()
+  const first = await reader.read()
+  expect(new TextDecoder().decode(first.value)).toContain("response.output_text.delta")
+  while (!(await reader.read()).done) {}
+  await vi.waitFor(() => expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200 }), expect.anything()))
+})
+
 test("logs the received protocol and the saved provider protocol", async () => {
   const provider = { id: "provider-a", name: "Nara", prefix: "nara", protocol: "openai-chat", authType: "bearer", enabled: true }
   mocks.listProviders.mockResolvedValue([provider])
@@ -448,7 +511,7 @@ test("logs the received protocol and the saved provider protocol", async () => {
   expect(messages).toContain("POST PROVIDER:Nara MODEL:nara/grok-4.5 -> grok-4.5 FMT:anthropic-messages -> openai-chat KEY:Gateway MSG:1")
 })
 
-test("lets CLIProxy translate every supported client/provider protocol direction", async () => {
+test("routes every supported client/provider protocol direction", async () => {
   const cases = [
     { name: "openai-responses to openai-chat", providerProtocol: "openai-chat" as const, path: "/v1/responses", body: { model: "bynara/model-a", input: "hello" } },
     { name: "openai-chat to openai-responses", providerProtocol: "openai-responses" as const, path: "/v1/chat/completions", body: { model: "bynara/model-a", messages: [{ role: "user", content: "hello" }] } },
@@ -460,7 +523,7 @@ test("lets CLIProxy translate every supported client/provider protocol direction
 
   for (const scenario of cases) {
     vi.clearAllMocks()
-    const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", protocol: scenario.providerProtocol, authType: "bearer", enabled: true }
+    const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", baseUrl: "https://api.example.test/v1", protocol: scenario.providerProtocol, authType: scenario.providerProtocol === "openai-responses" ? "none" : "bearer", headers: {}, enabled: true }
     mocks.listProviders.mockResolvedValue([provider])
     mocks.listModels.mockResolvedValue([{
       id: "model-a",
@@ -482,11 +545,12 @@ test("lets CLIProxy translate every supported client/provider protocol direction
 
     expect(response.status, scenario.name).toBe(200)
     await response.text()
-    expect(mocks.ensureNonCodexProviderProjection, scenario.name).toHaveBeenCalledWith(provider.id)
+    if (scenario.providerProtocol === "openai-responses") expect(mocks.ensureNonCodexProviderProjection, scenario.name).not.toHaveBeenCalled()
+    else expect(mocks.ensureNonCodexProviderProjection, scenario.name).toHaveBeenCalledWith(provider.id)
     const fetchCalls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls
-    expect(String(fetchCalls[0]?.[0]), scenario.name).toContain(scenario.path)
+    expect(String(fetchCalls[0]?.[0]), scenario.name).toContain(scenario.providerProtocol === "openai-responses" ? "/v1/responses" : scenario.path)
     const forwarded = JSON.parse(String(fetchCalls[0]?.[1]?.body)) as Record<string, unknown>
-    expect(forwarded.model, scenario.name).toBe("rr-ws-default-p-provider-a/model-a")
+    expect(forwarded.model, scenario.name).toBe(scenario.providerProtocol === "openai-responses" ? "upstream-a" : "rr-ws-default-p-provider-a/model-a")
   }
 })
 

@@ -28,6 +28,20 @@ export function normalizeProviderBaseUrl(protocol: Protocol, baseUrl: string) {
   }
 }
 
+export function providerResponsesUrl(baseUrl: string) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "")
+  try {
+    const url = new URL(trimmed)
+    const path = url.pathname.replace(/\/+$/, "")
+    if (path.endsWith("/responses")) return url.toString().replace(/\/+$/, "")
+    url.pathname = path.endsWith("/v1") ? `${path}/responses` : `${path}/v1/responses`
+    return url.toString()
+  } catch {
+    if (trimmed.endsWith("/responses")) return trimmed
+    return trimmed.endsWith("/v1") ? `${trimmed}/responses` : `${trimmed}/v1/responses`
+  }
+}
+
 export function supportedProviderAuthTypes(protocol: Protocol, baseUrl: string): AuthType[] {
   if (protocol === "anthropic-messages") {
     return isAnthropicFirstPartyBaseUrl(baseUrl) ? ["x-api-key", "bearer"] : ["bearer"]
