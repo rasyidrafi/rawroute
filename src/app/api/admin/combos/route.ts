@@ -11,7 +11,7 @@ import { listAliases, listCombos, listModels, listProviders, readSessionSecret, 
 import type { ComboMember, ModelCombo } from "@/lib/types"
 
 function normalizedMembers(input: Partial<ModelCombo>) {
-  const raw = Array.isArray(input.members) ? input.members : Array.isArray(input.memberModelIds) ? input.memberModelIds.map((modelId) => ({ modelId })) : []
+  const raw: ComboMember[] = Array.isArray(input.members) ? input.members : Array.isArray(input.memberModelIds) ? input.memberModelIds.map((modelId) => ({ modelId })) : []
   return raw.map((member): ComboMember => {
     const modelId = typeof member.modelId === "string" ? member.modelId.trim() : ""
     const mode = member.reasoning?.mode || "inherit"

@@ -641,7 +641,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     let memberPayload = payload
     let reasoningEffort: string | undefined
     try {
-      const applied = applyComboMemberPolicy(payload, member)
+      const applied = applyComboMemberPolicy(payload!, member)
       memberPayload = applied.payload
       reasoningEffort = applied.effort
     } catch (error) {
