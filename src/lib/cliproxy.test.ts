@@ -194,6 +194,31 @@ test("sends combo reasoning overrides in the request body without suffixing proj
   expect(forwarded.model).not.toContain("(max)")
 })
 
+test("deep merges a combo member custom payload and keeps the routed model", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a-upstream", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{
+    id: "combo-1",
+    combo: "custom-combo",
+    name: "Custom combo",
+    memberModelIds: ["p/a"],
+    members: [{ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { temperature: 0.2, response_format: { json_schema: { name: "answer" } } } }],
+    createdAt: new Date().toISOString(),
+  }])
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "custom-combo", messages: [{ role: "user", content: "hello" }], temperature: 1, response_format: { type: "json_schema" } }),
+  }))
+
+  expect(response.status).toBe(200)
+  await response.text()
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+  expect(forwarded).toMatchObject({ model: "rr-ws-default-p-p/a", temperature: 0.2, response_format: { type: "json_schema", json_schema: { name: "answer" } } })
+  expect(forwarded.messages).toEqual([{ role: "user", content: "hello" }])
+})
+
 test("falls back after a non-terminal provider error regardless of status class", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
   mocks.listModels.mockResolvedValue([

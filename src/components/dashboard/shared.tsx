@@ -11,8 +11,8 @@ import { Label } from "@/components/ui/label"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { TableCell, TableRow } from "@/components/ui/table"
 
-export function FormSubmitButton({ pending, idleLabel, pendingLabel }: { pending: boolean; idleLabel: string; pendingLabel: string }) {
-  return <Button aria-busy={pending} disabled={pending} type="submit">{pending && <LoadingSpinner />}{pending ? pendingLabel : idleLabel}</Button>
+export function FormSubmitButton({ pending, disabled, idleLabel, pendingLabel }: { pending: boolean; disabled?: boolean; idleLabel: string; pendingLabel: string }) {
+  return <Button aria-busy={pending} disabled={pending || disabled} type="submit">{pending && <LoadingSpinner />}{pending ? pendingLabel : idleLabel}</Button>
 }
 
 export function FormField({ label, children }: { label: string; children: ReactNode }) {

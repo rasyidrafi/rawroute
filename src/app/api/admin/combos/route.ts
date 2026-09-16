@@ -2,8 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 import { requireAdmin } from "@/lib/auth"
 import { invalidateDashboardPresentation } from "@/lib/analytics"
-import { cleanReasoningEffort, reasoningConfigHash } from "@/lib/combo-reasoning"
-import { testComboMemberReasoning, type ComboMemberTestResult } from "@/lib/cliproxy"
+import { cleanReasoningEffort, memberPolicyConfigHash, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
+import { testComboMemberPolicy, type ComboMemberTestResult } from "@/lib/cliproxy"
 import { cleanAliasId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getSharedModelForRecipient } from "@/lib/model-shares"
@@ -18,13 +18,14 @@ function normalizedMembers(input: Partial<ModelCombo>) {
     const effort = mode === "override" ? cleanReasoningEffort(member.reasoning?.effort) : undefined
     if (!["inherit", "provider-default", "override"].includes(mode)) throw new Error("Combo reasoning mode is invalid.")
     if (mode === "override" && !effort) throw new Error("Reasoning effort is required when override is enabled.")
-    return { modelId, reasoning: { mode, ...(effort ? { effort } : {}) }, validation: member.validation }
+    const customPayload = normalizeComboCustomPayload(member.customPayload)
+    return { modelId, reasoning: { mode, ...(effort ? { effort } : {}) }, ...(customPayload ? { customPayload } : {}), validation: member.validation }
   })
 }
 
 async function confirmationToken(members: ComboMember[]) {
   const expiresAt = Date.now() + 5 * 60_000
-  const value = `${expiresAt}.${JSON.stringify(members.map((member) => [member.modelId, member.reasoning]))}`
+  const value = `${expiresAt}.${JSON.stringify(members.map(memberPolicyConfigHash))}`
   const signature = createHmac("sha256", await readSessionSecret()).update(value).digest("base64url")
   return Buffer.from(`${value}.${signature}`).toString("base64url")
 }
@@ -38,7 +39,7 @@ async function validConfirmation(token: unknown, members: ComboMember[]) {
     const signature = decoded.slice(split + 1)
     const expiresAt = Number(value.slice(0, value.indexOf(".")))
     if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return false
-    const expectedValue = `${expiresAt}.${JSON.stringify(members.map((member) => [member.modelId, member.reasoning]))}`
+    const expectedValue = `${expiresAt}.${JSON.stringify(members.map(memberPolicyConfigHash))}`
     if (value !== expectedValue) return false
     const expected = createHmac("sha256", await readSessionSecret()).update(value).digest("base64url")
     const left = Buffer.from(signature)
@@ -66,7 +67,7 @@ async function validateCombo(input: Partial<ModelCombo> & { originalId?: string 
   }
   if (memberModelIds.some((member) => !availableModelIds.has(member) && !availableAliasIds.has(member))) throw new Error("One or more combo models are unavailable.")
   if (availableModelIds.has(combo) || aliases.some((alias) => cleanAliasId(alias.alias) === combo) || combos.some((entry) => cleanAliasId(entry.combo) === combo && entry.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
-  return { combo, name, members, memberModelIds }
+  return { combo, name, members, memberModelIds, existing: input.originalId ? combos.find((entry) => entry.id === input.originalId) : undefined }
 }
 
 export async function POST(request: Request) {
@@ -76,20 +77,33 @@ export async function POST(request: Request) {
   if (!input) return jsonError("Combo payload is required.", 400)
   try {
     const value = await validateCombo(input)
-    const overrideMembers = value.members.filter((member) => member.reasoning?.mode === "override")
+    const existingByModel = new Map(value.existing?.members?.map((member) => [member.modelId, member]) || [])
+    const cachedValidation = new Map<string, ComboMember["validation"]>()
+    const policyMembers = value.members.filter((member) => member.reasoning?.mode === "override" || member.customPayload)
+    const membersToTest = policyMembers.filter((member) => {
+      const existing = existingByModel.get(member.modelId)
+      const hash = memberPolicyConfigHash(member)
+      if (existing?.validation?.configHash === hash && existing.validation.status !== "stale" && existing.validation.status !== "invalid") {
+        cachedValidation.set(member.modelId, existing.validation)
+        return false
+      }
+      return true
+    })
     const results: ComboMemberTestResult[] = []
-    for (let index = 0; index < overrideMembers.length; index += 2) results.push(...await Promise.all(overrideMembers.slice(index, index + 2).map(testComboMemberReasoning)))
+    for (let index = 0; index < membersToTest.length; index += 2) results.push(...await Promise.all(membersToTest.slice(index, index + 2).map(testComboMemberPolicy)))
     const invalid = results.filter((result) => result.status === "invalid")
-    if (invalid.length) return jsonError("One or more reasoning overrides were rejected by the upstream.", 400, { results: invalid })
+    if (invalid.length) return jsonError("One or more member policies were rejected by the upstream.", 400, { results: invalid })
     const unverified = results.filter((result) => result.status === "unverified")
     if (unverified.length && !await validConfirmation(body?.confirmationToken, value.members)) {
-      return jsonError("Some reasoning overrides could not be verified.", 409, { results: unverified, confirmationToken: await confirmationToken(value.members) })
+      return jsonError("Some member policies could not be verified.", 409, { results: unverified, confirmationToken: await confirmationToken(value.members) })
     }
     const testedAt = new Date().toISOString()
     value.members = value.members.map((member) => {
-      if (member.reasoning?.mode !== "override") return { ...member, validation: undefined }
+      if (member.reasoning?.mode !== "override" && !member.customPayload) return { ...member, validation: undefined }
+      const cached = cachedValidation.get(member.modelId)
+      if (cached) return { ...member, validation: cached }
       const result = results.find((entry) => entry.modelId === member.modelId)!
-      return { ...member, validation: { status: result.status, testedAt, message: result.message, configHash: reasoningConfigHash(member.modelId, member.reasoning.mode, member.reasoning.effort) } }
+      return { ...member, validation: { status: result.status, testedAt, message: result.message, configHash: memberPolicyConfigHash(member) } }
     })
     const combo = await upsertCombo({ ...value, originalId: input.originalId })
     invalidateDashboardPresentation()

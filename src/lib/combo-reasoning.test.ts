@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, stripReasoningFields, supportedReasoningEfforts } from "@/lib/combo-reasoning"
+import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, memberPolicyConfigHash, normalizeComboCustomPayload, stripReasoningFields, supportedReasoningEfforts } from "@/lib/combo-reasoning"
 
 describe("combo reasoning policies", () => {
   test("migrates legacy combo members to inherit mode", () => {
@@ -27,6 +27,29 @@ describe("combo reasoning policies", () => {
     expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "provider-default" } }).payload).toEqual({})
   })
 
+  test("deep merges custom payload without changing protected request fields", () => {
+    expect(applyComboMemberPolicy({ model: "combo", messages: [{ role: "user", content: "hello" }], response_format: { type: "text" }, stop: ["old"] }, {
+      modelId: "p/a",
+      reasoning: { mode: "inherit" },
+      customPayload: { response_format: { json_schema: { name: "answer" } }, stop: ["new"], temperature: 0.2 },
+    }).payload).toEqual({
+      model: "combo",
+      messages: [{ role: "user", content: "hello" }],
+      response_format: { type: "text", json_schema: { name: "answer" } },
+      stop: ["new"],
+      temperature: 0.2,
+    })
+    expect(() => normalizeComboCustomPayload({ model: "other" })).toThrow("Custom payload cannot override model.")
+    expect(() => normalizeComboCustomPayload({ extra_body: { stream: true } })).toThrow("Custom payload cannot override extra_body.stream.")
+    expect(() => normalizeComboCustomPayload([])).toThrow("Custom payload must be a JSON object.")
+  })
+
+  test("uses a stable policy hash for custom JSON key order", () => {
+    const left = memberPolicyConfigHash({ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { z: 1, nested: { b: 2, a: 1 } } })
+    const right = memberPolicyConfigHash({ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { nested: { a: 1, b: 2 }, z: 1 } })
+    expect(left).toBe(right)
+  })
+
   test("uses model capability choices", () => {
     expect(supportedReasoningEfforts({ reasoningCapability: { mode: "enabled", supportedEfforts: ["High", "xhigh"] } })).toEqual(["high", "xhigh"])
     expect(supportedReasoningEfforts({ reasoningCapability: { mode: "disabled" } })).toEqual([])
@@ -39,5 +62,6 @@ describe("combo reasoning policies", () => {
     expect(applyReasoningOverride(payload, "max", "anthropic-messages")).toEqual({ model: "workspace/provider/model", thinking: { type: "adaptive" }, output_config: { verbosity: "low", effort: "max" } })
     expect(applyReasoningOverride(payload, "auto", "anthropic-messages")).toEqual({ model: "workspace/provider/model", thinking: { type: "enabled" }, output_config: { verbosity: "low" } })
     expect(applyReasoningOverride(payload, "none", "anthropic-messages")).toEqual({ model: "workspace/provider/model", thinking: { type: "disabled" }, output_config: { verbosity: "low" } })
+    expect(applyReasoningOverride({ model: "m", reasoning: { effort: "low", summary: "auto" } }, "high", "openai-responses")).toEqual({ model: "m", reasoning: { summary: "auto", effort: "high" } })
   })
 })

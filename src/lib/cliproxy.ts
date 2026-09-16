@@ -4,7 +4,7 @@ import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
 import { providerResponsesUrl } from "@/lib/cliproxy-provider-capabilities"
 import { catalogModels } from "@/lib/catalog"
-import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, stripReasoningFields } from "@/lib/combo-reasoning"
+import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, mergeComboCustomPayload, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
 import { writeLog } from "@/lib/logger"
 import { resolveSharedModelForRecipient } from "@/lib/model-shares"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
@@ -212,6 +212,7 @@ interface ResolvedGatewayModel {
   providerName?: string
   promptCacheKey: boolean
   reasoningEffort?: string
+  customPayload?: Record<string, unknown>
   reasoningCapability?: ModelReasoningCapability
   nativeResponses?: { baseUrl: string; authType: AuthType; headers: Record<string, string>; apiKeys: ProviderApiKey[] }
   shared?: { id: string; ownerWorkspaceId: string; ownerWorkspaceName: string; consumerWorkspaceId: string; consumerWorkspaceName: string; sourceGatewayModelId: string; sourceModelId: string }
@@ -359,13 +360,14 @@ function anthropicToResponses(payload: Record<string, unknown>) {
   return normalizeResponsesRequest(translated)
 }
 
-function nativeResponsesBody(body: Uint8Array, model: string, ingress: Protocol, reasoningEffort?: string) {
+function nativeResponsesBody(body: Uint8Array, model: string, ingress: Protocol, reasoningEffort?: string, customPayload?: Record<string, unknown>) {
   const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
   payload.model = model
   const translated = ingress === "openai-chat"
     ? chatToResponses(payload)
     : ingress === "anthropic-messages" ? anthropicToResponses(payload) : normalizeResponsesRequest(payload)
-  const normalized = reasoningEffort ? { ...stripReasoningFields(translated), reasoning: { effort: reasoningEffort } } : translated
+  const customized = mergeComboCustomPayload(translated, customPayload)
+  const normalized = applyReasoningOverride(customized, reasoningEffort, "openai-responses")
   return JSON.stringify(normalized)
 }
 
@@ -380,7 +382,7 @@ async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewa
     headers.set("accept", request.headers.get("accept") || "application/json")
     if (config.authType === "bearer" && key) headers.set("authorization", `Bearer ${key.key}`)
     const response = await fetch(providerResponsesUrl(config.baseUrl), {
-      method: "POST", headers, body: nativeResponsesBody(body, resolved.upstreamModel, ingress, resolved.reasoningEffort), signal: request.signal, cache: "no-store",
+      method: "POST", headers, body: nativeResponsesBody(body, resolved.upstreamModel, ingress, resolved.reasoningEffort, resolved.customPayload), signal: request.signal, cache: "no-store",
     })
     if (response.ok || keys.length === 1) return passthroughResponse(response)
     if (last) await last.body?.cancel().catch(() => undefined)
@@ -389,14 +391,16 @@ async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewa
   return passthroughResponse(last!)
 }
 
-async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string, reasoningEffort?: string) {
+async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string, reasoningEffort?: string, customPayload?: Record<string, unknown>) {
   const shouldNormalizeResponses = protocolForPath(path) === "openai-responses"
-  if (forwardedModel === model && !shouldNormalizeResponses && !reasoningEffort) return body
+  if (forwardedModel === model && !shouldNormalizeResponses && !reasoningEffort && !customPayload) return body
   try {
     const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
     if (forwardedModel !== model) payload.model = forwardedModel
     const normalized = shouldNormalizeResponses ? normalizeResponsesRequest(payload) : payload
-    const overridden = applyReasoningOverride(normalized, reasoningEffort, protocolForPath(path))
+    const customized = mergeComboCustomPayload(normalized, customPayload)
+    customized.model = forwardedModel
+    const overridden = applyReasoningOverride(customized, reasoningEffort, protocolForPath(path))
     return new TextEncoder().encode(JSON.stringify(overridden))
   } catch {
     return body
@@ -420,30 +424,37 @@ function validationMessage(value: string) {
   }
 }
 
-export async function testComboMemberReasoning(member: ComboMember): Promise<ComboMemberTestResult> {
+export async function testComboMemberPolicy(member: ComboMember): Promise<ComboMemberTestResult> {
   const started = Date.now()
   const effort = member.reasoning?.mode === "override" ? member.reasoning.effort?.trim().toLowerCase() : undefined
-  if (!effort) return { modelId: member.modelId, status: "verified", message: "No reasoning override to test.", latencyMs: 0 }
+  let customPayload: Record<string, unknown> | undefined
+  try { customPayload = normalizeComboCustomPayload(member.customPayload) }
+  catch (error) { return { modelId: member.modelId, status: "invalid", message: error instanceof Error ? error.message : "Custom payload is invalid.", latencyMs: 0 } }
+  if (!effort && !customPayload) return { modelId: member.modelId, status: "verified", message: "No member policy to test.", latencyMs: 0 }
   try {
     const resolved = await resolveGatewayModel(member.modelId)
     const supported = resolved.reasoningCapability?.supportedEfforts?.map((value) => value.trim().toLowerCase()).filter(Boolean)
-    if (resolved.reasoningCapability?.mode === "disabled") return { modelId: member.modelId, status: "invalid", message: "Reasoning overrides are disabled for this model.", latencyMs: Date.now() - started }
-    if (supported?.length && !supported.includes(effort)) return { modelId: member.modelId, status: "invalid", message: `This model does not allow reasoning effort ${effort}.`, latencyMs: Date.now() - started }
+    if (effort && resolved.reasoningCapability?.mode === "disabled") return { modelId: member.modelId, status: "invalid", message: "Reasoning overrides are disabled for this model.", latencyMs: Date.now() - started }
+    if (effort && supported?.length && !supported.includes(effort)) return { modelId: member.modelId, status: "invalid", message: `This model does not allow reasoning effort ${effort}.`, latencyMs: Date.now() - started }
 
-    const payload = { model: member.modelId, messages: [{ role: "user", content: "Reply with OK." }], max_completion_tokens: 8, stream: false }
+    const testCustomPayload = customPayload ? structuredClone(customPayload) : undefined
+    if (testCustomPayload) for (const key of ["max_tokens", "max_completion_tokens", "max_output_tokens", "n"]) delete testCustomPayload[key]
+    const probe = { model: member.modelId, messages: [{ role: "user", content: "Reply with OK." }], max_completion_tokens: 8, stream: false }
+    const applied = applyComboMemberPolicy(probe, { ...member, customPayload: testCustomPayload })
+    const payload = { ...applied.payload, model: member.modelId, messages: probe.messages, max_completion_tokens: 8, stream: false }
     const body = new TextEncoder().encode(JSON.stringify(payload))
     const request = new Request("http://rawroute.internal/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body, signal: AbortSignal.timeout(20_000) })
-    const tested = { ...resolved, reasoningEffort: effort }
+    const tested = { ...resolved, reasoningEffort: applied.effort, customPayload: applied.customPayload }
     let response: Response
     if (tested.nativeResponses) response = await proxyToNativeResponses(request, tested, body, "openai-chat")
     else {
       const internalKey = process.env.CLIPROXY_API_KEY?.trim()
       if (!internalKey) return { modelId: member.modelId, status: "unverified", message: "CLIProxy internal key is unavailable.", latencyMs: Date.now() - started }
-      const forwardedBody = await rewriteForwardedBody(body, tested.forwardedModel, member.modelId, "/v1/chat/completions", effort)
+      const forwardedBody = await rewriteForwardedBody(body, tested.forwardedModel, member.modelId, "/v1/chat/completions", applied.effort, applied.customPayload)
       response = await proxyToCliProxy(request, "/v1/chat/completions", { body: Buffer.from(forwardedBody), headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
     }
     const responseText = (await response.text()).slice(0, 500)
-    if (response.ok) return { modelId: member.modelId, status: "verified", httpStatus: response.status, message: `Accepted ${effort}.`, latencyMs: Date.now() - started }
+    if (response.ok) return { modelId: member.modelId, status: "verified", httpStatus: response.status, message: "Upstream accepted the member policy.", latencyMs: Date.now() - started }
     const message = validationMessage(responseText) || `Upstream returned ${response.status}.`
     const invalid = response.status === 400 || response.status === 404 || response.status === 422
     return { modelId: member.modelId, status: invalid ? "invalid" : "unverified", httpStatus: response.status, message, latencyMs: Date.now() - started }
@@ -640,10 +651,12 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     const resolved = await resolveGatewayModel(memberModelId).catch(() => undefined)
     let memberPayload = payload
     let reasoningEffort: string | undefined
+    let customPayload: Record<string, unknown> | undefined
     try {
       const applied = applyComboMemberPolicy(payload!, member)
       memberPayload = applied.payload
       reasoningEffort = applied.effort
+      customPayload = applied.customPayload
     } catch (error) {
       writeLog("warn", "gateway", "Combo member policy is invalid", { combo: combo.combo, memberModelId, error: error instanceof Error ? error.message : "Unknown error" })
       continue
@@ -654,7 +667,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       body: JSON.stringify({ ...memberPayload, model: memberModelId }),
       signal: request.signal,
     })
-    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort } : undefined))
+    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, customPayload } : undefined))
     if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
       return responseWithoutComboHeaders(response)
@@ -699,7 +712,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     })
   }
   const payload = objectValue(parsed) || {}
-  const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort)
+  const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort, resolvedModel.nativeResponses ? undefined : resolvedModel.customPayload)
   let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   let reservation: BudgetReservation | undefined
   try {
