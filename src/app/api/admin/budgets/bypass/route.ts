@@ -17,7 +17,7 @@ export async function PATCH(request: Request) {
     writeLog("info", "admin", "Unlimited Mode updated", { enabled: result.window.bypassLimits, autoDeactivateAtWindowEnd: result.window.bypassAutoDeactivateAtWindowEnd === true })
     return Response.json(result)
   } catch (error) {
-    writeLog("error", "admin", "Unlimited Mode update failed", { enabled: body?.enabled, autoDeactivateAtWindowEnd: body?.autoDeactivateAtWindowEnd, error: error instanceof Error ? error.message : "Unknown error" })
+    writeLog("error", "admin", "Unlimited Mode update failed", { enabled: hasEnabled ? body!.enabled as boolean : "unchanged", autoDeactivateAtWindowEnd: hasAutoDeactivate ? body!.autoDeactivateAtWindowEnd as boolean : "unchanged", error: error instanceof Error ? error.message : "Unknown error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update Unlimited Mode.", error instanceof Error && error.message === "Unlimited Mode is not active." ? 400 : 500)
   }
 }
