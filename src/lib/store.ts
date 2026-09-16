@@ -247,6 +247,7 @@ function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Mode
     upstreamModel: data.upstreamModel || "",
     enabled: data.enabled !== false,
     source: data.source || "custom",
+    reasoningCapability: data.reasoningCapability,
     createdAt: data.createdAt || "",
   }
 }
@@ -261,11 +262,16 @@ function aliasFromSnapshot(snapshot: DocumentSnapshot): ModelAlias {
 
 function comboFromSnapshot(snapshot: DocumentSnapshot): ModelCombo {
   const data = snapshot.data() as Partial<ModelCombo>
+  const memberModelIds = Array.isArray(data.memberModelIds) ? data.memberModelIds.filter((member): member is string => typeof member === "string") : []
+  const members = Array.isArray(data.members)
+    ? data.members.filter((member) => member && typeof member === "object" && typeof member.modelId === "string")
+    : memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
   return {
     id: snapshot.id,
     combo: data.combo || "",
     name: data.name || "",
-    memberModelIds: Array.isArray(data.memberModelIds) ? data.memberModelIds.filter((member): member is string => typeof member === "string") : [],
+    members,
+    memberModelIds: members.map((member) => member.modelId),
     createdAt: data.createdAt || "",
   }
 }
@@ -307,6 +313,7 @@ function storedModel(model: Model) {
     upstreamModel: model.upstreamModel,
     enabled: model.enabled,
     source: model.source,
+    reasoningCapability: model.reasoningCapability,
     createdAt: model.createdAt,
   })
 }
@@ -585,6 +592,7 @@ function validateComboInput(input: Partial<ModelCombo> & { originalId?: string }
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) throw new Error("Combo name must be between 1 and 80 characters.")
   if (input.combo !== undefined && (typeof input.combo !== "string" || !cleanAliasId(input.combo))) throw new Error("Combo gateway ID is required.")
   if (input.memberModelIds !== undefined && (!Array.isArray(input.memberModelIds) || input.memberModelIds.some((member) => typeof member !== "string" || !member.trim()))) throw new Error("Combo models are invalid.")
+  if (input.members !== undefined && (!Array.isArray(input.members) || input.members.some((member) => !member || typeof member.modelId !== "string" || !member.modelId.trim()))) throw new Error("Combo models are invalid.")
 }
 
 function assertModelMutationAllowed(existing: Model | undefined) {
@@ -1915,6 +1923,7 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       upstreamModel: input.upstreamModel,
       enabled: input.enabled,
       source: input.source,
+      reasoningCapability: input.reasoningCapability,
     }) as Partial<Model>
     const model: Model = {
       ...(existing || {}),
@@ -2041,11 +2050,17 @@ async function firestoreUpsertCombo(input: Partial<ModelCombo> & { originalId?: 
     const previousReservation = previousId && previousId !== normalizedId
       ? await firestoreGatewayIdReservation(transaction, previousId, owner)
       : undefined
-    const memberModelIds = input.memberModelIds === undefined ? existing?.memberModelIds || [] : input.memberModelIds.map((member) => member.trim())
+    const members = input.members === undefined
+      ? input.memberModelIds !== undefined
+        ? input.memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+        : existing?.members || (existing?.memberModelIds || []).map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+      : input.members.map((member) => ({ ...member, modelId: member.modelId.trim() }))
+    const memberModelIds = members.map((member) => member.modelId)
     const combo: ModelCombo = {
       id: comboId,
       combo: normalizedCombo,
       name: input.name?.trim() || existing?.name || "",
+      members,
       memberModelIds,
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
@@ -2303,6 +2318,7 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
     upstreamModel: input.upstreamModel,
     enabled: input.enabled,
     source: input.source,
+    reasoningCapability: input.reasoningCapability,
   }) as Partial<Model>
   const model: Model = {
     ...(existing || {}),
@@ -2412,9 +2428,15 @@ function memoryUpsertCombo(input: Partial<ModelCombo> & { originalId?: string })
     id: comboId,
     combo: normalizedCombo,
     name: input.name?.trim() || existing?.name || "",
-    memberModelIds: input.memberModelIds === undefined ? existing?.memberModelIds || [] : input.memberModelIds.map((member) => member.trim()),
+    members: input.members === undefined
+      ? input.memberModelIds !== undefined
+        ? input.memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+        : existing?.members || (existing?.memberModelIds || []).map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+      : input.members.map((member) => ({ ...member, modelId: member.modelId.trim() })),
+    memberModelIds: [],
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
+  combo.memberModelIds = (combo.members || []).map((member) => member.modelId)
   state.combos.set(combo.id, combo)
   reserveMemoryGatewayId(state, normalizedId, owner)
   if (previousId && previousId !== normalizedId) releaseMemoryGatewayId(state, previousId, owner)

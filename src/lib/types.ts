@@ -76,7 +76,13 @@ export interface Model {
   enabled: boolean
   /** Whether this is a fixed built-in model or a workspace-defined model. */
   source?: ModelSource
+  reasoningCapability?: ModelReasoningCapability
   createdAt: string
+}
+
+export interface ModelReasoningCapability {
+  mode: "auto" | "enabled" | "disabled"
+  supportedEfforts?: string[]
 }
 
 export interface ModelAlias {
@@ -91,11 +97,28 @@ export interface ModelAlias {
   createdAt: string
 }
 
+export type ComboReasoningMode = "inherit" | "provider-default" | "override"
+
+export interface ComboMemberValidation {
+  status: "verified" | "unverified" | "invalid" | "stale"
+  testedAt?: string
+  message?: string
+  configHash?: string
+}
+
+export interface ComboMember {
+  modelId: string
+  reasoning?: { mode: ComboReasoningMode; effort?: string }
+  validation?: ComboMemberValidation
+}
+
 /** A named, ordered fallback chain of resolvable gateway model IDs. */
 export interface ModelCombo {
   id: string
   combo: string
   name: string
+  members?: ComboMember[]
+  /** Legacy mirror retained while older clients and stored documents migrate. */
   memberModelIds: string[]
   createdAt: string
 }

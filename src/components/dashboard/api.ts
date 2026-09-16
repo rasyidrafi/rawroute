@@ -2,6 +2,10 @@ export class UnauthorizedError extends Error {
   constructor() { super("Unauthorized") }
 }
 
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly details?: unknown) { super(message) }
+}
+
 let activeWorkspaceId = "default"
 
 export function setApiWorkspaceId(workspaceId: string) {
@@ -21,11 +25,13 @@ async function parseError(response: Response) {
     throw new UnauthorizedError()
   }
   let message = `Request failed (${response.status})`
+  let details: unknown
   try {
-    const body = await response.json() as { error?: { message?: string } }
+    const body = await response.json() as { error?: { message?: string; details?: unknown } }
     if (body.error?.message) message = body.error.message
+    details = body.error?.details
   } catch {}
-  throw new Error(message)
+  throw new ApiRequestError(message, response.status, details)
 }
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {

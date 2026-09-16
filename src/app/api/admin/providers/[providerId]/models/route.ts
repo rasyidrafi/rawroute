@@ -35,6 +35,9 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
       throw new Error("Model enabled value must be a boolean.")
     }
+    const reasoningCapability = input.reasoningCapability
+    if (reasoningCapability && !["auto", "enabled", "disabled"].includes(reasoningCapability.mode)) throw new Error("Model reasoning capability is invalid.")
+    if (reasoningCapability?.supportedEfforts && (!Array.isArray(reasoningCapability.supportedEfforts) || reasoningCapability.supportedEfforts.some((effort) => typeof effort !== "string" || !effort.trim() || effort.trim().length > 64))) throw new Error("Supported reasoning efforts are invalid.")
     const modelInput: Partial<Model> & { originalId?: string } = {
       originalId: input.originalId,
       gatewayModelId: normalizedGatewayModelId,
@@ -42,6 +45,7 @@ export async function POST(request: Request, context: { params: Promise<{ provid
       upstreamModel,
       enabled: input.enabled,
       source: existing?.source || "custom",
+      reasoningCapability: reasoningCapability ? { mode: reasoningCapability.mode, supportedEfforts: [...new Set(reasoningCapability.supportedEfforts?.map((effort) => effort.trim().toLowerCase()) || [])] } : undefined,
     }
     await upsertModel(providerId, modelInput)
     if (provider.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
