@@ -337,7 +337,7 @@ async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel>
 }
 
 function chatToResponses(payload: Record<string, unknown>) {
-  const translated = { ...payload, input: payload.messages }
+  const translated: Record<string, unknown> = { ...payload, input: payload.messages }
   delete translated.messages
   if (!Object.hasOwn(translated, "max_output_tokens")) translated.max_output_tokens = translated.max_completion_tokens ?? translated.max_tokens
   delete translated.max_completion_tokens
@@ -346,7 +346,7 @@ function chatToResponses(payload: Record<string, unknown>) {
 }
 
 function anthropicToResponses(payload: Record<string, unknown>) {
-  const translated = { ...payload, input: payload.messages, max_output_tokens: payload.max_tokens }
+  const translated: Record<string, unknown> = { ...payload, input: payload.messages, max_output_tokens: payload.max_tokens }
   delete translated.messages
   delete translated.max_tokens
   if (typeof payload.system === "string") translated.instructions = payload.system
