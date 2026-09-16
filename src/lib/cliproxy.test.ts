@@ -484,7 +484,7 @@ test("streams native Responses SSE while collecting terminal usage", async () =>
   const first = await reader.read()
   expect(new TextDecoder().decode(first.value)).toContain("response.output_text.delta")
   while (!(await reader.read()).done) {}
-  await vi.waitFor(() => expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200 }), expect.anything()))
+  await vi.waitFor(() => expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200 }), undefined))
 })
 
 test("logs the received protocol and the saved provider protocol", async () => {
