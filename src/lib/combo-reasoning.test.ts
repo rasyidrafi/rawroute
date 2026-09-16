@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { applyComboMemberPolicy, comboMembers, modelWithReasoningSuffix, stripReasoningFields, supportedReasoningEfforts } from "@/lib/combo-reasoning"
+import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, stripReasoningFields, supportedReasoningEfforts } from "@/lib/combo-reasoning"
 
 describe("combo reasoning policies", () => {
   test("migrates legacy combo members to inherit mode", () => {
@@ -27,9 +27,17 @@ describe("combo reasoning policies", () => {
     expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "provider-default" } }).payload).toEqual({})
   })
 
-  test("uses model capability choices and semantic CLIProxy suffixes", () => {
+  test("uses model capability choices", () => {
     expect(supportedReasoningEfforts({ reasoningCapability: { mode: "enabled", supportedEfforts: ["High", "xhigh"] } })).toEqual(["high", "xhigh"])
     expect(supportedReasoningEfforts({ reasoningCapability: { mode: "disabled" } })).toEqual([])
-    expect(modelWithReasoningSuffix("workspace/provider/model", "xhigh")).toBe("workspace/provider/model(xhigh)")
+  })
+
+  test("compiles overrides for each client protocol without changing the model", () => {
+    const payload = { model: "workspace/provider/model", reasoning_effort: "low", output_config: { verbosity: "low" } }
+    expect(applyReasoningOverride(payload, "high", "openai-chat")).toEqual({ model: "workspace/provider/model", reasoning_effort: "high", output_config: { verbosity: "low" } })
+    expect(applyReasoningOverride(payload, "xhigh", "openai-responses")).toEqual({ model: "workspace/provider/model", reasoning: { effort: "xhigh" }, output_config: { verbosity: "low" } })
+    expect(applyReasoningOverride(payload, "max", "anthropic-messages")).toEqual({ model: "workspace/provider/model", thinking: { type: "adaptive" }, output_config: { verbosity: "low", effort: "max" } })
+    expect(applyReasoningOverride(payload, "auto", "anthropic-messages")).toEqual({ model: "workspace/provider/model", thinking: { type: "enabled" }, output_config: { verbosity: "low" } })
+    expect(applyReasoningOverride(payload, "none", "anthropic-messages")).toEqual({ model: "workspace/provider/model", thinking: { type: "disabled" }, output_config: { verbosity: "low" } })
   })
 })

@@ -4,7 +4,7 @@ import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
 import { providerResponsesUrl } from "@/lib/cliproxy-provider-capabilities"
 import { catalogModels } from "@/lib/catalog"
-import { applyComboMemberPolicy, comboMembers, modelWithReasoningSuffix, stripReasoningFields } from "@/lib/combo-reasoning"
+import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, stripReasoningFields } from "@/lib/combo-reasoning"
 import { writeLog } from "@/lib/logger"
 import { resolveSharedModelForRecipient } from "@/lib/model-shares"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
@@ -389,14 +389,15 @@ async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewa
   return passthroughResponse(last!)
 }
 
-async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string) {
+async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string, reasoningEffort?: string) {
   const shouldNormalizeResponses = protocolForPath(path) === "openai-responses"
-  if (forwardedModel === model && !shouldNormalizeResponses) return body
+  if (forwardedModel === model && !shouldNormalizeResponses && !reasoningEffort) return body
   try {
     const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
     if (forwardedModel !== model) payload.model = forwardedModel
     const normalized = shouldNormalizeResponses ? normalizeResponsesRequest(payload) : payload
-    return new TextEncoder().encode(JSON.stringify(normalized))
+    const overridden = applyReasoningOverride(normalized, reasoningEffort, protocolForPath(path))
+    return new TextEncoder().encode(JSON.stringify(overridden))
   } catch {
     return body
   }
@@ -438,14 +439,13 @@ export async function testComboMemberReasoning(member: ComboMember): Promise<Com
     else {
       const internalKey = process.env.CLIPROXY_API_KEY?.trim()
       if (!internalKey) return { modelId: member.modelId, status: "unverified", message: "CLIProxy internal key is unavailable.", latencyMs: Date.now() - started }
-      const forwardedModel = modelWithReasoningSuffix(tested.forwardedModel, effort)
-      const forwardedBody = await rewriteForwardedBody(body, forwardedModel, member.modelId, "/v1/chat/completions")
+      const forwardedBody = await rewriteForwardedBody(body, tested.forwardedModel, member.modelId, "/v1/chat/completions", effort)
       response = await proxyToCliProxy(request, "/v1/chat/completions", { body: Buffer.from(forwardedBody), headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
     }
     const responseText = (await response.text()).slice(0, 500)
     if (response.ok) return { modelId: member.modelId, status: "verified", httpStatus: response.status, message: `Accepted ${effort}.`, latencyMs: Date.now() - started }
     const message = validationMessage(responseText) || `Upstream returned ${response.status}.`
-    const invalid = response.status === 400 || response.status === 422
+    const invalid = response.status === 400 || response.status === 404 || response.status === 422
     return { modelId: member.modelId, status: invalid ? "invalid" : "unverified", httpStatus: response.status, message, latencyMs: Date.now() - started }
   } catch (error) {
     return { modelId: member.modelId, status: "unverified", message: error instanceof Error ? error.message : "Unable to reach the upstream.", latencyMs: Date.now() - started }
@@ -699,8 +699,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     })
   }
   const payload = objectValue(parsed) || {}
-  const effectiveForwardedModel = modelWithReasoningSuffix(resolvedModel.forwardedModel, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort)
-  const forwardedBody = await rewriteForwardedBody(body, effectiveForwardedModel, estimate.model, path)
+  const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort)
   let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   let reservation: BudgetReservation | undefined
   try {

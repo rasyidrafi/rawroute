@@ -167,6 +167,33 @@ test("tries combo members in order after an upstream failure", async () => {
   expect(forwardedModels).toEqual(["rr-ws-default-p-p/a", "rr-ws-default-p-p/b"])
 })
 
+test("sends combo reasoning overrides in the request body without suffixing projected model IDs", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([
+    { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a-upstream", enabled: true, createdAt: new Date().toISOString() },
+  ])
+  mocks.listCombos.mockResolvedValue([{
+    id: "combo-1",
+    combo: "reasoning-combo",
+    name: "Reasoning combo",
+    memberModelIds: ["p/a"],
+    members: [{ modelId: "p/a", reasoning: { mode: "override", effort: "max" } }],
+    createdAt: new Date().toISOString(),
+  }])
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "reasoning-combo", messages: [{ role: "user", content: "hello" }], reasoning_effort: "low" }),
+  }))
+
+  expect(response.status).toBe(200)
+  await response.text()
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+  expect(forwarded).toMatchObject({ model: "rr-ws-default-p-p/a", reasoning_effort: "max" })
+  expect(forwarded.model).not.toContain("(max)")
+})
+
 test("falls back after a non-terminal provider error regardless of status class", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
   mocks.listModels.mockResolvedValue([

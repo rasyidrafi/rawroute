@@ -47,7 +47,7 @@ to pin the application release. Pin dependency images there too when managing up
 ```bash
 sudo podman pull docker.io/library/postgres:16-alpine
 sudo podman pull docker.io/library/redis:7-alpine
-sudo podman pull docker.io/eceasy/cli-proxy-api:latest
+sudo podman pull docker.io/eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266
 sudo podman pull docker.io/rasyidrafi/rawroute:latest
 sudo systemctl daemon-reload
 sudo systemctl start rawroute-postgres.service

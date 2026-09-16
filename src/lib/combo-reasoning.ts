@@ -1,4 +1,4 @@
-import type { ComboMember, Model, ModelCombo } from "@/lib/types"
+import type { ComboMember, Model, ModelCombo, Protocol } from "@/lib/types"
 
 export const standardReasoningEfforts = ["none", "auto", "minimal", "low", "medium", "high", "xhigh", "max"] as const
 
@@ -59,6 +59,16 @@ export function applyComboMemberPolicy(payload: Record<string, unknown>, member:
   return { payload: next, effort }
 }
 
-export function modelWithReasoningSuffix(model: string, effort: string | undefined) {
-  return effort ? `${model}(${effort})` : model
+export function applyReasoningOverride(payload: Record<string, unknown>, effort: string | undefined, protocol: Protocol) {
+  if (!effort) return structuredClone(payload)
+  const next = stripReasoningFields(payload)
+  if (protocol === "openai-responses") return { ...next, reasoning: { effort } }
+  if (protocol === "openai-chat") return { ...next, reasoning_effort: effort }
+
+  if (effort === "none") return { ...next, thinking: { type: "disabled" } }
+  if (effort === "auto") return { ...next, thinking: { type: "enabled" } }
+  const outputConfig = next.output_config && typeof next.output_config === "object" && !Array.isArray(next.output_config)
+    ? next.output_config as Record<string, unknown>
+    : {}
+  return { ...next, thinking: { type: "adaptive" }, output_config: { ...outputConfig, effort } }
 }

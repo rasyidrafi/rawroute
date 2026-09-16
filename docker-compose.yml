@@ -104,7 +104,7 @@ services:
     restart: unless-stopped
 
   cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266}
     pull_policy: always
     environment:
       # This enables the internal Management API without publishing it.

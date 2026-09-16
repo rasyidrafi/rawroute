@@ -43,7 +43,7 @@ docker compose --env-file .env.local up -d
 The dashboard is available at `http://localhost:8080`. Set `RAWROUTE_HOST_PORT`
 and `RAWROUTE_PUBLIC_URL` to use a different host port.
 
-Compose pulls `eceasy/cli-proxy-api:latest` from Docker Hub by default. Set `CLI_PROXY_IMAGE` in `.env.local` to use another published Docker Hub or GCR image/tag.
+Compose uses the tested CLIProxyAPI `v7.3.4` multi-architecture image pinned by digest. Set `CLI_PROXY_IMAGE` in `.env.local` to use another published Docker Hub or GCR image/tag.
 
 `Enable CLIProxy prompt cache key support` is an opt-in provider setting. It
 projects CLIProxy's native `support-prompt-cache-key` option for

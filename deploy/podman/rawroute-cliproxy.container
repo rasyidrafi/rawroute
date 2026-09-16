@@ -4,7 +4,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Container]
-Image=docker.io/eceasy/cli-proxy-api:latest
+Image=docker.io/eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266
 ContainerName=rawroute-cliproxy
 Network=rawroute.network
 NetworkAlias=cli-proxy-api
