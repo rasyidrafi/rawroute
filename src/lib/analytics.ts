@@ -11,7 +11,7 @@ import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSamp
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
 import { writeLog } from "@/lib/logger"
 import { listSharedModelsForRecipient } from "@/lib/model-shares"
-import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
+import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSettings, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 import { listWorkspaces } from "@/lib/workspaces"
 
@@ -23,6 +23,7 @@ interface AnalyticsMemoryState {
   budgetCounters: Map<string, { spentMicros: number; lastUsedAt?: string }>
   bypassSessions: Map<string, BudgetBypassSession>
   beyondLimits?: BudgetBeyondLimitsSettings
+  unlimited?: BudgetUnlimitedSettings
   window?: BudgetWindow
 }
 declare global { var __rawrouteAnalyticsMemory: Map<string, AnalyticsMemoryState> | undefined }
@@ -97,6 +98,8 @@ const bypassSessionListCache = new Map<string, TimedValue<BudgetBypassSession[]>
 const bypassSessionListInflight = new Map<string, Promise<BudgetBypassSession[]>>()
 const beyondLimitsCache = new Map<string, TimedValue<BudgetBeyondLimitsSettings>>()
 const beyondLimitsInflight = new Map<string, Promise<BudgetBeyondLimitsSettings>>()
+const unlimitedSettingsCache = new Map<string, TimedValue<BudgetUnlimitedSettings>>()
+const unlimitedSettingsInflight = new Map<string, Promise<BudgetUnlimitedSettings>>()
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
 const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
 const dashboardModelLabelCache = new Map<string, TimedValue<Map<string, string>>>()
@@ -393,6 +396,8 @@ function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean 
   clearWorkspaceEntries(bypassSessionListInflight, workspaceId)
   beyondLimitsCache.delete(workspaceId)
   beyondLimitsInflight.delete(workspaceId)
+  unlimitedSettingsCache.delete(workspaceId)
+  unlimitedSettingsInflight.delete(workspaceId)
   clearWorkspaceEntries(dashboardCache, workspaceId)
   clearWorkspaceEntries(dashboardInflight, workspaceId)
 }
@@ -418,10 +423,12 @@ function budgetsRef() { return workspaceRef().collection("budgets") }
 function budgetCountersRef() { return workspaceRef().collection("budgetCounters") }
 function bypassSessionsRef() { return workspaceRef().collection("budgetBypassSessions") }
 function beyondLimitsRef() { return workspaceRef().collection("budgetSettings").doc("beyondLimits") }
+function unlimitedSettingsRef() { return workspaceRef().collection("budgetSettings").doc("unlimited") }
 function windowRef() { return workspaceRef().collection("budgetWindows").doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
-function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, updatedAt: new Date().toISOString() } }
+function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: new Date().toISOString() } }
 function defaultBeyondLimitsSettings(): BudgetBeyondLimitsSettings { return { enabled: false, modelIds: [], updatedAt: "" } }
+function defaultUnlimitedSettings(): BudgetUnlimitedSettings { return { excludedModelIds: [], updatedAt: "" } }
 function budgetCounterId(apiKeyId: string, usageStart: string) { return hash(`${apiKeyId}:${usageStart}`) }
 function sharedWorkspaceBudgetId(workspaceId: string) { return `shared-workspace:${workspaceId}` }
 function sharedWorkspaceIdFromBudgetId(value: string) { return value.startsWith("shared-workspace:") ? value.slice("shared-workspace:".length) : undefined }
@@ -459,6 +466,24 @@ function advanceExpiredWindow(window: BudgetWindow, now = Date.now()) {
   start += steps * duration
   end += steps * duration
   return { ...window, start: new Date(start).toISOString(), end: new Date(end).toISOString(), updatedAt: new Date().toISOString() }
+}
+
+function shouldAutoDeactivateBypass(window: BudgetWindow, now = Date.now()) {
+  const end = Date.parse(window.end)
+  return window.bypassLimits && window.bypassAutoDeactivateAtWindowEnd === true && Number.isFinite(end) && end <= now
+}
+
+function reconcileMemoryBudgetWindow(window: BudgetWindow, now = Date.now()) {
+  let current = window
+  if (shouldAutoDeactivateBypass(current, now)) {
+    const endedAt = current.end
+    if (current.bypassSessionId) {
+      const active = memoryState().bypassSessions.get(current.bypassSessionId)
+      if (active) memoryState().bypassSessions.set(active.id, { ...active, endedAt, endReason: "window_end" })
+    }
+    current = { ...current, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: new Date(now).toISOString() }
+  }
+  return advanceExpiredWindow(current, now)
 }
 
 async function budgetUsageStart(window: BudgetWindow) {
@@ -527,6 +552,7 @@ function emptyRollup(id: string, granularity: UsageRollup["granularity"], bucket
 export class BudgetDeniedError extends Error { status = 429; retryAfterSeconds: number; constructor(message: string, retryAfterSeconds: number) { super(message); this.name = "BudgetDeniedError"; this.retryAfterSeconds = retryAfterSeconds } }
 export class BudgetPricingUnavailableError extends Error { status = 503; constructor(message = "Budget pricing is unavailable.") { super(message); this.name = "BudgetPricingUnavailableError" } }
 export class BudgetUsageUnavailableError extends Error { status = 503; constructor(message = "Actual budget usage is unavailable.") { super(message); this.name = "BudgetUsageUnavailableError" } }
+export class BudgetModelExcludedError extends Error { status = 403; code = "model_excluded_in_unlimited_mode"; constructor(message = "This model is excluded while Unlimited Mode is active.") { super(message); this.name = "BudgetModelExcludedError" } }
 
 export interface BudgetUsageContext {
   usageStartAt: string
@@ -926,6 +952,47 @@ export async function setBudgetBeyondLimitsSettings(input: Pick<BudgetBeyondLimi
   return settings
 }
 
+function normalizeUnlimitedSettings(value: Partial<BudgetUnlimitedSettings> | undefined): BudgetUnlimitedSettings {
+  const fallback = defaultUnlimitedSettings()
+  return {
+    excludedModelIds: [...new Set((value?.excludedModelIds || []).filter((id): id is string => typeof id === "string" && id.trim().length > 0))],
+    updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : fallback.updatedAt,
+  }
+}
+
+export async function getBudgetUnlimitedSettings(): Promise<BudgetUnlimitedSettings> {
+  if (isMemory()) return normalizeUnlimitedSettings(memoryState().unlimited)
+  const workspaceId = currentWorkspaceId()
+  const cached = unlimitedSettingsCache.get(workspaceId)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const existing = unlimitedSettingsInflight.get(workspaceId)
+  if (existing) return existing
+  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const promise = unlimitedSettingsRef().get().then((snapshot) => {
+    const settings = normalizeUnlimitedSettings(snapshot.exists ? snapshot.data() as Partial<BudgetUnlimitedSettings> : undefined)
+    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+      boundedSet(unlimitedSettingsCache, workspaceId, { value: settings, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+    }
+    return settings
+  }).finally(() => {
+    if (unlimitedSettingsInflight.get(workspaceId) === promise) unlimitedSettingsInflight.delete(workspaceId)
+  })
+  unlimitedSettingsInflight.set(workspaceId, promise)
+  return promise
+}
+
+export async function setBudgetUnlimitedSettings(input: Pick<BudgetUnlimitedSettings, "excludedModelIds">): Promise<BudgetUnlimitedSettings> {
+  const settings: BudgetUnlimitedSettings = {
+    excludedModelIds: [...new Set(input.excludedModelIds.filter((id) => typeof id === "string" && id.trim().length > 0))],
+    updatedAt: new Date().toISOString(),
+  }
+  if (isMemory()) memoryState().unlimited = settings
+  else await unlimitedSettingsRef().set(settings)
+  invalidateBudgetReadCaches()
+  boundedSet(unlimitedSettingsCache, currentWorkspaceId(), { value: settings, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+  return settings
+}
+
 function codexBudgetWindowSyncKey(accountId: string) {
   return `${currentWorkspaceId()}:${accountId}`
 }
@@ -1009,7 +1076,7 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
   if (isMemory()) {
     const memory = memoryState()
     const current = memory.window || defaultWindow()
-    const next = advanceExpiredWindow(current)
+    const next = reconcileMemoryBudgetWindow(current)
     memory.window = next
     return next
   }
@@ -1018,11 +1085,14 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
   const budgetWindowCache = budgetWindowCaches.get(workspaceId)
   if (budgetWindowCache && budgetWindowCache.expiresAt > now) {
     const synced = await syncCodexBudgetWindowIfStale(budgetWindowCache.value, now)
-    const next = advanceExpiredWindow(synced, now)
-    if (next === budgetWindowCache.value) return next
-    if (next === synced) {
-      boundedSet(budgetWindowCaches, workspaceId, { value: next, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
-      return next
+    if (shouldAutoDeactivateBypass(synced, now)) budgetWindowCaches.delete(workspaceId)
+    else {
+      const next = advanceExpiredWindow(synced, now)
+      if (next === budgetWindowCache.value) return next
+      if (next === synced) {
+        boundedSet(budgetWindowCaches, workspaceId, { value: next, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+        return next
+      }
     }
   }
   const budgetWindowInflight = budgetWindowInflights.get(workspaceId)
@@ -1035,18 +1105,35 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     const current = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
     const synced = await syncCodexBudgetWindowIfStale(current)
     const next = advanceExpiredWindow(synced)
-    if (next === synced && synced !== current) return synced
-    if (snapshot.exists && next === current) return next
+    if (!shouldAutoDeactivateBypass(synced) && next === synced && synced !== current) return synced
+    if (!shouldAutoDeactivateBypass(current) && snapshot.exists && next === current) return next
 
     let result = next
+    let autoDeactivated = false
+    let autoDeactivatedAt = ""
     await db().runTransaction(async (transaction) => {
       const latest = await transaction.get(ref)
       const latestWindow = latest.exists ? { ...defaultWindow(), ...latest.data() } as BudgetWindow : defaultWindow()
-      const advanced = advanceExpiredWindow(latestWindow)
+      let reconciled = latestWindow
+      if (shouldAutoDeactivateBypass(latestWindow)) {
+        autoDeactivated = true
+        autoDeactivatedAt = latestWindow.end
+        const nowIso = new Date().toISOString()
+        if (latestWindow.bypassSessionId) {
+          transaction.set(bypassSessionsRef().doc(latestWindow.bypassSessionId), { endedAt: latestWindow.end, endReason: "window_end", updatedAt: nowIso }, { merge: true })
+        }
+        reconciled = { ...latestWindow, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: nowIso }
+      }
+      const advanced = advanceExpiredWindow(reconciled)
       if (!latest.exists) transaction.create(ref, advanced)
       else if (advanced !== latestWindow) transaction.set(ref, advanced)
       result = advanced
     })
+    if (autoDeactivated) {
+      invalidateBudgetReadCaches({ preserveWindowInflight: true })
+      boundedSet(budgetWindowCaches, workspaceId, { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+      writeLog("info", "admin", "Unlimited Mode auto-deactivated at budget window end", { endedAt: autoDeactivatedAt }, workspaceId)
+    }
     return result
   })().then((window) => {
     if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetWindowCaches, workspaceId, { value: window, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
@@ -1093,7 +1180,7 @@ export async function updateBudgetWindow(input: Partial<BudgetWindow> & { anchor
   return next
 }
 
-export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window: BudgetWindow; session: BudgetBypassSession | null }> {
+export async function setBudgetBypassEnabled(enabled: boolean, options: { autoDeactivateAtWindowEnd?: boolean } = {}): Promise<{ window: BudgetWindow; session: BudgetBypassSession | null }> {
   const now = new Date().toISOString()
   if (isMemory()) {
     const current = await getBudgetWindow()
@@ -1102,16 +1189,16 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
     }
     let session: BudgetBypassSession | null = null
     if (enabled) {
-      session = { id: crypto.randomUUID(), startedAt: now, endedAt: null }
+      session = { id: crypto.randomUUID(), startedAt: now, endedAt: null, endReason: null }
       memoryState().bypassSessions.set(session.id, session)
     } else if (current.bypassSessionId) {
       const active = memoryState().bypassSessions.get(current.bypassSessionId)
-      if (active) { session = { ...active, endedAt: now }; memoryState().bypassSessions.set(session.id, session) }
+      if (active) { session = { ...active, endedAt: now, endReason: "manual" }; memoryState().bypassSessions.set(session.id, session) }
     } else if (current.bypassLimits) {
-      session = { id: crypto.randomUUID(), startedAt: current.updatedAt, endedAt: now }
+      session = { id: crypto.randomUUID(), startedAt: current.updatedAt, endedAt: now, endReason: "manual" }
       memoryState().bypassSessions.set(session.id, session)
     }
-    const next: BudgetWindow = { ...current, bypassLimits: enabled, bypassSessionId: enabled ? session?.id || null : null, updatedAt: now }
+    const next: BudgetWindow = { ...current, bypassLimits: enabled, bypassSessionId: enabled ? session?.id || null : null, bypassAutoDeactivateAtWindowEnd: enabled && options.autoDeactivateAtWindowEnd === true, updatedAt: now }
     memoryState().window = next
     invalidateBudgetReadCaches()
     return { window: next, session: enabled ? session : null }
@@ -1129,22 +1216,47 @@ export async function setBudgetBypassEnabled(enabled: boolean): Promise<{ window
     let session: BudgetBypassSession | null = null
     let sessionId: string | null = null
     if (enabled) {
-      session = { id: crypto.randomUUID(), startedAt: now, endedAt: null }
+      session = { id: crypto.randomUUID(), startedAt: now, endedAt: null, endReason: null }
       sessionId = session.id
       transaction.create(bypassSessionsRef().doc(session.id), session)
     } else if (current.bypassSessionId) {
       sessionId = current.bypassSessionId
-      transaction.set(bypassSessionsRef().doc(sessionId), { endedAt: now, updatedAt: now }, { merge: true })
+      transaction.set(bypassSessionsRef().doc(sessionId), { endedAt: now, endReason: "manual", updatedAt: now }, { merge: true })
     } else if (current.bypassLimits) {
-      session = { id: crypto.randomUUID(), startedAt: current.updatedAt, endedAt: now }
+      session = { id: crypto.randomUUID(), startedAt: current.updatedAt, endedAt: now, endReason: "manual" }
       transaction.create(bypassSessionsRef().doc(session.id), session)
     }
-    const next: BudgetWindow = { ...current, bypassLimits: enabled, bypassSessionId: enabled ? sessionId : null, updatedAt: now }
+    const next: BudgetWindow = { ...current, bypassLimits: enabled, bypassSessionId: enabled ? sessionId : null, bypassAutoDeactivateAtWindowEnd: enabled && options.autoDeactivateAtWindowEnd === true, updatedAt: now }
     transaction.set(ref, next)
     result = { window: next, session: enabled ? session : null }
   })
   invalidateBudgetReadCaches()
   boundedSet(budgetWindowCaches, currentWorkspaceId(), { value: result.window, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+  return result
+}
+
+export async function setBudgetBypassAutoDeactivateAtWindowEnd(enabled: boolean): Promise<BudgetWindow> {
+  const now = new Date().toISOString()
+  if (isMemory()) {
+    const current = await getBudgetWindow()
+    if (!current.bypassLimits) throw new Error("Unlimited Mode is not active.")
+    const next = { ...current, bypassAutoDeactivateAtWindowEnd: enabled, updatedAt: now }
+    memoryState().window = next
+    invalidateBudgetReadCaches()
+    return next
+  }
+
+  let result = defaultWindow()
+  await db().runTransaction(async (transaction) => {
+    const ref = windowRef()
+    const snapshot = await transaction.get(ref)
+    const current = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
+    if (!current.bypassLimits) throw new Error("Unlimited Mode is not active.")
+    result = { ...current, bypassAutoDeactivateAtWindowEnd: enabled, updatedAt: now }
+    transaction.set(ref, result)
+  })
+  invalidateBudgetReadCaches()
+  boundedSet(budgetWindowCaches, currentWorkspaceId(), { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
   return result
 }
 export async function upsertBudget(input: { apiKeyId: string; weeklyLimitMicros: number; enabled: boolean }) {
@@ -1893,12 +2005,17 @@ export async function getBudgetRequestState(
       ...(estimatedCost.predictionSampleCount !== undefined ? { predictionSampleCount: estimatedCost.predictionSampleCount } : {}),
     }
     : {}
+  const window = await getBudgetWindow()
+  if (window.bypassLimits) {
+    const requestedModel = typeof payload?.model === "string" ? payload.model.trim() : ""
+    await assertUnlimitedModelsAllowed([requestedModel, gatewayModelId, providerModelId], window)
+  }
   if (!budget) return { pricing, requestBodyBytes, ...estimatedState }
 
-  const window = await getBudgetWindow()
   const usageStartAt = await budgetUsageStart(window)
   const usageContext = { usageStartAt, windowEnd: window.end } satisfies BudgetUsageContext
-  if (!budget.enabled || window.bypassLimits) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
+  if (window.bypassLimits) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
+  if (!budget.enabled) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
   if (!pricing) throw new BudgetPricingUnavailableError("This API key cannot call a model without configured pricing.")
 
   const spentMicros = await budgetSpentMicros(budget, window)
@@ -1921,6 +2038,15 @@ export async function getBudgetRequestState(
     requestBodyBytes,
     ...estimatedState,
   }
+}
+
+export async function assertUnlimitedModelsAllowed(modelIds: Array<string | undefined>, currentWindow?: BudgetWindow) {
+  const window = currentWindow || await getBudgetWindow()
+  if (!window.bypassLimits) return
+  const settings = await getBudgetUnlimitedSettings()
+  if (!settings.excludedModelIds.length) return
+  const excluded = new Set(settings.excludedModelIds)
+  if (modelIds.some((id) => id && excluded.has(id))) throw new BudgetModelExcludedError()
 }
 
 export async function getBudgetAdmission(
@@ -2080,7 +2206,7 @@ async function loadBudgetRows(
 }
 
 export async function getBudgetAdminData() {
-  const [keys, window, codex, models, providers, aliases, combos, beyondLimits] = await Promise.all([
+  const [keys, window, codex, models, providers, aliases, combos, beyondLimits, unlimited] = await Promise.all([
     budgetSelectableKeys(),
     getBudgetWindow(),
     listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
@@ -2089,6 +2215,7 @@ export async function getBudgetAdminData() {
     listAliases(),
     listCombos(),
     getBudgetBeyondLimitsSettings(),
+    getBudgetUnlimitedSettings(),
   ])
   const [{ rows }, bypassSessions] = await Promise.all([
     loadBudgetRows(keys, window, undefined, { freshUsage: true }),
@@ -2099,6 +2226,7 @@ export async function getBudgetAdminData() {
     bypassSessions,
     window,
     beyondLimits,
+    unlimited,
     modelOptions: [
       ...models
       .filter((model) => model.enabled && providers.some((provider) => provider.id === model.providerId && provider.enabled))
@@ -2843,6 +2971,10 @@ export function resetAnalyticsForTests() {
   bypassSessionInflight.clear()
   bypassSessionListCache.clear()
   bypassSessionListInflight.clear()
+  beyondLimitsCache.clear()
+  beyondLimitsInflight.clear()
+  unlimitedSettingsCache.clear()
+  unlimitedSettingsInflight.clear()
   dashboardCache.clear()
   dashboardInflight.clear()
   dashboardModelLabelCache.clear()

@@ -31,14 +31,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { calendarDateFromInstant, formatAppDate, formatAppDateTime, formatAppWindowDate, getZonedParts, zonedDateTimeToDate } from "@/lib/timezone"
-import type { BudgetBeyondLimitsSettings, BudgetWindowAnchor, CanonicalModelSummary, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingContextTier, PricingRates, PricingJob } from "@/lib/types"
+import type { BudgetBeyondLimitsSettings, BudgetUnlimitedSettings, BudgetWindowAnchor, CanonicalModelSummary, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingContextTier, PricingRates, PricingJob } from "@/lib/types"
 
 const money = (micros: number) => `$${(micros / 1_000_000).toFixed(2)}`
-type BudgetWindowResponse = { start: string; end: string; anchor?: BudgetWindowAnchor; codexAccountId?: string | null; bypassLimits: boolean }
+type BudgetWindowResponse = { start: string; end: string; anchor?: BudgetWindowAnchor; codexAccountId?: string | null; bypassLimits: boolean; bypassAutoDeactivateAtWindowEnd?: boolean }
 type BudgetEntry = { apiKeyId: string; name: string; weeklyLimitMicros: number; spentMicros: number; enabled: boolean; usageStartAt?: string; lastUsedAt?: string | null }
-type BudgetBypassSession = { id: string; startedAt: string; endedAt: string | null }
+type BudgetBypassSession = { id: string; startedAt: string; endedAt: string | null; endReason?: "manual" | "window_end" | null }
 type BudgetModelOption = { id: string; name: string; provider: string }
-type BudgetsResponse = { budgets: BudgetEntry[]; bypassSessions: BudgetBypassSession[]; window: BudgetWindowResponse; beyondLimits: BudgetBeyondLimitsSettings; modelOptions: BudgetModelOption[]; apiKeys: Array<{ id: string; name: string }>; codexAccounts: CodexAccountOption[] }
+type BudgetsResponse = { budgets: BudgetEntry[]; bypassSessions: BudgetBypassSession[]; window: BudgetWindowResponse; beyondLimits: BudgetBeyondLimitsSettings; unlimited: BudgetUnlimitedSettings; modelOptions: BudgetModelOption[]; apiKeys: Array<{ id: string; name: string }>; codexAccounts: CodexAccountOption[] }
 type CodexAccountOption = { id: string; name: string; planType?: string }
 type BudgetSortKey = "limit" | "usage" | "name"
 
@@ -71,6 +71,7 @@ export function BudgetsView() {
   const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null)
   const [editLimitValue, setEditLimitValue] = useState("")
   const [bypassDialogOpen, setBypassDialogOpen] = useState(false)
+  const [activationAutoDeactivate, setActivationAutoDeactivate] = useState(false)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
   const codexAccounts = data?.codexAccounts || []
   const windowAnchor = windowAnchorOverride ?? data?.window.anchor ?? "custom"
@@ -124,11 +125,33 @@ export function BudgetsView() {
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
 
-  async function toggleBypass(enabled: boolean) {
+  async function toggleBypass(enabled: boolean, autoDeactivateAtWindowEnd = false) {
     const pendingKey = "toggle-bypass"
     setPending((current) => new Set(current).add(pendingKey))
-    try { await apiPatch("/api/admin/budgets/bypass", { enabled }); await mutate(); return true }
+    try { await apiPatch("/api/admin/budgets/bypass", { enabled, ...(enabled ? { autoDeactivateAtWindowEnd } : {}) }); await mutate(); return true }
     catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update Unlimited Mode"); return false }
+    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
+  }
+
+  async function updateBypassAutoDeactivate(autoDeactivateAtWindowEnd: boolean) {
+    const pendingKey = "update-bypass-auto-deactivate"
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      await apiPatch("/api/admin/budgets/bypass", { autoDeactivateAtWindowEnd })
+      await mutate()
+      toast.success(autoDeactivateAtWindowEnd ? "Unlimited Mode will stop at the window end" : "Unlimited Mode will keep running")
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update Unlimited Mode") }
+    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
+  }
+
+  async function saveUnlimited(excludedModelIds: string[]) {
+    const pendingKey = "save-unlimited"
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      await apiPatch("/api/admin/budgets/unlimited", { excludedModelIds })
+      await mutate()
+      toast.success("Unlimited Mode exclusions saved")
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Unlimited Mode exclusions") }
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
 
@@ -161,6 +184,14 @@ export function BudgetsView() {
     } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget window") }
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
+
+  useEffect(() => {
+    if (!data?.window.bypassLimits || !data.window.bypassAutoDeactivateAtWindowEnd) return
+    const delay = Date.parse(data.window.end) - Date.now()
+    if (!Number.isFinite(delay)) return
+    const timeout = window.setTimeout(() => void mutate(), Math.max(0, delay) + 250)
+    return () => window.clearTimeout(timeout)
+  }, [data?.window.bypassLimits, data?.window.bypassAutoDeactivateAtWindowEnd, data?.window.end, mutate])
 
   if (isLoading || !data) return <DashboardContentSkeleton variant="budgets" />
   const currentAnchor = data.window.anchor || "custom"
@@ -195,8 +226,23 @@ export function BudgetsView() {
             <TabsTrigger value="beyond-limits">Beyond Limits</TabsTrigger>
           </TabsList>
           <TabsContent value="unlimited" className="space-y-4">
-            <div className="flex flex-col gap-4 rounded-xl border bg-muted/10 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2 font-medium"><SparklesIcon className="size-4 text-amber-500" />Unlimited Mode {bypass && <Badge variant="secondary">Active</Badge>}</div><div className="mt-1 text-sm text-muted-foreground">All gateway keys bypass budget limits until you deactivate it.</div></div><AlertDialog open={bypassDialogOpen} onOpenChange={(open) => { if (!isPending("toggle-bypass")) setBypassDialogOpen(open) }}><Button aria-busy={isPending("toggle-bypass")} variant={bypass ? "default" : "outline"} className={cn("h-9 min-w-40 gap-2 border-border/70", bypass ? "unlimited-button" : "unlimited-button-idle")} disabled={isPending("toggle-bypass")} onClick={() => setBypassDialogOpen(true)}>{isPending("toggle-bypass") ? <LoadingSpinner /> : <SparklesIcon className="size-4" />}{bypass ? "Deactivate" : "Activate"}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{bypass ? "Deactivate Unlimited Mode?" : "Activate Unlimited Mode?"}</AlertDialogTitle><AlertDialogDescription>{bypass ? "Budget enforcement will resume immediately for all gateway keys." : "All gateway keys will bypass budget limits until you deactivate Unlimited Mode."}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={isPending("toggle-bypass")}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={isPending("toggle-bypass")} disabled={isPending("toggle-bypass")} onClick={async () => { if (await toggleBypass(!bypass)) setBypassDialogOpen(false) }}>{isPending("toggle-bypass") && <LoadingSpinner />}{bypass ? "Deactivate" : "Activate"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div>
-            <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div>{data.bypassSessions.length ? <Table><TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Ended</TableHead><TableHead>Duration</TableHead><TableHead>Status</TableHead></TableRow></TableHeader><TableBody>{data.bypassSessions.map((session) => <TableRow key={session.id}><TableCell className="text-sm">{formatSessionDate(session.startedAt)}</TableCell><TableCell className="text-sm text-muted-foreground">{formatSessionDate(session.endedAt)}</TableCell><TableCell className="text-sm tabular-nums">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{session.endedAt ? "Completed" : "Active"}</Badge></TableCell></TableRow>)}</TableBody></Table> : <div className="px-4 py-8 text-center text-sm text-muted-foreground">No Unlimited Mode sessions yet.</div>}</div>
+            <UnlimitedSettings
+              key={data.unlimited.updatedAt}
+              settings={data.unlimited}
+              modelOptions={data.modelOptions}
+              window={data.window}
+              sessions={data.bypassSessions}
+              dialogOpen={bypassDialogOpen}
+              activationAutoDeactivate={activationAutoDeactivate}
+              togglePending={isPending("toggle-bypass")}
+              autoPending={isPending("update-bypass-auto-deactivate")}
+              savePending={isPending("save-unlimited")}
+              onDialogOpenChange={(open) => { if (!isPending("toggle-bypass")) { setBypassDialogOpen(open); if (open && !bypass) setActivationAutoDeactivate(false) } }}
+              onActivationAutoDeactivateChange={setActivationAutoDeactivate}
+              onToggle={toggleBypass}
+              onUpdateAutoDeactivate={updateBypassAutoDeactivate}
+              onSave={saveUnlimited}
+            />
           </TabsContent>
           <TabsContent value="beyond-limits">
             <BeyondLimitsSettings key={data.beyondLimits.updatedAt} settings={data.beyondLimits} modelOptions={data.modelOptions} pending={isPending("save-beyond-limits")} onSave={saveBeyondLimits} />
@@ -209,14 +255,58 @@ export function BudgetsView() {
   </div></main>
 }
 
+function BudgetModelSelector({ title, description, modelIds, modelOptions, pending, onChange }: { title: string; description: string; modelIds: string[]; modelOptions: BudgetModelOption[]; pending: boolean; onChange: (modelIds: string[]) => void }) {
+  const [search, setSearch] = useState("")
+  const normalizedSearch = search.trim().toLowerCase()
+  const uniqueOptions = useMemo(() => [...new Map(modelOptions.map((model) => [model.id, model])).values()], [modelOptions])
+  const filteredOptions = useMemo(() => uniqueOptions.filter((model) => !normalizedSearch || `${model.name} ${model.id} ${model.provider}`.toLowerCase().includes(normalizedSearch)), [normalizedSearch, uniqueOptions])
+  const toggleModel = (id: string, selected: boolean) => onChange(selected ? [...new Set([...modelIds, id])] : modelIds.filter((modelId) => modelId !== id))
+
+  return <div className="space-y-3">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><div className="text-sm font-medium">{title}</div><p className="text-xs text-muted-foreground">{description}</p></div><div className="flex items-center gap-2"><Badge variant="outline">{modelIds.length} selected</Badge>{modelIds.length > 0 && <Button size="sm" variant="ghost" disabled={pending} onClick={() => onChange([])}>Clear all</Button>}</div></div>
+    <Input aria-label={`Search ${title.toLowerCase()}`} placeholder="Search model name, ID, or provider" value={search} onChange={(event) => setSearch(event.target.value)} disabled={pending} />
+    <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">{filteredOptions.map((model) => { const selected = modelIds.includes(model.id); return <label key={model.id} className="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-muted/40"><Checkbox checked={selected} onCheckedChange={(checked) => toggleModel(model.id, checked === true)} disabled={pending} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{model.name}</span><span className="block truncate text-xs text-muted-foreground">{model.id} · {model.provider}</span></span></label> })}{!filteredOptions.length && <div className="px-4 py-8 text-center text-sm text-muted-foreground">{uniqueOptions.length ? "No models match your search." : "No enabled models are available."}</div>}</div>
+  </div>
+}
+
+function UnlimitedSettings({ settings, modelOptions, window, sessions, dialogOpen, activationAutoDeactivate, togglePending, autoPending, savePending, onDialogOpenChange, onActivationAutoDeactivateChange, onToggle, onUpdateAutoDeactivate, onSave }: {
+  settings: BudgetUnlimitedSettings
+  modelOptions: BudgetModelOption[]
+  window: BudgetWindowResponse
+  sessions: BudgetBypassSession[]
+  dialogOpen: boolean
+  activationAutoDeactivate: boolean
+  togglePending: boolean
+  autoPending: boolean
+  savePending: boolean
+  onDialogOpenChange: (open: boolean) => void
+  onActivationAutoDeactivateChange: (enabled: boolean) => void
+  onToggle: (enabled: boolean, autoDeactivateAtWindowEnd?: boolean) => Promise<boolean>
+  onUpdateAutoDeactivate: (enabled: boolean) => Promise<void>
+  onSave: (excludedModelIds: string[]) => Promise<void>
+}) {
+  const [excludedModelIds, setExcludedModelIds] = useState(settings.excludedModelIds)
+  const active = window.bypassLimits
+  const autoDeactivate = window.bypassAutoDeactivateAtWindowEnd === true
+  const dirty = [...excludedModelIds].sort().join("\0") !== [...settings.excludedModelIds].sort().join("\0")
+  const endLabel = formatSessionDate(window.end)
+
+  return <>
+    <div className="rounded-xl border">
+      <div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2 font-medium"><SparklesIcon className="size-4 text-amber-500" />Unlimited Mode <Badge variant={active ? "secondary" : "outline"}>{active ? "Active" : "Inactive"}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{active ? autoDeactivate ? `Budget limits are bypassed until ${endLabel}.` : "Budget limits are bypassed until you deactivate Unlimited Mode." : "Activate a temporary budget bypass while keeping expensive models blocked."}</p>{active && <div className="mt-3 flex items-start gap-3 rounded-lg border bg-background px-3 py-2"><Checkbox id="unlimited-auto-deactivate-active" checked={autoDeactivate} onCheckedChange={(checked) => void onUpdateAutoDeactivate(checked === true)} disabled={autoPending || togglePending} /><label htmlFor="unlimited-auto-deactivate-active" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">{autoDeactivate ? `Scheduled for ${endLabel}.` : "This session will continue into the next budget window."}</span></label></div>}</div><AlertDialog open={dialogOpen} onOpenChange={onDialogOpenChange}><Button aria-busy={togglePending} variant={active ? "default" : "outline"} className={cn("h-9 min-w-40 gap-2 border-border/70", active ? "unlimited-button" : "unlimited-button-idle")} disabled={togglePending} onClick={() => onDialogOpenChange(true)}>{togglePending ? <LoadingSpinner /> : <SparklesIcon className="size-4" />}{active ? "Deactivate" : "Activate"}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{active ? "Deactivate Unlimited Mode?" : "Activate Unlimited Mode?"}</AlertDialogTitle><AlertDialogDescription>{active ? "Budget enforcement will resume immediately for every gateway key." : "Configured gateway keys will bypass their budget limits. Excluded models will stay blocked."}</AlertDialogDescription></AlertDialogHeader>{!active && <div className="space-y-3"><div className={cn("rounded-lg border p-3 text-sm", excludedModelIds.length ? "bg-muted/25" : "border-amber-500/30 bg-amber-500/5")}><div className="font-medium">{excludedModelIds.length ? `${excludedModelIds.length} model${excludedModelIds.length === 1 ? "" : "s"} will stay blocked` : "No models are excluded"}</div><div className="mt-1 text-xs text-muted-foreground">{excludedModelIds.length ? "You can change this list while Unlimited Mode is active." : "Every available model can be used during this session."}</div></div><div className="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="unlimited-auto-deactivate-activation" checked={activationAutoDeactivate} onCheckedChange={(checked) => onActivationAutoDeactivateChange(checked === true)} disabled={togglePending} /><label htmlFor="unlimited-auto-deactivate-activation" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">Stop this session on {endLabel}.</span></label></div></div>}<AlertDialogFooter><AlertDialogCancel disabled={togglePending}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={togglePending} disabled={togglePending} onClick={async () => { if (await onToggle(!active, activationAutoDeactivate)) onDialogOpenChange(false) }}>{togglePending && <LoadingSpinner />}{active ? "Deactivate" : "Activate Unlimited Mode"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div>
+      <div className="space-y-3 p-4"><BudgetModelSelector title="Excluded models" description="These models cannot start new requests while Unlimited Mode is active." modelIds={excludedModelIds} modelOptions={modelOptions} pending={savePending} onChange={setExcludedModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button aria-busy={savePending} disabled={savePending || !dirty} onClick={() => void onSave(excludedModelIds)}>{savePending && <LoadingSpinner />}Save exclusions</Button></div></div>
+    </div>
+    <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div>{sessions.length ? <Table><TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Ended</TableHead><TableHead>Duration</TableHead><TableHead>Result</TableHead></TableRow></TableHeader><TableBody>{sessions.map((session) => <TableRow key={session.id}><TableCell className="text-sm">{formatSessionDate(session.startedAt)}</TableCell><TableCell className="text-sm text-muted-foreground">{formatSessionDate(session.endedAt)}</TableCell><TableCell className="text-sm tabular-nums">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{!session.endedAt ? "Active" : session.endReason === "window_end" ? "Window ended" : session.endReason === "manual" ? "Deactivated" : "Completed"}</Badge></TableCell></TableRow>)}</TableBody></Table> : <div className="px-4 py-8 text-center text-sm text-muted-foreground">No Unlimited Mode sessions yet.</div>}</div>
+  </>
+}
+
 function BeyondLimitsSettings({ settings, modelOptions, pending, onSave }: { settings: BudgetBeyondLimitsSettings; modelOptions: BudgetModelOption[]; pending: boolean; onSave: (settings: Pick<BudgetBeyondLimitsSettings, "enabled" | "modelIds">) => Promise<void> }) {
   const [enabled, setEnabled] = useState(settings.enabled)
   const [modelIds, setModelIds] = useState(settings.modelIds)
-  const toggleModel = (id: string, selected: boolean) => setModelIds((current) => selected ? [...new Set([...current, id])] : current.filter((modelId) => modelId !== id))
 
   return <div className="rounded-xl border">
     <div className="flex flex-col gap-4 border-b p-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex items-center gap-2 font-medium"><ShieldCheckIcon className="size-4 text-primary" />Beyond Limits</div><p className="mt-1 text-sm text-muted-foreground">Let selected models continue after a gateway key reaches its budget. Their usage still counts and can exceed the limit.</p></div><div className="flex items-center gap-3 rounded-lg border bg-muted/20 px-3 py-2"><Checkbox id="beyond-limits-enabled" checked={enabled} onCheckedChange={(checked) => setEnabled(checked === true)} disabled={pending} /><label htmlFor="beyond-limits-enabled" className="cursor-pointer text-sm font-medium">Enabled</label></div></div>
-    <div className="space-y-3 p-4"><div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Allowed models</div><p className="text-xs text-muted-foreground">These exceptions apply only after a key reaches its limit.</p></div><Badge variant="outline">{modelIds.length} selected</Badge></div><div className="max-h-80 divide-y overflow-y-auto rounded-lg border">{modelOptions.map((model) => { const selected = modelIds.includes(model.id); return <label key={model.id} className="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-muted/40"><Checkbox checked={selected} onCheckedChange={(checked) => toggleModel(model.id, checked === true)} disabled={pending} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{model.name}</span><span className="block truncate text-xs text-muted-foreground">{model.id} · {model.provider}</span></span></label> })}{!modelOptions.length && <div className="px-4 py-8 text-center text-sm text-muted-foreground">No enabled models are available.</div>}</div><div className="flex flex-col gap-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Budget rows will show actual usage above the limit when these models keep running.</span><Button aria-busy={pending} disabled={pending} onClick={() => void onSave({ enabled, modelIds })}>{pending && <LoadingSpinner />}Save settings</Button></div></div>
+    <div className="space-y-3 p-4"><BudgetModelSelector title="Allowed models" description="These exceptions apply only after a key reaches its limit." modelIds={modelIds} modelOptions={modelOptions} pending={pending} onChange={setModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Budget rows will show actual usage above the limit when these models keep running.</span><Button aria-busy={pending} disabled={pending} onClick={() => void onSave({ enabled, modelIds })}>{pending && <LoadingSpinner />}Save settings</Button></div></div>
   </div>
 }
 

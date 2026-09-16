@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
 import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
 import type { UsageEvent } from "@/lib/types"
@@ -293,6 +293,47 @@ describe.sequential("usage analytics", () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.every((session) => session.startedAt && session.endedAt)).toBe(true)
     expect((await getBudgetWindow()).bypassLimits).toBe(false)
+  })
+
+  test("blocks excluded models only while Unlimited Mode is active", async () => {
+    const key = await createApiKey("Unlimited exclusions")
+    const model = await configureTestPricing({ modelId: "expensive-model", gatewayModelId: "test/expensive", upstreamModel: "expensive", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
+    expect(await getBudgetUnlimitedSettings()).toMatchObject({ excludedModelIds: [] })
+    await setBudgetUnlimitedSettings({ excludedModelIds: [model.gatewayModelId] })
+    await setBudgetBypassEnabled(true)
+    await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { model: model.gatewayModelId })).rejects.toMatchObject({ code: "model_excluded_in_unlimited_mode", status: 403 })
+    await setBudgetBypassEnabled(false)
+    await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { model: model.gatewayModelId })).resolves.toBeDefined()
+  })
+
+  test("auto-deactivates Unlimited Mode at the live budget window end", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-06T10:00:00.000Z"))
+    try {
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:00:00.000Z", end: "2026-08-06T11:00:00.000Z" })
+      await setBudgetBypassEnabled(true, { autoDeactivateAtWindowEnd: true })
+      expect((await getBudgetWindow()).bypassAutoDeactivateAtWindowEnd).toBe(true)
+      vi.setSystemTime(new Date("2026-08-06T11:00:00.000Z"))
+      expect(await getBudgetWindow()).toMatchObject({ bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false })
+      expect((await listBudgetBypassSessions())[0]).toMatchObject({ endedAt: "2026-08-06T11:00:00.000Z", endReason: "window_end" })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test("can keep an active Unlimited session running past the window end", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-08-06T10:00:00.000Z"))
+    try {
+      await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:00:00.000Z", end: "2026-08-06T11:00:00.000Z" })
+      await setBudgetBypassEnabled(true, { autoDeactivateAtWindowEnd: true })
+      await setBudgetBypassAutoDeactivateAtWindowEnd(false)
+      vi.setSystemTime(new Date("2026-08-06T11:00:00.000Z"))
+      expect(await getBudgetWindow()).toMatchObject({ bypassLimits: true, bypassAutoDeactivateAtWindowEnd: false, start: "2026-08-06T11:00:00.000Z" })
+    } finally {
+      await setBudgetBypassEnabled(false)
+      vi.useRealTimers()
+    }
   })
 
   test("allows only selected models past a budget limit and continues counting their usage", async () => {

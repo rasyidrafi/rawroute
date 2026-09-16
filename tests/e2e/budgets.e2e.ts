@@ -43,5 +43,23 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   const budgets = await page.request.get("/api/admin/budgets")
   expect(budgets.ok()).toBe(true)
   expect((await budgets.json()).beyondLimits).toMatchObject({ enabled: true, modelIds: ["budget-test/over-limit"] })
+
+  await page.getByRole("tab", { name: "Unlimited Mode" }).click()
+  await page.getByText("Over-limit model").click()
+  await page.getByRole("button", { name: "Save exclusions" }).click()
+  await expect(page.getByText("Unlimited Mode exclusions saved")).toBeVisible()
+  await page.getByRole("button", { name: "Activate" }).click()
+  await page.getByRole("checkbox", { name: "Auto-deactivate at budget window end" }).click()
+  await page.getByRole("button", { name: "Activate Unlimited Mode" }).click()
+  await expect(page.getByText("Scheduled for", { exact: false })).toBeVisible()
+
+  const unlimited = await page.request.get("/api/admin/budgets")
+  expect(unlimited.ok()).toBe(true)
+  expect((await unlimited.json())).toMatchObject({
+    unlimited: { excludedModelIds: ["budget-test/over-limit"] },
+    window: { bypassLimits: true, bypassAutoDeactivateAtWindowEnd: true },
+  })
+  await page.getByRole("button", { name: "Deactivate" }).click()
+  await page.getByRole("button", { name: "Deactivate" }).last().click()
   await restoreDefaultPassword(page)
 })

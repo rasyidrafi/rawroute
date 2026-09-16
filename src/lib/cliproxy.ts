@@ -1,5 +1,5 @@
 import { authenticateProxyKey } from "@/lib/auth"
-import { BudgetDeniedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
+import { assertUnlimitedModelsAllowed, BudgetDeniedError, BudgetModelExcludedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
 import { providerResponsesUrl } from "@/lib/cliproxy-provider-capabilities"
@@ -507,6 +507,13 @@ function responseWithoutComboHeaders(response: Response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
+function excludedModelResponse(error: BudgetModelExcludedError, comboMember = false) {
+  return Response.json({ error: { message: error.message, code: error.code } }, {
+    status: error.status,
+    headers: comboMember ? { "x-rawroute-combo-member-unavailable": "1" } : undefined,
+  })
+}
+
 function routingErrorCode(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
@@ -567,6 +574,8 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   if (!requestedModel) return proxyGatewaySingleRequest(request, path, apiKey)
   const combo = (await listCombos()).find((entry) => entry.combo === requestedModel)
   if (!combo) return proxyGatewaySingleRequest(request, path, apiKey)
+  try { await assertUnlimitedModelsAllowed([requestedModel]) }
+  catch (error) { if (error instanceof BudgetModelExcludedError) return excludedModelResponse(error); throw error }
 
   let lastResponse: Response | undefined
   for (const memberModelId of combo.memberModelIds) {
@@ -646,6 +655,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
           protocol,
         )
   } catch (error) {
+    if (error instanceof BudgetModelExcludedError) return excludedModelResponse(error, true)
     if (error instanceof BudgetDeniedError) {
       return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" } })
     }

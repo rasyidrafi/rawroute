@@ -297,6 +297,7 @@ export interface BudgetWindow {
   codexAccountId?: string | null
   bypassLimits: boolean
   bypassSessionId?: string | null
+  bypassAutoDeactivateAtWindowEnd?: boolean
   updatedAt: string
 }
 
@@ -304,11 +305,17 @@ export interface BudgetBypassSession {
   id: string
   startedAt: string
   endedAt: string | null
+  endReason?: "manual" | "window_end" | null
 }
 
 export interface BudgetBeyondLimitsSettings {
   enabled: boolean
   modelIds: string[]
+  updatedAt: string
+}
+
+export interface BudgetUnlimitedSettings {
+  excludedModelIds: string[]
   updatedAt: string
 }
 

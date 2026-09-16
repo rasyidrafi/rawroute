@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   authenticateProxyKey: vi.fn(),
   getBudgetRequestState: vi.fn(),
+  assertUnlimitedModelsAllowed: vi.fn(),
   reserveBudgetAdmission: vi.fn(),
   releaseBudgetReservation: vi.fn(),
   createGatewayUsageEvent: vi.fn(),
@@ -18,12 +19,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
 vi.mock("@/lib/analytics", () => ({
+  assertUnlimitedModelsAllowed: mocks.assertUnlimitedModelsAllowed,
   BudgetDeniedError: class BudgetDeniedError extends Error {
     status = 429
     retryAfterSeconds = 1
   },
   BudgetPricingUnavailableError: class BudgetPricingUnavailableError extends Error {
     status = 503
+  },
+  BudgetModelExcludedError: class BudgetModelExcludedError extends Error {
+    status = 403
+    code = "model_excluded_in_unlimited_mode"
   },
   createGatewayUsageEvent: mocks.createGatewayUsageEvent,
   getBudgetRequestState: mocks.getBudgetRequestState,
@@ -49,7 +55,7 @@ vi.mock("@/lib/workspace-context", () => ({
   runInWorkspace: (_workspace: unknown, callback: () => unknown) => callback(),
 }))
 
-import { BudgetDeniedError } from "@/lib/analytics"
+import { BudgetDeniedError, BudgetModelExcludedError } from "@/lib/analytics"
 import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest } from "@/lib/cliproxy"
 
 const originalFetch = globalThis.fetch
@@ -61,6 +67,7 @@ beforeEach(() => {
     apiKey: { id: "gateway-key", name: "Gateway" },
   })
   mocks.getBudgetRequestState.mockResolvedValue({ admission: undefined, usageContext: undefined })
+  mocks.assertUnlimitedModelsAllowed.mockResolvedValue(undefined)
   mocks.reserveBudgetAdmission.mockResolvedValue(undefined)
   mocks.releaseBudgetReservation.mockResolvedValue(undefined)
   mocks.createGatewayUsageEvent.mockResolvedValue({ id: "usage-event" })
@@ -281,6 +288,41 @@ test("skips an unavailable combo member and does not expose its internal retry m
 
   expect(response.status).toBe(200)
   expect(response.headers.has("x-rawroute-combo-member-unavailable")).toBe(false)
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+})
+
+test("blocks an excluded combo before trying its members", async () => {
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "expensive-combo", name: "Expensive combo", memberModelIds: ["codex/gpt-5"], createdAt: new Date().toISOString() }])
+  mocks.assertUnlimitedModelsAllowed.mockRejectedValueOnce(new BudgetModelExcludedError("This model is excluded while Unlimited Mode is active."))
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "expensive-combo", input: "hello" }),
+  }))
+
+  expect(response.status).toBe(403)
+  expect(await response.json()).toMatchObject({ error: { code: "model_excluded_in_unlimited_mode" } })
+  expect(globalThis.fetch).not.toHaveBeenCalled()
+})
+
+test("skips an excluded combo member and tries the next model", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([
+    { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
+    { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
+  ])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  mocks.getBudgetRequestState.mockRejectedValueOnce(new BudgetModelExcludedError("This model is excluded while Unlimited Mode is active.")).mockResolvedValueOnce({ admission: undefined, usageContext: undefined })
+  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ id: "response-from-b" })) as typeof fetch
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "coding-fallback", messages: [{ role: "user", content: "hello" }] }),
+  }))
+
+  expect(response.status).toBe(200)
   expect(globalThis.fetch).toHaveBeenCalledTimes(1)
 })
 
