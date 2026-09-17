@@ -439,9 +439,9 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
 
     const testCustomPayload = customPayload ? structuredClone(customPayload) : undefined
     if (testCustomPayload) for (const key of ["max_tokens", "max_completion_tokens", "max_output_tokens", "n"]) delete testCustomPayload[key]
-    const probe = { model: member.modelId, messages: [{ role: "user", content: "Reply with OK." }], max_completion_tokens: 8, stream: false }
+    const probe = { model: member.modelId, messages: [{ role: "user", content: "Reply with OK." }], max_completion_tokens: 8, stream: true }
     const applied = applyComboMemberPolicy(probe, { ...member, customPayload: testCustomPayload })
-    const payload = { ...applied.payload, model: member.modelId, messages: probe.messages, max_completion_tokens: 8, stream: false }
+    const payload = { ...applied.payload, model: member.modelId, messages: probe.messages, max_completion_tokens: 8, stream: true }
     const body = new TextEncoder().encode(JSON.stringify(payload))
     const request = new Request("http://rawroute.internal/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body, signal: AbortSignal.timeout(20_000) })
     const tested = { ...resolved, reasoningEffort: applied.effort, customPayload: applied.customPayload }
@@ -453,8 +453,11 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
       const forwardedBody = await rewriteForwardedBody(body, tested.forwardedModel, member.modelId, "/v1/chat/completions", applied.effort, applied.customPayload)
       response = await proxyToCliProxy(request, "/v1/chat/completions", { body: Buffer.from(forwardedBody), headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
     }
+    if (response.ok) {
+      await response.body?.cancel().catch(() => undefined)
+      return { modelId: member.modelId, status: "verified", httpStatus: response.status, message: "Upstream accepted the streaming member policy.", latencyMs: Date.now() - started }
+    }
     const responseText = (await response.text()).slice(0, 500)
-    if (response.ok) return { modelId: member.modelId, status: "verified", httpStatus: response.status, message: "Upstream accepted the member policy.", latencyMs: Date.now() - started }
     const message = validationMessage(responseText) || `Upstream returned ${response.status}.`
     const invalid = response.status === 400 || response.status === 404 || response.status === 422
     return { modelId: member.modelId, status: invalid ? "invalid" : "unverified", httpStatus: response.status, message, latencyMs: Date.now() - started }

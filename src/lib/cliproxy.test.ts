@@ -56,7 +56,7 @@ vi.mock("@/lib/workspace-context", () => ({
 }))
 
 import { BudgetDeniedError, BudgetModelExcludedError } from "@/lib/analytics"
-import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest } from "@/lib/cliproxy"
+import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComboMemberPolicy } from "@/lib/cliproxy"
 
 const originalFetch = globalThis.fetch
 
@@ -92,6 +92,19 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+})
+
+test("tests combo member policies with a streaming probe", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  globalThis.fetch = vi.fn(async () => new Response("data: {}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch
+
+  const result = await testComboMemberPolicy({ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { diffusing: true } })
+
+  expect(result.status).toBe("verified")
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+  expect(forwarded).toMatchObject({ model: "a", input: [{ role: "user", content: "Reply with OK." }], diffusing: true, stream: true })
 })
 
 test("restores the pre-rewrite request and completion console logs", async () => {
