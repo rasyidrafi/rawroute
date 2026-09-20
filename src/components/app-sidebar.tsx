@@ -8,7 +8,8 @@ import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost } from "@/components/dashboard/api"
-import { dashboardAppForPathname, dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
+import { DashboardAppSwitcher } from "@/components/dashboard/dashboard-app-switcher"
+import { dashboardAppForPathname, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
 import { useWorkspace } from "@/components/dashboard/workspace-provider"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -114,13 +115,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarMenuItem>
+          <DashboardAppSwitcher activeApp={activeApp} onSelect={closeMobileSidebar} />
         </SidebarMenu>
-        <SidebarGroup className="p-0">
-          <SidebarGroupLabel>Apps</SidebarGroupLabel>
-          <SidebarGroupContent><SidebarMenu>
-            {dashboardApps.map((app) => <SidebarMenuItem key={app.id}><SidebarMenuButton isActive={activeApp.id === app.id} tooltip={app.title} onClick={closeMobileSidebar} render={<Link href={app.href} prefetch={false} aria-label={`${app.title} app`} aria-current={activeApp.id === app.id ? "page" : undefined} />}><app.icon /><span>{app.title}{app.id === "tool-gateway" ? " (Executor)" : null}</span></SidebarMenuButton></SidebarMenuItem>)}
-          </SidebarMenu></SidebarGroupContent>
-        </SidebarGroup>
       </SidebarHeader>
       <SidebarContent>
         {activeApp.navigation.map((group) => <SidebarGroup key={group.label}><SidebarGroupLabel>{group.label}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>

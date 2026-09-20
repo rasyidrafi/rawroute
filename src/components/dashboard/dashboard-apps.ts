@@ -17,6 +17,7 @@ export type DashboardNavigationGroup = {
 export type DashboardApp = {
   id: DashboardAppId
   title: string
+  description: string
   icon: LucideIcon
   href: string
   navigation: DashboardNavigationGroup[]
@@ -26,6 +27,7 @@ export const dashboardApps: DashboardApp[] = [
   {
     id: "ai-gateway",
     title: "AI Gateway",
+    description: "Route AI requests across your providers",
     icon: RouteIcon,
     href: "/dashboard",
     navigation: [
@@ -58,6 +60,7 @@ export const dashboardApps: DashboardApp[] = [
   {
     id: "tool-gateway",
     title: "Tool Gateway",
+    description: "Use shared tools through the API proxy",
     icon: WrenchIcon,
     href: "/dashboard/tool-gateway",
     navigation: [
