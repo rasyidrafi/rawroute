@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
 import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
 import type { UsageEvent } from "@/lib/types"
@@ -334,6 +334,79 @@ describe.sequential("usage analytics", () => {
       await setBudgetBypassEnabled(false)
       vi.useRealTimers()
     }
+  })
+
+  test("closes an auto-deactivating Unlimited session when a Codex lookup crosses the window end", () => {
+    const lookupStartedAt = Date.parse("2026-08-06T10:59:59.000Z")
+    const reconciledAt = Date.parse("2026-08-06T11:00:00.000Z")
+    expect(lookupStartedAt).toBeLessThan(reconciledAt)
+    const window = {
+      anchor: "codex",
+      codexAccountId: "codex-account",
+      start: "2026-08-06T09:00:00.000Z",
+      end: "2026-08-06T11:00:00.000Z",
+      bypassLimits: true,
+      bypassSessionId: "bypass-session",
+      bypassAutoDeactivateAtWindowEnd: true,
+      updatedAt: "2026-08-06T10:00:00.000Z",
+    } as const
+    const resolved = {
+      anchor: "codex",
+      codexAccountId: "codex-account",
+      start: "2026-08-06T11:00:00.000Z",
+      end: "2026-08-13T11:00:00.000Z",
+    } as const
+    const beforeWindowEnd = reconcileCodexBudgetWindowRollover(window, resolved, lookupStartedAt)
+    const reconciliation = reconcileCodexBudgetWindowRollover(window, resolved, reconciledAt)
+
+    expect(beforeWindowEnd.window).toMatchObject({ bypassLimits: true, bypassSessionId: "bypass-session", bypassAutoDeactivateAtWindowEnd: true })
+    expect(beforeWindowEnd.endedSession).toBeNull()
+    expect(reconciliation.window).toMatchObject({
+      start: "2026-08-06T11:00:00.000Z",
+      end: "2026-08-13T11:00:00.000Z",
+      bypassLimits: false,
+      bypassSessionId: null,
+      bypassAutoDeactivateAtWindowEnd: false,
+    })
+    expect(reconciliation.endedSession).toEqual({ id: "bypass-session", endedAt: "2026-08-06T11:00:00.000Z", endReason: "window_end" })
+  })
+
+  test("preserves an Unlimited session across a Codex rollover when auto-deactivation is disabled", () => {
+    const reconciliation = reconcileCodexBudgetWindowRollover({
+      anchor: "codex",
+      codexAccountId: "codex-account",
+      start: "2026-08-06T09:00:00.000Z",
+      end: "2026-08-06T11:00:00.000Z",
+      bypassLimits: true,
+      bypassSessionId: "bypass-session",
+      bypassAutoDeactivateAtWindowEnd: false,
+      updatedAt: "2026-08-06T10:00:00.000Z",
+    }, {
+      anchor: "codex",
+      codexAccountId: "codex-account",
+      start: "2026-08-06T11:00:00.000Z",
+      end: "2026-08-13T11:00:00.000Z",
+    }, Date.parse("2026-08-06T11:00:00.000Z"))
+
+    expect(reconciliation.window).toMatchObject({ bypassLimits: true, bypassSessionId: "bypass-session", bypassAutoDeactivateAtWindowEnd: false })
+    expect(reconciliation.endedSession).toBeNull()
+  })
+
+  test("persists Codex auto-deactivation when the resolved dates are unchanged", () => {
+    const window = {
+      anchor: "codex" as const,
+      codexAccountId: "codex-account",
+      start: "2026-08-06T09:00:00.000Z",
+      end: "2026-08-06T11:00:00.000Z",
+      bypassLimits: true,
+      bypassSessionId: "bypass-session",
+      bypassAutoDeactivateAtWindowEnd: true,
+      updatedAt: "2026-08-06T10:00:00.000Z",
+    }
+    const reconciliation = reconcileCodexBudgetWindowRollover(window, window, Date.parse("2026-08-06T11:00:00.000Z"))
+
+    expect(reconciliation.window).toMatchObject({ bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false })
+    expect(reconciliation.endedSession).toEqual({ id: "bypass-session", endedAt: window.end, endReason: "window_end" })
   })
 
   test("allows only selected models past a budget limit and continues counting their usage", async () => {

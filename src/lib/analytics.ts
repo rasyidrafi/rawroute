@@ -473,17 +473,31 @@ function shouldAutoDeactivateBypass(window: BudgetWindow, now = Date.now()) {
   return window.bypassLimits && window.bypassAutoDeactivateAtWindowEnd === true && Number.isFinite(end) && end <= now
 }
 
-function reconcileMemoryBudgetWindow(window: BudgetWindow, now = Date.now()) {
-  let current = window
-  if (shouldAutoDeactivateBypass(current, now)) {
-    const endedAt = current.end
-    if (current.bypassSessionId) {
-      const active = memoryState().bypassSessions.get(current.bypassSessionId)
-      if (active) memoryState().bypassSessions.set(active.id, { ...active, endedAt, endReason: "window_end" })
-    }
-    current = { ...current, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: new Date(now).toISOString() }
+function reconcileExpiredBudgetWindowBypass(window: BudgetWindow, now = Date.now()) {
+  if (!shouldAutoDeactivateBypass(window, now)) return { window, autoDeactivatedAt: null, endedSession: null }
+  const endedSession = window.bypassSessionId
+    ? { id: window.bypassSessionId, endedAt: window.end, endReason: "window_end" as const }
+    : null
+  return {
+    window: { ...window, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: new Date(now).toISOString() },
+    autoDeactivatedAt: window.end,
+    endedSession,
   }
-  return advanceExpiredWindow(current, now)
+}
+
+function reconcileMemoryBudgetWindow(window: BudgetWindow, now = Date.now()) {
+  const reconciliation = reconcileExpiredBudgetWindowBypass(window, now)
+  if (reconciliation.endedSession) {
+    const active = memoryState().bypassSessions.get(reconciliation.endedSession.id)
+    if (active) {
+      memoryState().bypassSessions.set(active.id, {
+        ...active,
+        endedAt: reconciliation.endedSession.endedAt,
+        endReason: reconciliation.endedSession.endReason,
+      })
+    }
+  }
+  return advanceExpiredWindow(reconciliation.window, now)
 }
 
 async function budgetUsageStart(window: BudgetWindow) {
@@ -1001,6 +1015,15 @@ function sameCodexBudgetWindow(left: BudgetWindow, right: Pick<BudgetWindow, "st
   return left.anchor === right.anchor && left.codexAccountId === right.codexAccountId && left.start === right.start && left.end === right.end
 }
 
+export function reconcileCodexBudgetWindowRollover(window: BudgetWindow, resolved: Pick<BudgetWindow, "start" | "end" | "anchor" | "codexAccountId">, reconciledAt = Date.now()) {
+  const reconciliation = reconcileExpiredBudgetWindowBypass(window, reconciledAt)
+  if (sameCodexBudgetWindow(reconciliation.window, resolved)) return reconciliation
+  return {
+    ...reconciliation,
+    window: { ...reconciliation.window, ...resolved, updatedAt: new Date(reconciledAt).toISOString() },
+  }
+}
+
 async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now()): Promise<BudgetWindow> {
   if (isMemory() || window.anchor !== "codex" || !window.codexAccountId) return window
 
@@ -1031,7 +1054,10 @@ async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now
       const ref = windowRef()
       let result = window
       let changed = false
+      let autoDeactivatedAt: string | null = null
       await db().runTransaction(async (transaction) => {
+        changed = false
+        autoDeactivatedAt = null
         const snapshot = await transaction.get(ref)
         const latest = snapshot.exists ? { ...defaultWindow(), ...snapshot.data() } as BudgetWindow : defaultWindow()
         // Do not let a delayed Codex refresh overwrite an administrator's
@@ -1040,13 +1066,23 @@ async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now
           result = latest
           return
         }
-        if (sameCodexBudgetWindow(latest, resolved)) {
-          result = latest
-          return
+        // The Codex request may have crossed the old window boundary, so
+        // evaluate expiration only after reading the window to be updated.
+        const reconciledAt = Date.now()
+        const reconciliation = reconcileCodexBudgetWindowRollover(latest, resolved, reconciledAt)
+        if (reconciliation.endedSession) {
+          transaction.set(bypassSessionsRef().doc(reconciliation.endedSession.id), {
+            endedAt: reconciliation.endedSession.endedAt,
+            endReason: reconciliation.endedSession.endReason,
+            updatedAt: new Date(reconciledAt).toISOString(),
+          }, { merge: true })
         }
-        result = { ...latest, ...resolved, updatedAt: new Date().toISOString() }
-        changed = true
-        transaction.set(ref, result)
+        result = reconciliation.window
+        autoDeactivatedAt = reconciliation.autoDeactivatedAt
+        if (result !== latest) {
+          changed = true
+          transaction.set(ref, result)
+        }
       })
 
       if (changed) {
@@ -1057,6 +1093,7 @@ async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now
       } else if (result !== window) {
         boundedSet(budgetWindowCaches, workspaceId, { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
       }
+      if (autoDeactivatedAt) writeLog("info", "admin", "Unlimited Mode auto-deactivated at budget window end", { endedAt: autoDeactivatedAt }, workspaceId)
       return result
     } catch (error) {
       writeLog("warn", "admin", "Unable to sync Codex budget window", {
@@ -1114,15 +1151,15 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     await db().runTransaction(async (transaction) => {
       const latest = await transaction.get(ref)
       const latestWindow = latest.exists ? { ...defaultWindow(), ...latest.data() } as BudgetWindow : defaultWindow()
-      let reconciled = latestWindow
-      if (shouldAutoDeactivateBypass(latestWindow)) {
+      const reconciliation = reconcileExpiredBudgetWindowBypass(latestWindow)
+      const reconciled = reconciliation.window
+      if (reconciliation.autoDeactivatedAt) {
         autoDeactivated = true
-        autoDeactivatedAt = latestWindow.end
+        autoDeactivatedAt = reconciliation.autoDeactivatedAt
         const nowIso = new Date().toISOString()
-        if (latestWindow.bypassSessionId) {
-          transaction.set(bypassSessionsRef().doc(latestWindow.bypassSessionId), { endedAt: latestWindow.end, endReason: "window_end", updatedAt: nowIso }, { merge: true })
+        if (reconciliation.endedSession) {
+          transaction.set(bypassSessionsRef().doc(reconciliation.endedSession.id), { endedAt: reconciliation.endedSession.endedAt, endReason: reconciliation.endedSession.endReason, updatedAt: nowIso }, { merge: true })
         }
-        reconciled = { ...latestWindow, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: nowIso }
       }
       const advanced = advanceExpiredWindow(reconciled)
       if (!latest.exists) transaction.create(ref, advanced)
