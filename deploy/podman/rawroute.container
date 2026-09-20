@@ -2,13 +2,15 @@
 Description=RawRoute
 Wants=network-online.target
 After=network-online.target
-Wants=rawroute-postgres.service rawroute-redis.service rawroute-cliproxy.service
-After=rawroute-postgres.service rawroute-redis.service rawroute-cliproxy.service
+Wants=svc-postgres-shared.service svc-redis-cache.service rawroute-cliproxy.service
+After=svc-postgres-shared.service svc-redis-cache.service rawroute-cliproxy.service
 [Container]
 Image=docker.io/rasyidrafi/rawroute:latest
 Pull=missing
 ContainerName=rawroute
 Network=rawroute.network
+Network=svc-postgres-shared.network
+Network=svc-redis-cache.network
 EnvironmentFile=/etc/rawroute/app.env
 Environment=HOSTNAME=::
 PublishPort=0.0.0.0:8080:8080
