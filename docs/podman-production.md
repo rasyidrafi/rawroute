@@ -3,7 +3,8 @@
 Use Podman 5 or newer with systemd and cgroup v2. The service files run rootful
 containers and enforce memory limits through systemd. RawRoute is published on all
 IPv4 interfaces at port 8080. An optional systemd socket proxy also serves `[::1]:8080`.
-PostgreSQL, Redis, and CLIProxyAPI remain on the private container network.
+PostgreSQL, Redis, CLIProxyAPI, and the optional Executor service remain on the
+private container network.
 
 ## Build and publish
 
@@ -31,7 +32,7 @@ existing credentials.
 ```bash
 bun scripts/init-production.ts
 sudo install -d -m 700 /etc/rawroute
-sudo install -m 600 .rawroute/app.env .rawroute/postgres.env .rawroute/cliproxy.env .rawroute/cliproxy.yaml /etc/rawroute/
+sudo install -m 600 .rawroute/app.env .rawroute/postgres.env .rawroute/cliproxy.env .rawroute/cliproxy.yaml .rawroute/executor.env /etc/rawroute/
 sudo install -d /etc/containers/systemd
 sudo install -m 644 deploy/podman/*.container deploy/podman/*.network deploy/podman/*.volume /etc/containers/systemd/
 ```
@@ -49,6 +50,8 @@ sudo podman pull docker.io/library/postgres:16-alpine
 sudo podman pull docker.io/library/redis:7-alpine
 sudo podman pull docker.io/eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266
 sudo podman pull docker.io/rasyidrafi/rawroute:latest
+# Optional, only when enabling the Executor integration:
+# sudo podman pull ghcr.io/usefulsoftwareco/executor-selfhost:latest
 sudo systemctl daemon-reload
 sudo systemctl start rawroute-postgres.service
 sudo systemctl start rawroute-redis.service
@@ -56,10 +59,27 @@ sudo systemctl start rawroute-cliproxy.service
 sudo systemctl start rawroute.service
 ```
 
-Quadlet generates boot startup links from the `[Install]` sections. The `.container`
-units do not need `systemctl enable`. PostgreSQL data and CLIProxyAPI credentials
-live in named Podman volumes and survive container replacement. No provider
-credentials are seeded; add an account or provider through the dashboard.
+The Executor Quadlet is optional and is deliberately not wanted by
+`rawroute.service`. To enable it, first create an Executor API key using the
+bootstrap admin in `/etc/rawroute/executor.env`, put that key in
+`/etc/rawroute/app.env` as `EXECUTOR_UPSTREAM_API_KEY`, restart RawRoute so it
+reloads the server-side credential, then start it:
+
+```bash
+sudo systemctl restart rawroute.service
+sudo systemctl start rawroute-executor.service
+```
+
+`rawroute-executor.container` publishes no host port. RawRoute reaches it as
+`http://executor:4788` on the private `rawroute` network. Existing Podman
+deployments remain unchanged until this unit is started explicitly.
+
+Quadlet generates boot startup links from the `[Install]` sections on the
+required units; the optional Executor unit intentionally has no such section.
+The required `.container` units do not need `systemctl enable`. PostgreSQL data,
+CLIProxyAPI credentials, and optional Executor data live in named Podman volumes
+and survive container replacement. No provider credentials are seeded; add an
+account or provider through the dashboard.
 
 When upgrading an installation created before RawRoute owned model-combo
 fallback, add these values to `/etc/rawroute/cliproxy.yaml` and restart
@@ -92,6 +112,7 @@ sudo systemctl enable --now rawroute-loopback.socket
 | PostgreSQL | 160 MiB | 32 MiB shared buffers, 20 connections, 1 MiB work memory |
 | CLIProxyAPI | 128 MiB | Go memory target of 80 MiB, one CPU worker |
 | Redis | 48 MiB | 24 MiB data cap, no persistence, no eviction |
+| Optional Executor | 256 MiB | Only when `rawroute-executor.service` is enabled |
 | Optional IPv6 proxy | 16 MiB | Socket activation |
 
 The main containers can each use up to 64 MiB of swap. These are ceilings, not
@@ -145,6 +166,8 @@ CLIProxyAPI auth volume. Database dumps and auth archives contain private data.
 umask 077
 sudo podman exec rawroute-postgres pg_dump -U rawroute -d rawroute -Fc > rawroute-postgres.dump
 sudo podman volume export rawroute-cliproxy-auth > rawroute-cliproxy-auth.tar
+# If enabled, back up Executor's data volume too:
+# sudo podman volume export rawroute-executor > rawroute-executor.tar
 ```
 
 The service accepts IPv4 traffic on port 8080. Keep host firewall rules restrictive,

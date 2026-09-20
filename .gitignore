@@ -62,3 +62,4 @@ next-env.d.ts
 # Local production backups, which contain database data and provider credentials
 /rawroute-postgres.dump
 /rawroute-cliproxy-auth.tar
+/rawroute-executor.tar

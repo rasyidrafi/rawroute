@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, existsSync } from "node:fs"
 import { resolve, join } from "node:path"
 
 const directory = resolve(process.argv[2] || ".rawroute")
-const names = ["app.env", "postgres.env", "cliproxy.env", "cliproxy.yaml"]
+const names = ["app.env", "postgres.env", "cliproxy.env", "cliproxy.yaml", "executor.env"]
 if (names.some(name => existsSync(join(directory, name)))) {
   throw new Error("Configuration already exists. Refusing to replace credentials.")
 }
@@ -12,6 +12,7 @@ const secret = () => randomBytes(32).toString("hex")
 const databasePassword = secret()
 const managementKey = secret()
 const apiKey = secret()
+const executorAdminPassword = secret()
 const files: Record<string, string> = {
   "app.env": `STORAGE_BACKEND=postgres
 DEFAULT_ADMIN_USERNAME=admin
@@ -34,12 +35,22 @@ RAWROUTE_PUBLIC_URL=http://localhost:8080
 CLIPROXY_URL=http://cli-proxy-api:8317
 CLIPROXY_MANAGEMENT_KEY=${managementKey}
 CLIPROXY_API_KEY=${apiKey}
+EXECUTOR_UPSTREAM_URL=http://executor:4788
+EXECUTOR_UPSTREAM_API_KEY=
 `,
   "postgres.env": `POSTGRES_DB=rawroute
 POSTGRES_USER=rawroute
 POSTGRES_PASSWORD=${databasePassword}
 `,
   "cliproxy.env": `MANAGEMENT_PASSWORD=${managementKey}
+`,
+  "executor.env": `EXECUTOR_HOST=0.0.0.0
+EXECUTOR_DATA_DIR=/data
+EXECUTOR_BOOTSTRAP_ADMIN_EMAIL=executor-admin@example.invalid
+EXECUTOR_BOOTSTRAP_ADMIN_PASSWORD=${executorAdminPassword}
+EXECUTOR_BOOTSTRAP_ADMIN_NAME=RawRoute Executor Admin
+EXECUTOR_ALLOW_LOCAL_NETWORK=false
+EXECUTOR_ALLOW_STDIO_MCP=false
 `,
   "cliproxy.yaml": `host: ""
 port: 8317

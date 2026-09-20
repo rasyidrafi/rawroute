@@ -1,23 +1,26 @@
 # RawRoute
 
-RawRoute is the public wrapper around a private CLIProxyAPI container pulled from its published image.
+RawRoute is the public wrapper around private CLIProxyAPI and optional Executor
+containers pulled from their published images.
 
 The original RawRoute dashboard remains intact, including workspaces, aliases, gateway keys, budgets, custom model pricing, usage analytics, Codex views, logs, and settings. RawRoute owns those wrapper features and the budget admission decision. CLIProxyAPI owns provider credentials, OAuth execution, protocol translation, retries, upstream routing, provider rate limits, and model execution.
 
 ## Network boundary
 
 Only RawRoute binds a host port. CLIProxyAPI remains the private provider
-execution and translation service; provider requests use the configured
-upstream base URL directly.
+execution and translation service, while Executor remains a separate private
+service for tools, connections, integrations, and policies.
 
 ```text
 client -> rawroute:8080 -> cli-proxy-api:8317 (private Compose network)
-                              -> provider origin
+                      -> executor:4788 (optional private Compose network)
+                               -> provider origin
 ```
 
 CLIProxyAPI uses `expose`, not `ports`, so its management API is not reachable
-from the host. RawRoute synchronizes workspace-scoped provider projections to
-CLIProxyAPI; it does not proxy or rewrite provider traffic itself.
+from the host. Executor uses the same private-network boundary and does not
+publish port 4788. RawRoute synchronizes workspace-scoped provider projections
+to CLIProxyAPI; it does not proxy or rewrite provider traffic itself.
 
 ## Setup
 
@@ -39,6 +42,41 @@ cp cliproxy/config.example.yaml cliproxy/config.yaml
 docker compose --env-file .env.local pull
 docker compose --env-file .env.local up -d
 ```
+
+Executor is optional. Set `EXECUTOR_UPSTREAM_API_KEY` to an Executor API key
+and start the profile when it is needed:
+
+```bash
+docker compose --profile executor --env-file .env.local up -d
+```
+
+The public API boundary is:
+
+- `/v1/*`, `/v1beta/*`, `/openai/v1/*`, and `/backend-api/*` belong to RawRoute and CLIProxyAPI.
+- `/executor/api/*` belongs to the separate internal Executor service.
+- `/api/*` and `/admin/*` remain RawRoute management routes.
+
+Use one public base URL for Executor API calls:
+
+```bash
+curl "$PUBLIC_BASE_URL/executor/api/tools" \
+  -H "Authorization: Bearer $RAWROUTE_API_KEY"
+```
+
+RawRoute authenticates the gateway key, removes client authentication and
+RawRoute-only headers, then injects `Authorization: Bearer
+$EXECUTOR_UPSTREAM_API_KEY` on the private hop. The upstream URL is server
+configuration only; request headers and query parameters cannot select it.
+
+This phase does not make CLIProxyAPI call Executor, does not add MCP to
+RawRoute, and does not implement chat tool-calling orchestration. The public
+route is API-only; Executor's browser UI and OAuth callback flow are not
+exposed through `/executor`, so configure `EXECUTOR_WEB_BASE_URL` only for a
+separate, deliberately configured Executor UI deployment. The current compose
+deployment is single-tenant at the Executor boundary: every authenticated
+RawRoute caller uses the configured Executor credential. RawRoute does not
+trust incoming workspace or user headers to create Executor identity.
+Executor auth and MCP endpoints are intentionally not forwarded in this phase.
 
 The dashboard is available at `http://localhost:8080`. Set `RAWROUTE_HOST_PORT`
 and `RAWROUTE_PUBLIC_URL` to use a different host port.
