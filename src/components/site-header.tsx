@@ -2,12 +2,14 @@
 
 import { usePathname } from "next/navigation"
 
+import { dashboardAppForPathname, toolGatewayTitleForPathname } from "@/components/dashboard/dashboard-apps"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 
 export function SiteHeader() {
   const pathname = usePathname()
-  const title = pathname === "/dashboard/providers/codex" ? "Codex Providers" : pathname.startsWith("/dashboard/providers") ? "Providers" : pathname.startsWith("/dashboard/oauth-providers") ? "Codex Providers" : pathname === "/dashboard/logs" ? "Console Log" : pathname === "/dashboard/settings" ? "Settings" : pathname.startsWith("/dashboard/usage") ? "Usage" : pathname.startsWith("/dashboard/budgets") ? "Budgets" : pathname.startsWith("/dashboard/model-pricing") ? "Model Pricing" : "Endpoint & Key"
+  const activeApp = dashboardAppForPathname(pathname)
+  const title = activeApp.id === "tool-gateway" ? toolGatewayTitleForPathname(pathname) : pathname === "/dashboard/providers/codex" ? "Codex Providers" : pathname.startsWith("/dashboard/providers") ? "Providers" : pathname.startsWith("/dashboard/oauth-providers") ? "Codex Providers" : pathname === "/dashboard/logs" ? "Console Log" : pathname === "/dashboard/settings" ? "Settings" : pathname.startsWith("/dashboard/usage") ? "Usage" : pathname.startsWith("/dashboard/budgets") ? "Budgets" : pathname.startsWith("/dashboard/model-pricing") ? "Model Pricing" : "Endpoint & Key"
 
-  return <header className="sticky top-0 z-30 flex h-(--header-height) shrink-0 items-center border-b bg-background/90 backdrop-blur-md"><div className="flex w-full items-center gap-3 px-4 lg:px-6"><SidebarTrigger className="-ml-1" /><h1 className="font-medium">{title}</h1><div className="ml-auto"><ThemeToggle /></div></div></header>
+  return <header className="sticky top-0 z-30 flex h-(--header-height) shrink-0 items-center border-b bg-background/90 backdrop-blur-md"><div className="flex w-full items-center gap-3 px-4 lg:px-6"><SidebarTrigger className="-ml-1" /><h1 className="font-medium">{activeApp.id === "tool-gateway" ? <><span className="text-muted-foreground">{activeApp.title}</span><span className="mx-2 text-muted-foreground">/</span>{title}</> : title}</h1><div className="ml-auto"><ThemeToggle /></div></div></header>
 }

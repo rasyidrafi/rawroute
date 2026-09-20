@@ -1,13 +1,14 @@
 "use client"
 
-import { ArrowLeftRightIcon, ChartNoAxesCombinedIcon, ChevronDownIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, LogOutIcon, PencilIcon, PlusIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, Trash2Icon, WalletCardsIcon } from "lucide-react"
+import { ChevronDownIcon, LogOutIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost } from "@/components/dashboard/api"
+import { dashboardAppForPathname, dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
 import { useWorkspace } from "@/components/dashboard/workspace-provider"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -15,38 +16,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
-
-const navigationGroups = [
-  {
-    label: "Gateway",
-    items: [
-      { title: "Endpoint & Key", icon: KeyRoundIcon, href: "/dashboard" },
-      { title: "Providers", icon: ServerIcon, href: "/dashboard/providers" },
-      { title: "Codex Providers", icon: ShieldCheckIcon, href: "/dashboard/providers/codex" },
-      { title: "Model routing", icon: ArrowLeftRightIcon, href: "/dashboard/aliases" },
-    ],
-  },
-  {
-    label: "Analytics",
-    items: [
-      { title: "Usage", icon: ChartNoAxesCombinedIcon, href: "/dashboard/usage" },
-      { title: "Budgets", icon: WalletCardsIcon, href: "/dashboard/budgets" },
-      { title: "Model Pricing", icon: DollarSignIcon, href: "/dashboard/model-pricing" },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { title: "Console Log", icon: LogsIcon, href: "/dashboard/logs" },
-      { title: "Settings", icon: SettingsIcon, href: "/dashboard/settings" },
-    ],
-  },
-]
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar"
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const router = useRouter()
   const pathname = usePathname()
+  const activeApp = dashboardAppForPathname(pathname)
+  const { isMobile, setOpenMobile } = useSidebar()
   const { workspaces, workspace, selectWorkspace, refreshWorkspaces } = useWorkspace()
   const [signingOut, setSigningOut] = useState(false)
   const [logoutOpen, setLogoutOpen] = useState(false)
@@ -58,8 +34,17 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const [workspacePending, setWorkspacePending] = useState(false)
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
 
+  useEffect(() => {
+    if (isMobile) setOpenMobile(false)
+  }, [isMobile, pathname, setOpenMobile])
+
+  function closeMobileSidebar() {
+    if (isMobile) setOpenMobile(false)
+  }
+
   function switchWorkspace(workspaceId: string) {
     setWorkspaceMenuOpen(false)
+    closeMobileSidebar()
     selectWorkspace(workspaceId)
     if (pathname.startsWith("/dashboard/providers/") && pathname !== "/dashboard/providers/codex") router.push("/dashboard/providers")
     else router.refresh()
@@ -130,10 +115,16 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             </DropdownMenu>
           </SidebarMenuItem>
         </SidebarMenu>
+        <SidebarGroup className="p-0">
+          <SidebarGroupLabel>Apps</SidebarGroupLabel>
+          <SidebarGroupContent><SidebarMenu>
+            {dashboardApps.map((app) => <SidebarMenuItem key={app.id}><SidebarMenuButton isActive={activeApp.id === app.id} tooltip={app.title} onClick={closeMobileSidebar} render={<Link href={app.href} prefetch={false} aria-label={`${app.title} app`} aria-current={activeApp.id === app.id ? "page" : undefined} />}><app.icon /><span>{app.title}{app.id === "tool-gateway" ? " (Executor)" : null}</span></SidebarMenuButton></SidebarMenuItem>)}
+          </SidebarMenu></SidebarGroupContent>
+        </SidebarGroup>
       </SidebarHeader>
       <SidebarContent>
-        {navigationGroups.map((group) => <SidebarGroup key={group.label}><SidebarGroupLabel>{group.label}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
-          {group.items.map((item) => <SidebarMenuItem key={item.href}><SidebarMenuButton isActive={pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(`${item.href}/`))} tooltip={item.title} render={<Link href={item.href} prefetch={false} />}><item.icon /><span>{item.title}</span></SidebarMenuButton></SidebarMenuItem>)}
+        {activeApp.navigation.map((group) => <SidebarGroup key={group.label}><SidebarGroupLabel>{group.label}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
+          {group.items.map((item) => <SidebarMenuItem key={item.href}><SidebarMenuButton isActive={isDashboardNavigationItemActive(pathname, item)} tooltip={item.title} onClick={closeMobileSidebar} render={<Link href={item.href} prefetch={false} aria-current={isDashboardNavigationItemActive(pathname, item) ? "page" : undefined} />}><item.icon /><span>{item.title}</span></SidebarMenuButton></SidebarMenuItem>)}
         </SidebarMenu></SidebarGroupContent></SidebarGroup>)}
       </SidebarContent>
       <SidebarFooter><SidebarMenu><SidebarMenuItem><SidebarMenuButton aria-busy={signingOut} disabled={signingOut} tooltip="Sign out" onClick={() => setLogoutOpen(true)}>{signingOut ? <LoadingSpinner /> : <LogOutIcon />}<span>{signingOut ? "Signing out..." : "Sign out"}</span></SidebarMenuButton></SidebarMenuItem></SidebarMenu><AlertDialog open={logoutOpen} onOpenChange={setLogoutOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Sign out?</AlertDialogTitle><AlertDialogDescription>Your dashboard session will end on this browser.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={signingOut}>Cancel</AlertDialogCancel><AlertDialogAction disabled={signingOut} onClick={async () => { setSigningOut(true); try { await fetch("/api/auth/logout", { method: "POST" }); router.push("/login"); router.refresh() } finally { setSigningOut(false) } }}>{signingOut && <LoadingSpinner />}Sign out</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></SidebarFooter>

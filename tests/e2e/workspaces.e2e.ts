@@ -16,6 +16,84 @@ async function workspaceMenu(page: Page) {
   return trigger
 }
 
+test("switches dashboard apps with contextual navigation", async ({ page }) => {
+  await authenticate(page)
+  await page.goto("/dashboard")
+
+  const sidebar = page.locator('[data-slot="sidebar-inner"]')
+  await expect(sidebar.getByText("Apps", { exact: true })).toBeVisible()
+  await expect(sidebar.getByRole("link", { name: "AI Gateway app" })).toHaveAttribute("aria-current", "page")
+  await expect(sidebar.getByRole("link", { name: "Providers", exact: true })).toBeVisible()
+
+  await sidebar.getByRole("link", { name: "Tool Gateway app" }).click()
+  await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+  await expect(page.getByRole("heading", { name: /Tool Gateway.*Overview/ })).toBeVisible()
+  await expect(sidebar.getByRole("link", { name: "Tool Gateway app" })).toHaveAttribute("aria-current", "page")
+  await expect(sidebar.getByRole("link", { name: "Tools" })).toBeVisible()
+  await expect(sidebar.getByRole("link", { name: "Providers", exact: true })).toHaveCount(0)
+  await expect(page.getByText("This is a shared Executor deployment.")).toBeVisible()
+  await expect(page.getByText("/executor/api", { exact: true })).toBeVisible()
+
+  await sidebar.getByRole("link", { name: "AI Gateway app" }).click()
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(sidebar.getByRole("link", { name: "Providers", exact: true })).toBeVisible()
+})
+
+test("preserves dashboard app URL state, workspace selection, and mobile navigation", async ({ page }) => {
+  const workspaceName = "E2E App Switch Workspace"
+  await authenticate(page)
+  const existingResponse = await page.request.get("/api/admin/workspaces")
+  const existing = ((await existingResponse.json()).workspaces as Array<{ id: string; name: string; isDefault: boolean }>).find((workspace) => workspace.name === workspaceName)
+  if (existing && !existing.isDefault) {
+    await page.request.delete(`/api/admin/workspaces/${existing.id}`, { data: { confirmation: existing.name }, headers: { "x-rawroute-workspace-id": "default" } })
+  }
+  const createResponse = await page.request.post("/api/admin/workspaces", { data: { name: workspaceName } })
+  expect(createResponse.ok()).toBe(true)
+  const workspaceId = ((await createResponse.json()).workspace as { id: string }).id
+
+  try {
+    await page.goto("/dashboard")
+    const workspaceTrigger = await workspaceMenu(page)
+    await page.getByRole("menuitemradio", { name: workspaceName }).click()
+    await expect(workspaceTrigger).toContainText(workspaceName)
+
+    const sidebar = page.locator('[data-slot="sidebar-inner"]')
+    await sidebar.getByRole("link", { name: "Tool Gateway app" }).click()
+    await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+    await expect(workspaceTrigger).toContainText(workspaceName)
+
+    await page.goto("/dashboard/tool-gateway/tools")
+    await expect(page.getByRole("heading", { name: /Tool Gateway.*Tools/ })).toBeVisible()
+    await page.reload()
+    await expect(page.getByRole("heading", { name: /Tool Gateway.*Tools/ })).toBeVisible()
+    await expect(sidebar.getByRole("link", { name: "Tool Gateway app" })).toHaveAttribute("aria-current", "page")
+
+    await sidebar.getByRole("link", { name: "AI Gateway app" }).click()
+    await expect(page).toHaveURL(/\/dashboard$/)
+    await page.goBack()
+    await expect(page).toHaveURL(/\/dashboard\/tool-gateway\/tools$/)
+    await page.goForward()
+    await expect(page).toHaveURL(/\/dashboard$/)
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    const sidebarTrigger = page.getByRole("button", { name: "Toggle Sidebar" })
+    await sidebarTrigger.click()
+    const mobileSidebar = page.locator('[data-mobile="true"]')
+    await expect(mobileSidebar).toBeVisible()
+    await mobileSidebar.getByRole("link", { name: "Tool Gateway app" }).click()
+    await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+    await expect(mobileSidebar).toBeHidden()
+
+    await sidebarTrigger.click()
+    await expect(mobileSidebar).toBeVisible()
+    await mobileSidebar.getByRole("link", { name: "Tools", exact: true }).click()
+    await expect(page).toHaveURL(/\/dashboard\/tool-gateway\/tools$/)
+    await expect(mobileSidebar).toBeHidden()
+  } finally {
+    await page.request.delete(`/api/admin/workspaces/${workspaceId}`, { data: { confirmation: workspaceName }, headers: { "x-rawroute-workspace-id": "default" } })
+  }
+})
+
 test("creates, switches, isolates, renames, publishes, and deletes a workspace", async ({ page }) => {
   await authenticate(page)
   const existingResponse = await page.request.get("/api/admin/workspaces")
