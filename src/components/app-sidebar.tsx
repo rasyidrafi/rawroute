@@ -8,6 +8,7 @@ import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost } from "@/components/dashboard/api"
 import { dashboardAppForPathname, dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
+import { useToolGatewayStatus } from "@/components/dashboard/tool-gateway-status"
 import { useWorkspace } from "@/components/dashboard/workspace-provider"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -23,6 +24,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const activeApp = dashboardAppForPathname(pathname)
   const { isMobile, setOpenMobile } = useSidebar()
   const { workspaces, workspace, selectWorkspace, refreshWorkspaces } = useWorkspace()
+  const { data: toolGatewayStatus } = useToolGatewayStatus()
+  const toolGatewayAvailable = toolGatewayStatus?.state === "available"
   const [signingOut, setSigningOut] = useState(false)
   const [logoutOpen, setLogoutOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -53,7 +56,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     const app = dashboardApps.find((entry) => entry.id === appId)
     setWorkspaceMenuOpen(false)
     closeMobileSidebar()
-    if (!app || app.id === activeApp.id) return
+    if (!app || app.id === activeApp.id || (app.id === "tool-gateway" && !toolGatewayAvailable)) return
     router.push(app.href)
   }
 
@@ -121,7 +124,17 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                 <DropdownMenuGroup>
                   <DropdownMenuLabel>Apps</DropdownMenuLabel>
                   <DropdownMenuRadioGroup value={activeApp.id} onValueChange={switchApp}>
-                    {dashboardApps.map((app) => <DropdownMenuRadioItem key={app.id} value={app.id}><div className="flex size-7 items-center justify-center rounded-md border bg-background"><app.icon className="size-3.5" /></div><span>{app.title}</span></DropdownMenuRadioItem>)}
+                    {dashboardApps.map((app) => {
+                      const unavailable = app.id === "tool-gateway" && !toolGatewayAvailable
+                      const statusLabel = !toolGatewayStatus
+                        ? "Checking"
+                        : toolGatewayStatus.state === "disabled" ? "Not configured" : "Unavailable"
+                      return <DropdownMenuRadioItem key={app.id} value={app.id} disabled={unavailable} title={unavailable ? statusLabel : undefined}>
+                        <div className="flex size-7 items-center justify-center rounded-md border bg-background"><app.icon className="size-3.5" /></div>
+                        <span className="min-w-0 flex-1 truncate">{app.title}</span>
+                        {unavailable && <span className="mr-1 text-[10px] text-muted-foreground">{statusLabel}</span>}
+                      </DropdownMenuRadioItem>
+                    })}
                   </DropdownMenuRadioGroup>
                 </DropdownMenuGroup>
               </DropdownMenuContent>

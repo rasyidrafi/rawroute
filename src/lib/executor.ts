@@ -1,5 +1,6 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { writeLog } from "@/lib/logger"
+import type { ToolGatewayStatus } from "@/lib/types"
 
 const EXECUTOR_PUBLIC_PREFIX = "/executor"
 const EXECUTOR_API_PREFIX = "/api"
@@ -66,6 +67,27 @@ function executorConfig() {
     }
   } catch {
     return undefined
+  }
+}
+
+export async function getToolGatewayStatus(): Promise<ToolGatewayStatus> {
+  const config = executorConfig()
+  if (!config) return { state: "disabled" }
+
+  try {
+    const response = await fetch(`${config.origin}${config.basePath}/api/health`, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(3_000),
+    })
+    return { state: response.ok ? "available" : "unavailable" }
+  } catch {
+    return { state: "unavailable" }
   }
 }
 

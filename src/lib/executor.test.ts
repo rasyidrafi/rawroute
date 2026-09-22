@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
 vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
 
-import { executorPathFromRequest, proxyExecutorRequest } from "@/lib/executor"
+import { executorPathFromRequest, getToolGatewayStatus, proxyExecutorRequest } from "@/lib/executor"
 
 const originalFetch = globalThis.fetch
 const originalUpstream = process.env.EXECUTOR_UPSTREAM_URL
@@ -42,6 +42,28 @@ afterEach(() => {
 })
 
 describe("Executor HTTP proxy", () => {
+  test("reports the integration as disabled when no upstream credential is configured", async () => {
+    delete process.env.EXECUTOR_UPSTREAM_API_KEY
+
+    await expect(getToolGatewayStatus()).resolves.toEqual({ state: "disabled" })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  test("reports Executor as available after a successful health check", async () => {
+    globalThis.fetch = vi.fn(async () => new Response("ok", { status: 200 })) as typeof fetch
+
+    await expect(getToolGatewayStatus()).resolves.toEqual({ state: "available" })
+    const [url, init] = fetchCalls()[0] || []
+    expect(String(url)).toBe("http://executor:4788/api/health")
+    expect(new Headers((init as RequestInit).headers).get("authorization")).toBe("Bearer executor-secret")
+  })
+
+  test("reports Executor as unavailable for failed health checks", async () => {
+    globalThis.fetch = vi.fn(async () => Response.json({ status: "degraded" }, { status: 503 })) as typeof fetch
+
+    await expect(getToolGatewayStatus()).resolves.toEqual({ state: "unavailable" })
+  })
+
   test("authenticates before forwarding a GET and preserves the query string", async () => {
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ tools: [] }), {
       status: 200,

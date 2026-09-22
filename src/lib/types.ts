@@ -18,6 +18,12 @@ export interface Workspace {
   storageMode?: WorkspaceStorageMode
 }
 
+export type ToolGatewayState = "available" | "unavailable" | "disabled"
+
+export interface ToolGatewayStatus {
+  state: ToolGatewayState
+}
+
 export interface Provider {
   id: string
   name: string
