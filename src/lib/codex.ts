@@ -10,6 +10,8 @@ export const CODEX_PROVIDER_NAME = "Codex OAuth"
 
 const CODEX_BUILTIN_MODELS = [
   { name: "GPT-6 Astra", gatewayModelId: "codex/gpt-6-astra", upstreamModel: "gpt-6-astra", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT-6 Luna", gatewayModelId: "codex/gpt-6-luna", upstreamModel: "gpt-6-luna", protocol: "openai-responses", source: "builtin" },
+  { name: "GPT-6 Sol", gatewayModelId: "codex/gpt-6-sol", upstreamModel: "gpt-6-sol", protocol: "openai-responses", source: "builtin" },
   { name: "GPT 5.3 Codex Spark", gatewayModelId: "codex/gpt-5.3-codex-spark", upstreamModel: "gpt-5.3-codex-spark", protocol: "openai-responses", source: "builtin" },
   { name: "GPT 5.4 Mini", gatewayModelId: "codex/gpt-5.4-mini", upstreamModel: "gpt-5.4-mini", protocol: "openai-responses", source: "builtin" },
   { name: "GPT 5.4", gatewayModelId: "codex/gpt-5.4", upstreamModel: "gpt-5.4", protocol: "openai-responses", source: "builtin" },
