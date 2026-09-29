@@ -22,9 +22,30 @@ export interface CodexQuotaWindow {
 }
 
 export interface CodexUsageSnapshot {
+  resetCredits?: CodexResetCredit[]
+  resetCreditsError?: string
   fiveHour: CodexQuotaWindow | null
   weekly: CodexQuotaWindow | null
   unusedResetCredits?: number
+}
+
+export interface CodexResetCredit {
+  id: string
+  status: string
+  grantedAt?: string
+  expiresAt?: string
+}
+
+export function parseCodexResetCredits(payload: unknown): CodexResetCredit[] {
+  const data = objectValue(payload)
+  if (!Array.isArray(data?.credits)) throw new Error("Invalid reset credit inventory")
+  return data.credits.map((entry) => {
+    const credit = objectValue(entry)
+    if (typeof credit?.id !== "string" || typeof credit.status !== "string") throw new Error("Invalid reset credit")
+    const expiresAt = parseResetAt(credit.expires_at)
+    if (credit.expires_at != null && !expiresAt) throw new Error("Invalid reset credit expiry")
+    return { id: credit.id, status: credit.status, grantedAt: parseResetAt(credit.granted_at), expiresAt }
+  }).sort((a, b) => (a.expiresAt ? Date.parse(a.expiresAt) : Infinity) - (b.expiresAt ? Date.parse(b.expiresAt) : Infinity))
 }
 
 export interface CodexUsageResult extends CodexUsageSnapshot {
@@ -239,7 +260,19 @@ async function fetchCodexUsage(account: ProviderApiKey): Promise<CodexUsageSnaps
     throw Object.assign(new Error(`Codex usage request failed (${response.status})${response.body ? `: ${response.body.slice(0, 200)}` : ""}`), { status: response.status })
   }
   try {
-    return parseCodexUsagePayload(JSON.parse(response.body) as unknown)
+    const snapshot = parseCodexUsagePayload(JSON.parse(response.body) as unknown)
+    try {
+      const url = new URL(getUsageUrl())
+      url.pathname = url.pathname.replace(/\/usage\/?$/, "/rate-limit-reset-credits")
+      url.search = ""
+      const details = await codexApiCall(account, { method: "GET", url: url.toString(), headers })
+      if (details.status < 200 || details.status >= 300) throw new Error("Reset credit inventory unavailable")
+      snapshot.resetCredits = parseCodexResetCredits(JSON.parse(details.body))
+      snapshot.unusedResetCredits = snapshot.resetCredits.filter((credit) => credit.status === "available" && (!credit.expiresAt || Date.parse(credit.expiresAt) > now())).length
+    } catch {
+      snapshot.resetCreditsError = "Expiry unavailable"
+    }
+    return snapshot
   } catch {
     throw new Error("Codex usage response was not valid JSON.")
   }
@@ -253,6 +286,8 @@ function resultFromCache(cached: CachedCodexUsage, stale: boolean): CodexUsageRe
   return {
     fiveHour: cached.snapshot?.fiveHour || null,
     weekly: cached.snapshot?.weekly || null,
+    resetCredits: cached.snapshot?.resetCredits,
+    resetCreditsError: cached.snapshot?.resetCreditsError,
     ...(cached.snapshot?.unusedResetCredits !== undefined ? { unusedResetCredits: cached.snapshot.unusedResetCredits } : {}),
     fetchedAt: cached.fetchedAt,
     stale,

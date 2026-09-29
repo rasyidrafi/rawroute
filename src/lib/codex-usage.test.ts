@@ -106,7 +106,13 @@ describe("Codex usage", () => {
     setCodexUsageRedisForTests(redis)
     setCodexUsageClockForTests(() => current)
 
-    setCodexUsageApiCallForTests(async () => {
+    setCodexUsageApiCallForTests(async (_account, input) => {
+      if (input.url.endsWith("/rate-limit-reset-credits")) return { status: 200, body: JSON.stringify({ credits: [
+        { id: "one", status: "available", expires_at: "2030-01-01T00:00:00.123Z" },
+        { id: "two", status: "available", expires_at: null },
+        { id: "old", status: "available", expires_at: "1970-01-01T00:00:01Z" },
+        { id: "used", status: "redeemed", expires_at: null },
+      ] }) }
       calls += 1
       if (calls > 1) throw new Error("upstream unavailable")
       return { status: 200, body: JSON.stringify({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } }, rate_limit_reset_credits: { available_count: 2 } }) }
@@ -118,6 +124,8 @@ describe("Codex usage", () => {
     expect(first.unusedResetCredits).toBe(2)
     expect(cached.stale).toBe(false)
     expect(cached.unusedResetCredits).toBe(2)
+    expect(cached.resetCredits).toEqual(first.resetCredits)
+    expect(first.resetCredits?.find((credit) => credit.id === "one")?.expiresAt).toBe("2030-01-01T00:00:00.123Z")
     expect(calls).toBe(1)
 
     current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
@@ -126,6 +134,7 @@ describe("Codex usage", () => {
     const retained = await getCodexUsageForAccount(account)
     expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 }, unusedResetCredits: 2 })
     expect(retained.stale).toBe(true)
+    expect(retained.resetCredits).toEqual(first.resetCredits)
     expect(calls).toBe(2)
 
     setCodexUsageRedisForTests()

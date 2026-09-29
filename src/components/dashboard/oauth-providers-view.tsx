@@ -6,6 +6,7 @@ import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
+import { CodexResetCredits } from "@/components/dashboard/codex-reset-credits"
 import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
@@ -210,7 +211,7 @@ export function OAuthProvidersView() {
                     <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
                     <TableCell><Badge variant={account.enabled ? "secondary" : "outline"} title={account.cliProxyStatusMessage}>{account.cliProxyStatus === "missing" ? "Reconnect required" : account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     <CodexQuotaTableCell accountUsage={usage} loading={usageLoading && !usageData} error={usageError?.message} routingStatus={account.cliProxyStatusMessage} />
-                    <TableCell>{usageLoading && !usageData ? "…" : (usage?.unusedResetCredits ?? 0) > 0 ? usage?.unusedResetCredits : "Not Available"}</TableCell>
+                    <TableCell>{usageLoading && !usageData ? "…" : <CodexResetCredits usage={usage} />}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
                     <TableCell><div className="flex justify-end gap-1"><Button aria-busy={pending.has(updateKey)} size="sm" variant="outline" disabled={pending.has(updateKey) || account.credentialKind !== "codex-cli-proxy"} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <LoadingSpinner /> : account.enabled ? "Disable" : "Enable"}</Button>{account.credentialKind === "codex-cli-proxy" && (usage?.unusedResetCredits ?? 0) > 0 && <Button aria-busy={pending.has(`reset:${account.id}`)} size="sm" variant="outline" disabled={usage?.weekly?.remainingPercent !== 0 || pending.has(`reset:${account.id}`)} title="Requires an exhausted weekly quota" onClick={() => setResetAccount(account)}>{pending.has(`reset:${account.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}<ConfirmAction title={`Remove ${account.name}?`} description={account.credentialKind === "codex-cli-proxy" ? "This deletes the CLIProxy OAuth credential. You can connect this account again later." : "This removes the unmatched legacy credential from RawRoute. Reconnect it to use this account again."} pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                   </TableRow>
