@@ -55,6 +55,14 @@ export const dashboardApps: DashboardApp[] = [
           { title: "Settings", icon: SettingsIcon, href: "/dashboard/settings" },
         ],
       },
+      {
+        label: "Coding Agents",
+        items: [
+          { title: "Codex", icon: WrenchIcon, href: "/dashboard/coding-agents/codex" },
+          { title: "Opencode", icon: WrenchIcon, href: "/dashboard/coding-agents/opencode" },
+          { title: "Claude Code", icon: WrenchIcon, href: "/dashboard/coding-agents/claude-code" },
+        ],
+      },
     ],
   },
   {
