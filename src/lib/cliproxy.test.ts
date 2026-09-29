@@ -43,6 +43,7 @@ vi.mock("@/lib/cliproxy-provider-sync", () => ({
   nonCodexProviderPrefix: (workspaceId: string, providerId: string) => `rr-ws-${workspaceId}-p-${providerId}`,
 }))
 vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+vi.mock("@/lib/codex-model-refresh", () => ({ scheduleCodexModelRefresh: vi.fn() }))
 vi.mock("@/lib/store", () => ({
   listAliases: mocks.listAliases,
   listCombos: mocks.listCombos,
@@ -92,6 +93,16 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+})
+
+test("advertises and routes a discovered model unknown to the bundled catalog", async () => {
+  mocks.listModels.mockResolvedValue([{ id: "discovered", providerId: "codex", gatewayModelId: "codex/future-model", upstreamModel: "future-model", name: "Future", source: "discovered", enabled: true, createdAt: new Date().toISOString() }])
+  const catalog = await proxyGatewayRequest(new Request("http://gateway/v1/models", { headers: { authorization: "Bearer gateway-secret" } }))
+  expect((await catalog.json()).data).toEqual(expect.arrayContaining([expect.objectContaining({ id: "codex/future-model" })]))
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "codex/future-model", input: "Hello" }) }))
+  expect(response.status).toBe(200)
+  const calls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+  expect(calls.some((call) => call[1]?.body && JSON.parse(String(call[1].body)).model === "rr-codex-default/future-model")).toBe(true)
 })
 
 test("tests combo member policies with a streaming probe", async () => {

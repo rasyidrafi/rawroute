@@ -25,14 +25,35 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "@/lib/types"
 import { formatAppDate } from "@/lib/timezone"
+import type { CodexDiscoveryStatus } from "@/lib/codex-model-discovery"
 
-type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[] }
+type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[]; discovery?: CodexDiscoveryStatus }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
 
 export function ProviderDetailView({ providerId }: { providerId: string }) {
   const router = useRouter()
   const { mutate: refreshCachedResource } = useSWRConfig()
-  const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId))
+  const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId), fetcher, { refreshInterval: providerId === "codex" ? 15000 : 0 })
+  const [refreshingModels, setRefreshingModels] = useState(false)
+  async function refreshModels() {
+    if (!data) return
+    setRefreshingModels(true)
+    try {
+      const result = await apiPost<CodexDiscoveryStatus>(`${providerKey(data.provider.id)}/models/refresh`, {})
+      await mutate()
+      await refreshCachedResource("/api/admin/providers")
+      if (result.error) toast.error(result.error)
+      else toast.success(`Models refreshed: ${result.added} added${result.skipped ? `, ${result.skipped} custom mappings preserved` : ""}`)
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Model refresh failed") }
+    finally { setRefreshingModels(false) }
+  }
+  async function toggleDiscoveredModel(model: Model) {
+    if (!data) return
+    try {
+      await apiPost(`${providerKey(data.provider.id)}/models`, { model: { originalId: model.id, enabled: !model.enabled } })
+      await mutate()
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Model update failed") }
+  }
   const usageKey = data && (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
     ? "/api/admin/oauth-providers/usage"
     : null
@@ -381,8 +402,8 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><BoxesIcon className="size-5" />Models</CardTitle>
-          <CardDescription>{provider.prefix === "codex" ? "Built-in Codex models are fixed; custom Codex mappings can be added below." : "Expose upstream models behind your provider prefix."}</CardDescription>
-          <CardAction><Button onClick={() => { setEditingModel(null); setModelOpen(true) }}><PlusIcon />Add model</Button></CardAction>
+          <CardDescription>{provider.prefix === "codex" ? <>Models are discovered from connected CLIProxy accounts. Custom mappings are preserved. {data.discovery?.succeededAt ? `Last synced: ${formatAppDate(data.discovery.succeededAt)}.` : "Waiting for first sync."}{data.discovery?.error && <span className="block text-destructive">{data.discovery.error}</span>}</> : "Expose upstream models behind your provider prefix."}</CardDescription>
+          <CardAction><div className="flex gap-2">{provider.prefix === "codex" && <Button variant="outline" disabled={refreshingModels} onClick={() => void refreshModels()}>{refreshingModels ? <LoadingSpinner /> : <RotateCcwIcon />}Refresh models</Button>}<Button onClick={() => { setEditingModel(null); setModelOpen(true) }}><PlusIcon />Add model</Button></div></CardAction>
         </CardHeader>
         <Dialog open={modelOpen} onOpenChange={(open) => { setModelOpen(open); if (!open) setEditingModel(null) }}>
           <DialogContent>
@@ -405,13 +426,13 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
               {models.map((model) => {
                 const pendingKey = `delete-model:${model.id}`
                 const gatewayModelId = model.gatewayModelId || model.id
-                const builtin = model.source === "builtin"
+                const builtin = model.source === "builtin" || model.source === "discovered"
                 return <TableRow key={model.id} className={model.enabled ? undefined : "opacity-60"}>
                   <TableCell className="font-medium">{model.name}</TableCell>
                   <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{gatewayModelId}</span></div><Button aria-label={`Copy gateway ID ${gatewayModelId}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void navigator.clipboard.writeText(gatewayModelId); toast.success("Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
                   <TableCell>{model.upstreamModel}</TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
-                  <TableCell><div className="flex items-center gap-2"><Badge variant={builtin ? "secondary" : "outline"}>{builtin ? "Built-in" : "Custom"}</Badge><Badge variant={model.enabled ? "secondary" : "outline"}>{model.enabled ? "Enabled" : "Disabled"}</Badge></div></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><Badge variant={builtin ? "secondary" : "outline"}>{model.source === "discovered" ? "Auto-discovered" : builtin ? "Legacy" : "Custom"}</Badge><Badge variant={model.enabled ? "secondary" : "outline"}>{model.enabled ? "Enabled" : "Disabled"}</Badge>{(model.discovery?.stale || model.source === "builtin") && <Badge variant="outline">Not recently observed</Badge>}{model.source === "discovered" && <Button size="icon-sm" variant="ghost" aria-label={`${model.enabled ? "Disable" : "Enable"} ${model.name}`} onClick={() => void toggleDiscoveredModel(model)}><PowerIcon /></Button>}</div></TableCell>
                   <TableCell><div className="flex justify-end gap-1"><ModelShareButton modelId={model.id} modelName={model.name} disabled={!model.enabled || !provider.enabled} onSaved={mutate} />{builtin ? null : <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
                 </TableRow>
               })}

@@ -24,6 +24,11 @@ export async function POST(request: Request, context: { params: Promise<{ provid
     if (existing?.source === "builtin") {
       throw new Error("Built-in Codex models are fixed and cannot be edited.")
     }
+    if (existing?.source === "discovered") {
+      if (typeof input.enabled !== "boolean" || Object.keys(input).some((key) => !["originalId", "enabled"].includes(key))) throw new Error("Only enabled state can be changed for discovered models.")
+      await upsertModel(providerId, { originalId: existing.id, enabled: input.enabled })
+      return Response.json({ ok: true })
+    }
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const upstreamModel = typeof input.upstreamModel === "string" ? input.upstreamModel.trim() : ""
     if (!name || !upstreamModel) throw new Error("Model fields are incomplete.")

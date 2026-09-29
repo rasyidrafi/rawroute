@@ -247,6 +247,7 @@ function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Mode
     upstreamModel: data.upstreamModel || "",
     enabled: data.enabled !== false,
     source: data.source || "custom",
+    discovery: data.discovery,
     reasoningCapability: data.reasoningCapability,
     createdAt: data.createdAt || "",
   }
@@ -313,6 +314,7 @@ function storedModel(model: Model) {
     upstreamModel: model.upstreamModel,
     enabled: model.enabled,
     source: model.source,
+    discovery: model.discovery,
     reasoningCapability: model.reasoningCapability,
     createdAt: model.createdAt,
   })
@@ -599,6 +601,24 @@ function assertModelMutationAllowed(existing: Model | undefined) {
   if (existing?.source === "builtin") {
     throw new Error("Built-in models are fixed and cannot be edited.")
   }
+}
+
+function managedModelInput(existing: Model | undefined, input: Partial<Model>, discover: boolean) {
+  if (discover) {
+    if (existing && existing.source !== "builtin" && existing.source !== "discovered") throw new Error("Custom model owns this gateway ID.")
+    return { ...input, source: "discovered" as const, enabled: existing?.enabled ?? true, reasoningCapability: existing?.reasoningCapability }
+  }
+  if (existing?.source === "discovered") {
+    if (input.gatewayModelId && input.gatewayModelId !== existing.gatewayModelId || input.upstreamModel && input.upstreamModel !== existing.upstreamModel || input.name && input.name !== existing.name || input.reasoningCapability || input.source && input.source !== existing.source || input.discovery) throw new Error("Discovered model identity is managed automatically.")
+  }
+  return input
+}
+
+/** Internal catalog writer; ownership is checked again inside the transaction. */
+export async function reconcileDiscoveredModel(providerId: string, input: Pick<Model, "gatewayModelId" | "name" | "upstreamModel" | "discovery">) {
+  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input, true) : await firestoreUpsertModel(providerId, input, true)
+  invalidateRoutingCaches()
+  return model
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1893,15 +1913,21 @@ async function firestoreListProviderModels(providerId: string): Promise<Model[]>
   return snapshot.docs.map((doc) => modelFromSnapshot(doc, providerId))
 }
 
-async function firestoreUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
+async function firestoreUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }, discover = false): Promise<Model> {
   const firestore = getLocalDatabase()
   return firestore.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
+    if (discover) {
+      if (providerDocSnapshot.data()?.prefix !== "codex") throw new Error("Discovery requires a Codex provider.")
+      const matches = await transaction.get(modelsRef(providerId).where("gatewayModelId", "==", input.gatewayModelId).limit(1))
+      input = { ...input, originalId: matches.docs[0]?.id }
+    }
     const existingSnapshot = input.originalId ? await transaction.get(modelRef(providerId, input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? modelFromSnapshot(existingSnapshot, providerId) : undefined
     if (input.originalId && !existing) throw new Error("Model not found.")
-    assertModelMutationAllowed(existing)
+    if (!discover) assertModelMutationAllowed(existing)
+    input = { ...input, ...managedModelInput(existing, input, discover) }
     const rawGatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
     const gatewayModelId = normalizedGatewayId(rawGatewayModelId)
     const name = input.name || existing?.name || ""
@@ -1923,6 +1949,7 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       upstreamModel: input.upstreamModel,
       enabled: input.enabled,
       source: input.source,
+      discovery: input.discovery,
       reasoningCapability: input.reasoningCapability,
     }) as Partial<Model>
     const model: Model = {
@@ -1957,7 +1984,7 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const model = modelFromSnapshot(snapshot, providerId)
-    if (model.source === "builtin") throw new Error("Built-in models cannot be deleted.")
+    if (model.source === "builtin" || model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
     const reservation = await firestoreGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
     transaction.delete(ref)
     releaseFirestoreGatewayId(transaction, reservation)
@@ -2293,14 +2320,19 @@ function memoryDeleteProviderApiKey(providerId: string, apiKeyId: string): void 
 
 }
 
-function memoryUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Model {
+function memoryUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }, discover = false): Model {
   const state = ensureMemorySeeded()
   const provider = state.providers.get(providerId)
   if (!provider) throw new Error("Provider is missing.")
   const slot = state.models.get(providerId) || new Map<string, Model>()
+  if (discover) {
+    if (provider.prefix !== "codex") throw new Error("Discovery requires a Codex provider.")
+    input = { ...input, originalId: [...slot.values()].find((model) => model.gatewayModelId === input.gatewayModelId)?.id }
+  }
   const existing = input.originalId ? slot.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Model not found.")
-  assertModelMutationAllowed(existing)
+  if (!discover) assertModelMutationAllowed(existing)
+  input = { ...input, ...managedModelInput(existing, input, discover) }
   const modelId = existing ? input.originalId! : crypto.randomUUID()
   const rawGatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
   const gatewayModelId = normalizedGatewayId(rawGatewayModelId)
@@ -2318,6 +2350,7 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
     upstreamModel: input.upstreamModel,
     enabled: input.enabled,
     source: input.source,
+    discovery: input.discovery,
     reasoningCapability: input.reasoningCapability,
   }) as Partial<Model>
   const model: Model = {
@@ -2359,7 +2392,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
   const slot = state.models.get(providerId)
   const model = slot?.get(modelId)
   if (!model || !slot) return
-  if (model.source === "builtin") throw new Error("Built-in models cannot be deleted.")
+  if (model.source === "builtin" || model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
   slot.delete(modelId)
   releaseMemoryGatewayId(state, normalizedGatewayId(model.gatewayModelId || model.id), gatewayIdOwner("model", `${providerId}:${model.id}`))
   state.providers.set(providerId, {

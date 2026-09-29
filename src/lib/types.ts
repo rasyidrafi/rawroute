@@ -70,7 +70,7 @@ export interface ProviderApiKey {
   createdAt: string
 }
 
-export type ModelSource = "builtin" | "custom"
+export type ModelSource = "builtin" | "custom" | "discovered"
 
 export interface Model {
   id: string
@@ -80,8 +80,9 @@ export interface Model {
   name: string
   upstreamModel: string
   enabled: boolean
-  /** Whether this is a fixed built-in model or a workspace-defined model. */
+  /** User-owned mapping, discovered route, or legacy built-in awaiting migration. */
   source?: ModelSource
+  discovery?: { lastSeenAt?: string; accountIds: string[]; stale: boolean }
   reasoningCapability?: ModelReasoningCapability
   createdAt: string
 }

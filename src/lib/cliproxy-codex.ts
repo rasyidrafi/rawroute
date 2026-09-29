@@ -69,7 +69,7 @@ function authFile(value: RawAuthFile): CliProxyAuthFile | undefined {
 }
 
 export async function listCliProxyCodexAuthFiles() {
-  const response = await cliproxyManagement("/v0/management/auth-files")
+  const response = await cliproxyManagement("/v0/management/auth-files", { signal: AbortSignal.timeout(10_000) })
   const payload = await response.json().catch(() => undefined) as { files?: RawAuthFile[] } | undefined
   if (!response.ok) throw new Error(`CLIProxy auth-file list failed (${response.status}).`)
   return (Array.isArray(payload?.files) ? payload.files : []).flatMap((value) => authFile(value) ? [authFile(value)!] : [])

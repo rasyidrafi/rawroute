@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
 import { deleteCliProxyCodexAccount, setCliProxyCodexAccountEnabled } from "@/lib/cliproxy-codex"
 import { listCodexAccounts } from "@/lib/codex"
+import { scheduleCodexModelRefresh } from "@/lib/codex-model-refresh"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { deleteProviderApiKey, upsertProviderApiKey } from "@/lib/store"
@@ -34,6 +35,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
       throw error
     }
     writeLog("info", "admin", "Codex account updated", { accountId })
+    scheduleCodexModelRefresh(true)
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Codex account update failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
@@ -52,6 +54,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ acc
     if (account.credentialKind === "codex-cli-proxy" && account.cliProxyAuthFile) await deleteCliProxyCodexAccount(account)
     await deleteProviderApiKey(result.provider.id, accountId)
     writeLog("info", "admin", "Codex account deleted", { accountId })
+    scheduleCodexModelRefresh(true)
     return Response.json({ ok: true })
   } catch (error) {
     writeLog("error", "admin", "Codex account delete failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })

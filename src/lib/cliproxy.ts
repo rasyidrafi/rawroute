@@ -1,6 +1,7 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { assertUnlimitedModelsAllowed, BudgetDeniedError, BudgetModelExcludedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
+import { scheduleCodexModelRefresh } from "@/lib/codex-model-refresh"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
 import { providerResponsesUrl } from "@/lib/cliproxy-provider-capabilities"
 import { catalogModels } from "@/lib/catalog"
@@ -467,6 +468,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
 }
 
 async function canonicalModelsResponse() {
+  scheduleCodexModelRefresh()
   const [models, providers, aliases, combos] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos()])
   return Response.json({ object: "list", data: catalogModels(providers, models, aliases, combos) }, { headers: { "cache-control": "no-store" } })
 }

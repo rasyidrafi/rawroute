@@ -1,6 +1,8 @@
 import { requireAdmin } from "@/lib/auth"
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
 import { ensureCodexProvider } from "@/lib/codex"
+import { codexDiscoveryStatus } from "@/lib/codex-model-discovery"
+import { scheduleCodexModelRefresh } from "@/lib/codex-model-refresh"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { deleteProvider, getProvider, listProviderApiKeys, listProviderModels } from "@/lib/store"
@@ -30,7 +32,9 @@ export async function GET(_request: Request, context: { params: Promise<{ provid
     listProviderModels(resolvedId),
   ])
   if (!provider) return jsonError("Provider not found.", 404)
+  if (provider.prefix === "codex") scheduleCodexModelRefresh()
   return Response.json({
+    discovery: provider.prefix === "codex" ? await codexDiscoveryStatus() : undefined,
     provider,
     apiKeys: apiKeys.map((apiKey) => ({ ...apiKey, key: maskApiKey(apiKey.key) })),
     models: models.map(stripUnprefixed),

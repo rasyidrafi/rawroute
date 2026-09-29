@@ -1,25 +1,12 @@
 import { createHash, randomBytes } from "node:crypto"
 
 import { listMappedCodexAccounts } from "@/lib/cliproxy-codex"
-import { getProvider, listProviderModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
+import { getProvider, listProviders, upsertProvider } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace-context"
 
 export const CODEX_PROVIDER_PREFIX = "codex"
 export const CODEX_PROVIDER_NAME = "Codex OAuth"
-
-const CODEX_BUILTIN_MODELS = [
-  { name: "GPT-6 Astra", gatewayModelId: "codex/gpt-6-astra", upstreamModel: "gpt-6-astra", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT-6 Luna", gatewayModelId: "codex/gpt-6-luna", upstreamModel: "gpt-6-luna", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT-6 Sol", gatewayModelId: "codex/gpt-6-sol", upstreamModel: "gpt-6-sol", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.3 Codex Spark", gatewayModelId: "codex/gpt-5.3-codex-spark", upstreamModel: "gpt-5.3-codex-spark", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.4 Mini", gatewayModelId: "codex/gpt-5.4-mini", upstreamModel: "gpt-5.4-mini", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.4", gatewayModelId: "codex/gpt-5.4", upstreamModel: "gpt-5.4", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.5", gatewayModelId: "codex/gpt-5.5", upstreamModel: "gpt-5.5", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.6 Luna", gatewayModelId: "codex/gpt-5.6-luna", upstreamModel: "gpt-5.6-luna", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.6 Sol", gatewayModelId: "codex/gpt-5.6-sol", upstreamModel: "gpt-5.6-sol", protocol: "openai-responses", source: "builtin" },
-  { name: "GPT 5.6 Terra", gatewayModelId: "codex/gpt-5.6-terra", upstreamModel: "gpt-5.6-terra", protocol: "openai-responses", source: "builtin" },
-] as const
 
 const codexProviderEnsureInflight = new Map<string, Promise<Provider>>()
 
@@ -227,16 +214,6 @@ export async function ensureCodexProvider(): Promise<Provider> {
       throw new Error(`Provider prefix ${CODEX_PROVIDER_PREFIX} is already configured for a different upstream.`)
     }
 
-    const existingModels = await listProviderModels(provider.id)
-    for (const builtin of CODEX_BUILTIN_MODELS) {
-      const model = existingModels.find((entry) => entry.gatewayModelId === builtin.gatewayModelId)
-      if (model?.source === "builtin") continue
-      await upsertModel(provider.id, {
-        ...(model ? { originalId: model.id } : {}),
-        ...builtin,
-        enabled: model?.enabled !== false,
-      })
-    }
     return (await getProvider(provider.id)) || provider
   })()
   codexProviderEnsureInflight.set(workspaceId, promise)

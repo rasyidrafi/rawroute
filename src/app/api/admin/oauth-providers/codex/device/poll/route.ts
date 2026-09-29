@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth"
 import { deletePendingCliProxyCodexLogin, takePendingCliProxyCodexLogin } from "@/lib/codex-cli-login"
 import { cancelCliProxyCodexLogin, completeCliProxyCodexLogin, registerCliProxyCodexAccount, setCliProxyCodexAccountPrefix } from "@/lib/cliproxy-codex"
 import { ensureCodexProvider } from "@/lib/codex"
+import { scheduleCodexModelRefresh } from "@/lib/codex-model-refresh"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { currentWorkspaceId } from "@/lib/workspace-context"
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
       throw error
     }
     await deletePendingCliProxyCodexLogin(loginId)
+    scheduleCodexModelRefresh(true)
     writeLog("info", "admin", "CLIProxy Codex account mapped", { accountId: account.id })
     return Response.json({ status: "authorized", account: { id: account.id, name: account.name, email: account.email, accountId: account.accountId, planType: account.planType, providerId: provider.id } })
   } catch (error) {
