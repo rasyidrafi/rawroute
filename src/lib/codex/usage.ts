@@ -1,7 +1,7 @@
-import { cliProxyCodexApiCall } from "@/lib/cliproxy-codex"
+import { cliProxyCodexApiCall } from "@/lib/codex/cliproxy"
 import { getLocalRedis } from "@/lib/local-redis"
 import type { ProviderApiKey } from "@/lib/types"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export const CODEX_USAGE_CACHE_TTL_SECONDS = 5 * 60
 

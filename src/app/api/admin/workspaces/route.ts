@@ -1,7 +1,7 @@
 import { isAuthenticated } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { createWorkspace, listWorkspaces } from "@/lib/workspaces"
+import { createWorkspace, listWorkspaces } from "@/lib/workspace/repository"
 
 export async function GET() {
   if (!(await isAuthenticated())) return jsonError("Unauthorized", 401)

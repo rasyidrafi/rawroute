@@ -2,11 +2,11 @@ import { beforeEach, expect, test, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({ accounts: vi.fn(), files: vi.fn(), call: vi.fn(), management: vi.fn(), lock: vi.fn() }))
 vi.mock("@/lib/store", () => ({ listProviderApiKeys: mocks.accounts }))
-vi.mock("@/lib/cliproxy-codex", () => ({ listCliProxyCodexAuthFiles: mocks.files, cliProxyCodexApiCall: mocks.call, cliproxyManagement: mocks.management }))
+vi.mock("@/lib/codex/cliproxy", () => ({ listCliProxyCodexAuthFiles: mocks.files, cliProxyCodexApiCall: mocks.call, cliproxyManagement: mocks.management }))
 vi.mock("@/lib/local-redis", () => ({ localRedisSetIfAbsent: mocks.lock }))
 vi.mock("@/lib/logger", () => ({ writeLog: vi.fn() }))
-vi.mock("@/lib/workspace-context", () => ({ currentWorkspaceId: () => "workspace" }))
-import { quotaAllowsProbe, recoverCodexQuota } from "@/lib/codex-recovery"
+vi.mock("@/lib/workspace/context", () => ({ currentWorkspaceId: () => "workspace" }))
+import { quotaAllowsProbe, recoverCodexQuota } from "@/lib/codex/recovery"
 
 beforeEach(() => {
   vi.resetAllMocks()

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto"
 
-import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy-management"
-import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy-provider-capabilities"
+import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/management"
+import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 import { localRedisCompareAndDelete, localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
 import { listProviderApiKeys, listProviderModels, getProvider } from "@/lib/store"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 import type { Model, Provider } from "@/lib/types"
 
 const SYNC_TTL_MS = 5 * 60 * 1000

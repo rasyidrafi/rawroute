@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
-import { listCodexAccounts } from "@/lib/codex"
+import { listCodexAccounts } from "@/lib/codex/oauth"
 import { jsonError } from "@/lib/http"
 
 

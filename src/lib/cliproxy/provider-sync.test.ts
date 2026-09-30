@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   currentWorkspaceId: vi.fn(),
 }))
 
-vi.mock("@/lib/cliproxy-management", () => ({
+vi.mock("@/lib/cliproxy/management", () => ({
   cliproxyManagement: mocks.cliproxyManagement,
   cliproxyManagementJson: mocks.cliproxyManagementJson,
 }))
@@ -32,9 +32,9 @@ vi.mock("@/lib/store", () => ({
   listProviderApiKeys: mocks.listProviderApiKeys,
   listProviderModels: mocks.listProviderModels,
 }))
-vi.mock("@/lib/workspace-context", () => ({ currentWorkspaceId: mocks.currentWorkspaceId }))
+vi.mock("@/lib/workspace/context", () => ({ currentWorkspaceId: mocks.currentWorkspaceId }))
 
-import { ensureNonCodexProviderProjection, nonCodexProviderPrefix, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
+import { ensureNonCodexProviderProjection, nonCodexProviderPrefix, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 
 const successfulResponse = () => new Response(null, { status: 200 })
 

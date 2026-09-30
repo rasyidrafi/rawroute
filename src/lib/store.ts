@@ -5,7 +5,7 @@ import { gatewayModelId, cleanAliasId } from "@/lib/http"
 import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
 import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
-import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, workspaceContext } from "@/lib/workspace-context"
+import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, workspaceContext } from "@/lib/workspace/context"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 60_000

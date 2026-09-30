@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 
-import { normalizeProviderBaseUrl, providerResponsesUrl, supportedProviderAuthTypes, validateProviderCliProxyCompatibility } from "@/lib/cliproxy-provider-capabilities"
+import { normalizeProviderBaseUrl, providerResponsesUrl, supportedProviderAuthTypes, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 
 test("normalizes the Anthropic base URL to the path CLIProxy expects", () => {
   expect(normalizeProviderBaseUrl("anthropic-messages", "https://api.anthropic.com/v1/")).toBe("https://api.anthropic.com")

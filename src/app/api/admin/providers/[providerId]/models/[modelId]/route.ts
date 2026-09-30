@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
-import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
+import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { deleteModel, getProvider } from "@/lib/store"

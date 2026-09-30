@@ -1,8 +1,8 @@
-import { cliProxyCodexApiCall, cliproxyManagement, listCliProxyCodexAuthFiles } from "@/lib/cliproxy-codex"
+import { cliProxyCodexApiCall, cliproxyManagement, listCliProxyCodexAuthFiles } from "@/lib/codex/cliproxy"
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
 import { listProviderApiKeys } from "@/lib/store"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 type UsagePayload = {
   rate_limit?: { allowed?: boolean; limit_reached?: boolean }

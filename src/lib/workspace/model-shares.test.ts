@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, test } from "vitest"
 
 import { getDashboardPayload, recordUsageEvent, resetAnalyticsForTests } from "@/lib/analytics"
-import { listShareTargets, listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/model-shares"
+import { listShareTargets, listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/workspace/model-shares"
 import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/lib/store"
-import { runInWorkspace } from "@/lib/workspace-context"
-import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/lib/workspaces"
+import { runInWorkspace } from "@/lib/workspace/context"
+import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/lib/workspace/repository"
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"

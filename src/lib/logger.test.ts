@@ -1,7 +1,7 @@
 import { beforeEach, expect, test } from "vitest"
 
 import { clearLogs, logVersion, readLogs, writeLog } from "@/lib/logger"
-import { runInWorkspace } from "@/lib/workspace-context"
+import { runInWorkspace } from "@/lib/workspace/context"
 
 beforeEach(clearLogs)
 

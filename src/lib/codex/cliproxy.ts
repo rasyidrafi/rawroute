@@ -2,8 +2,8 @@ import { createHash } from "node:crypto"
 
 import { listProviderApiKeys, listProviders, upsertProviderApiKey } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
-import { runInWorkspace } from "@/lib/workspace-context"
-import { listWorkspaces } from "@/lib/workspaces"
+import { runInWorkspace } from "@/lib/workspace/context"
+import { listWorkspaces } from "@/lib/workspace/repository"
 
 const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 

@@ -4,7 +4,7 @@ import { getLocalFirestore, type Firestore } from "@/lib/local-db"
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
 import { listModels, listProviders } from "@/lib/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 let localDatabase: Firestore | undefined
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>

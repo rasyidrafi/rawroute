@@ -7,15 +7,15 @@ vi.mock("@/lib/local-redis", () => ({
   localRedisCompareAndDelete: async () => true,
   localRedisDelete: async () => true,
 }))
-vi.mock("@/lib/cliproxy-codex", () => ({
+vi.mock("@/lib/codex/cliproxy", () => ({
   codexWorkspacePrefix: (id: string) => `rr-${id}`,
   listCliProxyCodexAuthFiles: mocks.files,
   cliproxyManagement: mocks.management,
 }))
-import { parseCodexModels, refreshCodexModels } from "@/lib/codex-model-discovery"
-import { ensureCodexProvider } from "@/lib/codex"
+import { parseCodexModels, refreshCodexModels } from "@/lib/codex/model-discovery"
+import { ensureCodexProvider } from "@/lib/codex/oauth"
 import { _resetMemoryBackend, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } from "@/lib/store"
-import { runInWorkspace } from "@/lib/workspace-context"
+import { runInWorkspace } from "@/lib/workspace/context"
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"

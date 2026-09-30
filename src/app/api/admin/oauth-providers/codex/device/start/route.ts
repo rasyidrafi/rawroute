@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
 
 import { requireAdmin } from "@/lib/auth"
-import { deletePendingCliProxyCodexLogin, reservePendingCliProxyCodexLogin, savePendingCliProxyCodexLogin } from "@/lib/codex-cli-login"
-import { cancelCliProxyCodexLogin, startCliProxyCodexLogin } from "@/lib/cliproxy-codex"
+import { deletePendingCliProxyCodexLogin, reservePendingCliProxyCodexLogin, savePendingCliProxyCodexLogin } from "@/lib/codex/cli-login"
+import { cancelCliProxyCodexLogin, startCliProxyCodexLogin } from "@/lib/codex/cliproxy"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export async function POST() {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }

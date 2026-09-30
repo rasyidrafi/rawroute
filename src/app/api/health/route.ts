@@ -1,4 +1,4 @@
-import { cliProxyHealth } from "@/lib/cliproxy"
+import { cliProxyHealth } from "@/lib/cliproxy/gateway"
 import { localDatabaseHealth } from "@/lib/local-db"
 import { localRedisHealth } from "@/lib/local-redis"
 

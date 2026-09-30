@@ -1,11 +1,11 @@
 import { requireAdmin } from "@/lib/auth"
-import { deletePendingCliProxyCodexLogin, takePendingCliProxyCodexLogin } from "@/lib/codex-cli-login"
-import { cancelCliProxyCodexLogin, completeCliProxyCodexLogin, registerCliProxyCodexAccount, setCliProxyCodexAccountPrefix } from "@/lib/cliproxy-codex"
-import { ensureCodexProvider } from "@/lib/codex"
-import { scheduleCodexModelRefresh } from "@/lib/codex-model-refresh"
+import { deletePendingCliProxyCodexLogin, takePendingCliProxyCodexLogin } from "@/lib/codex/cli-login"
+import { cancelCliProxyCodexLogin, completeCliProxyCodexLogin, registerCliProxyCodexAccount, setCliProxyCodexAccountPrefix } from "@/lib/codex/cliproxy"
+import { ensureCodexProvider } from "@/lib/codex/oauth"
+import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export async function POST(request: Request) {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }

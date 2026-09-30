@@ -3,8 +3,8 @@ import { cookies, headers } from "next/headers"
 
 import { findIndexedApiKeyByValue, readSessionSecret } from "@/lib/store"
 import type { AuthenticatedGatewayKey, Workspace } from "@/lib/types"
-import { DEFAULT_WORKSPACE_ID, enterWorkspace } from "@/lib/workspace-context"
-import { getWorkspace } from "@/lib/workspaces"
+import { DEFAULT_WORKSPACE_ID, enterWorkspace } from "@/lib/workspace/context"
+import { getWorkspace } from "@/lib/workspace/repository"
 
 const COOKIE_NAME = "rawroute_session"
 

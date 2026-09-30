@@ -1,9 +1,9 @@
-import { invalidateCodexUsageCache, parseUnusedCodexResetCredits } from "@/lib/codex-usage"
-import { cliProxyCodexApiCall } from "@/lib/cliproxy-codex"
+import { invalidateCodexUsageCache, parseUnusedCodexResetCredits } from "@/lib/codex/usage"
+import { cliProxyCodexApiCall } from "@/lib/codex/cliproxy"
 import { getLocalRedis } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
 import type { ProviderApiKey } from "@/lib/types"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 const consumeUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 const locks = new Map<string, string>()

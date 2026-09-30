@@ -8,7 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { supportedProviderAuthTypes } from "@/lib/cliproxy-provider-capabilities"
+import { supportedProviderAuthTypes } from "@/lib/cliproxy/provider-capabilities"
 import type { AuthType, Protocol, Provider } from "@/lib/types"
 import { protocolLabels } from "@/lib/types"
 

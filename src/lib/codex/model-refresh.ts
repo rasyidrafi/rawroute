@@ -1,6 +1,6 @@
 import { after } from "next/server"
-import { refreshCodexModels } from "@/lib/codex-model-discovery"
-import { runInWorkspace, workspaceContext } from "@/lib/workspace-context"
+import { refreshCodexModels } from "@/lib/codex/model-discovery"
+import { runInWorkspace, workspaceContext } from "@/lib/workspace/context"
 
 export function scheduleCodexModelRefresh(force = false) {
   const workspace = workspaceContext()

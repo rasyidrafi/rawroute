@@ -37,13 +37,13 @@ vi.mock("@/lib/analytics", () => ({
   releaseBudgetReservation: mocks.releaseBudgetReservation,
   reserveBudgetAdmission: mocks.reserveBudgetAdmission,
 }))
-vi.mock("@/lib/cliproxy-codex", () => ({ codexWorkspacePrefix: (workspaceId: string) => `rr-codex-${workspaceId}` }))
-vi.mock("@/lib/cliproxy-provider-sync", () => ({
+vi.mock("@/lib/codex/cliproxy", () => ({ codexWorkspacePrefix: (workspaceId: string) => `rr-codex-${workspaceId}` }))
+vi.mock("@/lib/cliproxy/provider-sync", () => ({
   ensureNonCodexProviderProjection: mocks.ensureNonCodexProviderProjection,
   nonCodexProviderPrefix: (workspaceId: string, providerId: string) => `rr-ws-${workspaceId}-p-${providerId}`,
 }))
 vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
-vi.mock("@/lib/codex-model-refresh", () => ({ scheduleCodexModelRefresh: vi.fn() }))
+vi.mock("@/lib/codex/model-refresh", () => ({ scheduleCodexModelRefresh: vi.fn() }))
 vi.mock("@/lib/store", () => ({
   listAliases: mocks.listAliases,
   listCombos: mocks.listCombos,
@@ -51,13 +51,13 @@ vi.mock("@/lib/store", () => ({
   listProviders: mocks.listProviders,
   listProviderApiKeys: mocks.listProviderApiKeys,
 }))
-vi.mock("@/lib/workspace-context", () => ({
+vi.mock("@/lib/workspace/context", () => ({
   currentWorkspaceId: () => "default",
   runInWorkspace: (_workspace: unknown, callback: () => unknown) => callback(),
 }))
 
 import { BudgetDeniedError, BudgetModelExcludedError } from "@/lib/analytics"
-import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComboMemberPolicy } from "@/lib/cliproxy"
+import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComboMemberPolicy } from "@/lib/cliproxy/gateway"
 
 const originalFetch = globalThis.fetch
 

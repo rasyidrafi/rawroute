@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/auth"
-import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy-provider-sync"
-import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy-provider-capabilities"
+import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
+import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 import { cleanId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"

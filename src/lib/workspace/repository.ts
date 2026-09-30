@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getLocalDatabase, isMemoryBackend } from "@/lib/store"
 import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
 import type { Workspace } from "@/lib/types"
-import { DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME } from "@/lib/workspace-context"
+import { DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME } from "@/lib/workspace/context"
 
 declare global {
   var __rawrouteMemoryWorkspaces: Map<string, Workspace> | undefined

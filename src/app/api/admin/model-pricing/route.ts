@@ -6,7 +6,7 @@ import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricing
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import type { PricingCanonicalSource } from "@/lib/types"
-import { runInWorkspace, workspaceContext } from "@/lib/workspace-context"
+import { runInWorkspace, workspaceContext } from "@/lib/workspace/context"
 
 
 export async function GET(request: Request) {

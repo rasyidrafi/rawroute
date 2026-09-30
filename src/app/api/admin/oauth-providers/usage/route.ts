@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/auth"
-import { getCodexUsageForAccount } from "@/lib/codex-usage"
-import { listCodexAccounts } from "@/lib/codex"
+import { getCodexUsageForAccount } from "@/lib/codex/usage"
+import { listCodexAccounts } from "@/lib/codex/oauth"
 import { jsonError } from "@/lib/http"
 
 

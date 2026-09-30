@@ -25,7 +25,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "@/lib/types"
 import { formatAppDate } from "@/lib/timezone"
-import type { CodexDiscoveryStatus } from "@/lib/codex-model-discovery"
+import type { CodexDiscoveryStatus } from "@/lib/codex/model-discovery"
 
 type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[]; discovery?: CodexDiscoveryStatus }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`

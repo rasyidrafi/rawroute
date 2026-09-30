@@ -1,6 +1,6 @@
 import { requireAdmin } from "@/lib/auth"
-import { redeemCodexReset } from "@/lib/codex-reset"
-import { listCodexAccounts } from "@/lib/codex"
+import { redeemCodexReset } from "@/lib/codex/reset"
+import { listCodexAccounts } from "@/lib/codex/oauth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 

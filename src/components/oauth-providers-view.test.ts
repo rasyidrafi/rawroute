@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 test("Codex OAuth accounts expose dynamically detected usage limits", () => {
   const view = readFileSync(new URL("./dashboard/oauth-providers-view.tsx", import.meta.url), "utf8")
   const quota = readFileSync(new URL("./dashboard/codex-quota.tsx", import.meta.url), "utf8")
+  const resetCredits = readFileSync(new URL("./dashboard/codex-reset-credits.tsx", import.meta.url), "utf8")
 
   expect(view).toContain('"/api/admin/oauth-providers/usage"')
   expect(view).toContain("refreshInterval: 300000")
@@ -15,7 +16,8 @@ test("Codex OAuth accounts expose dynamically detected usage limits", () => {
   expect(view).toContain("Usage Limits")
   expect(view).toContain("<CodexQuotaTableCell")
   expect(view).toContain('colSpan={6}')
-  expect(view).toContain("Not Available")
+  expect(view).toContain("<CodexResetCredits usage={usage} />")
+  expect(resetCredits).toContain('count === undefined ? "Not Available"')
   expect(quota).toContain("Authentication token expired. Reauthorize this Codex account.")
 
   const detail = readFileSync(new URL("./dashboard/provider-detail-view.tsx", import.meta.url), "utf8")

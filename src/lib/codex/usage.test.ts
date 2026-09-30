@@ -8,7 +8,7 @@ import {
   setCodexUsageApiCallForTests,
   setCodexUsageRedisForTests,
   type UsageRedis,
-} from "@/lib/codex-usage"
+} from "@/lib/codex/usage"
 import type { ProviderApiKey } from "@/lib/types"
 
 class FakeRedis implements UsageRedis {

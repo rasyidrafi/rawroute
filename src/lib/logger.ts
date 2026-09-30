@@ -1,4 +1,4 @@
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export type LogLevel = "info" | "warn" | "error"
 

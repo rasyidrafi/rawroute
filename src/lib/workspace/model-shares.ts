@@ -3,8 +3,8 @@ import { createHash } from "node:crypto"
 import { getLocalFirestore, type Firestore } from "@/lib/local-db"
 import { isMemoryBackend, listModels, listProviders } from "@/lib/store"
 import type { ModelShare, SharedModelView } from "@/lib/types"
-import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
-import { getWorkspace, listWorkspaces } from "@/lib/workspaces"
+import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace/context"
+import { getWorkspace, listWorkspaces } from "@/lib/workspace/repository"
 
 let localDatabase: Firestore | undefined
 declare global { var __rawrouteModelShares: Map<string, ModelShare> | undefined }

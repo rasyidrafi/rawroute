@@ -3,17 +3,17 @@ import { FieldPath, FieldValue, getLocalFirestore, listLocalDocuments, type Fire
 
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
 import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/lib/store"
-import { listCodexAccounts } from "@/lib/codex"
-import { getCodexUsageForAccount } from "@/lib/codex-usage"
+import { listCodexAccounts } from "@/lib/codex/oauth"
+import { getCodexUsageForAccount } from "@/lib/codex/usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "@/lib/usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
 import { writeLog } from "@/lib/logger"
-import { listSharedModelsForRecipient } from "@/lib/model-shares"
+import { listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
 import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSettings, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
-import { currentWorkspaceId } from "@/lib/workspace-context"
-import { listWorkspaces } from "@/lib/workspaces"
+import { currentWorkspaceId } from "@/lib/workspace/context"
+import { listWorkspaces } from "@/lib/workspace/repository"
 
 let localDatabase: Firestore | undefined
 interface AnalyticsMemoryState {

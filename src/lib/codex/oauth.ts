@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from "node:crypto"
 
-import { listMappedCodexAccounts } from "@/lib/cliproxy-codex"
+import { listMappedCodexAccounts } from "@/lib/codex/cliproxy"
 import { getProvider, listProviders, upsertProvider } from "@/lib/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export const CODEX_PROVIDER_PREFIX = "codex"
 export const CODEX_PROVIDER_NAME = "Codex OAuth"

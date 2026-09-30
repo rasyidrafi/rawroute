@@ -1,4 +1,4 @@
-import { BudgetsView } from "@/components/dashboard/management-views"
+import { BudgetsView } from "@/components/dashboard/budgets-view"
 
 
 export default function BudgetsPage() { return <BudgetsView /> }

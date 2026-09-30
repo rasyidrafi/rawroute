@@ -1,7 +1,7 @@
-import { cliproxyManagement, codexWorkspacePrefix, listCliProxyCodexAuthFiles } from "@/lib/cliproxy-codex"
+import { cliproxyManagement, codexWorkspacePrefix, listCliProxyCodexAuthFiles } from "@/lib/codex/cliproxy"
 import { localRedisCompareAndDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
 import { listProviderApiKeys, listProviderModels, listProviders, reconcileDiscoveredModel } from "@/lib/store"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export type CodexDiscoveryStatus = { attemptedAt: string; succeededAt?: string; error?: string; added: number; skipped: number }
 const inflight = new Map<string, Promise<CodexDiscoveryStatus>>()

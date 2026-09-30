@@ -2,7 +2,7 @@ import { authenticateProxyKey } from "@/lib/auth"
 import { catalogLiteLlmModelInfo } from "@/lib/catalog"
 import { jsonError } from "@/lib/http"
 import { readCatalogData } from "@/lib/store"
-import { runInWorkspace } from "@/lib/workspace-context"
+import { runInWorkspace } from "@/lib/workspace/context"
 
 export async function GET(request: Request) {
   const authenticated = await authenticateProxyKey(request)

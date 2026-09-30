@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/auth", () => ({ requireAdmin: mocks.requireAdmin }))
-vi.mock("@/lib/codex-cli-login", () => ({ takePendingCliProxyCodexLogin: mocks.takeLogin }))
-vi.mock("@/lib/cliproxy-codex", () => ({ submitCliProxyCodexCallback: mocks.submitCallback }))
-vi.mock("@/lib/workspace-context", () => ({ currentWorkspaceId: mocks.workspaceId }))
+vi.mock("@/lib/codex/cli-login", () => ({ takePendingCliProxyCodexLogin: mocks.takeLogin }))
+vi.mock("@/lib/codex/cliproxy", () => ({ submitCliProxyCodexCallback: mocks.submitCallback }))
+vi.mock("@/lib/workspace/context", () => ({ currentWorkspaceId: mocks.workspaceId }))
 
 import { POST } from "./route"
 

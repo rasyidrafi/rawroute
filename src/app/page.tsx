@@ -5,8 +5,8 @@ import { PublicWorkspaceSelector } from "@/components/public-workspace-selector"
 import { getDashboardPayload } from "@/lib/analytics"
 import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-query"
 import { isAuthenticated } from "@/lib/auth"
-import { DEFAULT_WORKSPACE_ID, runInWorkspace } from "@/lib/workspace-context"
-import { listWorkspaces } from "@/lib/workspaces"
+import { DEFAULT_WORKSPACE_ID, runInWorkspace } from "@/lib/workspace/context"
+import { listWorkspaces } from "@/lib/workspace/repository"
 
 const initialQuery = DEFAULT_DASHBOARD_QUERY
 

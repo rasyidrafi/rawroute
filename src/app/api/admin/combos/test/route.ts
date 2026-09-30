@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
-import { testComboMemberPolicy } from "@/lib/cliproxy"
+import { testComboMemberPolicy } from "@/lib/cliproxy/gateway"
 import { jsonError } from "@/lib/http"
 import type { ComboMember } from "@/lib/types"
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import type { CodexUsageResult } from "@/lib/codex-usage"
+import type { CodexUsageResult } from "@/lib/codex/usage"
 import { formatAppDateTime } from "@/lib/timezone"
 
 export function CodexResetCredits({ usage }: { usage?: CodexUsageResult }) {

@@ -1,7 +1,7 @@
 import { isAuthenticated } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteWorkspace, renameWorkspace } from "@/lib/workspaces"
+import { deleteWorkspace, renameWorkspace } from "@/lib/workspace/repository"
 
 export async function PATCH(request: Request, context: { params: Promise<{ workspaceId: string }> }) {
   if (!(await isAuthenticated())) return jsonError("Unauthorized", 401)

@@ -1,4 +1,4 @@
-import { cliproxyManagementJson, maskSecret } from "@/lib/cliproxy"
+import { cliproxyManagementJson, maskSecret } from "@/lib/cliproxy/gateway"
 import { isAuthenticated } from "@/lib/auth"
 import { errorMessage, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"

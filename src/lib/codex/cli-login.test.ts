@@ -21,7 +21,7 @@ import {
   reservePendingCliProxyCodexLogin,
   savePendingCliProxyCodexLogin,
   takePendingCliProxyCodexLogin,
-} from "@/lib/codex-cli-login"
+} from "@/lib/codex/cli-login"
 
 beforeEach(() => {
   vi.clearAllMocks()

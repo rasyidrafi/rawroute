@@ -13,10 +13,10 @@ vi.mock("@/lib/store", () => ({
   listProviders: mocks.listProviders,
   upsertProviderApiKey: mocks.upsertProviderApiKey,
 }))
-vi.mock("@/lib/workspaces", () => ({ listWorkspaces: mocks.listWorkspaces }))
-vi.mock("@/lib/workspace-context", () => ({ runInWorkspace: mocks.runInWorkspace }))
+vi.mock("@/lib/workspace/repository", () => ({ listWorkspaces: mocks.listWorkspaces }))
+vi.mock("@/lib/workspace/context", () => ({ runInWorkspace: mocks.runInWorkspace }))
 
-import { completeCliProxyCodexLogin, registerCliProxyCodexAccount, startCliProxyCodexLogin } from "@/lib/cliproxy-codex"
+import { completeCliProxyCodexLogin, registerCliProxyCodexAccount, startCliProxyCodexLogin } from "@/lib/codex/cliproxy"
 
 const provider = { id: "codex-provider", prefix: "codex" } as never
 

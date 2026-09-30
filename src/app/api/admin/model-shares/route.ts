@@ -1,7 +1,7 @@
 import { requireAdmin } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { listModelSharesForSourceModel, listShareTargets, setModelShareTargets } from "@/lib/model-shares"
+import { listModelSharesForSourceModel, listShareTargets, setModelShareTargets } from "@/lib/workspace/model-shares"
 
 export async function GET(request: Request) {
   try { (await requireAdmin())() } catch { return jsonError("Unauthorized", 401) }

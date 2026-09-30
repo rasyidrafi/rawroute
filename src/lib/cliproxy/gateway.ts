@@ -1,36 +1,19 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { assertUnlimitedModelsAllowed, BudgetDeniedError, BudgetModelExcludedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
-import { codexWorkspacePrefix } from "@/lib/cliproxy-codex"
-import { scheduleCodexModelRefresh } from "@/lib/codex-model-refresh"
-import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy-provider-sync"
-import { providerResponsesUrl } from "@/lib/cliproxy-provider-capabilities"
+import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { catalogModels } from "@/lib/catalog"
-import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, mergeComboCustomPayload, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
+import { applyComboMemberPolicy, comboMembers, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
 import { writeLog } from "@/lib/logger"
-import { resolveSharedModelForRecipient } from "@/lib/model-shares"
-import { normalizeResponsesRequest } from "@/lib/request-normalization"
-import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "@/lib/usage-metrics"
-import { listAliases, listCombos, listModels, listProviderApiKeys, listProviders } from "@/lib/store"
-import type { AuthType, ComboMember, ModelReasoningCapability, Protocol, ProviderApiKey, UsageEvent } from "@/lib/types"
-import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace-context"
-import { getWorkspace } from "@/lib/workspaces"
+import { extractUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
+import { listAliases, listCombos, listModels, listProviders } from "@/lib/store"
+import type { ComboMember, Protocol, UsageEvent } from "@/lib/types"
+import { runInWorkspace } from "@/lib/workspace/context"
+import { getWorkspace } from "@/lib/workspace/repository"
 import { upstreamFailure } from "@/lib/upstream-failure"
-
-const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
-
-const hopByHopHeaders = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "host",
-  "content-length",
-  "expect",
-])
+import { GatewayModelResolutionError, resolveGatewayModel } from "@/lib/cliproxy/model-resolution"
+import type { ResolvedGatewayModel } from "@/lib/cliproxy/model-resolution"
+import { collectStreamUsage } from "@/lib/cliproxy/stream-usage"
+import { protocolForPath, proxyToCliProxy, proxyToNativeResponses, responseHeaders, rewriteForwardedBody } from "@/lib/cliproxy/transport"
 
 function estimateRequest(body: unknown) {
   const value = body && typeof body === "object" ? body as Record<string, unknown> : {}
@@ -126,68 +109,10 @@ function completionSummary(durationMs: number, ttftMs: number | undefined, usage
   return parts.join(" ")
 }
 
-function baseUrl() {
-  return (process.env.CLIPROXY_URL || DEFAULT_CLIPROXY_URL).replace(/\/$/, "")
-}
-
-function upstreamUrl(path: string, search = "") {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`
-  return `${baseUrl()}${normalizedPath}${search}`
-}
-
-function forwardedHeaders(source: Headers) {
-  const headers = new Headers()
-  for (const [name, value] of source.entries()) {
-    if (!hopByHopHeaders.has(name.toLowerCase())) headers.set(name, value)
-  }
-  return headers
-}
-
-function responseHeaders(source: Headers) {
-  const headers = new Headers()
-  for (const [name, value] of source.entries()) {
-    if (!hopByHopHeaders.has(name.toLowerCase())) headers.set(name, value)
-  }
-  return headers
-}
-
-function passthroughResponse(response: Response) {
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: responseHeaders(response.headers),
-  })
-}
-
-export async function proxyToCliProxy(request: Request, path = new URL(request.url).pathname, options: { body?: BodyInit | null; headers?: HeadersInit } = {}) {
-  const url = new URL(request.url)
-  const headers = forwardedHeaders(request.headers)
-  if (options.headers) {
-    for (const [name, value] of new Headers(options.headers).entries()) headers.set(name, value)
-  }
-  const body = options.body !== undefined ? options.body : request.body
-  const response = await fetch(upstreamUrl(path, url.search), {
-    method: request.method,
-    headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
-    cache: "no-store",
-    signal: request.signal,
-    ...(body ? { duplex: "half" as const } : {}),
-  } as RequestInit & { duplex?: "half" })
-  return passthroughResponse(response)
-}
-
 function suppliedGatewayKey(request: Request) {
   const authorization = request.headers.get("authorization")
   if (authorization?.slice(0, 7).toLowerCase() === "bearer ") return authorization.slice(7).trim()
   return request.headers.get("x-api-key")?.trim() || ""
-}
-
-function protocolForPath(path: string): Protocol {
-  const normalized = path.toLowerCase()
-  if (normalized.includes("/messages")) return "anthropic-messages"
-  if (normalized.includes("/responses") || normalized.includes("/backend-api/codex")) return "openai-responses"
-  return "openai-chat"
 }
 
 function protocolForLogPath(path: string): Protocol | "catalog" {
@@ -201,211 +126,6 @@ function actualResponseUsage(body: Uint8Array, contentType: string | null) {
   let payload: Record<string, unknown> | undefined
   try { payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown> } catch { return undefined }
   return payload ? extractUsageMetrics(payload) : undefined
-}
-
-interface ResolvedGatewayModel {
-  forwardedModel: string
-  upstreamModel: string
-  upstreamProtocol: Protocol
-  pricingGatewayModelId: string
-  providerModelId?: string
-  providerId?: string
-  providerName?: string
-  promptCacheKey: boolean
-  reasoningEffort?: string
-  customPayload?: Record<string, unknown>
-  reasoningCapability?: ModelReasoningCapability
-  nativeResponses?: { baseUrl: string; authType: AuthType; headers: Record<string, string>; apiKeys: ProviderApiKey[] }
-  shared?: { id: string; ownerWorkspaceId: string; ownerWorkspaceName: string; consumerWorkspaceId: string; consumerWorkspaceName: string; sourceGatewayModelId: string; sourceModelId: string }
-}
-
-export class GatewayModelResolutionError extends Error {
-  readonly status: 400 | 503
-  readonly code: "model_not_found" | "model_resolver_unavailable"
-
-  constructor(message: string, status: 400 | 503, code: GatewayModelResolutionError["code"]) {
-    super(message)
-    this.name = "GatewayModelResolutionError"
-    this.status = status
-    this.code = code
-  }
-}
-
-function modelGatewayId(model: { gatewayModelId?: string; id: string }) {
-  return model.gatewayModelId || model.id
-}
-
-function activeModel(model: Awaited<ReturnType<typeof listModels>>[number], provider: Awaited<ReturnType<typeof listProviders>>[number] | undefined) {
-  return Boolean(provider && provider.enabled !== false && model.enabled)
-}
-
-function modelNotFound(model: string): never {
-  throw new GatewayModelResolutionError(`Model ${model} is not configured or is unavailable.`, 400, "model_not_found")
-}
-
-function providerModelSuffix(provider: Awaited<ReturnType<typeof listProviders>>[number], model: Awaited<ReturnType<typeof listModels>>[number]) {
-  const gatewayModelId = modelGatewayId(model)
-  const prefix = `${provider.prefix}/`
-  if (!gatewayModelId.startsWith(prefix)) modelNotFound(gatewayModelId)
-  const suffix = gatewayModelId.slice(prefix.length).trim()
-  if (!suffix) modelNotFound(gatewayModelId)
-  return suffix
-}
-
-async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel> {
-  const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
-  const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
-  const availableModels = models.filter((candidate) => activeModel(candidate, providerIndex.get(candidate.providerId)))
-  const alias = aliases.find((entry) => entry.alias === model)
-  if (alias?.sharedModelId) {
-    const consumerWorkspaceId = currentWorkspaceId()
-    const [shared, consumerWorkspace] = await Promise.all([resolveSharedModelForRecipient(alias.sharedModelId, consumerWorkspaceId), getWorkspace(consumerWorkspaceId)])
-    if (!shared || !consumerWorkspace) throw new GatewayModelResolutionError("Shared model is no longer available.", 400, "model_not_found")
-    return runInWorkspace(shared.owner, async () => {
-      const target = shared.model
-      const provider = shared.provider
-      const upstreamModel = target.upstreamModel || modelGatewayId(target)
-      const forwardedModel = provider.prefix === "codex"
-        ? `${codexWorkspacePrefix(currentWorkspaceId())}/${upstreamModel}`
-        : `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
-      const nativeResponses = provider.prefix !== "codex" && provider.protocol === "openai-responses"
-        ? { baseUrl: provider.baseUrl, authType: provider.authType, headers: provider.headers || {}, apiKeys: await listProviderApiKeys(provider.id) }
-        : undefined
-      if (provider.prefix !== "codex" && !nativeResponses) await ensureNonCodexProviderProjection(provider.id)
-      return {
-        forwardedModel,
-        upstreamModel,
-        upstreamProtocol: provider.protocol || (provider.prefix === "codex" ? "openai-responses" : "openai-chat"),
-        pricingGatewayModelId: modelGatewayId(target),
-        providerModelId: target.id,
-        providerId: target.providerId,
-        providerName: provider.name,
-        promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
-        reasoningCapability: target.reasoningCapability,
-        nativeResponses,
-        shared: {
-          id: shared.share.id,
-          ownerWorkspaceId: shared.owner.id,
-          ownerWorkspaceName: shared.owner.name,
-          consumerWorkspaceId,
-          consumerWorkspaceName: consumerWorkspace.name,
-          sourceGatewayModelId: modelGatewayId(target),
-          sourceModelId: target.id,
-        },
-      }
-    })
-  }
-  const target = alias
-    ? availableModels.find((entry) => entry.id === alias.targetModelId || modelGatewayId(entry) === alias.targetModelId)
-    : availableModels.find((entry) => entry.id === model || modelGatewayId(entry) === model)
-      || (() => {
-        if (model.includes("/")) return undefined
-        const suffixMatches = availableModels.filter((entry) => entry.upstreamModel === model || modelGatewayId(entry).endsWith(`/${model}`))
-        return suffixMatches.length === 1 ? suffixMatches[0] : undefined
-      })()
-  if (!target) return modelNotFound(model)
-
-  const provider = providerIndex.get(target.providerId)
-  if (!provider || provider.enabled === false) return modelNotFound(model)
-  // The request endpoint is the client source format. The saved provider
-  // protocol identifies the CLIProxy upstream executor; it is not an ingress
-  // restriction because CLIProxy translates supported client formats.
-  const upstreamModel = target.upstreamModel || modelGatewayId(target)
-  let forwardedModel = upstreamModel
-
-  if (provider.prefix === "codex") {
-    // RawRoute has already selected the workspace from the global API-key
-    // index. The namespace is an internal CLIProxy transport selector; it is
-    // never stored as a provider or exposed in the RawRoute model catalog.
-    forwardedModel = `${codexWorkspacePrefix(currentWorkspaceId())}/${upstreamModel}`
-  } else {
-    // RawRoute owns the external provider/model resolver. CLIProxy receives a
-    // workspace/provider-scoped transport model only after this local lookup.
-    if (provider.protocol !== "openai-responses") {
-      await ensureNonCodexProviderProjection(provider.id)
-      forwardedModel = `${nonCodexProviderPrefix(currentWorkspaceId(), provider.id)}/${providerModelSuffix(provider, target)}`
-    }
-  }
-
-  return {
-    forwardedModel,
-    upstreamModel,
-    upstreamProtocol: provider.protocol || (provider.prefix === "codex" ? "openai-responses" : "openai-chat"),
-    pricingGatewayModelId: modelGatewayId(target),
-    providerModelId: target.id,
-    providerId: target.providerId,
-    providerName: provider.name,
-    promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
-    reasoningCapability: target.reasoningCapability,
-    ...(provider.prefix !== "codex" && provider.protocol === "openai-responses" ? {
-      nativeResponses: { baseUrl: provider.baseUrl, authType: provider.authType, headers: provider.headers || {}, apiKeys: await listProviderApiKeys(provider.id) },
-    } : {}),
-  }
-}
-
-function chatToResponses(payload: Record<string, unknown>) {
-  const translated: Record<string, unknown> = { ...payload, input: payload.messages }
-  delete translated.messages
-  if (!Object.hasOwn(translated, "max_output_tokens")) translated.max_output_tokens = translated.max_completion_tokens ?? translated.max_tokens
-  delete translated.max_completion_tokens
-  delete translated.max_tokens
-  return normalizeResponsesRequest(translated)
-}
-
-function anthropicToResponses(payload: Record<string, unknown>) {
-  const translated: Record<string, unknown> = { ...payload, input: payload.messages, max_output_tokens: payload.max_tokens }
-  delete translated.messages
-  delete translated.max_tokens
-  if (typeof payload.system === "string") translated.instructions = payload.system
-  delete translated.system
-  return normalizeResponsesRequest(translated)
-}
-
-function nativeResponsesBody(body: Uint8Array, model: string, ingress: Protocol, reasoningEffort?: string, customPayload?: Record<string, unknown>) {
-  const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
-  payload.model = model
-  const translated = ingress === "openai-chat"
-    ? chatToResponses(payload)
-    : ingress === "anthropic-messages" ? anthropicToResponses(payload) : normalizeResponsesRequest(payload)
-  const customized = mergeComboCustomPayload(translated, customPayload)
-  const normalized = applyReasoningOverride(customized, reasoningEffort, "openai-responses")
-  return JSON.stringify(normalized)
-}
-
-async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewayModel, body: Uint8Array, ingress: Protocol) {
-  const config = resolved.nativeResponses!
-  const keys = config.authType === "none" ? [undefined] : config.apiKeys.filter((key) => key.enabled && key.key.trim())
-  if (!keys.length) return Response.json({ error: { message: "No enabled provider credentials are available." } }, { status: 503 })
-  let last: Response | undefined
-  for (const key of keys) {
-    const headers = new Headers(config.headers)
-    headers.set("content-type", "application/json")
-    headers.set("accept", request.headers.get("accept") || "application/json")
-    if (config.authType === "bearer" && key) headers.set("authorization", `Bearer ${key.key}`)
-    const response = await fetch(providerResponsesUrl(config.baseUrl), {
-      method: "POST", headers, body: nativeResponsesBody(body, resolved.upstreamModel, ingress, resolved.reasoningEffort, resolved.customPayload), signal: request.signal, cache: "no-store",
-    })
-    if (response.ok || keys.length === 1) return passthroughResponse(response)
-    if (last) await last.body?.cancel().catch(() => undefined)
-    last = response
-  }
-  return passthroughResponse(last!)
-}
-
-async function rewriteForwardedBody(body: Uint8Array, forwardedModel: string, model: string, path: string, reasoningEffort?: string, customPayload?: Record<string, unknown>) {
-  const shouldNormalizeResponses = protocolForPath(path) === "openai-responses"
-  if (forwardedModel === model && !shouldNormalizeResponses && !reasoningEffort && !customPayload) return body
-  try {
-    const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
-    if (forwardedModel !== model) payload.model = forwardedModel
-    const normalized = shouldNormalizeResponses ? normalizeResponsesRequest(payload) : payload
-    const customized = mergeComboCustomPayload(normalized, customPayload)
-    customized.model = forwardedModel
-    const overridden = applyReasoningOverride(customized, reasoningEffort, protocolForPath(path))
-    return new TextEncoder().encode(JSON.stringify(overridden))
-  } catch {
-    return body
-  }
 }
 
 export interface ComboMemberTestResult {
@@ -471,86 +191,6 @@ async function canonicalModelsResponse() {
   scheduleCodexModelRefresh()
   const [models, providers, aliases, combos] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos()])
   return Response.json({ object: "list", data: catalogModels(providers, models, aliases, combos) }, { headers: { "cache-control": "no-store" } })
-}
-
-export function isTerminalStreamEvent(eventName: string, parsed: Record<string, unknown> | undefined) {
-  const normalizedEvent = eventName.trim().toLowerCase()
-  if (["message_stop", "response.completed", "response.done", "message.completed", "message.done", "done"].includes(normalizedEvent)) return true
-  const type = typeof parsed?.type === "string" ? parsed.type.trim().toLowerCase() : ""
-  if (["response.completed", "response.done", "message_stop", "message.completed", "message.done", "done"].includes(type)) return true
-  const response = objectValue(parsed?.response)
-  return response?.status === "completed" || response?.status === "complete"
-}
-
-export async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let usage: UsageMetrics | undefined
-  let terminalEventSeen = false
-  let firstByteAt: number | undefined
-  const configuredTimeout = Number(process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || 290) * 1_000 + 10_000
-  const readTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 300_000
-  const deadline = Date.now() + readTimeoutMs
-  const readWithTimeout = async () => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const remaining = Math.max(0, deadline - Date.now())
-    if (!remaining) throw new Error("Timed out while collecting streamed usage.")
-    try {
-      return await Promise.race([
-        reader.read(),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Timed out while collecting streamed usage.")), remaining) }),
-      ])
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
-  }
-  let eventName = ""
-  const consumeLine = (line: string) => {
-    const value = line.trim()
-    if (value.startsWith("event:")) {
-      eventName = value.slice(6).trim()
-      return
-    }
-    if (!value) {
-      eventName = ""
-      return
-    }
-    if (!value.startsWith("data:")) return
-    const payload = value.slice(5).trim()
-    if (!payload) return
-    if (payload === "[DONE]") {
-      terminalEventSeen = true
-      return
-    }
-    try {
-      const parsed = JSON.parse(payload) as Record<string, unknown>
-      terminalEventSeen ||= isTerminalStreamEvent(eventName, parsed)
-      usage = mergeUsage(usage, extractUsageMetrics(parsed))
-    } catch {
-      // A provider may emit non-JSON comments or partial events; keep reading.
-    }
-  }
-  try {
-    while (true) {
-      const next = await readWithTimeout()
-      if (next.done) {
-        break
-      }
-      firstByteAt ??= Date.now()
-      buffer += decoder.decode(next.value, { stream: true })
-      const lines = buffer.split(/\r?\n/)
-      buffer = lines.pop() || ""
-      for (const line of lines) consumeLine(line)
-    }
-  } catch {
-    // Preserve any usage observed before an upstream disconnect/timeout. The
-    // caller will settle the remaining amount conservatively when needed.
-    await reader.cancel().catch(() => undefined)
-  }
-  buffer += decoder.decode()
-  for (const line of buffer.split(/\r?\n/)) consumeLine(line)
-  return { usage, completedNormally: terminalEventSeen, terminalEventSeen, firstByteAt }
 }
 
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
@@ -903,16 +543,11 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
   if (ownerWorkspace) await runInWorkspace(ownerWorkspace, () => recordUsageEvent(ownerEvent, input.budgetState.usageContext))
 }
 
-export async function cliProxyHealth() {
-  try {
-    const response = await fetch(upstreamUrl("/healthz"), { cache: "no-store", signal: AbortSignal.timeout(3000) })
-    return response.ok
-  } catch {
-    return false
-  }
-}
-
-export { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy-management"
+export { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/management"
+export { GatewayModelResolutionError } from "@/lib/cliproxy/model-resolution"
+export type { ResolvedGatewayModel } from "@/lib/cliproxy/model-resolution"
+export { collectStreamUsage, isTerminalStreamEvent } from "@/lib/cliproxy/stream-usage"
+export { cliProxyHealth, proxyToCliProxy } from "@/lib/cliproxy/transport"
 
 export function maskSecret(value: unknown) {
   if (typeof value !== "string" || value.length < 5) return "••••••••"

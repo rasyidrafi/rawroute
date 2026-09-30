@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 
 import { getLocalRedis } from "@/lib/local-redis"
-import { currentWorkspaceId } from "@/lib/workspace-context"
+import { currentWorkspaceId } from "@/lib/workspace/context"
 
 const retentionMs = 8 * 24 * 60 * 60 * 1000
 const leaseMs = 330_000

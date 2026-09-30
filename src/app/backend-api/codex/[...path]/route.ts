@@ -1,4 +1,4 @@
-import { proxyGatewayRequest } from "@/lib/cliproxy"
+import { proxyGatewayRequest } from "@/lib/cliproxy/gateway"
 
 type Context = { params: Promise<{ path: string[] }> }
 
@@ -14,4 +14,3 @@ export const PATCH = forward
 export const DELETE = forward
 export const OPTIONS = forward
 export const HEAD = forward
-

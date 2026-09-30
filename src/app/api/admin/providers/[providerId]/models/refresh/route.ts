@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth"
-import { refreshCodexModels } from "@/lib/codex-model-discovery"
+import { refreshCodexModels } from "@/lib/codex/model-discovery"
 import { getProvider } from "@/lib/store"
 import { jsonError } from "@/lib/http"
 
