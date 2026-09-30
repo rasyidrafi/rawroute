@@ -45,14 +45,14 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
       : "Checking the optional Executor service."
   const toolNavigation = dashboardApps[1].navigation[0].items
 
-  return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
+  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={statusVariant}>{statusLabel}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
           <CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent spacing="compact-stack">
           {available ? <>
             <div className="rounded-lg border bg-muted/30 p-3">
               <p className="text-xs font-medium text-muted-foreground">Public proxy base</p>
@@ -68,7 +68,7 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
           <CardTitle>Tool Gateway overview</CardTitle>
           <CardDescription>Use the API proxy with a RawRoute gateway key. This dashboard provides deployment context only and does not report live Executor state.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2">
+        <CardContent spacing="compact-flow" className="grid sm:grid-cols-2">
           {toolNavigation.filter((item) => item.href !== "/dashboard/tool-gateway").map((item) => <Link key={item.href} href={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <div className="flex items-center gap-2 font-medium"><item.icon className="size-4" />{item.title}</div>
             <p className="mt-1 text-sm text-muted-foreground">View current API-only availability.</p>

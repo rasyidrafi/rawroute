@@ -18,6 +18,9 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline",
+        "muted-ghost": "text-muted-foreground hover:bg-muted hover:text-foreground dark:hover:bg-muted/50",
+        unlimited: "unlimited-button border-border/70 bg-primary text-primary-foreground hover:bg-primary/80",
+        "unlimited-idle": "unlimited-button-idle border-border/70 bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
       },
       size: {
         default:
@@ -31,8 +34,17 @@ const buttonVariants = cva(
         "icon-sm":
           "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-9",
+        compact: "h-8 gap-1 px-2",
+        picker: "h-auto gap-3 px-3 py-2",
+      },
+      weight: {
+        default: "",
+        normal: "font-normal",
       },
     },
+    compoundVariants: [
+      { variant: ["unlimited", "unlimited-idle"], class: "gap-2" },
+    ],
     defaultVariants: {
       variant: "default",
       size: "default",
@@ -44,12 +56,13 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  weight = "default",
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
   return (
     <ButtonPrimitive
       data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={cn(buttonVariants({ variant, size, weight, className }))}
       {...props}
     />
   )

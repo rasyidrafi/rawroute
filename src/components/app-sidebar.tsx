@@ -106,7 +106,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <DropdownMenu open={workspaceMenuOpen} onOpenChange={setWorkspaceMenuOpen}>
               <DropdownMenuTrigger render={<SidebarMenuButton size="lg" tooltip={`${workspace.name} • ${activeApp.title}`} />}>
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-slate-950 text-white"><RouteIcon className="size-4" /></div>
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-console text-white"><RouteIcon className="size-4" /></div>
                 <div className="grid flex-1 text-left text-sm leading-tight"><span className="truncate font-semibold">RawRoute</span><span className="flex min-w-0 items-center truncate text-xs"><span className="truncate">{workspace.name}</span><span aria-hidden="true" className="px-1 text-muted-foreground">•</span><span className="sr-only"> in </span><span className="truncate">{activeApp.title}</span></span></div>
                 <ChevronDownIcon className="ml-auto size-4 text-muted-foreground" />
               </DropdownMenuTrigger>
@@ -132,7 +132,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                       return <DropdownMenuRadioItem key={app.id} value={app.id} disabled={unavailable} title={unavailable ? statusLabel : undefined}>
                         <div className="flex size-7 items-center justify-center rounded-md border bg-background"><app.icon className="size-3.5" /></div>
                         <span className="min-w-0 flex-1 truncate">{app.title}</span>
-                        {unavailable && <span className="mr-1 text-[10px] text-muted-foreground">{statusLabel}</span>}
+                        {unavailable && <span className="mr-1 text-micro text-muted-foreground">{statusLabel}</span>}
                       </DropdownMenuRadioItem>
                     })}
                   </DropdownMenuRadioGroup>

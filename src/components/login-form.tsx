@@ -41,13 +41,13 @@ export function LoginForm() {
   }
 
   return (
-    <Card className="border-border/70 shadow-2xl shadow-slate-950/10">
-      <CardHeader className="space-y-5">
-        <div className="flex size-11 items-center justify-center rounded-xl bg-slate-950 text-white">
+    <Card variant="login">
+      <CardHeader variant="spacious">
+        <div className="flex size-11 items-center justify-center rounded-xl bg-console text-white">
           <RouteIcon className="size-5" />
         </div>
         <div>
-          <CardTitle className="text-2xl">RawRoute</CardTitle>
+          <CardTitle variant="page">RawRoute</CardTitle>
           <CardDescription className="mt-2">A protocol-preserving gateway for your model providers.</CardDescription>
         </div>
       </CardHeader>

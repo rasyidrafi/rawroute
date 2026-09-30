@@ -19,6 +19,14 @@ const badgeVariants = cva(
         ghost:
           "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
         link: "text-primary underline-offset-4 hover:underline",
+        "log-error": "border-error/40 text-error-bright",
+        "log-warning": "border-warning/40 text-warning-bright",
+        "log-info": "border-info/40 text-info-bright",
+        refreshing: "gap-2 border-border bg-card/90 px-3 py-1.5 text-foreground shadow-sm",
+      },
+      spacing: {
+        default: "",
+        comfortable: "gap-2",
       },
     },
     defaultVariants: {
@@ -30,6 +38,7 @@ const badgeVariants = cva(
 function Badge({
   className,
   variant = "default",
+  spacing = "default",
   render,
   ...props
 }: useRender.ComponentProps<"span"> & VariantProps<typeof badgeVariants>) {
@@ -37,7 +46,7 @@ function Badge({
     defaultTagName: "span",
     props: mergeProps<"span">(
       {
-        className: cn(badgeVariants({ variant }), className),
+        className: cn(badgeVariants({ variant, spacing }), className),
       },
       props
     ),

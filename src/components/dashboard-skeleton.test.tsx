@@ -22,7 +22,7 @@ test("model pricing loading state uses the shared dashboard content spacing", ()
 
   expect(markup).toContain('aria-label="Loading model pricing"')
   expect(markup).toContain("rounded-xl border bg-card p-6")
-  expect(markup).toContain("minmax(14rem, 1.4fr)")
+  expect(markup).toContain("grid-cols-[minmax(14rem,1.4fr)_6rem_minmax(10rem,1fr)_minmax(10rem,1fr)_auto]")
   expect(markup).not.toContain("xl:grid-cols-6")
   expect(markup).not.toContain('data-slot="card-header"')
 })

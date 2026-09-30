@@ -8,14 +8,16 @@ import { cn } from "@/lib/utils"
 function Tabs({
   className,
   orientation = "horizontal",
+  spacing = "default",
   ...props
-}: TabsPrimitive.Root.Props) {
+}: TabsPrimitive.Root.Props & { spacing?: "default" | "comfortable" }) {
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
       data-orientation={orientation}
       className={cn(
         "group/tabs flex gap-2 data-horizontal:flex-col",
+        spacing === "comfortable" && "gap-4",
         className
       )}
       {...props}
@@ -69,11 +71,11 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
   )
 }
 
-function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
+function TabsContent({ className, spacing = "default", ...props }: TabsPrimitive.Panel.Props & { spacing?: "default" | "stack" }) {
   return (
     <TabsPrimitive.Panel
       data-slot="tabs-content"
-      className={cn("flex-1 text-sm outline-none", className)}
+      className={cn("flex-1 text-sm outline-none", spacing === "stack" && "space-y-4", className)}
       {...props}
     />
   )

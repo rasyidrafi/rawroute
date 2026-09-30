@@ -8,13 +8,14 @@ function Progress({
   className,
   children,
   value,
+  variant = "default",
   ...props
-}: ProgressPrimitive.Root.Props) {
+}: ProgressPrimitive.Root.Props & { variant?: "default" | "unlimited" }) {
   return (
     <ProgressPrimitive.Root
       value={value}
       data-slot="progress"
-      className={cn("flex flex-wrap gap-3", className)}
+      className={cn("flex flex-wrap gap-3", variant === "unlimited" && "unlimited-progress", className)}
       {...props}
     >
       {children}

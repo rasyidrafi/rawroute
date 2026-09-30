@@ -83,11 +83,11 @@ export function EndpointKeyView() {
     }
   }
 
-  return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
+  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><RouteIcon className="size-5" />API Endpoint</CardTitle>
+          <CardTitle variant="icon"><RouteIcon className="size-5" />API Endpoint</CardTitle>
           <CardDescription>Use this base URL with the native protocol endpoint supported by each model.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -107,7 +107,7 @@ export function EndpointKeyView() {
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}><DialogContent><ApiKeyForm onSave={createKey} /></DialogContent></Dialog>
       <Dialog open={Boolean(editingKey)} onOpenChange={(open) => { if (!open) setEditingKey(null) }}><DialogContent><form onSubmit={(event) => { event.preventDefault(); void renameKey() }}><DialogHeader><DialogTitle>Edit API key name</DialogTitle><DialogDescription>The key value cannot be changed.</DialogDescription></DialogHeader><div className="py-5"><label htmlFor="gateway-api-key-name" className="text-sm font-medium">Key Name</label><Input id="gateway-api-key-name" value={editingName} onChange={(event) => setEditingName(event.target.value)} maxLength={80} autoFocus className="mt-2" /></div><DialogFooter><Button type="button" variant="outline" disabled={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} onClick={() => setEditingKey(null)}>Cancel</Button><Button type="submit" aria-busy={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} disabled={!editingName.trim() || Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))}>{editingKey && isPending(`rename-api-key:${editingKey.id}`) && <LoadingSpinner />}Save name</Button></DialogFooter></form></DialogContent></Dialog>
       <Dialog open={Boolean(createdKey)} onOpenChange={(open) => { if (!open) setCreatedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>API key created</DialogTitle><DialogDescription>Copy this value now. It will only be available from the admin dashboard.</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{createdKey}</code><Button aria-label="Copy created API key" size="icon-sm" variant="outline" onClick={() => { if (createdKey) { void navigator.clipboard.writeText(createdKey); toast.success("Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setCreatedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
-        <CardContent className="space-y-3">
+        <CardContent spacing="compact-stack">
           {!data.apiKeys.length ? <div className="rounded-lg border border-dashed p-8 text-center"><p className="font-medium">No gateway API keys</p><p className="mt-1 text-sm text-muted-foreground">Create a key before sending requests through this workspace.</p></div> : null}
           {data.apiKeys.map((key) => {
             const pendingKey = `delete-api-key:${key.id}`

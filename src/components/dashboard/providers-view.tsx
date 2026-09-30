@@ -67,7 +67,7 @@ export function ProvidersView() {
     }
   }
 
-  return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
+  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <Card>
         <CardHeader>
@@ -100,7 +100,7 @@ export function ProvidersView() {
                   <TableCell><Link href={`/dashboard/providers/${provider.id}`} prefetch={false} className="font-medium hover:underline" onClick={(event) => event.stopPropagation()}>{provider.name}</Link></TableCell>
                   <TableCell><Badge variant="secondary">{provider.prefix}/</Badge></TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
-                  <TableCell className="max-w-64 truncate font-mono text-xs">{provider.baseUrl}</TableCell>
+                  <TableCell text="code-truncate" className="max-w-64">{provider.baseUrl}</TableCell>
                   <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.apiKeyCount}</span><span className="text-xs text-muted-foreground">configured</span>{provider.authType !== "none" && provider.enabledApiKeyCount !== provider.apiKeyCount && <Badge variant="outline">{provider.enabledApiKeyCount} enabled</Badge>}</div></TableCell>
                   <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.modelCount}</span><span className="text-xs text-muted-foreground">configured</span>{provider.enabledModelCount !== provider.modelCount && <Badge variant="outline">{provider.enabledModelCount} enabled</Badge>}</div></TableCell>
                   <TableCell onClick={(event) => event.stopPropagation()}>
@@ -118,7 +118,7 @@ export function ProvidersView() {
       </Card>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />Codex Providers</CardTitle>
+          <CardTitle variant="icon"><LinkIcon className="size-5" />Codex Providers</CardTitle>
           <CardDescription>Manage Codex accounts separately from ordinary provider API keys.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -126,7 +126,7 @@ export function ProvidersView() {
             <TableHeader><TableRow><TableHead>Provider</TableHead><TableHead>Prefix</TableHead><TableHead>Protocol</TableHead><TableHead>Accounts</TableHead><TableHead>Models</TableHead><TableHead /></TableRow></TableHeader>
             <TableBody>
               {codexProvider && <TableRow className="cursor-pointer" onClick={() => router.push("/dashboard/providers/codex")}>
-                <TableCell className="font-medium">Codex Providers</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
+                <TableCell text="label">Codex Providers</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
                 <TableCell><span className="font-medium tabular-nums">{codexProvider.apiKeyCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell><TableCell><span className="font-medium tabular-nums">{codexProvider.modelCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell>
                 <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="ghost" render={<Link href="/dashboard/providers/codex" prefetch={false} />}><ChevronRightIcon /></Button></TableCell>
               </TableRow>}

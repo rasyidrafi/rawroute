@@ -17,8 +17,6 @@ export const KEY_COLORS = [
   "var(--chart-4)",
   "var(--chart-5)",
 ]
-export const TALL_PANEL_HEIGHT = "h-[560px]"
-export const TABLE_PANEL_HEIGHT = "h-[640px]"
 
 export const PRESET_OPTIONS: Array<{ value: DashboardQuery["preset"]; label: string }> = [
   { value: "budget", label: "Budget window" },

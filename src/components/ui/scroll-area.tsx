@@ -10,17 +10,19 @@ function ScrollArea({
   viewportClassName,
   contentClassName,
   orientation = "vertical",
+  variant = "default",
   children,
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
   viewportClassName?: string
   contentClassName?: string
   orientation?: "vertical" | "horizontal" | "both"
+  variant?: "default" | "panel" | "bordered" | "console"
 }) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
-      className={cn("relative min-w-0 max-w-full", className)}
+      className={cn("relative min-w-0 max-w-full", variant !== "default" && "rounded-lg", variant === "bordered" && "border border-border/70", variant === "console" && "bg-console", className)}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
@@ -29,7 +31,7 @@ function ScrollArea({
       >
         <ScrollAreaPrimitive.Content
           data-slot="scroll-area-content"
-          className={cn("min-w-full", contentClassName)}
+          className={cn("min-w-full", variant === "console" && "w-full p-4 font-mono text-xs leading-6 text-console-foreground", contentClassName)}
         >
           {children}
         </ScrollAreaPrimitive.Content>

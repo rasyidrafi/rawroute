@@ -186,11 +186,11 @@ export function OAuthProvidersView() {
     }
   }
 
-  return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
+  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><LinkIcon className="size-5" />Codex Providers</CardTitle>
+          <CardTitle variant="icon"><LinkIcon className="size-5" />Codex Providers</CardTitle>
           <CardDescription>Connect multiple Codex accounts once and route native Responses requests through this gateway. Usage limits update every five minutes.</CardDescription>
           <CardAction><Button aria-busy={starting} onClick={() => void connectCodex()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex account</Button></CardAction>
         </CardHeader>
@@ -202,17 +202,18 @@ export function OAuthProvidersView() {
                 const updateKey = `update:${account.id}`
                 const usage = usageData?.accounts[account.id]
                 const rowError = account.cliProxyStatusMessage && ["missing", "error", "expired", "unavailable"].includes(account.cliProxyStatus || "") ? account.cliProxyStatusMessage : codexUsageError(usage, usageError?.message)
-                if (rowError) return <TableRow key={account.id} className="bg-destructive/5">
-                  <TableCell colSpan={6} className="whitespace-normal px-4 py-4"><div className="flex min-w-0 flex-col gap-1"><span className="font-medium text-destructive">{account.name}</span><span className="break-words text-sm text-destructive">{rowError}</span></div></TableCell>
+                if (rowError) return <TableRow key={account.id} variant="error">
+                  <TableCell colSpan={6} density="comfortable"
+                          className="whitespace-normal"><div className="flex min-w-0 flex-col gap-1"><span className="font-medium text-destructive">{account.name}</span><span className="break-words text-sm text-destructive">{rowError}</span></div></TableCell>
                   <TableCell><div className="flex justify-end"><ConfirmAction title={`Remove ${account.name}?`} description={account.credentialKind === "codex-cli-proxy" ? "This deletes the CLIProxy OAuth credential. You can reconnect this account afterward." : "This removes the unmatched legacy credential from RawRoute."} pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                 </TableRow>
-                return <TableRow key={account.id} className={account.enabled ? undefined : "opacity-60"}>
+                return <TableRow key={account.id} variant={account.enabled ? "default" : "disabled"}>
                     <TableCell><div className="font-medium">{account.name}</div><div className="text-xs text-muted-foreground">{account.email || account.accountId || "Codex account"}</div></TableCell>
                     <TableCell><Badge variant="secondary">{account.planType ? account.planType.charAt(0).toUpperCase() + account.planType.slice(1) : "Codex"}</Badge></TableCell>
                     <TableCell><Badge variant={account.enabled ? "secondary" : "outline"} title={account.cliProxyStatusMessage}>{account.cliProxyStatus === "missing" ? "Reconnect required" : account.enabled ? "Enabled" : "Disabled"}</Badge></TableCell>
                     <CodexQuotaTableCell accountUsage={usage} loading={usageLoading && !usageData} error={usageError?.message} routingStatus={account.cliProxyStatusMessage} />
                     <TableCell>{usageLoading && !usageData ? "…" : <CodexResetCredits usage={usage} />}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{expiryLabel(account.expiresAt)}</TableCell>
+                    <TableCell text="small" tone="muted">{expiryLabel(account.expiresAt)}</TableCell>
                     <TableCell><div className="flex justify-end gap-1"><Button aria-busy={pending.has(updateKey)} size="sm" variant="outline" disabled={pending.has(updateKey) || account.credentialKind !== "codex-cli-proxy"} onClick={() => void updateAccount(account, !account.enabled)}>{pending.has(updateKey) ? <LoadingSpinner /> : account.enabled ? "Disable" : "Enable"}</Button>{account.credentialKind === "codex-cli-proxy" && (usage?.unusedResetCredits ?? 0) > 0 && <Button aria-busy={pending.has(`reset:${account.id}`)} size="sm" variant="outline" disabled={usage?.weekly?.remainingPercent !== 0 || pending.has(`reset:${account.id}`)} title="Requires an exhausted weekly quota" onClick={() => setResetAccount(account)}>{pending.has(`reset:${account.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}<ConfirmAction title={`Remove ${account.name}?`} description={account.credentialKind === "codex-cli-proxy" ? "This deletes the CLIProxy OAuth credential. You can connect this account again later." : "This removes the unmatched legacy credential from RawRoute. Reconnect it to use this account again."} pending={pending.has(`delete:${account.id}`)} onConfirm={() => removeAccount(account)}><Trash2Icon /></ConfirmAction></div></TableCell>
                   </TableRow>
               })}

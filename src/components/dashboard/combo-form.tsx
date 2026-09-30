@@ -46,9 +46,9 @@ function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, 
   const panelId = `combo-member-${index}`
   const configured = mode !== "inherit" || Boolean(member.customPayload)
 
-  return <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn("rounded-lg border bg-background shadow-sm transition-shadow", isDragging && "relative z-20 shadow-lg ring-2 ring-ring/30")}>
+  return <div ref={setNodeRef} style={{ "--sort-transform": CSS.Transform.toString(transform) || "none", "--sort-transition": transition } as React.CSSProperties} className={cn("sortable-member rounded-lg border bg-background shadow-sm", isDragging && "relative z-20 shadow-lg ring-2 ring-ring/30")}>
     <div className="flex min-h-12 items-center gap-2 px-2 py-2 sm:px-3">
-      <Button {...attributes} {...listeners} type="button" size="icon-sm" variant="ghost" className="cursor-grab touch-none text-muted-foreground active:cursor-grabbing" aria-label={`Drag ${member.modelId} to reorder`}><GripVerticalIcon /></Button>
+      <Button {...attributes} {...listeners} type="button" size="icon-sm" variant="muted-ghost" className="cursor-grab touch-none active:cursor-grabbing" aria-label={`Drag ${member.modelId} to reorder`}><GripVerticalIcon /></Button>
       <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted-foreground">{index + 1}</span>
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open} aria-controls={panelId} onClick={onToggle}>
         <span className="min-w-0 truncate font-mono text-xs font-semibold">{member.modelId}</span>
@@ -71,7 +71,8 @@ function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, 
 
       <details className="rounded-md border bg-background" open={Boolean(payloadError)}>
         <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium"><BracesIcon className="size-4" />Custom payload{member.customPayload && <span className="text-xs font-normal text-muted-foreground">Configured</span>}<ChevronDownIcon className="ml-auto size-4" /></summary>
-        <div className="grid gap-2 border-t p-3"><Textarea aria-label={`Custom payload for ${member.modelId}`} value={payloadDraft} onChange={(event) => onPayloadChange(event.target.value)} className="min-h-32 font-mono text-xs" spellCheck={false} /><div className="flex flex-wrap items-center justify-between gap-2"><p className={payloadError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{payloadError || `Protected: ${protectedComboPayloadFields.join(", ")}. Nested objects merge; arrays and values replace.`}</p><div className="flex gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => onPayloadChange("{}")}>Clear</Button><Button type="button" size="sm" variant="outline" onClick={onFormatPayload}>Format JSON</Button></div></div></div>
+        <div className="grid gap-2 border-t p-3"><Textarea aria-label={`Custom payload for ${member.modelId}`} value={payloadDraft} onChange={(event) => onPayloadChange(event.target.value)} variant="code"
+                className="min-h-32" spellCheck={false} /><div className="flex flex-wrap items-center justify-between gap-2"><p className={payloadError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{payloadError || `Protected: ${protectedComboPayloadFields.join(", ")}. Nested objects merge; arrays and values replace.`}</p><div className="flex gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => onPayloadChange("{}")}>Clear</Button><Button type="button" size="sm" variant="outline" onClick={onFormatPayload}>Format JSON</Button></div></div></div>
       </details>
       {member.validation?.message && configured && <p className="text-xs text-muted-foreground">{member.validation.message}</p>}
     </div>}

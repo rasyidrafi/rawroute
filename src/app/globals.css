@@ -5,6 +5,27 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Shared surfaces and status colors, including the always-dark log console. */
+  --color-workspace: #f6f5f1;
+  --color-login-surface: #f3f0e8;
+  --color-console: var(--color-slate-950);
+  --color-console-foreground: var(--color-slate-200);
+  --color-console-muted: var(--color-slate-400);
+  --color-console-subtle: var(--color-slate-500);
+  --color-console-skeleton: var(--color-slate-800);
+  --color-success: var(--color-emerald-500);
+  --color-warning: var(--color-amber-500);
+  --color-warning-foreground: var(--color-amber-600);
+  --color-warning-bright: var(--color-amber-400);
+  --color-warning-glow: var(--color-amber-300);
+  --color-error: var(--color-red-500);
+  --color-error-bright: var(--color-red-400);
+  --color-info: var(--color-sky-500);
+  --color-info-bright: var(--color-sky-400);
+  --text-micro: 0.625rem;
+  --text-caption: 0.6875rem;
+  --radius-inherit: inherit;
+  --blur-scrim: 1.5px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-jakarta-sans);
@@ -148,6 +169,11 @@
 }
 
 @layer components {
+  .sortable-member {
+    transform: var(--sort-transform, none);
+    transition: var(--sort-transition, box-shadow var(--default-transition-duration, 150ms) var(--default-transition-timing-function, ease));
+  }
+
   .unlimited-shine {
     position: relative;
     isolation: isolate;

@@ -23,7 +23,8 @@ export function CodexResetCredits({ usage }: { usage?: CodexUsageResult }) {
     return `${Math.floor(hours / 24)}d ${hours % 24}h`
   }
   return <Dialog>
-    <DialogTrigger render={<Button variant="ghost" className="h-auto flex-col items-start gap-1 px-2" />}>
+    <DialogTrigger render={<Button variant="ghost" size="compact"
+            className="h-auto flex-col items-start" />}>
       <span>{count === undefined ? "Not Available" : `${count} available`}</span>
       <span className="text-xs text-muted-foreground">{usage?.stale ? "Last known data · " : ""}{next?.expiresAt && now ? `Next expires in ${remaining(next.expiresAt)}` : credits ? "No upcoming expiry" : "Expiry unavailable"}</span>
     </DialogTrigger>

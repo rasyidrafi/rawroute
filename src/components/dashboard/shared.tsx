@@ -24,7 +24,8 @@ export function DetailValue({ label, value, mono }: { label: string; value: stri
 }
 
 export function EmptyRow({ label, colSpan = 5 }: { label: string; colSpan?: number }) {
-  return <TableRow><TableCell colSpan={colSpan} className="h-28 text-center text-muted-foreground">{label}</TableCell></TableRow>
+  return <TableRow><TableCell colSpan={colSpan} tone="muted"
+        className="h-28 text-center">{label}</TableCell></TableRow>
 }
 
 export function maskApiKey(key: string) {
@@ -43,7 +44,7 @@ export function EndpointValue() {
 }
 
 export function NotFoundState({ label = "Provider not found", description = "This resource may have been deleted or renamed.", backHref = "/dashboard/providers", backLabel = "Back to list" }: { label?: string; description?: string; backHref?: string; backLabel?: string; onBack?: () => void }) {
-  return <main className="flex-1 bg-[#f6f5f1] p-4 dark:bg-background md:p-6 lg:p-8">
+  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <Card>
         <CardHeader>
