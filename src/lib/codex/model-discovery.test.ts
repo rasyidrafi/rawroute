@@ -1,5 +1,5 @@
 import { beforeEach, expect, test, vi } from "vitest"
-const mocks = vi.hoisted(() => ({ files: vi.fn(), management: vi.fn(), cache: new Map<string, string>() }))
+const mocks = vi.hoisted(() => ({ files: vi.fn(), management: vi.fn(), otherWorkspace: vi.fn(), cache: new Map<string, string>() }))
 vi.mock("@/lib/local-redis", () => ({
   localRedisGet: async (key: string) => mocks.cache.get(key),
   localRedisSet: async (key: string, value: string) => { mocks.cache.set(key, value); return true },
@@ -11,10 +11,11 @@ vi.mock("@/lib/codex/cliproxy", () => ({
   codexWorkspacePrefix: (id: string) => `rr-${id}`,
   listCliProxyCodexAuthFiles: mocks.files,
   cliproxyManagement: mocks.management,
+  mappedWorkspaceForFile: mocks.otherWorkspace,
 }))
-import { parseCodexModels, refreshCodexModels } from "@/lib/codex/model-discovery"
+import { codexDiscoveryStatus, parseCodexModels, refreshCodexModels } from "@/lib/codex/model-discovery"
 import { ensureCodexProvider } from "@/lib/codex/oauth"
-import { _resetMemoryBackend, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } from "@/lib/store"
+import { _resetMemoryBackend, listProviderApiKeys, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } from "@/lib/store"
 import { runInWorkspace } from "@/lib/workspace/context"
 
 beforeEach(() => {
@@ -22,7 +23,8 @@ beforeEach(() => {
   _resetMemoryBackend()
   mocks.cache.clear()
   vi.clearAllMocks()
-  mocks.files.mockResolvedValue([{ name: "account.json", prefix: "rr-default", disabled: false }])
+  mocks.files.mockResolvedValue([{ name: "account.json", disabled: false }])
+  mocks.otherWorkspace.mockResolvedValue(undefined)
   mocks.management.mockImplementation(async () => Response.json({ models: [{ id: "rr-default/future-model", display_name: "Future model" }, { id: "future-model" }, { id: "rr-other/private-model" }] }))
 })
 
@@ -45,6 +47,21 @@ test("discovers unknown models, ignores bare/foreign routes, and preserves disab
   await expect(upsertModel(provider.id, { originalId: model.id, upstreamModel: "changed" })).rejects.toThrow("managed automatically")
 })
 
+test("discovers workspace-prefixed production model IDs from auth files without a prefix field", async () => {
+  const provider = await setup()
+  mocks.management.mockResolvedValue(Response.json({ models: [
+    { id: "rr-default/gpt-6.1-sol", display_name: "GPT 6.1 Sol" },
+    { id: "gpt-6.1-sol" },
+    { id: "rr-defaultish/not-this-workspace" },
+    { id: "rr-other/foreign-model" },
+  ] }))
+
+  const result = await refreshCodexModels(true)
+  expect(result).toMatchObject({ added: 1 })
+  expect(result.error).toBeUndefined()
+  expect(await listProviderModels(provider.id)).toMatchObject([{ gatewayModelId: "codex/gpt-6.1-sol", upstreamModel: "gpt-6.1-sol", name: "GPT 6.1 Sol" }])
+})
+
 test("preserves a custom ID collision, including the internal writer's ownership check", async () => {
   const provider = await setup()
   const custom = await upsertModel(provider.id, { gatewayModelId: "codex/future-model", name: "My mapping", upstreamModel: "alternate", source: "custom", enabled: false })
@@ -65,15 +82,31 @@ test("migrates built-ins without breaking aliases and retains absent records", a
 test.each([{}, { models: [] }, { models: [{ id: 42 }] }])("keeps last-good data on invalid/empty catalogs: %j", async (payload) => {
   const provider = await setup()
   await refreshCodexModels(true)
+  const saved = await listProviderModels(provider.id)
   mocks.management.mockResolvedValue(Response.json(payload))
   expect((await refreshCodexModels(true)).error).toBeTruthy()
-  expect(await listProviderModels(provider.id)).toMatchObject([{ gatewayModelId: "codex/future-model", discovery: { stale: true } }])
+  expect(await listProviderModels(provider.id)).toEqual(saved)
+})
+
+test("does not report success or change saved models when a mapped file is missing", async () => {
+  const provider = await setup()
+  await refreshCodexModels(true)
+  const saved = await listProviderModels(provider.id)
+  const previousStatus = await codexDiscoveryStatus()
+  mocks.files.mockResolvedValue([])
+
+  const result = await refreshCodexModels(true)
+
+  expect(result.error).toContain("is missing")
+  expect(result.succeededAt).toBe(previousStatus?.succeededAt)
+  expect(mocks.management).toHaveBeenCalledTimes(1)
+  expect(await listProviderModels(provider.id)).toEqual(saved)
 })
 
 test("unions mapped accounts and never imports another workspace's accounts", async () => {
   const provider = await setup()
   await upsertProviderApiKey(provider.id, { name: "Second", key: "", credentialKind: "codex-cli-proxy", cliProxyAuthFile: "second.json" })
-  mocks.files.mockResolvedValue([{ name: "account.json", prefix: "rr-default", disabled: false }, { name: "second.json", prefix: "rr-default", disabled: false }, { name: "foreign.json", prefix: "rr-other", disabled: false }])
+  mocks.files.mockResolvedValue([{ name: "account.json", disabled: false }, { name: "second.json", disabled: false }, { name: "foreign.json", disabled: false }])
   mocks.management.mockImplementation(async (url: string) => Response.json({ models: [{ id: url.includes("second.json") ? "rr-default/second-model" : "rr-default/future-model" }] }))
   await refreshCodexModels(true)
   expect(await listProviderModels(provider.id)).toHaveLength(2)
@@ -95,7 +128,14 @@ test("coalesces concurrent refreshes and respects freshness", async () => {
 test("disabled accounts stop contributing availability without deleting models", async () => {
   const provider = await setup()
   await refreshCodexModels(true)
-  mocks.files.mockResolvedValue([{ name: "account.json", prefix: "rr-default", disabled: true }])
+  const [account] = await listProviderApiKeys(provider.id)
+  await upsertProviderApiKey(provider.id, { originalId: account.id, enabled: false })
+  await refreshCodexModels(true)
+  expect(await listProviderModels(provider.id)).toMatchObject([{ enabled: true, discovery: { accountIds: [], stale: true } }])
+  expect(mocks.management).toHaveBeenCalledTimes(1)
+
+  await upsertProviderApiKey(provider.id, { originalId: account.id, enabled: true })
+  mocks.files.mockResolvedValue([{ name: "account.json", disabled: true }])
   await refreshCodexModels(true)
   expect(await listProviderModels(provider.id)).toMatchObject([{ enabled: true, discovery: { accountIds: [], stale: true } }])
   expect(mocks.management).toHaveBeenCalledTimes(1)
@@ -104,10 +144,22 @@ test("disabled accounts stop contributing availability without deleting models",
 test("rejects a catalog if account ownership changes during the fetch", async () => {
   const provider = await setup()
   mocks.management.mockImplementation(async () => {
-    mocks.files.mockResolvedValue([{ name: "account.json", prefix: "rr-other", disabled: false }])
+    mocks.files.mockResolvedValue([{ name: "account.json", disabled: true }])
     return Response.json({ models: [{ id: "rr-default/future-model" }] })
   })
   expect((await refreshCodexModels(true)).error).toContain("accounts changed")
+  expect(await listProviderModels(provider.id)).toEqual([])
+})
+
+test("does not fetch or import an auth file mapped to another workspace", async () => {
+  const provider = await setup()
+  mocks.otherWorkspace.mockResolvedValue("other")
+
+  const result = await refreshCodexModels(true)
+
+  expect(result.error).toContain("already mapped to another RawRoute workspace")
+  expect(result.succeededAt).toBeUndefined()
+  expect(mocks.management).not.toHaveBeenCalled()
   expect(await listProviderModels(provider.id)).toEqual([])
 })
 

@@ -1,4 +1,4 @@
-import { cliproxyManagement, codexWorkspacePrefix, listCliProxyCodexAuthFiles } from "@/lib/codex/cliproxy"
+import { cliproxyManagement, codexWorkspacePrefix, listCliProxyCodexAuthFiles, mappedWorkspaceForFile } from "@/lib/codex/cliproxy"
 import { localRedisCompareAndDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
 import { listProviderApiKeys, listProviderModels, listProviders, reconcileDiscoveredModel } from "@/lib/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
@@ -6,7 +6,7 @@ import { currentWorkspaceId } from "@/lib/workspace/context"
 export type CodexDiscoveryStatus = { attemptedAt: string; succeededAt?: string; error?: string; added: number; skipped: number }
 const inflight = new Map<string, Promise<CodexDiscoveryStatus>>()
 const ttl = 300_000
-const statusKey = () => `rawroute:codex-models:${currentWorkspaceId()}:status`
+const statusKey = (workspaceId = currentWorkspaceId()) => `rawroute:codex-models:${workspaceId}:status`
 
 export async function codexDiscoveryStatus(): Promise<CodexDiscoveryStatus | undefined> {
   const value = await localRedisGet(statusKey())
@@ -32,16 +32,18 @@ export function refreshCodexModels(force = false): Promise<CodexDiscoveryStatus>
   const workspaceId = currentWorkspaceId()
   const pending = inflight.get(workspaceId)
   if (pending) return pending
-  const task = refresh(force).finally(() => inflight.delete(workspaceId))
+  const task = refresh(force, workspaceId).finally(() => inflight.delete(workspaceId))
   inflight.set(workspaceId, task)
   return task
 }
 
-async function refresh(force: boolean): Promise<CodexDiscoveryStatus> {
-  const previous = await codexDiscoveryStatus()
+async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscoveryStatus> {
+  const previousValue = await localRedisGet(statusKey(workspaceId))
+  let previous: CodexDiscoveryStatus | undefined
+  try { previous = previousValue ? JSON.parse(previousValue) : undefined } catch { previous = undefined }
   if (!force && previous && Date.now() - Date.parse(previous.attemptedAt) < ttl) return previous
   const status: CodexDiscoveryStatus = { attemptedAt: new Date().toISOString(), succeededAt: previous?.succeededAt, added: 0, skipped: 0 }
-  const key = `${statusKey()}:lock`
+  const key = `${statusKey(workspaceId)}:lock`
   const token = crypto.randomUUID()
   const lock = await localRedisSetIfAbsent(key, token, 120_000)
   if (lock === false) return previous || { ...status, error: "Model refresh is already running." }
@@ -50,16 +52,51 @@ async function refresh(force: boolean): Promise<CodexDiscoveryStatus> {
     if (!provider) return status
     const mappings = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-cli-proxy")
     const files = await listCliProxyCodexAuthFiles()
-    const prefix = codexWorkspacePrefix(currentWorkspaceId())
-    const accounts = mappings.filter((account) => files.some((file) => file.name === account.cliProxyAuthFile && file.prefix === prefix && !file.disabled))
-    const accountSignature = (rows: typeof mappings, authFiles: typeof files) => JSON.stringify(rows.map((account) => {
-      const file = authFiles.find((entry) => entry.name === account.cliProxyAuthFile)
-      return [account.id, account.cliProxyAuthFile, file?.prefix, file?.disabled]
+    const prefix = codexWorkspacePrefix(workspaceId)
+    const fileByName = new Map(files.map((file) => [file.name, file]))
+    const mappedWorkspaceByFile = new Map<string, string | undefined>()
+    for (const account of mappings) {
+      const fileName = account.cliProxyAuthFile
+      if (fileName && !mappedWorkspaceByFile.has(fileName)) {
+        mappedWorkspaceByFile.set(fileName, await mappedWorkspaceForFile(fileName, workspaceId))
+      }
+    }
+    const accountSignature = (rows: typeof mappings, authFiles: typeof files, mappedWorkspaces: Map<string, string | undefined>) => JSON.stringify(rows.map((account) => {
+      const file = account.cliProxyAuthFile ? authFiles.find((entry) => entry.name === account.cliProxyAuthFile) : undefined
+      return [account.id, account.cliProxyAuthFile, account.enabled, file?.authIndex, file?.accountId, file?.disabled, file?.unavailable, mappedWorkspaces.get(account.cliProxyAuthFile || "")]
     }).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
-    const startingAccounts = accountSignature(mappings, files)
-    const observations = new Map<string, { name: string; accountIds: string[] }>()
+    const startingAccounts = accountSignature(mappings, files, mappedWorkspaceByFile)
     const failed = new Set<string>()
     const errors: string[] = []
+    const activeMappings = mappings.filter((account) => {
+      if (!account.enabled) return false
+      const file = account.cliProxyAuthFile ? fileByName.get(account.cliProxyAuthFile) : undefined
+      return !file || !file.disabled
+    })
+    const accounts = activeMappings.filter((account) => {
+      const file = account.cliProxyAuthFile ? fileByName.get(account.cliProxyAuthFile) : undefined
+      if (!file) {
+        failed.add(account.id)
+        errors.push(`Mapped Codex auth file ${account.cliProxyAuthFile || "(missing filename)"} is missing.`)
+        return false
+      }
+      if (file.unavailable) {
+        failed.add(account.id)
+        errors.push(`Mapped Codex auth file ${file.name} is unavailable.`)
+        return false
+      }
+      const owner = mappedWorkspaceByFile.get(file.name)
+      if (owner) {
+        failed.add(account.id)
+        errors.push(`Codex auth file ${file.name} is already mapped to another RawRoute workspace.`)
+        return false
+      }
+      return true
+    })
+    if (activeMappings.length > 0 && accounts.length === 0) {
+      throw new Error(errors[0] || "No eligible enabled Codex auth files were found; keeping the saved catalog.")
+    }
+    const observations = new Map<string, { name: string; accountIds: string[] }>()
     const deadline = Date.now() + 60_000
     for (let index = 0; index < accounts.length; index += 4) {
       await Promise.all(accounts.slice(index, index + 4).map(async (account) => {
@@ -79,7 +116,18 @@ async function refresh(force: boolean): Promise<CodexDiscoveryStatus> {
       }))
     }
     const currentMappings = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-cli-proxy")
-    if (startingAccounts !== accountSignature(currentMappings, await listCliProxyCodexAuthFiles())) throw new Error("Codex accounts changed during discovery. Refresh again to use the current accounts.")
+    const currentFiles = await listCliProxyCodexAuthFiles()
+    const currentMappedWorkspaceByFile = new Map<string, string | undefined>()
+    for (const account of currentMappings) {
+      const fileName = account.cliProxyAuthFile
+      if (fileName && !currentMappedWorkspaceByFile.has(fileName)) {
+        currentMappedWorkspaceByFile.set(fileName, await mappedWorkspaceForFile(fileName, workspaceId))
+      }
+    }
+    if (startingAccounts !== accountSignature(currentMappings, currentFiles, currentMappedWorkspaceByFile)) throw new Error("Codex accounts changed during discovery. Refresh again to use the current accounts.")
+    if (accounts.length > 0 && observations.size === 0 && errors.length > 0) {
+      throw new Error(`${[...new Set(errors)].join(" ")} Keeping the saved catalog.`)
+    }
     const existing = await listProviderModels(provider.id)
     const candidates = new Map(observations)
     for (const model of existing) {
@@ -105,7 +153,7 @@ async function refresh(force: boolean): Promise<CodexDiscoveryStatus> {
   } catch (error) {
     status.error = error instanceof Error ? error.message : "Model discovery failed."
   } finally {
-    await localRedisSet(statusKey(), JSON.stringify(status), 30 * 86400_000)
+    await localRedisSet(statusKey(workspaceId), JSON.stringify(status), 30 * 86400_000)
     if (lock) await localRedisCompareAndDelete(key, token)
   }
   return status

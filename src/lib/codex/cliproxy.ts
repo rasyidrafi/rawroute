@@ -93,7 +93,7 @@ function mappedFileName(account: ProviderApiKey, workspaceId: string) {
   return account.cliProxyAuthFile || legacyAuthFileName(workspaceId, account)
 }
 
-async function mappedWorkspaceForFile(fileName: string, targetWorkspaceId: string) {
+export async function mappedWorkspaceForFile(fileName: string, targetWorkspaceId: string) {
   for (const workspace of await listWorkspaces()) {
     if (workspace.id === targetWorkspaceId) continue
     const matched = await runInWorkspace(workspace, async () => {

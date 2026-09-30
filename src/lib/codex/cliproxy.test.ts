@@ -16,7 +16,7 @@ vi.mock("@/lib/store", () => ({
 vi.mock("@/lib/workspace/repository", () => ({ listWorkspaces: mocks.listWorkspaces }))
 vi.mock("@/lib/workspace/context", () => ({ runInWorkspace: mocks.runInWorkspace }))
 
-import { completeCliProxyCodexLogin, registerCliProxyCodexAccount, startCliProxyCodexLogin } from "@/lib/codex/cliproxy"
+import { completeCliProxyCodexLogin, mappedWorkspaceForFile, registerCliProxyCodexAccount, startCliProxyCodexLogin } from "@/lib/codex/cliproxy"
 
 const provider = { id: "codex-provider", prefix: "codex" } as never
 
@@ -68,4 +68,13 @@ test("updates an existing RawRoute mapping when the same CLIProxy file is reauth
     name: "Existing label",
     credentialKind: "codex-cli-proxy",
   }))
+})
+
+test("finds auth files already mapped in another workspace", async () => {
+  mocks.listWorkspaces.mockResolvedValue([{ id: "workspace-a" }])
+  mocks.listProviders.mockResolvedValue([provider])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "account-a", credentialKind: "codex-cli-proxy", cliProxyAuthFile: "shared.json" }])
+
+  await expect(mappedWorkspaceForFile("shared.json", "workspace-b")).resolves.toBe("workspace-a")
+  expect(mocks.runInWorkspace).toHaveBeenCalledWith({ id: "workspace-a" }, expect.any(Function))
 })

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 
 import { TableCell } from "@/components/ui/table"
+import type { CodexUsageResult } from "@/lib/codex/usage"
 
 export type QuotaWindow = {
   usedPercent: number
@@ -10,15 +11,7 @@ export type QuotaWindow = {
   resetAt?: string
 }
 
-export type AccountUsage = {
-  fiveHour: QuotaWindow | null
-  weekly: QuotaWindow | null
-  unusedResetCredits?: number
-  fetchedAt: string | null
-  stale: boolean
-  error?: string
-  reauthRequired?: boolean
-}
+export type AccountUsage = CodexUsageResult
 
 export type UsageResponse = {
   accounts: Record<string, AccountUsage>

@@ -84,6 +84,40 @@ describe("Codex usage", () => {
     expect(parseCodexUsagePayload({ rate_limit: { rate_limit_reset_credits: { remaining_count: "2" } } }).unusedResetCredits).toBe(2)
   })
 
+  test("bypasses old count-only Redis snapshots so reset-credit details refresh immediately", async () => {
+    const redis = new FakeRedis()
+    const current = 2_000_000
+    let usageCalls = 0
+    let inventoryCalls = 0
+    redis.values.set("rawroute:codex-usage:v1:default:account-1", {
+      snapshot: { fiveHour: null, weekly: null, unusedResetCredits: 4 },
+      fetchedAt: new Date(current).toISOString(),
+      retryAt: current + CODEX_USAGE_CACHE_TTL_SECONDS * 1000,
+    })
+    setCodexUsageRedisForTests(redis)
+    setCodexUsageClockForTests(() => current)
+    setCodexUsageApiCallForTests(async (_account, input) => {
+      if (input.url.endsWith("/rate-limit-reset-credits")) {
+        inventoryCalls += 1
+        return { status: 200, body: JSON.stringify({ credits: [{ id: "available-only", status: "available", expires_at: "2030-01-01T00:00:00Z" }] }) }
+      }
+      usageCalls += 1
+      return { status: 200, body: JSON.stringify({ rate_limit_reset_credits: { available_count: 1 } }) }
+    })
+
+    const result = await getCodexUsageForAccount(account)
+
+    expect(result.resetCredits).toEqual([{ id: "available-only", status: "available", grantedAt: undefined, expiresAt: "2030-01-01T00:00:00.000Z" }])
+    expect(result.resetCreditsError).toBeUndefined()
+    expect(result.unusedResetCredits).toBe(1)
+    expect(usageCalls).toBe(1)
+    expect(inventoryCalls).toBe(1)
+
+    setCodexUsageRedisForTests()
+    setCodexUsageClockForTests()
+    setCodexUsageApiCallForTests()
+  })
+
   test("classifies an unauthorized usage response as requiring reauthorization", async () => {
     const redis = new FakeRedis()
     setCodexUsageRedisForTests(redis)
@@ -129,7 +163,7 @@ describe("Codex usage", () => {
     expect(calls).toBe(1)
 
     current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
-    redis.values.delete("rawroute:codex-usage:v1:lock:default:account-1")
+    redis.values.delete("rawroute:codex-usage:v2:lock:default:account-1")
     const stale = await getCodexUsageForAccount(account)
     const retained = await getCodexUsageForAccount(account)
     expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 }, unusedResetCredits: 2 })

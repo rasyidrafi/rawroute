@@ -7,7 +7,7 @@ export const CODEX_USAGE_CACHE_TTL_SECONDS = 5 * 60
 
 const CACHE_RETENTION_SECONDS = 24 * 60 * 60
 const REFRESH_LOCK_TTL_SECONDS = 30
-const CACHE_PREFIX = "rawroute:codex-usage:v1"
+const CACHE_PREFIX = "rawroute:codex-usage:v2"
 const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const configuredLocalCacheTtlMs = Number(process.env.CODEX_USAGE_LOCAL_CACHE_TTL_MS || CODEX_USAGE_CACHE_TTL_SECONDS * 1000)
 const localCacheTtlMs = Number.isFinite(configuredLocalCacheTtlMs) && configuredLocalCacheTtlMs >= 0 ? configuredLocalCacheTtlMs : CODEX_USAGE_CACHE_TTL_SECONDS * 1000
