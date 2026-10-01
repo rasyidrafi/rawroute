@@ -26,7 +26,7 @@ async function seedModel(page: Page) {
 test("Beyond Limits saves selected model exceptions from the budgets page", async ({ page }) => {
   await authenticate(page)
   await seedModel(page)
-  await page.goto("/dashboard/budgets")
+  await page.goto("/dashboard/ai/budgets")
 
   await page.getByRole("tab", { name: "Beyond Limits" }).click()
   await expect(page.getByText("Let selected models continue after a gateway key reaches its budget.")).toBeVisible()

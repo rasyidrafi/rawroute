@@ -4,7 +4,6 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type Transaction } from "@/lib/local-db"
 
 import { gatewayModelId, cleanAliasId } from "@/lib/http"
-import { decryptCredentialSecret, encryptCredentialSecret } from "@/lib/credential-secrets"
 import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
 import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
 import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, workspaceContext } from "@/lib/workspace/context"
@@ -184,7 +183,7 @@ export function validatePasswordUpdate(currentPassword: string, newPassword: str
 
 export interface Meta {
   version: 4
-  admin: { username: string; passwordHash: string; mustChangePassword: boolean }
+  admin: { passwordHash: string; mustChangePassword: boolean }
   sessionSecret: string
 }
 
@@ -193,8 +192,6 @@ function initialMeta(): Meta {
   return {
     version: 4,
     admin: {
-      // Retained for metadata compatibility; dashboard authentication uses only the password.
-      username: "admin",
       passwordHash: hashPassword(process.env.DEFAULT_ADMIN_PASSWORD || documentedAdminPassword),
       mustChangePassword: true,
     },
@@ -233,11 +230,6 @@ function providerFromSnapshot(snapshot: DocumentSnapshot): Provider {
 
 function providerApiKeyFromSnapshot(snapshot: DocumentSnapshot, providerId: string): ProviderApiKey {
   const value = { ...snapshot.data(), id: snapshot.id, providerId } as ProviderApiKey
-  if (value.credentialKind === "codex-oauth") {
-    value.key = decryptCredentialSecret(value.key) || ""
-    value.refreshToken = decryptCredentialSecret(value.refreshToken)
-    value.idToken = decryptCredentialSecret(value.idToken)
-  }
   return value
 }
 
@@ -267,16 +259,13 @@ function aliasFromSnapshot(snapshot: DocumentSnapshot): ModelAlias {
 
 function comboFromSnapshot(snapshot: DocumentSnapshot): ModelCombo {
   const data = snapshot.data() as Partial<ModelCombo>
-  const memberModelIds = Array.isArray(data.memberModelIds) ? data.memberModelIds.filter((member): member is string => typeof member === "string") : []
-  const members = Array.isArray(data.members)
-    ? data.members.filter((member) => member && typeof member === "object" && typeof member.modelId === "string")
-    : memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+  if (!Array.isArray(data.members)) throw new Error("Combo data requires the current schema. Run the data conversion script before starting RawRoute.")
+  const members = data.members
   return {
     id: snapshot.id,
     combo: data.combo || "",
     name: data.name || "",
     members,
-    memberModelIds: members.map((member) => member.modelId),
     createdAt: data.createdAt || "",
   }
 }
@@ -303,11 +292,6 @@ function storedProviderApiKey(apiKey: ProviderApiKey) {
   const { id, providerId, ...data } = apiKey
   void id
   void providerId
-  if (apiKey.credentialKind === "codex-oauth") {
-    data.key = encryptCredentialSecret(apiKey.key) || ""
-    data.refreshToken = encryptCredentialSecret(apiKey.refreshToken)
-    data.idToken = encryptCredentialSecret(apiKey.idToken)
-  }
   return stripUndefined(data)
 }
 
@@ -588,19 +572,12 @@ function validateComboInput(input: Partial<ModelCombo> & { originalId?: string }
   if (!input.originalId && (typeof input.name !== "string" || !input.name.trim())) throw new Error("Combo name is required.")
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) throw new Error("Combo name must be between 1 and 80 characters.")
   if (input.combo !== undefined && (typeof input.combo !== "string" || !cleanAliasId(input.combo))) throw new Error("Combo gateway ID is required.")
-  if (input.memberModelIds !== undefined && (!Array.isArray(input.memberModelIds) || input.memberModelIds.some((member) => typeof member !== "string" || !member.trim()))) throw new Error("Combo models are invalid.")
   if (input.members !== undefined && (!Array.isArray(input.members) || input.members.some((member) => !member || typeof member.modelId !== "string" || !member.modelId.trim()))) throw new Error("Combo models are invalid.")
-}
-
-function assertModelMutationAllowed(existing: Model | undefined) {
-  if (existing?.source === "builtin") {
-    throw new Error("Built-in models are fixed and cannot be edited.")
-  }
 }
 
 function managedModelInput(existing: Model | undefined, input: Partial<Model>, discover: boolean) {
   if (discover) {
-    if (existing && existing.source !== "builtin" && existing.source !== "discovered") throw new Error("Custom model owns this gateway ID.")
+    if (existing && existing.source !== "discovered") throw new Error("Custom model owns this gateway ID.")
     return { ...input, source: "discovered" as const, enabled: existing?.enabled ?? true, reasoningCapability: existing?.reasoningCapability }
   }
   if (existing?.source === "discovered") {
@@ -1828,8 +1805,8 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
       name: input.name,
       key: input.key,
       credentialKind: input.credentialKind,
-      refreshToken: input.refreshToken,
-      idToken: input.idToken,
+
+
       accountId: input.accountId,
       email: input.email,
       planType: input.planType,
@@ -1859,11 +1836,10 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
     }
     if (apiKey.credentialKind === "codex-cli-proxy") {
       // CLIProxy is the sole owner of the OAuth token lifecycle. A mapping
-      // conversion deliberately writes a replacement document, so leaving
-      // these undefined removes any previously encrypted OAuth material.
+      // keys are never stored in RawRoute.
       apiKey.key = ""
-      apiKey.refreshToken = undefined
-      apiKey.idToken = undefined
+
+
       apiKey.rpmLimit = undefined
       apiKey.maxConcurrency = undefined
     }
@@ -1921,7 +1897,7 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
     const existingSnapshot = input.originalId ? await transaction.get(modelRef(providerId, input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? modelFromSnapshot(existingSnapshot, providerId) : undefined
     if (input.originalId && !existing) throw new Error("Model not found.")
-    if (!discover) assertModelMutationAllowed(existing)
+
     input = { ...input, ...managedModelInput(existing, input, discover) }
     const rawGatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
     const gatewayModelId = normalizedGatewayId(rawGatewayModelId)
@@ -1979,7 +1955,7 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const model = modelFromSnapshot(snapshot, providerId)
-    if (model.source === "builtin" || model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
+    if (model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
     const reservation = await firestoreGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
     transaction.delete(ref)
     releaseFirestoreGatewayId(transaction, reservation)
@@ -2072,18 +2048,13 @@ async function firestoreUpsertCombo(input: Partial<ModelCombo> & { originalId?: 
     const previousReservation = previousId && previousId !== normalizedId
       ? await firestoreGatewayIdReservation(transaction, previousId, owner)
       : undefined
-    const members = input.members === undefined
-      ? input.memberModelIds !== undefined
-        ? input.memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
-        : existing?.members || (existing?.memberModelIds || []).map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+    const members = input.members === undefined ? existing?.members || []
       : input.members.map((member) => ({ ...member, modelId: member.modelId.trim() }))
-    const memberModelIds = members.map((member) => member.modelId)
     const combo: ModelCombo = {
       id: comboId,
       combo: normalizedCombo,
       name: input.name?.trim() || existing?.name || "",
       members,
-      memberModelIds,
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(comboRef(comboId), storedCombo(combo))
@@ -2245,8 +2216,8 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     name: input.name,
     key: input.key,
     credentialKind: input.credentialKind,
-    refreshToken: input.refreshToken,
-    idToken: input.idToken,
+
+
     accountId: input.accountId,
     email: input.email,
     planType: input.planType,
@@ -2276,8 +2247,8 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
   }
   if (apiKey.credentialKind === "codex-cli-proxy") {
     apiKey.key = ""
-    apiKey.refreshToken = undefined
-    apiKey.idToken = undefined
+
+
     apiKey.rpmLimit = undefined
     apiKey.maxConcurrency = undefined
   }
@@ -2326,7 +2297,7 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
   }
   const existing = input.originalId ? slot.get(input.originalId) : undefined
   if (input.originalId && !existing) throw new Error("Model not found.")
-  if (!discover) assertModelMutationAllowed(existing)
+
   input = { ...input, ...managedModelInput(existing, input, discover) }
   const modelId = existing ? input.originalId! : crypto.randomUUID()
   const rawGatewayModelId = input.gatewayModelId || (!input.originalId ? input.id : undefined) || existing?.gatewayModelId || existing?.id || ""
@@ -2387,7 +2358,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
   const slot = state.models.get(providerId)
   const model = slot?.get(modelId)
   if (!model || !slot) return
-  if (model.source === "builtin" || model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
+  if (model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
   slot.delete(modelId)
   releaseMemoryGatewayId(state, normalizedGatewayId(model.gatewayModelId || model.id), gatewayIdOwner("model", `${providerId}:${model.id}`))
   state.providers.set(providerId, {
@@ -2456,15 +2427,10 @@ function memoryUpsertCombo(input: Partial<ModelCombo> & { originalId?: string })
     id: comboId,
     combo: normalizedCombo,
     name: input.name?.trim() || existing?.name || "",
-    members: input.members === undefined
-      ? input.memberModelIds !== undefined
-        ? input.memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
-        : existing?.members || (existing?.memberModelIds || []).map((modelId) => ({ modelId, reasoning: { mode: "inherit" as const } }))
+    members: input.members === undefined ? existing?.members || []
       : input.members.map((member) => ({ ...member, modelId: member.modelId.trim() })),
-    memberModelIds: [],
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
-  combo.memberModelIds = (combo.members || []).map((member) => member.modelId)
   state.combos.set(combo.id, combo)
   reserveMemoryGatewayId(state, normalizedId, owner)
   if (previousId && previousId !== normalizedId) releaseMemoryGatewayId(state, previousId, owner)

@@ -15,9 +15,6 @@ export async function POST(request: Request, params: { providerId: string }) {
     const provider = await getProvider(providerId)
     if (!provider) throw new Error("Provider is missing.")
     const existing = input.originalId ? (await listProviderModels(providerId)).find((model) => model.id === input.originalId) : undefined
-    if (existing?.source === "builtin") {
-      throw new Error("Built-in Codex models are fixed and cannot be edited.")
-    }
     if (existing?.source === "discovered") {
       if (typeof input.enabled !== "boolean" || Object.keys(input).some((key) => !["originalId", "enabled"].includes(key))) throw new Error("Only enabled state can be changed for discovered models.")
       await upsertModel(providerId, { originalId: existing.id, enabled: input.enabled })

@@ -1,7 +1,7 @@
 import { useSearchParams } from "react-router"
 import useSWR from "swr"
 
-import { UsageView } from "@/components/dashboard/usage-view"
+import { UsageView } from "@/components/dashboard/ai/usage-view"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { PublicWorkspaceSelector } from "@/components/public-workspace-selector"
 import { useSession } from "@/hooks/use-session"

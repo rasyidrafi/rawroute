@@ -10,7 +10,7 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
     expect((await page.request.delete(`/api/admin/oauth-providers/${account.id}`, { headers: { "x-rawroute-workspace-id": "default" } })).ok()).toBe(true)
   }
   await page.request.post("http://127.0.0.1:3211/reset")
-  await page.goto("/dashboard/providers/codex")
+  await page.goto("/dashboard/ai/codex-providers")
 
   await expect(page.getByRole("link", { name: "Codex Providers" })).toBeVisible()
   await expect(page.getByText("No accounts yet.")).toBeVisible()

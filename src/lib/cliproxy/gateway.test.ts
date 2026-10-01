@@ -184,7 +184,7 @@ test("tries combo members in order after an upstream failure", async () => {
     { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
-  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", members: ["p/a", "p/b"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })), createdAt: new Date().toISOString() }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock()
     .mockResolvedValueOnce(Response.json({ error: { message: "rate limited" } }, { status: 429 }))
     .mockResolvedValueOnce(Response.json({ id: "response-from-b" })))
@@ -210,7 +210,6 @@ test("sends combo reasoning overrides in the request body without suffixing proj
     id: "combo-1",
     combo: "reasoning-combo",
     name: "Reasoning combo",
-    memberModelIds: ["p/a"],
     members: [{ modelId: "p/a", reasoning: { mode: "override", effort: "max" } }],
     createdAt: new Date().toISOString(),
   }])
@@ -235,7 +234,6 @@ test("deep merges a combo member custom payload and keeps the routed model", asy
     id: "combo-1",
     combo: "custom-combo",
     name: "Custom combo",
-    memberModelIds: ["p/a"],
     members: [{ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { temperature: 0.2, response_format: { json_schema: { name: "answer" } } } }],
     createdAt: new Date().toISOString(),
   }])
@@ -259,7 +257,7 @@ test("falls back after a non-terminal provider error regardless of status class"
     { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
-  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", members: ["p/a", "p/b"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })), createdAt: new Date().toISOString() }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock()
     .mockResolvedValueOnce(Response.json({ error: { message: "credential rejected" } }, { status: 403, headers: { "retry-after": "3700" } }))
     .mockResolvedValueOnce(Response.json({ id: "response-from-b" })))
@@ -280,7 +278,7 @@ test("treats CLIProxy model cooldown as an immediate fallback signal", async () 
     { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
-  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", members: ["p/a", "p/b"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })), createdAt: new Date().toISOString() }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock()
     .mockResolvedValueOnce(Response.json({ error: { code: "model_cooldown", message: "All credentials for model p/a are cooling down" } }, { status: 429, headers: { "retry-after": "3700" } }))
     .mockResolvedValueOnce(Response.json({ id: "response-from-b" })))
@@ -363,7 +361,7 @@ test("skips an unavailable combo member and does not expose its internal retry m
   mocks.listModels.mockResolvedValue([
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
-  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/disabled", "p/b"], createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", members: ["p/disabled", "p/b"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })), createdAt: new Date().toISOString() }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({ id: "response-from-b" })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
@@ -378,7 +376,7 @@ test("skips an unavailable combo member and does not expose its internal retry m
 })
 
 test("blocks an excluded combo before trying its members", async () => {
-  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "expensive-combo", name: "Expensive combo", memberModelIds: ["codex/gpt-5"], createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "expensive-combo", name: "Expensive combo", members: ["codex/gpt-5"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })), createdAt: new Date().toISOString() }])
   mocks.assertUnlimitedModelsAllowed.mockRejectedValueOnce(new BudgetModelExcludedError("This model is excluded while Unlimited Mode is active."))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
@@ -398,7 +396,7 @@ test("skips an excluded combo member and tries the next model", async () => {
     { id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() },
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
-  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", members: ["p/a", "p/b"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })), createdAt: new Date().toISOString() }])
   mocks.getBudgetRequestState.mockRejectedValueOnce(new BudgetModelExcludedError("This model is excluded while Unlimited Mode is active.")).mockResolvedValueOnce({ admission: undefined, usageContext: undefined })
   spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({ id: "response-from-b" })))
 

@@ -17,7 +17,7 @@ const result = await Bun.build({
 
 for (const message of result.logs) console.error(message)
 if (!result.success) process.exit(1)
-const migration = await Bun.build({ entrypoints: ["./scripts/import-cliproxy.ts"], outdir: "./dist", target: "bun", minify: true, env: "disable" })
+const migration = await Bun.build({ entrypoints: ["./scripts/import-cliproxy.ts", "./scripts/convert-current-data.ts"], outdir: "./dist", target: "bun", minify: true, env: "disable", external: ["pg", "ioredis"] })
 for (const message of migration.logs) console.error(message)
 if (!migration.success) process.exit(1)
 console.log(`Built ${result.outputs.length + migration.outputs.length} production files in dist/`)

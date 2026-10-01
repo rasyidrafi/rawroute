@@ -1,3 +1,4 @@
+import { pagePaths, providerPagePath } from "@/lib/dashboard/routes"
 import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useState } from "react"
 import { ChevronRightIcon, LinkIcon, PlusIcon, Trash2Icon } from "lucide-react"
@@ -7,7 +8,7 @@ import useSWR from "swr"
 import { toast } from "sonner"
 
 import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
-import { ProviderForm } from "@/components/dashboard/provider-form"
+import { ProviderForm } from "@/components/dashboard/ai/provider-form"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { Badge } from "@/components/ui/badge"
@@ -84,8 +85,8 @@ export function ProvidersView() {
             <TableBody>
               {regularProviders.map((provider) => {
                 const pendingKey = `delete-provider:${provider.id}`
-                return <TableRow key={provider.id} className="cursor-pointer" onClick={() => navigate(`/dashboard/providers/${provider.id}`)}>
-                  <TableCell><Link to={`/dashboard/providers/${provider.id}`} className="font-medium hover:underline" onClick={(event) => event.stopPropagation()}>{provider.name}</Link></TableCell>
+                return <TableRow key={provider.id} className="cursor-pointer" onClick={() => navigate(providerPagePath(provider.id))}>
+                  <TableCell><Link to={providerPagePath(provider.id)} className="font-medium hover:underline" onClick={(event) => event.stopPropagation()}>{provider.name}</Link></TableCell>
                   <TableCell><Badge variant="secondary">{provider.prefix}/</Badge></TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
                   <TableCell text="code-truncate" className="max-w-64">{provider.baseUrl}</TableCell>
@@ -94,7 +95,7 @@ export function ProvidersView() {
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
                       {provider.prefix !== "codex" && <ConfirmAction title={`Delete ${provider.name}?`} description={`This permanently deletes ${provider.apiKeyCount} API keys and ${provider.modelCount} models attached to this provider.`} pending={isPending(pendingKey)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>}
-                      <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link to={`/dashboard/providers/${provider.id}`} />}><ChevronRightIcon /></Button>
+                      <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link to={providerPagePath(provider.id)} />}><ChevronRightIcon /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -113,10 +114,10 @@ export function ProvidersView() {
           <Table>
             <TableColumns columns={[{ id: "Provider", label: "Provider" }, { id: "Prefix", label: "Prefix" }, { id: "Protocol", label: "Protocol" }, { id: "Accounts", label: "Accounts" }, { id: "Models", label: "Models" }, { id: "actions" }]} />
             <TableBody>
-              {codexProvider && <TableRow className="cursor-pointer" onClick={() => navigate("/dashboard/providers/codex")}>
+              {codexProvider && <TableRow className="cursor-pointer" onClick={() => navigate(pagePaths.codex)}>
                 <TableCell text="label">Codex Providers</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
                 <TableCell><span className="font-medium tabular-nums">{codexProvider.apiKeyCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell><TableCell><span className="font-medium tabular-nums">{codexProvider.modelCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell>
-                <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="ghost" render={<Link to="/dashboard/providers/codex" />}><ChevronRightIcon /></Button></TableCell>
+                <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="ghost" render={<Link to={pagePaths.codex} />}><ChevronRightIcon /></Button></TableCell>
               </TableRow>}
               {!codexProvider && <EmptyRow label="Codex Providers are not configured yet." colSpan={6} />}
             </TableBody>

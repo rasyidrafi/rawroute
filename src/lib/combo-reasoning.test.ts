@@ -3,8 +3,8 @@ import { describe, expect, test } from "bun:test"
 import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, memberPolicyConfigHash, normalizeComboCustomPayload, stripReasoningFields, supportedReasoningEfforts } from "@/lib/combo-reasoning"
 
 describe("combo reasoning policies", () => {
-  test("migrates legacy combo members to inherit mode", () => {
-    expect(comboMembers({ memberModelIds: ["p/a", "p/b"] })).toEqual([
+  test("preserves current combo member policies", () => {
+    expect(comboMembers({ members: ["p/a", "p/b"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })) })).toEqual([
       { modelId: "p/a", reasoning: { mode: "inherit" } },
       { modelId: "p/b", reasoning: { mode: "inherit" } },
     ])

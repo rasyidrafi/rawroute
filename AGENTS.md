@@ -20,3 +20,10 @@ Consult `.agents/skills/ask-bun/SKILL.md` and its script for Bun-specific guidan
 
 After making changes, run `bun run lint` and fix all errors and warnings.
 Fix violations in source; do not disable rules, add suppressions, or broaden allowances to make lint pass.
+
+Keep only the current feature implementation and canonical dashboard routes.
+Do not retain retired URL aliases, redirect compatibility layers, unused feature
+pages, or request-time legacy data conversion. Put one-time data conversions in
+`scripts/migrations/` with an explicit CLI entrypoint, and update callers/tests
+when replacing an API or data shape. Preserve existing data through an offline,
+tested conversion before deploying a schema change.

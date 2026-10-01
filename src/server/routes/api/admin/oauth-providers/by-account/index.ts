@@ -13,7 +13,7 @@ export async function PATCH(request: Request, params: { accountId: string }) {
     const result = await listCodexAccounts()
     const account = result.accounts.find((entry) => entry.id === accountId)
     if (!result.provider || !account) return jsonError("Codex account not found.", 404)
-    if (account.credentialKind !== "codex-cli-proxy") throw new Error("This legacy Codex credential is not mapped to CLIProxy. Remove it and reconnect the account.")
+    if (account.credentialKind !== "codex-cli-proxy") throw new Error("This account is not a CLIProxy credential.")
     const enabled = body?.enabled === undefined ? account.enabled : body.enabled
     if (typeof enabled !== "boolean") throw new Error("Enabled value must be boolean.")
     const name = body?.name === undefined ? account.name : body.name

@@ -2,10 +2,10 @@ import { afterEach, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { importLegacyInstance } from "./migration"
-import { getServicePaths, validateLoopbackConfig } from "./store"
-import { snapshotConfiguration, restoreConfiguration } from "./backup"
-import { hasManagedAuthPrefix } from "./auth-ownership"
+import { importLegacyInstance } from "../../scripts/migrations/cliproxy-instance"
+import { getServicePaths, validateLoopbackConfig } from "../../src/server/cliproxy/store"
+import { snapshotConfiguration, restoreConfiguration } from "../../src/server/cliproxy/backup"
+import { hasManagedAuthPrefix } from "../../src/server/cliproxy/auth-ownership"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })

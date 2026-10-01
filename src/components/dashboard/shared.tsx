@@ -1,3 +1,4 @@
+import { pagePaths } from "@/lib/dashboard/routes"
 import { useState, type ReactNode } from "react"
 import { Link } from "react-router"
 import { ArrowLeftIcon } from "lucide-react"
@@ -40,7 +41,7 @@ export function EndpointValue() {
   return <code className="min-w-0 flex-1 truncate text-sm">{window.location.origin}/v1</code>
 }
 
-export function NotFoundState({ label = "Provider not found", description = "This resource may have been deleted or renamed.", backHref = "/dashboard/providers", backLabel = "Back to list" }: { label?: string; description?: string; backHref?: string; backLabel?: string; onBack?: () => void }) {
+export function NotFoundState({ label = "Provider not found", description = "This resource may have been deleted or renamed.", backHref = pagePaths.providers, backLabel = "Back to list" }: { label?: string; description?: string; backHref?: string; backLabel?: string; onBack?: () => void }) {
   return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <Card>

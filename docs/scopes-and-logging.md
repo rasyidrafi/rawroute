@@ -8,18 +8,19 @@ global pages remain available even when the workspace list cannot load.
 | Gateway, Analytics, Coding Agents | Workspace | Existing providers, keys, routing, usage, budgets, pricing and setup |
 | System → Console Log | Workspace | Gateway requests, workspace administration and dashboard activity |
 | Global → System Logs | Global | Authentication, workspace lifecycle, instance administration and service activity |
+| Global → CLIProxyAPI | Global | Shared service lifecycle, releases, credentials, OAuth and engine logs |
 | Global → Settings | Global | Admin password and shared gateway settings |
 | Tool Gateway | Global | Existing shared Executor service views |
 
 System and Global groups appear in both AI Gateway and Tool Gateway. Shared pages
-retain the selected app. There is no CLIProxyAPI navigation group. Executor proxy
+retain the selected app. CLIProxyAPI belongs to Global. Executor proxy
 requests are attributed to the workspace that owns the authenticating gateway
 key, but the upstream Executor deployment itself remains shared.
 
 ## Adding a feature
 
-1. Declare its path, title, scope and app in `src/lib/dashboard/routes.ts` and add
-   its route in `src/App.tsx`. Build sidebar entries from this metadata in
+1. Declare its path, title, scope, app and skeleton in `src/lib/dashboard/routes.ts` and add
+   its lazy view in `src/components/dashboard/route-views.tsx`. Build sidebar entries from this metadata in
    `src/components/dashboard/dashboard-apps.ts`.
 2. Declare each API access policy and route template in `src/server/routes.ts`.
    `session` means authenticated global administration; `workspace` and
@@ -104,3 +105,42 @@ may leave earlier fields applied. Reload the settings after a partial failure.
 No database migration is needed. PostgreSQL/Redis storage and gateway execution
 remain in place. Verify changes with `bun run lint`, `bun run typecheck`,
 `bun run test`, `bun run build` and the Playwright suite with an isolated test Redis.
+
+## Routes and feature ownership
+
+AI Gateway pages live under `/dashboard/ai/`: `endpoint`, `providers`,
+`providers/:providerId`, `codex-providers`, `routing`, `usage`, `budgets`,
+`pricing`, and `coding-agents/{codex,opencode,claude-code}`.
+Tool Gateway uses `/dashboard/tools/{overview,catalog,connections,policies,activity,settings}`.
+Shared workspace logs use `/dashboard/logs`. Global pages remain
+`/dashboard/{settings,cliproxy,system-logs}`.
+
+Only canonical URLs are registered. Removed URLs return 404; no aliases or
+redirect compatibility layer is retained. Login and all navigation target the
+canonical URLs. Metadata in `src/lib/dashboard/routes.ts` drives server HTML
+routes, the React router, navigation labels, scopes, page headers and skeletons.
+
+Feature components live in `src/components/dashboard/ai`, `tools`, and `global`.
+The dashboard root owns the shared shell, API context, workspace selection,
+cache boundaries and navigation. Reusable log rendering remains in `logs`.
+Tool Gateway's runtime is currently global; assigning workspace scope requires
+backend ownership and isolation, not just changing its route metadata.
+
+## Offline data conversion
+
+Before upgrading a persisted installation, back up PostgreSQL and stop RawRoute.
+Run `bun scripts/convert-current-data.ts` with `DATABASE_URL` (and, if customized,
+`DATABASE_COLLECTION_PREFIX`) to preview, then repeat with `--apply`.
+The container includes `bun convert-current-data.js` for the same operation.
+The conversion is transactional and idempotent; it never deletes account records.
+It removes the old admin username and combo mirror, converts built-in model
+records in place, and replaces old Codex token records with existing CLIProxy
+file mappings. Missing Codex mappings abort the transaction and require account
+reconnection/export before the upgrade. Already mapped accounts have obsolete
+token fields and local rate limits removed. Provider/model/account IDs and
+password hashes are preserved. There is no automatic request-time conversion.
+
+If old Codex records exist, export the CLIProxy auth-file metadata before stopping
+its managed process, then pass `--auth-files=/private/auth-files.json` to the
+conversion command. The JSON must be the `files` array from CLIProxy management
+or an array of normalized file metadata; it contains no token contents.

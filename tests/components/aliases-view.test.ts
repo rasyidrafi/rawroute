@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 test("aliases expose copyable gateway IDs", () => {
-  const view = readFileSync(new URL("../../src/components/dashboard/aliases-view.tsx", import.meta.url), "utf8")
+  const view = readFileSync(new URL("../../src/components/dashboard/ai/aliases-view.tsx", import.meta.url), "utf8")
 
   expect(view).toContain('id: "Gateway ID", label: "Gateway ID"')
   expect(view).toContain('copy(alias.alias, "Gateway ID copied")')
@@ -13,7 +13,7 @@ test("aliases expose copyable gateway IDs", () => {
 })
 
 test("alias form pairs gateway ID and name, then provider and model", () => {
-  const form = readFileSync(new URL("../../src/components/dashboard/alias-form.tsx", import.meta.url), "utf8")
+  const form = readFileSync(new URL("../../src/components/dashboard/ai/alias-form.tsx", import.meta.url), "utf8")
 
   expect(form).toContain('label="Gateway ID"')
   expect(form).toContain('label="Name"')

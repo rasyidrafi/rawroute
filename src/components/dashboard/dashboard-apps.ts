@@ -39,7 +39,7 @@ export const dashboardApps: DashboardApp[] = [
     title: "AI Gateway",
     description: "Route AI requests across your providers",
     icon: RouteIcon,
-    href: "/dashboard",
+    href: pagePaths.dashboard,
     navigation: [
       {
         label: "Gateway",
@@ -74,7 +74,7 @@ export const dashboardApps: DashboardApp[] = [
     title: "Tool Gateway",
     description: "Use shared tools through the API proxy",
     icon: WrenchIcon,
-    href: "/dashboard/tool-gateway",
+    href: pagePaths.tools,
     navigation: [
       {
         label: "Tool Gateway",
@@ -92,16 +92,6 @@ export const dashboardApps: DashboardApp[] = [
   },
 ]
 
-export function dashboardAppForPathname(pathname: string): DashboardApp {
-  return pathname === "/dashboard/tool-gateway" || pathname.startsWith("/dashboard/tool-gateway/")
-    ? dashboardApps[1]
-    : dashboardApps[0]
-}
-
 export function isDashboardNavigationItemActive(pathname: string, item: DashboardNavigationItem) {
   return pathname === item.href || (!dashboardApps.some((app) => app.href === item.href) && pathname.startsWith(`${item.href}/`))
-}
-
-export function toolGatewayTitleForPathname(pathname: string) {
-  return dashboardApps[1].navigation[0].items.find((item) => item.href === pathname)?.title ?? "Overview"
 }

@@ -1,4 +1,4 @@
-import { importLegacyInstance } from "../src/server/cliproxy/migration"
+import { importLegacyInstance } from "./migrations/cliproxy-instance"
 
 const [source, destination] = process.argv.slice(2)
 if (!source || !destination) throw new Error("Usage: bun scripts/import-cliproxy.ts <stopped-legacy-directory> <new-data-directory>. Source must contain config.yaml and auths/; logs/ and plugins/ are optional.")

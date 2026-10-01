@@ -10,7 +10,7 @@ import { listAliases, listCombos, listModels, listProviders, readSessionSecret, 
 import type { ComboMember, ModelCombo } from "@/lib/types"
 
 function normalizedMembers(input: Partial<ModelCombo>) {
-  const raw: ComboMember[] = Array.isArray(input.members) ? input.members : Array.isArray(input.memberModelIds) ? input.memberModelIds.map((modelId) => ({ modelId })) : []
+  const raw: ComboMember[] = Array.isArray(input.members) ? input.members : []
   return raw.map((member): ComboMember => {
     const modelId = typeof member.modelId === "string" ? member.modelId.trim() : ""
     const mode = member.reasoning?.mode || "inherit"
@@ -66,7 +66,7 @@ async function validateCombo(input: Partial<ModelCombo> & { originalId?: string 
   }))
   if (memberModelIds.some((member) => !availableModelIds.has(member) && !availableAliasIds.has(member))) throw new Error("One or more combo models are unavailable.")
   if (availableModelIds.has(combo) || aliases.some((alias) => cleanAliasId(alias.alias) === combo) || combos.some((entry) => cleanAliasId(entry.combo) === combo && entry.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
-  return { combo, name, members, memberModelIds, existing: input.originalId ? combos.find((entry) => entry.id === input.originalId) : undefined }
+  return { combo, name, members, existing: input.originalId ? combos.find((entry) => entry.id === input.originalId) : undefined }
 }
 
 export async function POST(request: Request) {

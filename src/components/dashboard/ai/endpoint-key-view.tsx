@@ -7,7 +7,7 @@ import { toast } from "sonner"
 
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
-import { ApiKeyForm } from "@/components/dashboard/api-key-form"
+import { ApiKeyForm } from "@/components/dashboard/ai/api-key-form"
 import { LoadError, ConfirmAction, EndpointValue, maskApiKey } from "@/components/dashboard/shared"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { Badge } from "@/components/ui/badge"

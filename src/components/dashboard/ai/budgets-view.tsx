@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils"
 import { calendarDateFromInstant, formatAppDateTime, formatAppWindowDate, getZonedParts, zonedDateTimeToDate } from "@/lib/timezone"
 import type { BudgetBeyondLimitsSettings, BudgetUnlimitedSettings, BudgetWindowAnchor } from "@/lib/types"
 
-import { sanitizeNonNegativeDraft } from "@/components/dashboard/management-panel"
+import { sanitizeNonNegativeDraft } from "@/components/dashboard/ai/management-panel"
 
 const money = (micros: number) => `$${(micros / 1_000_000).toFixed(2)}`
 type BudgetWindowResponse = { start: string; end: string; anchor?: BudgetWindowAnchor; codexAccountId?: string | null; bypassLimits: boolean; bypassAutoDeactivateAtWindowEnd?: boolean }

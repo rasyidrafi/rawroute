@@ -80,7 +80,7 @@ test("combo immediately falls back instead of forwarding model cooldown", async 
   expect(models.length).toBeGreaterThanOrEqual(2)
   const comboId = `e2e-fallback-${Date.now()}`
   const saved = await request.post("/api/admin/combos", { headers: { "x-rawroute-workspace-id": "default" },
-    data: { combo: { combo: comboId, name: "E2E immediate fallback", memberModelIds: models.slice(0, 2) } },
+    data: { combo: { combo: comboId, name: "E2E immediate fallback", members: models.slice(0, 2).map(modelId => ({ modelId })) } },
   })
   expect(saved.ok()).toBe(true)
 

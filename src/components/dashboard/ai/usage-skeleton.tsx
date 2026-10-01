@@ -2,7 +2,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { LoadingTable } from "@/components/loading-layout"
-import { DashboardPage } from "./page-layout"
+import { DashboardPage } from "../page-layout"
 import { UsageOverview } from "./usage-overview"
 import { UsageSummary } from "./usage-summary"
 import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-defaults"

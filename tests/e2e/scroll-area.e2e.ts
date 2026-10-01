@@ -84,7 +84,7 @@ test("console stays fixed-height and scrolls its log content", async ({ page }) 
 
 test("provider dialog and protocol select remain usable in a short viewport", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 500 })
-  await page.goto(`/dashboard/providers/${firstProviderId}`)
+  await page.goto(`/dashboard/ai/providers/${firstProviderId}`)
   await page.getByRole("button", { name: "Edit", exact: true }).click()
 
   const dialog = page.getByRole("dialog")
@@ -113,7 +113,7 @@ test("provider dialog and protocol select remain usable in a short viewport", as
 })
 
 test("dropdown menu interaction survives ScrollArea composition", async ({ page }) => {
-  await page.goto(`/dashboard/providers/${firstProviderId}`)
+  await page.goto(`/dashboard/ai/providers/${firstProviderId}`)
   await expect(page.getByText("Provider details")).toBeVisible()
   await page.getByRole("button", { name: "Change color theme" }).click()
   await page.getByRole("menuitemradio", { name: "Dark" }).click()
@@ -133,7 +133,7 @@ test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) =
   expect(response.ok()).toBe(true)
 
   await page.setViewportSize({ width: 600, height: 700 })
-  await page.goto(`/dashboard/providers/${firstProviderId}`)
+  await page.goto(`/dashboard/ai/providers/${firstProviderId}`)
   await expect(page.getByText("Wide model", { exact: true })).toBeVisible()
   const modelCard = page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: /^Models$/ }) })
   const viewport = modelCard.locator('[data-slot="table-container"] [data-slot="scroll-area-viewport"]')

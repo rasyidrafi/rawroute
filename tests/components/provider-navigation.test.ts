@@ -2,14 +2,14 @@ import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 test("providers use a list page and a dynamic detail page", () => {
-  const routes = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8")
-  const list = readFileSync(new URL("../../src/components/dashboard/providers-view.tsx", import.meta.url), "utf8")
-  const detail = readFileSync(new URL("../../src/components/dashboard/provider-detail-view.tsx", import.meta.url), "utf8")
-  const loginDialog = readFileSync(new URL("../../src/components/dashboard/codex-login-dialog.tsx", import.meta.url), "utf8")
+  const routes = readFileSync(new URL("../../src/components/dashboard/route-views.tsx", import.meta.url), "utf8")
+  const list = readFileSync(new URL("../../src/components/dashboard/ai/providers-view.tsx", import.meta.url), "utf8")
+  const detail = readFileSync(new URL("../../src/components/dashboard/ai/provider-detail-view.tsx", import.meta.url), "utf8")
+  const loginDialog = readFileSync(new URL("../../src/components/dashboard/ai/codex-login-dialog.tsx", import.meta.url), "utf8")
 
   expect(routes).toContain("<ProviderPage />")
   expect(routes).toContain('providerId="codex"')
-  expect(list).toContain("/dashboard/providers/${provider.id}")
+  expect(list).toContain("providerPagePath(provider.id)")
   expect(detail).toContain('buttonLabel="Delete provider"')
   expect(detail).toContain("Expose upstream models behind your provider prefix.")
   expect(detail).toContain('isOAuthProvider ? "Accounts" : "API keys"')

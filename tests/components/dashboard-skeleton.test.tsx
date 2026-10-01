@@ -3,15 +3,15 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
 
 import { DashboardContentSkeleton, DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
-import { UsageSummary } from "@/components/dashboard/usage-summary"
+import { UsageSummary } from "@/components/dashboard/ai/usage-summary"
 
 for (const [path, heading] of [
-  ["/dashboard/usage", "Usage summary"],
+  ["/dashboard/ai/usage", "Usage summary"],
   ["/dashboard/settings", "Global gateway settings"],
   ["/dashboard/system-logs", "System Logs"],
   ["/dashboard/cliproxy", "CLIProxy API keys"],
-  ["/dashboard/providers/codex", "Usage Limits"],
-  ["/dashboard/tool-gateway", "Executor integration"],
+  ["/dashboard/ai/codex-providers", "Usage Limits"],
+  ["/dashboard/tools/overview", "Executor integration"],
 ]) {
   test(`route loading preserves the content for ${path}`, () => {
     const markup = renderToStaticMarkup(<MemoryRouter initialEntries={[path!]}><DashboardRouteSkeleton /></MemoryRouter>)

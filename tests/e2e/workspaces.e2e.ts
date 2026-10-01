@@ -18,7 +18,7 @@ async function workspaceMenu(page: Page) {
 
 test("switches dashboard apps with contextual navigation", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard")
+  await page.goto("/dashboard/ai/endpoint")
 
   const sidebar = page.locator('[data-slot="sidebar-inner"]')
   await expect(sidebar.getByText("Apps", { exact: true })).toHaveCount(0)
@@ -49,7 +49,7 @@ test("switches dashboard apps with contextual navigation", async ({ page }) => {
   await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0)
   await appMenu.getByRole("menuitemradio", { name: "Tool Gateway", exact: true }).click()
   await expect(appMenu).toBeHidden()
-  await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+  await expect(page).toHaveURL(/\/dashboard\/tools\/overview$/)
   await expect(page.getByRole("heading", { name: /Tool Gateway.*Overview/ })).toBeVisible()
   await expect(sidebar.getByRole("link", { name: "Tools" })).toBeVisible()
   await expect(sidebar.getByRole("link", { name: "Providers", exact: true })).toHaveCount(0)
@@ -58,13 +58,13 @@ test("switches dashboard apps with contextual navigation", async ({ page }) => {
 
   await workspaceMenu(page)
   await appMenu.getByRole("menuitemradio", { name: "AI Gateway", exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
   await expect(sidebar.getByRole("link", { name: "Providers", exact: true })).toBeVisible()
 })
 
 test("keeps the simple footer sign-out confirmation", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard")
+  await page.goto("/dashboard/ai/endpoint")
 
   const sidebar = page.locator('[data-slot="sidebar-inner"]')
   await expect(sidebar.getByRole("button", { name: "Account menu" })).toHaveCount(0)
@@ -88,27 +88,27 @@ test("preserves dashboard app URL state, workspace selection, and mobile navigat
   const workspaceId = ((await createResponse.json()).workspace as { id: string }).id
 
   try {
-    await page.goto("/dashboard")
+    await page.goto("/dashboard/ai/endpoint")
     const workspaceTrigger = await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: workspaceName }).click()
     await expect(workspaceTrigger).toContainText(workspaceName)
 
     await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: "Tool Gateway", exact: true }).click()
-    await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+    await expect(page).toHaveURL(/\/dashboard\/tools\/overview$/)
     await expect(workspaceTrigger).toContainText(workspaceName)
 
-    await page.goto("/dashboard/tool-gateway/tools")
+    await page.goto("/dashboard/tools/catalog")
     await expect(page.getByRole("heading", { name: /Tool Gateway.*Tools/ })).toBeVisible()
     await page.reload()
     await expect(page.getByRole("heading", { name: /Tool Gateway.*Tools/ })).toBeVisible()
     await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: "AI Gateway", exact: true }).click()
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
     await page.goBack()
-    await expect(page).toHaveURL(/\/dashboard\/tool-gateway\/tools$/)
+    await expect(page).toHaveURL(/\/dashboard\/tools\/catalog$/)
     await page.goForward()
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
 
     await page.setViewportSize({ width: 390, height: 844 })
     const sidebarTrigger = page.getByRole("button", { name: "Toggle Sidebar" })
@@ -117,20 +117,20 @@ test("preserves dashboard app URL state, workspace selection, and mobile navigat
     await expect(mobileSidebar).toBeVisible()
     await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: "Tool Gateway", exact: true }).click()
-    await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+    await expect(page).toHaveURL(/\/dashboard\/tools\/overview$/)
     await expect(mobileSidebar).toBeHidden()
 
     await sidebarTrigger.click()
     await expect(mobileSidebar).toBeVisible()
     await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: "Tool Gateway", exact: true }).click()
-    await expect(page).toHaveURL(/\/dashboard\/tool-gateway$/)
+    await expect(page).toHaveURL(/\/dashboard\/tools\/overview$/)
     await expect(mobileSidebar).toBeHidden()
 
     await sidebarTrigger.click()
     await expect(mobileSidebar).toBeVisible()
     await mobileSidebar.getByRole("link", { name: "Tools", exact: true }).click()
-    await expect(page).toHaveURL(/\/dashboard\/tool-gateway\/tools$/)
+    await expect(page).toHaveURL(/\/dashboard\/tools\/catalog$/)
     await expect(mobileSidebar).toBeHidden()
 
     await sidebarTrigger.click()
@@ -151,7 +151,7 @@ test("creates, switches, isolates, renames, publishes, and deletes a workspace",
     await page.request.delete(`/api/admin/workspaces/${existing.id}`, { data: { confirmation: existing.name }, headers: { "x-rawroute-workspace-id": "default" } })
   }
 
-  await page.goto("/dashboard")
+  await page.goto("/dashboard/ai/endpoint")
   await workspaceMenu(page)
   await page.getByRole("menuitem", { name: "Add New Workspace" }).click()
   await page.getByRole("dialog").getByLabel("Workspace name").fill("E2E Workspace")
@@ -185,7 +185,7 @@ test("creates, switches, isolates, renames, publishes, and deletes a workspace",
   await expect(page.getByText("Public gateway analytics")).toBeVisible()
   await expect(page.getByRole("combobox", { name: "Workspace" })).toContainText("E2E Workspace")
 
-  await page.goto("/dashboard")
+  await page.goto("/dashboard/ai/endpoint")
   await workspaceMenu(page)
   await page.getByRole("menuitem", { name: "Rename Workspace" }).click()
   const renameDialog = page.getByRole("dialog")

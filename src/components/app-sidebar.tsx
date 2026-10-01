@@ -1,3 +1,4 @@
+import { pagePaths } from "@/lib/dashboard/routes"
 import { useDashboardApp } from "@/hooks/use-dashboard-app"
 import { ChevronDownIcon, LogOutIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon } from "lucide-react"
 import { Link } from "react-router"
@@ -7,7 +8,7 @@ import { toast } from "sonner"
 
 import { apiDelete, apiPatch, apiPost } from "@/components/dashboard/api"
 import { dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
-import { useToolGatewayStatus } from "@/components/dashboard/tool-gateway-status"
+import { useToolGatewayStatus } from "@/components/dashboard/tools/tool-gateway-status"
 import { useWorkspace } from "@/components/dashboard/workspace-provider"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -47,7 +48,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     setWorkspaceMenuOpen(false)
     closeMobileSidebar()
     selectWorkspace(workspaceId)
-    if (pathname.startsWith("/dashboard/providers/") && pathname !== "/dashboard/providers/codex") navigate("/dashboard/providers")
+    if (pathname.startsWith(`${pagePaths.providers}/`)) navigate(pagePaths.providers)
   }
 
   function switchApp(appId: string) {
@@ -91,7 +92,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       await apiDelete(`/api/admin/workspaces/${workspace.id}`, { confirmation })
       selectWorkspace("default")
       await refreshWorkspaces()
-      navigate("/dashboard")
+      navigate(pagePaths.dashboard)
       setDeleteOpen(false)
       setConfirmation("")
       toast.success("Workspace deleted")

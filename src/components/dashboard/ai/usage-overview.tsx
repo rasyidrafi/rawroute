@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger } from "@/components/ui/select"
 import type { DashboardPayload, DashboardQuery } from "@/lib/types"
 import { formatAppDateTime } from "@/lib/timezone"
-import { DEFAULT_GRANULARITY, getGranularityOptions, getOptionLabel, getRangeLabel, PRESET_OPTIONS } from "@/components/dashboard/usage-utils"
+import { DEFAULT_GRANULARITY, getGranularityOptions, getOptionLabel, getRangeLabel, PRESET_OPTIONS } from "@/components/dashboard/ai/usage-utils"
 
 export function UsageOverview({ dashboard, loading, preset, setPreset, granularity, setGranularity, selectedRange, onRangeChange, onRefresh }: { dashboard: DashboardPayload | null; loading: boolean; preset: DashboardQuery["preset"]; setPreset: (value: DashboardQuery["preset"]) => void; granularity: NonNullable<DashboardQuery["granularity"]> | "auto"; setGranularity: (value: NonNullable<DashboardQuery["granularity"]> | "auto") => void; selectedRange: DateRange | undefined; onRangeChange: (range: DateRange | undefined) => void; onRefresh: () => void }) {
   const initialLoading = loading && !dashboard

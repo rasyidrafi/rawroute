@@ -130,13 +130,13 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
     const existing = await listProviderModels(provider.id)
     const candidates = new Map(observations)
     for (const model of existing) {
-      if ((model.source === "builtin" || model.source === "discovered") && !candidates.has(model.upstreamModel)) candidates.set(model.upstreamModel, { name: model.name, accountIds: [] })
+      if ((model.source === "discovered") && !candidates.has(model.upstreamModel)) candidates.set(model.upstreamModel, { name: model.name, accountIds: [] })
     }
     const existingByGatewayId = new Map(existing.map((model) => [model.gatewayModelId, model]))
     await mapConcurrent([...candidates], 1, async ([id, observed]) => {
       const gatewayModelId = `codex/${id}`
       const model = existingByGatewayId.get(gatewayModelId)
-      if (model && model.source !== "builtin" && model.source !== "discovered") { status.skipped++; return }
+      if (model && model.source !== "discovered") { status.skipped++; return }
       const retained = model?.discovery?.accountIds.filter((accountId) => failed.has(accountId)) || []
       const accountIds = [...new Set([...observed.accountIds, ...retained])].sort()
       const discovery = { lastSeenAt: observed.accountIds.length ? status.attemptedAt : model?.discovery?.lastSeenAt, accountIds, stale: !observed.accountIds.length }

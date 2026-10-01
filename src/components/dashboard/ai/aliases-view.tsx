@@ -5,8 +5,8 @@ import { ArrowLeftRightIcon, CopyIcon, ListOrderedIcon, PencilIcon, PlusIcon, Sh
 import useSWR from "swr"
 import { toast } from "sonner"
 
-import { AliasForm } from "@/components/dashboard/alias-form"
-import { ComboForm } from "@/components/dashboard/combo-form"
+import { AliasForm } from "@/components/dashboard/ai/alias-form"
+import { ComboForm } from "@/components/dashboard/ai/combo-form"
 import { ApiRequestError } from "@/components/dashboard/api"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"

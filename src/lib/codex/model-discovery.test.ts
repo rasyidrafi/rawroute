@@ -71,12 +71,12 @@ test("preserves a custom ID collision, including the internal writer's ownership
   await expect(reconcileDiscoveredModel(provider.id, { gatewayModelId: custom.gatewayModelId, name: "Future", upstreamModel: "future-model", discovery: { accountIds: [], stale: false } })).rejects.toThrow("Custom model owns")
 })
 
-test("migrates built-ins without breaking aliases and retains absent records", async () => {
+test("retains absent discovered records without breaking aliases", async () => {
   const provider = await setup()
-  const old = await upsertModel(provider.id, { gatewayModelId: "codex/old-model", name: "Old", upstreamModel: "old-model", source: "builtin", enabled: false })
+  const old = await reconcileDiscoveredModel(provider.id, { gatewayModelId: "codex/old-model", name: "Old", upstreamModel: "old-model", discovery: { accountIds: [], stale: true } })
   await upsertAlias({ name: "Stable", alias: "stable", targetModelId: old.gatewayModelId })
   await refreshCodexModels(true)
-  expect((await listProviderModels(provider.id)).find((entry) => entry.id === old.id)).toMatchObject({ source: "discovered", enabled: false, discovery: { stale: true } })
+  expect((await listProviderModels(provider.id)).find((entry) => entry.id === old.id)).toMatchObject({ source: "discovered", discovery: { stale: true } })
   expect(await listAliases()).toMatchObject([{ targetModelId: old.gatewayModelId }])
 })
 

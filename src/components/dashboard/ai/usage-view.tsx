@@ -5,9 +5,9 @@ import { BarChart3Icon, DatabaseIcon, KeyRoundIcon, WalletCardsIcon } from "luci
 import type { DateRange } from "react-day-picker"
 
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
-import { EmptyState, ModelMix, TopKeys, UsageTable, DashboardTrend } from "@/components/dashboard/usage-panels"
-import { UsageOverview } from "@/components/dashboard/usage-overview"
-import { DEFAULT_GRANULARITY, formatCalendarSelection, resolveSelectedRange } from "@/components/dashboard/usage-utils"
+import { EmptyState, ModelMix, TopKeys, UsageTable, DashboardTrend } from "@/components/dashboard/ai/usage-panels"
+import { UsageOverview } from "@/components/dashboard/ai/usage-overview"
+import { DEFAULT_GRANULARITY, formatCalendarSelection, resolveSelectedRange } from "@/components/dashboard/ai/usage-utils"
 import type { DashboardPayload, DashboardQuery } from "@/lib/types"
 import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-defaults"
 import { calendarDateFromInstant } from "@/lib/timezone"

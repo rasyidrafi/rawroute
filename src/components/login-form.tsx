@@ -1,3 +1,4 @@
+import { pagePaths } from "@/lib/dashboard/routes"
 import useSWR from "swr"
 import { isLocalLoginHost, type BootstrapStatus } from "@/lib/auth-defaults"
 import { useState, useSyncExternalStore, type FormEvent } from "react"
@@ -47,7 +48,7 @@ export function LoginForm({ checkingSession = false }: { checkingSession?: boole
         return
       }
       await refreshSession()
-      navigate("/dashboard", { replace: true })
+      navigate(pagePaths.dashboard, { replace: true })
     } catch {
       toast.error("Unable to reach the gateway")
     } finally {

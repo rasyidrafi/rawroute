@@ -6,7 +6,7 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   expect(login.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
 
-  await page.goto("/dashboard/model-pricing")
+  await page.goto("/dashboard/ai/pricing")
   await page.getByRole("button", { name: "New custom group" }).click()
   await page.getByLabel("Group name").fill("Pricing editor test")
   await page.getByRole("button", { name: "Save group", exact: true }).click()

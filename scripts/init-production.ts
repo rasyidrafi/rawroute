@@ -19,7 +19,6 @@ const files: Record<string, string> = {
 DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
 DEFAULT_PROXY_API_KEY=sk-${secret()}
 SESSION_SECRET=${secret()}
-CREDENTIAL_ENCRYPTION_KEY=${secret()}
 TIMEZONE=UTC
 DATABASE_URL=postgresql://rawroute:${databasePassword}@postgres:5432/rawroute
 DATABASE_POOL_MAX=4

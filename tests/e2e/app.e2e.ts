@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { pagePaths } from "../../src/lib/page-routes"
+import { pagePaths } from "../../src/lib/dashboard/routes"
 
 test("production serves every dashboard deep link and keeps unknown APIs out of the HTML app", async ({ request }) => {
   for (const path of Object.values(pagePaths)) {
@@ -30,7 +30,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page.getByText("Usage summary", { exact: true })).toBeVisible()
   await expect(page.locator('[data-slot="chart"] .recharts-surface').first()).toBeVisible()
   await expect(page.getByRole("link", { name: "Admin login", exact: true })).toBeVisible()
-  await page.goto("/dashboard/providers/codex")
+  await page.goto("/dashboard/ai/codex-providers")
   await expect(page).toHaveURL(/\/login$/)
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
 
@@ -54,17 +54,17 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page).toHaveURL(/\/login$/)
   await page.getByLabel("Password", { exact: true }).fill("private-password")
   await page.getByRole("button", { name: "Sign in", exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible()
   await page.goto("/login")
-  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
 
   await page.getByRole("button", { name: "Change color theme" }).click()
   await page.getByRole("menuitemradio", { name: "Dark", exact: true }).click()
   await expect(page.locator("html")).toHaveClass(/dark/)
   await page.reload()
   await expect(page.locator("html")).toHaveClass(/dark/)
-  await page.goto("/dashboard/usage")
+  await page.goto("/dashboard/ai/usage")
   await expect(page.getByText("Usage summary", { exact: true })).toBeVisible()
   await expect(page.locator('[data-slot="chart"] .recharts-surface').first()).toBeVisible()
   expect(await page.locator("html").evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Plus Jakarta Sans")
@@ -74,4 +74,12 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page).toHaveURL(/\/login$/)
   expect(await (await page.request.get("/api/auth/session")).json()).toEqual({ authenticated: false })
   expect(errors).toEqual([])
+})
+
+test("retired dashboard URLs are absent rather than redirected", async ({ request }) => {
+  for (const path of ["/dashboard", "/dashboard/providers", "/dashboard/providers/example", "/dashboard/providers/codex", "/dashboard/aliases", "/dashboard/usage", "/dashboard/budgets", "/dashboard/model-pricing", "/dashboard/models", "/dashboard/oauth-providers", "/dashboard/tool-gateway", "/dashboard/tool-gateway/tools", "/dashboard/coding-agents/codex"]) {
+    const response = await request.get(path, { maxRedirects: 0 })
+    expect(response.status(), path).toBe(404)
+    expect(response.headers().location).toBeUndefined()
+  }
 })

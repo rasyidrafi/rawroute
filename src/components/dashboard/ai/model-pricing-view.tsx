@@ -6,7 +6,7 @@ import useSWR from "swr"
 
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
-import { formatCost } from "@/components/dashboard/usage-utils"
+import { formatCost } from "@/components/dashboard/ai/usage-utils"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -22,7 +22,7 @@ import { TableColumns, Table, TableBody, TableCell, TableRow } from "@/component
 import { formatAppDate } from "@/lib/timezone"
 import type { CanonicalModelSummary, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingContextTier, PricingJob, PricingRates } from "@/lib/types"
 
-import { Panel, sanitizeNonNegativeDraft } from "@/components/dashboard/management-panel"
+import { Panel, sanitizeNonNegativeDraft } from "@/components/dashboard/ai/management-panel"
 
 type PricingModelRow = { id: string; name: string; groupKey: string; gatewayModelId: string; upstreamModel: string; providerId: string; enabled: boolean }
 type PricingGroupRow = ModelPricingGroup & { canonicalModel: CanonicalModelSummary | null; versions: ModelPricingVersion[]; currentVersion: ModelPricingVersion | null }

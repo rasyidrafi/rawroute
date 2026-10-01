@@ -162,7 +162,7 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
     if (members.some((member) => payloadErrors[member.modelId])) { toast.error("Fix the custom payload JSON before saving."); return }
     const formData = new FormData(event.currentTarget)
     setPending(true)
-    try { await onSave({ originalId: combo?.id || undefined, combo: String(formData.get("combo")), name: String(formData.get("name")), members, memberModelIds: members.map((member) => member.modelId) }) }
+    try { await onSave({ originalId: combo?.id || undefined, combo: String(formData.get("combo")), name: String(formData.get("name")), members }) }
     finally { setPending(false) }
   }
 

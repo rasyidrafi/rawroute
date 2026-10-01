@@ -2,7 +2,7 @@ export type Protocol = "openai-chat" | "openai-responses" | "anthropic-messages"
 
 export type AuthType = "bearer" | "x-api-key" | "none"
 
-export type ProviderCredentialKind = "api-key" | "codex-oauth" | "codex-cli-proxy"
+export type ProviderCredentialKind = "api-key" | "codex-cli-proxy"
 
 export type WorkspaceStatus = "active" | "deleting"
 
@@ -50,8 +50,6 @@ export interface ProviderApiKey {
   name: string
   key: string
   credentialKind?: ProviderCredentialKind
-  refreshToken?: string
-  idToken?: string
   accountId?: string
   email?: string
   planType?: string
@@ -70,7 +68,7 @@ export interface ProviderApiKey {
   createdAt: string
 }
 
-export type ModelSource = "builtin" | "custom" | "discovered"
+export type ModelSource = "custom" | "discovered"
 
 export interface Model {
   id: string
@@ -80,7 +78,7 @@ export interface Model {
   name: string
   upstreamModel: string
   enabled: boolean
-  /** User-owned mapping, discovered route, or legacy built-in awaiting migration. */
+  /** User-owned mapping or automatically discovered route. */
   source?: ModelSource
   discovery?: { lastSeenAt?: string; accountIds: string[]; stale: boolean }
   reasoningCapability?: ModelReasoningCapability
@@ -125,9 +123,7 @@ export interface ModelCombo {
   id: string
   combo: string
   name: string
-  members?: ComboMember[]
-  /** Legacy mirror retained while older clients and stored documents migrate. */
-  memberModelIds: string[]
+  members: ComboMember[]
   createdAt: string
 }
 
@@ -405,7 +401,6 @@ export interface CodexResetResult {
 export interface AppData {
   version: 4
   admin: {
-    username: string
     passwordHash: string
     mustChangePassword: boolean
   }

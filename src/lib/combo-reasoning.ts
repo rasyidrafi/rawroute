@@ -64,9 +64,8 @@ export function cleanReasoningEffort(value: unknown) {
   return effort && effort.length <= 64 ? effort : undefined
 }
 
-export function comboMembers(combo: Pick<ModelCombo, "members" | "memberModelIds">): ComboMember[] {
-  if (Array.isArray(combo.members) && combo.members.length) return combo.members
-  return combo.memberModelIds.map((modelId) => ({ modelId, reasoning: { mode: "inherit" } }))
+export function comboMembers(combo: Pick<ModelCombo, "members">): ComboMember[] {
+  return combo.members
 }
 
 export function supportedReasoningEfforts(model: Pick<Model, "reasoningCapability"> | undefined) {

@@ -7,7 +7,7 @@ import { drainBackgroundTasks } from "@/lib/background-tasks"
 import { jsonError } from "@/lib/http"
 import { closeLocalDatabase } from "@/lib/local-db"
 import { closeLocalRedis } from "@/lib/local-redis"
-import { isPagePath, pagePaths, pageRedirects } from "@/lib/page-routes"
+import { isPagePath, pagePaths } from "@/lib/dashboard/routes"
 import { apiRoutes } from "@/server/routes"
 
 const port = Number(process.env.PORT || 3000)
@@ -25,10 +25,8 @@ const server = serve({
   },
   fetch(request) {
     const url = new URL(request.url)
-    const destination = Object.hasOwn(pageRedirects, url.pathname) ? pageRedirects[url.pathname] : undefined
-    if (destination && (request.method === "GET" || request.method === "HEAD")) return Response.redirect(new URL(destination, url), 307)
     // Only registered pages serve HTML. Unknown API/provider paths stay errors.
-    if (destination || isPagePath(url.pathname)) return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } })
+    if (isPagePath(url.pathname)) return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } })
     return jsonError("Not found.", 404)
   },
 })

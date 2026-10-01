@@ -131,7 +131,7 @@ for (const route of ["providers", "aliases", "budgets", "model-pricing", "provid
     await authenticate(page)
     const endpoint = route === "cliproxy" ? "cliproxy/status" : route
     const data = await hold(page, `**/api/admin/${endpoint}`)
-    await page.goto(`/dashboard/${route}`)
+    await page.goto(({ providers: "/dashboard/ai/providers", aliases: "/dashboard/ai/routing", budgets: "/dashboard/ai/budgets", "model-pricing": "/dashboard/ai/pricing", "providers/codex": "/dashboard/ai/codex-providers", cliproxy: "/dashboard/cliproxy" } as Record<string, string>)[route]!)
     await data.reached
     const selector = 'main [data-slot="card-header"]'
     await expect(page.locator(selector).first()).toBeVisible()

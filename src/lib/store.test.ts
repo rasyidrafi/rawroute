@@ -82,12 +82,12 @@ describe("configuration storage", () => {
 
   test("persists metadata through the canonical store API", async () => {
     const before = await readMeta()
-    await updateMeta((meta) => { meta.admin.username = "test-admin" })
+    await updateMeta((meta) => { meta.admin.mustChangePassword = false })
     const after = await readMeta()
-    expect(after.admin.username).toBe("test-admin")
-    after.admin.username = "mutated-copy"
-    expect((await readMeta()).admin.username).toBe("test-admin")
-    await updateMeta((meta) => { meta.admin.username = before.admin.username })
+    expect(after.admin.mustChangePassword).toBe(false)
+    after.admin.mustChangePassword = true
+    expect((await readMeta()).admin.mustChangePassword).toBe(false)
+    await updateMeta((meta) => { meta.admin.mustChangePassword = before.admin.mustChangePassword })
   })
 
   test("maintains provider counters for API keys and models", async () => {

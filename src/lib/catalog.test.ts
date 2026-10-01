@@ -17,7 +17,7 @@ const combo: ModelCombo = {
   id: "combo-1",
   combo: "coding-fallback",
   name: "Coding fallback",
-  memberModelIds: ["p/model"],
+  members: ["p/model"].map(modelId => ({ modelId, reasoning: { mode: "inherit" as const } })),
   createdAt: "2026-01-01T00:00:00Z",
 }
 

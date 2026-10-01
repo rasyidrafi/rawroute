@@ -1,5 +1,5 @@
 import { useWorkspace } from "@/components/dashboard/workspace-provider"
-import { UsageView } from "@/components/dashboard/usage-view"
+import { UsageView } from "@/components/dashboard/ai/usage-view"
 
 /**
  * The selected admin workspace is browser state, so usage must not receive a

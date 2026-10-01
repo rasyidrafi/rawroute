@@ -1,7 +1,6 @@
 import { withManagementMutation } from "@/server/cliproxy/mutations"
 import { cliproxyManagement } from "@/lib/cliproxy/management"
 export { cliproxyManagement } from "@/lib/cliproxy/management"
-import { mapConcurrent } from "@/lib/concurrency"
 import { createHash } from "node:crypto"
 
 import { listProviderApiKeys, listProviders, upsertProviderApiKey } from "@/server/store"
@@ -74,15 +73,6 @@ export function codexWorkspacePrefix(workspaceId: string) {
   return `rr-codex-${digest}`
 }
 
-function legacyAuthFileName(workspaceId: string, account: ProviderApiKey) {
-  const identity = (account.accountId || account.id).trim().replace(/[^A-Za-z0-9._-]+/g, "-")
-  return `codex-rawroute-${codexWorkspacePrefix(workspaceId)}-${identity}.json`
-}
-
-function mappedFileName(account: ProviderApiKey, workspaceId: string) {
-  return account.cliProxyAuthFile || legacyAuthFileName(workspaceId, account)
-}
-
 export async function mappedWorkspaceForFile(fileName: string, targetWorkspaceId: string) {
   for (const workspace of await listWorkspaces()) {
     if (workspace.id === targetWorkspaceId) continue
@@ -96,60 +86,16 @@ export async function mappedWorkspaceForFile(fileName: string, targetWorkspaceId
   return undefined
 }
 
-export async function migrateLegacyCodexAccounts(provider: Provider, workspaceId: string, accounts: ProviderApiKey[]) {
-  const files = await listCliProxyCodexAuthFiles()
-  const byName = new Map(files.map((file) => [file.name, file]))
-  const migrated = await mapConcurrent(accounts, 4, async (account) => {
-    if (account.credentialKind !== "codex-oauth") return false
-    const file = byName.get(legacyAuthFileName(workspaceId, account))
-    if (!file) return false
-    await upsertProviderApiKey(provider.id, {
-      originalId: account.id,
-      name: account.name,
-      key: "",
-      credentialKind: "codex-cli-proxy",
-      accountId: file.accountId || account.accountId,
-      email: file.email || account.email,
-      planType: file.planType || account.planType,
-      expiresAt: file.expiresAt,
-      lastRefresh: file.lastRefresh,
-      cliProxyAuthFile: file.name,
-      cliProxyAuthIndex: file.authIndex,
-      cliProxyStatus: file.status,
-      cliProxyStatusMessage: file.statusMessage,
-      enabled: !file.disabled,
-      priority: account.priority,
-    })
-    return true
-  })
-  return migrated.filter(Boolean).length
-}
-
-export async function listMappedCodexAccounts(provider: Provider, workspaceId: string) {
-  let accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth" || entry.credentialKind === "codex-cli-proxy")
-  if (accounts.some((entry) => entry.credentialKind === "codex-oauth")) {
-    await migrateLegacyCodexAccounts(provider, workspaceId, accounts)
-    accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth" || entry.credentialKind === "codex-cli-proxy")
-  }
-  const limitedMappings = accounts.filter((entry) => entry.credentialKind === "codex-cli-proxy" && (entry.rpmLimit !== undefined || entry.maxConcurrency !== undefined))
-  if (limitedMappings.length) {
-    await Promise.all(limitedMappings.map((account) => upsertProviderApiKey(provider.id, {
-      originalId: account.id,
-      credentialKind: "codex-cli-proxy",
-      key: "__unchanged__",
-    })))
-    accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-oauth" || entry.credentialKind === "codex-cli-proxy")
-  }
+export async function listMappedCodexAccounts(provider: Provider) {
+  const accounts = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-cli-proxy")
   const files = await listCliProxyCodexAuthFiles()
   const byName = new Map(files.map((file) => [file.name, file]))
   return accounts.map((account) => {
-    const file = byName.get(mappedFileName(account, workspaceId))
+    const file = account.cliProxyAuthFile ? byName.get(account.cliProxyAuthFile) : undefined
     if (!file) return {
       ...account,
       cliProxyStatus: "missing",
-      cliProxyStatusMessage: account.credentialKind === "codex-oauth"
-        ? "Legacy credential could not be matched to a CLIProxy auth file. Reconnect this account."
-        : "Credential mapping is missing in CLIProxy.",
+      cliProxyStatusMessage: "Credential mapping is missing in CLIProxy.",
       enabled: false,
     }
     return {

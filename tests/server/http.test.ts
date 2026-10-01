@@ -51,12 +51,12 @@ test("login rejects incorrect passwords without creating a session", async () =>
   expect(response.headers.get("set-cookie")).toBeNull()
 })
 
-test("password-only login preserves existing credentials and ignores legacy usernames", async () => {
+test("password-only login preserves existing credentials", async () => {
   const base = start(apiRoutes)
-  await updateMeta((meta) => { meta.admin.username = "custom-admin"; meta.admin.mustChangePassword = false })
+  await updateMeta((meta) => { meta.admin.mustChangePassword = false })
   const saved = await readMeta()
   process.env.DEFAULT_ADMIN_PASSWORD = "changed-bootstrap-password"
-  for (const body of [{ password: "http-test-password" }, { username: "old-client-username", password: "http-test-password" }]) {
+  for (const body of [{ password: "http-test-password" }]) {
     const response = await fetch(new URL("/api/auth/login", base), {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     })

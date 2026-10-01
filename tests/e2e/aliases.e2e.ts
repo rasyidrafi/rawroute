@@ -57,7 +57,7 @@ async function seedProviderAndModel(page: Page) {
 test("Alias menu creates, deduplicates and deletes a model alias", async ({ page }) => {
   await authenticate(page)
   await seedProviderAndModel(page)
-  await page.goto("/dashboard/aliases")
+  await page.goto("/dashboard/ai/routing")
   await expect(page.getByRole("link", { name: "Model routing" })).toBeVisible()
   await expect(page.getByText("No aliases yet.")).toBeVisible()
 
@@ -99,7 +99,7 @@ test("Alias menu creates, deduplicates and deletes a model alias", async ({ page
 test("Model routing menu creates, reorders and deletes a fallback combo", async ({ page }) => {
   await authenticate(page)
   await seedProviderAndModel(page)
-  await page.goto("/dashboard/aliases")
+  await page.goto("/dashboard/ai/routing")
   await expect(page.getByText("No combos yet.")).toBeVisible()
 
   await page.getByRole("main").getByRole("button", { name: "Add combo" }).click()

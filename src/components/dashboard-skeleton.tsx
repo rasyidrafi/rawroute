@@ -3,27 +3,20 @@ import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, Ke
 import { Button } from "@/components/ui/button"
 import { LogToolbar } from "@/components/dashboard/logs/log-toolbar"
 import { LogResults, LogStatus } from "@/components/dashboard/logs/log-results"
-import { CodingAgentView } from "@/components/dashboard/coding-agent-view"
+import { CodingAgentView } from "@/components/dashboard/ai/coding-agent-view"
 import { useLocation } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { LoadingCard, LoadingTable } from "@/components/loading-layout"
 import { DashboardPage, logPageClassName } from "@/components/dashboard/page-layout"
-import { UsageSkeleton } from "@/components/dashboard/usage-skeleton"
-import { SettingsSkeleton } from "@/components/dashboard/settings/settings-skeleton"
-import { CliProxySkeleton } from "@/components/dashboard/cliproxy/skeleton"
-import { dashboardPageForPath, pageRedirects, type DashboardPage as Page } from "@/lib/dashboard/routes"
-
-export type DashboardSkeletonVariant = "endpoint-key" | "providers" | "oauth-providers" | "aliases" | "provider-detail" | "codex-detail" | "settings" | "usage" | "budgets" | "model-pricing" | "console-log" | "system-logs" | "cliproxy" | "coding-agent" | "opencode-agent" | "claude-agent" | "tool-gateway"
-const variants: Record<Page, DashboardSkeletonVariant> = {
-  dashboard: "endpoint-key", providers: "providers", provider: "provider-detail", codex: "codex-detail", aliases: "aliases", usage: "usage", budgets: "budgets", pricing: "model-pricing",
-  logs: "console-log", systemLogs: "system-logs", cliproxy: "cliproxy", settings: "settings", codexAgent: "coding-agent", opencodeAgent: "opencode-agent", claudeAgent: "claude-agent",
-  tools: "tool-gateway", toolCatalog: "tool-gateway", toolConnections: "tool-gateway", toolActivity: "tool-gateway", toolPolicies: "tool-gateway", toolSettings: "tool-gateway",
-}
+import { UsageSkeleton } from "@/components/dashboard/ai/usage-skeleton"
+import { SettingsSkeleton } from "@/components/dashboard/global/settings/settings-skeleton"
+import { CliProxySkeleton } from "@/components/dashboard/global/cliproxy/skeleton"
+import { dashboardPageForPath, dashboardPages, type DashboardSkeletonVariant } from "@/lib/dashboard/routes"
 
 export function dashboardSkeletonForPath(path: string): DashboardSkeletonVariant {
-  const page = dashboardPageForPath(pageRedirects[path] ?? path)
-  return page ? variants[page] : "endpoint-key"
+  const page = dashboardPageForPath(path)
+  return page ? dashboardPages[page].skeleton : "endpoint-key"
 }
 
 export function DashboardRouteSkeleton() {
@@ -40,7 +33,6 @@ export function DashboardContentSkeleton({ variant }: { variant: DashboardSkelet
   const content = {
     "endpoint-key": <EndpointKeySkeleton />,
     "providers": <ProvidersSkeleton />,
-    "oauth-providers": <LoadingCard title={<><LinkIcon className="size-5" />Codex Providers</>} description="Connect multiple Codex accounts once and route native Responses requests through this gateway. Usage limits update every five minutes." action><LoadingTable columns={["Account", "Plan", "Status", "Usage Limits", "Unused Resets", "Token expiry", "Actions"]} /></LoadingCard>,
     "aliases": <AliasesSkeleton />,
     "provider-detail": <ProviderDetailSkeleton codex={false} />,
     "codex-detail": <ProviderDetailSkeleton codex />,

@@ -43,7 +43,7 @@ export function catalogModels(providers: Provider[], models: Model[], aliases: M
   }
   const availableAliases = new Set(aliases.filter((alias) => enabledModels.has(alias.targetModelId) || Boolean(alias.sharedModelId)).map((alias) => alias.alias))
   for (const combo of combos) {
-    if (!combo.memberModelIds.some((member) => enabledModels.has(member) || availableAliases.has(member))) continue
+    if (!combo.members.some(({ modelId: member }) => enabledModels.has(member) || availableAliases.has(member))) continue
     entries.push({
       id: combo.combo,
       object: "model",
