@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest"
+import { beforeEach, describe, expect, test } from "bun:test"
 
 import { getDashboardPayload, recordUsageEvent, resetAnalyticsForTests } from "@/lib/analytics"
 import { listShareTargets, listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/workspace/model-shares"

@@ -1,5 +1,3 @@
-"use client"
-
 import { useMemo, useState } from "react"
 import { ActivityIcon } from "lucide-react"
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts"

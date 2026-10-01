@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useMemo, useState } from "react"
 import { AlertTriangleIcon, CheckIcon, ChevronsUpDownIcon, DollarSignIcon, PencilIcon, PlusIcon } from "lucide-react"
 import { LegendList } from "@legendapp/list/react"

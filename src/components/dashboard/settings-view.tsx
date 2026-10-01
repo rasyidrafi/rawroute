@@ -1,5 +1,3 @@
-"use client"
-
 import { LockKeyholeIcon } from "lucide-react"
 import { toast } from "sonner"
 

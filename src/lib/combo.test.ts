@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test } from "bun:test"
 
 import { _resetMemoryBackend, deleteCombo, listCombos, upsertCombo, upsertModel, upsertProvider } from "@/lib/store"
 

@@ -1,7 +1,5 @@
-import { loadEnvConfig } from "@next/env"
 import { Client } from "pg"
 
-loadEnvConfig(process.cwd())
 
 const targets = [
   { id: "09f41154-9cc4-45c8-8ea9-8a8cde14b1e6", name: "Unlimited GPT-5.3 Codex Spark" },

@@ -143,9 +143,43 @@ The development server listens on `http://localhost:3000`. For local development
 set database and Redis URLs to services reachable from your host. Compose service
 names in `.env.example` resolve only inside the Compose network.
 
+The application uses native Bun full-stack React: `src/index.ts` serves the HTML
+entry, bundled assets, and HTTP APIs on one port. `src/frontend.tsx` mounts React;
+`src/App.tsx` owns browser routes and reuses the dashboard components. Development
+uses Bun HMR and the Tailwind plugin. API registration and authorization live in
+`src/server/routes.ts` and `src/server/http.ts`.
+
+Build and run the production app locally with `bun run build` followed by
+`bun run start`. The built server runs from `dist/`, where Bun resolves its
+prebuilt HTML asset manifest. Docker uses the same artifact. Builds do not need
+database credentials or a live backend. `bun run typecheck` checks types separately.
+
+Bun loads local environment files for development and maintenance commands.
+`TIMEZONE` configures both server and browser display; `/api/config` exposes only
+the validated time zone and deployment version at runtime. Server environment
+variables are never inlined into the browser bundle. `HOSTNAME` and `PORT` control
+the listener; the container uses `0.0.0.0:8080`.
+
+Page HTML is a public application shell. Session guards control dashboard
+navigation, and every management API independently enforces its registered
+session/workspace policy. The public analytics page fetches its data through
+the public API. Unknown API and provider paths never fall back to the HTML app.
+
 Bun runs the application, build tools, tests, and maintenance scripts. Docker uses
 the same pinned Bun version. `node:` imports use Bun's compatibility APIs and do
 not require a separate Node.js installation.
+
+Browser tests run the production build with an in-memory data store and local
+CLIProxy/Executor fixtures. Install Chromium with
+`bunx --bun playwright install --with-deps chromium` and provide a disposable Redis
+database through `E2E_REDIS_URL` (default: `redis://127.0.0.1:6379/15`).
+`COMBO_TEST_REDIS_URL` enables the Redis integration test in the unit suite; use
+a separate test database for it.
+
+Unit and integration tests use `bun:test`. Run `bun run test` (or
+`bun test --isolate`) to give each file its own module registry and globals.
+The test preload restores environment variables after each test. A focused run
+can use `bun run test ./tests/server/http.test.ts`.
 
 ## Verification
 
@@ -155,6 +189,7 @@ bun run lint
 bun run test
 bun run typecheck
 bun run build
+bun run test:e2e
 docker compose --env-file .env.local config
 ```
 

@@ -1,7 +1,5 @@
-"use client"
-
 import { useState, type ReactNode } from "react"
-import Link from "next/link"
+import { Link } from "react-router"
 import { ArrowLeftIcon } from "lucide-react"
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -39,8 +37,7 @@ export function ConfirmAction({ title, description, buttonLabel, pending, disabl
 }
 
 export function EndpointValue() {
-  const endpoint = typeof window === "undefined" ? "/v1" : `${window.location.origin}/v1`
-  return <><code id="gateway-endpoint" suppressHydrationWarning className="min-w-0 flex-1 truncate text-sm">{endpoint}</code><script type={typeof window === "undefined" ? "text/javascript" : "text/plain"} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: '{var n=document.getElementById("gateway-endpoint");if(n)n.textContent=window.location.origin+"/v1"}' }} /></>
+  return <code className="min-w-0 flex-1 truncate text-sm">{window.location.origin}/v1</code>
 }
 
 export function NotFoundState({ label = "Provider not found", description = "This resource may have been deleted or renamed.", backHref = "/dashboard/providers", backLabel = "Back to list" }: { label?: string; description?: string; backHref?: string; backLabel?: string; onBack?: () => void }) {
@@ -52,7 +49,7 @@ export function NotFoundState({ label = "Provider not found", description = "Thi
           <CardDescription>{description}</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button nativeButton={false} variant="outline" render={<Link href={backHref} prefetch={false} />}><ArrowLeftIcon />{backLabel}</Button>
+          <Button nativeButton={false} variant="outline" render={<Link to={backHref} />}><ArrowLeftIcon />{backLabel}</Button>
         </CardContent>
       </Card>
     </div>

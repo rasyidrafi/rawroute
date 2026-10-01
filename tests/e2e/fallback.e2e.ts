@@ -1,13 +1,32 @@
 import { expect, test, type APIRequestContext } from "@playwright/test"
 
 async function authenticate(request: APIRequestContext) {
-  let login = await request.post("/api/auth/login", { data: { username: "admin", password: "change-me-now" } })
+  let login = await request.post("/api/auth/login", { data: { username: "admin", password: "e2e-initial-password" } })
   if (!login.ok()) login = await request.post("/api/auth/login", { data: { username: "admin", password: "private-password" } })
   expect(login.ok()).toBe(true)
 }
 
 async function codexModels(request: APIRequestContext) {
-  const response = await request.get("/v1/models", { headers: { authorization: "Bearer sk-local-change-me" } })
+  await authenticate(request)
+  const accounts = await request.get("/api/admin/oauth-providers")
+  expect(accounts.ok()).toBe(true)
+  if (!(await accounts.json()).accounts.length) {
+    const start = await request.post("/api/admin/oauth-providers/codex/device/start")
+    expect(start.ok(), await start.text()).toBe(true)
+    const { loginId, authorizationUrl } = await start.json()
+    const state = new URL(authorizationUrl).searchParams.get("state")
+    const callback = await request.post("/api/admin/oauth-providers/codex/device/callback", {
+      data: { loginId, redirectUrl: `http://localhost:1455/auth/callback?code=e2e-code&state=${state}` },
+    })
+    expect(callback.ok(), await callback.text()).toBe(true)
+    const poll = await request.post("/api/admin/oauth-providers/codex/device/poll", { data: { loginId, name: "Routing test account" } })
+    expect((await poll.json()).status).toBe("authorized")
+  }
+  const catalog = await request.get("/api/admin/oauth-providers")
+  const { provider } = await catalog.json()
+  const refresh = await request.post(`/api/admin/providers/${provider.id}/models/refresh`)
+  expect(refresh.ok(), await refresh.text()).toBe(true)
+  const response = await request.get("/v1/models", { headers: { authorization: "Bearer sk-e2e-gateway" } })
   expect(response.ok()).toBe(true)
   return ((await response.json()).data as Array<{ id: string }>).map((model) => model.id).filter((id) => id.startsWith("codex/"))
 }
@@ -18,7 +37,7 @@ test("synthetic CLIProxy cooldown never exposes a long retry delay", async ({ re
   expect(model).toBeTruthy()
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-local-change-me" },
+    headers: { authorization: "Bearer sk-e2e-gateway" },
     data: { model, input: "hello", stream: true },
   })
 
@@ -32,7 +51,7 @@ test("Codex cooldown never reaches OpenCode as a retry instruction", async ({ re
   const [model] = await codexModels(request)
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-local-change-me" },
+    headers: { authorization: "Bearer sk-e2e-gateway" },
     data: { model, input: "hello", stream: true },
   })
 
@@ -46,7 +65,7 @@ test("ambiguous upstream 429 cannot impose a retry deadline", async ({ request }
   const [model] = await codexModels(request)
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-local-change-me" },
+    headers: { authorization: "Bearer sk-e2e-gateway" },
     data: { model, input: "hello", stream: true },
   })
 
@@ -66,7 +85,7 @@ test("combo immediately falls back instead of forwarding model cooldown", async 
   expect(saved.ok()).toBe(true)
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-local-change-me" },
+    headers: { authorization: "Bearer sk-e2e-gateway" },
     data: { model: comboId, input: "hello", stream: true },
   })
 

@@ -1,15 +1,15 @@
-import { beforeEach, expect, test, vi } from "vitest"
+import { beforeEach, expect, test, mock, jest } from "bun:test"
 
-const mocks = vi.hoisted(() => ({ accounts: vi.fn(), files: vi.fn(), call: vi.fn(), management: vi.fn(), lock: vi.fn() }))
-vi.mock("@/lib/store", () => ({ listProviderApiKeys: mocks.accounts }))
-vi.mock("@/lib/codex/cliproxy", () => ({ listCliProxyCodexAuthFiles: mocks.files, cliProxyCodexApiCall: mocks.call, cliproxyManagement: mocks.management }))
-vi.mock("@/lib/local-redis", () => ({ localRedisSetIfAbsent: mocks.lock }))
-vi.mock("@/lib/logger", () => ({ writeLog: vi.fn() }))
-vi.mock("@/lib/workspace/context", () => ({ currentWorkspaceId: () => "workspace" }))
-import { quotaAllowsProbe, recoverCodexQuota } from "@/lib/codex/recovery"
+const mocks = { accounts: mock(), files: mock(), call: mock(), management: mock(), lock: mock() }
+mock.module("@/lib/store", () => ({ listProviderApiKeys: mocks.accounts }))
+mock.module("@/lib/codex/cliproxy", () => ({ listCliProxyCodexAuthFiles: mocks.files, cliProxyCodexApiCall: mocks.call, cliproxyManagement: mocks.management }))
+mock.module("@/lib/local-redis", () => ({ localRedisSetIfAbsent: mocks.lock }))
+mock.module("@/lib/logger", () => ({ writeLog: mock() }))
+mock.module("@/lib/workspace/context", () => ({ currentWorkspaceId: () => "workspace" }))
+const { quotaAllowsProbe, recoverCodexQuota } = await import("@/lib/codex/recovery")
 
 beforeEach(() => {
-  vi.resetAllMocks()
+  jest.resetAllMocks()
   mocks.accounts.mockResolvedValue([{ id: "a", enabled: true, credentialKind: "codex-cli-proxy", cliProxyAuthFile: "owned" }])
   mocks.files.mockResolvedValue([{ name: "owned", authIndex: "index", statusMessage: "usage_limit_reached" }])
   mocks.lock.mockResolvedValue(true)

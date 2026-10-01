@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useState } from "react"
 import { LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import useSWR, { useSWRConfig } from "swr"

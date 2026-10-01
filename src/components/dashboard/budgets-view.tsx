@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useMemo, useState } from "react"
 import { addDays, format } from "date-fns"
 import type { DateRange } from "react-day-picker"

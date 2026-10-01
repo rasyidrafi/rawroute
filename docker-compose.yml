@@ -36,7 +36,6 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY}
       TIMEZONE: ${TIMEZONE:-UTC}
-      NEXT_PUBLIC_TIMEZONE: ${NEXT_PUBLIC_TIMEZONE:-UTC}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       DATABASE_COLLECTION_PREFIX: ${DATABASE_COLLECTION_PREFIX:-rawroute}
       DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-20}
@@ -88,7 +87,6 @@ services:
       # gated below, so existing deployments do not start it accidentally.
       EXECUTOR_UPSTREAM_URL: ${EXECUTOR_UPSTREAM_URL:-http://executor:4788}
       EXECUTOR_UPSTREAM_API_KEY: ${EXECUTOR_UPSTREAM_API_KEY:-}
-      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY:-}
       DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-unknown}
     depends_on:
       postgres:
@@ -110,6 +108,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 6
+    stop_grace_period: 45s
     restart: unless-stopped
 
   cli-proxy-api:

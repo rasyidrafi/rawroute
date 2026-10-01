@@ -1,14 +1,14 @@
-import { beforeEach, expect, test, vi } from "vitest"
+import { beforeEach, expect, test, mock } from "bun:test"
 
-const mocks = vi.hoisted(() => ({
-  compareAndDelete: vi.fn(),
-  delete: vi.fn(),
-  get: vi.fn(),
-  set: vi.fn(),
-  setIfAbsent: vi.fn(),
-}))
+const mocks = {
+  compareAndDelete: mock(),
+  delete: mock(),
+  get: mock(),
+  set: mock(),
+  setIfAbsent: mock(),
+}
 
-vi.mock("@/lib/local-redis", () => ({
+mock.module("@/lib/local-redis", () => ({
   localRedisCompareAndDelete: mocks.compareAndDelete,
   localRedisDelete: mocks.delete,
   localRedisGet: mocks.get,
@@ -16,15 +16,15 @@ vi.mock("@/lib/local-redis", () => ({
   localRedisSetIfAbsent: mocks.setIfAbsent,
 }))
 
-import {
+const {
   deletePendingCliProxyCodexLogin,
   reservePendingCliProxyCodexLogin,
   savePendingCliProxyCodexLogin,
   takePendingCliProxyCodexLogin,
-} from "@/lib/codex/cli-login"
+} = await import("@/lib/codex/cli-login")
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  mock.clearAllMocks()
   mocks.compareAndDelete.mockResolvedValue(true)
   mocks.delete.mockResolvedValue(true)
   mocks.set.mockResolvedValue(true)

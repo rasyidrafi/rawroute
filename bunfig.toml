@@ -1,0 +1,6 @@
+[serve.static]
+plugins = ["bun-plugin-tailwind"]
+env = "disable"
+
+[test]
+preload = ["./tests/setup.ts"]

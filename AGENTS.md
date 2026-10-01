@@ -1,12 +1,13 @@
-<!-- BEGIN:nextjs-agent-rules -->
+# Bun full-stack React
 
-# This is NOT the Next.js you know
+The server entry is `src/index.ts`; `src/index.html` loads `src/frontend.tsx` and
+`src/App.tsx`. Use native Bun routing and HTML bundling. Keep browser code free
+of server imports and secrets. API routes must declare their access policy in
+`src/server/routes.ts`; workspace handlers execute inside `runInWorkspace`.
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
-
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
+Consult `.agents/skills/ask-bun/SKILL.md` and its script for Bun-specific guidance.
+`bun run build` bundles the app; TypeScript checks run separately with
+`bun run typecheck`.
 
 After making changes, run `bun run lint` and fix all errors and warnings.
 Fix violations in source; do not disable rules, add suppressions, or broaden allowances to make lint pass.

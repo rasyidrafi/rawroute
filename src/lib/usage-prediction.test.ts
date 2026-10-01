@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, test } from "bun:test"
 
 import { isOpenAiCodexModel, predictPayloadCalibratedCost } from "@/lib/usage-prediction"
 

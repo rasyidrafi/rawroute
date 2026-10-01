@@ -4,6 +4,11 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const formatterCache = new Map<string, Intl.DateTimeFormat>()
 let cachedTimeZoneSource: string | undefined
 let cachedTimeZone = DEFAULT_TIME_ZONE
+let browserTimeZone = DEFAULT_TIME_ZONE
+
+export function configureBrowserTimeZone(timeZone: string) {
+  browserTimeZone = timeZone
+}
 
 type ZonedParts = {
   year: number
@@ -16,7 +21,7 @@ type ZonedParts = {
 }
 
 function configuredTimeZone() {
-  const value = process.env.NEXT_PUBLIC_TIMEZONE || process.env.TIMEZONE || DEFAULT_TIME_ZONE
+  const value = (typeof window === "undefined" ? process.env.TIMEZONE : browserTimeZone) || DEFAULT_TIME_ZONE
   if (value === cachedTimeZoneSource) return cachedTimeZone
   try {
     new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: value }).format()

@@ -1,9 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
-import { cookies, headers } from "next/headers"
 
 import { findIndexedApiKeyByValue, readSessionSecret } from "@/lib/store"
-import type { AuthenticatedGatewayKey, Workspace } from "@/lib/types"
-import { DEFAULT_WORKSPACE_ID, enterWorkspace } from "@/lib/workspace/context"
+import type { AuthenticatedGatewayKey } from "@/lib/types"
 import { getWorkspace } from "@/lib/workspace/repository"
 
 const COOKIE_NAME = "rawroute_session"
@@ -21,54 +19,32 @@ export function isSecureSessionRequest(requestHeaders: HeaderReader) {
   return forwarded === "https"
 }
 
-export async function createSession() {
+export async function createSession(request: Request) {
   const sessionSecret = await readSessionSecret()
   const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 7
   const value = `${expiresAt}.${sign(String(expiresAt), sessionSecret)}`
-  const jar = await cookies()
-  const requestHeaders = await headers()
-  jar.set(COOKIE_NAME, value, {
+  return new Bun.Cookie(COOKIE_NAME, value, {
     httpOnly: true,
     sameSite: "lax",
-    secure: isSecureSessionRequest(requestHeaders),
+    secure: new URL(request.url).protocol === "https:" || isSecureSessionRequest(request.headers),
     path: "/",
     expires: new Date(expiresAt),
-  })
+  }).serialize()
 }
 
-export async function destroySession() {
-  const jar = await cookies()
-  jar.delete(COOKIE_NAME)
+export function destroySession() {
+  return new Bun.Cookie(COOKIE_NAME, "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 }).serialize()
 }
 
-export async function isAuthenticated() {
-  const jar = await cookies()
-  const value = jar.get(COOKIE_NAME)?.value
+export async function isAuthenticated(request: Request) {
+  const value = new Bun.CookieMap(request.headers.get("cookie") || "").get(COOKIE_NAME)
   if (!value) return false
-  const [expires, signature] = value.split(".")
-  if (!expires || !signature || Number(expires) < Date.now()) return false
+  const [expires, signature, extra] = value.split(".")
+  if (!expires || !signature || extra !== undefined || !Number.isSafeInteger(Number(expires)) || Number(expires) <= Date.now()) return false
   const expected = sign(expires, await readSessionSecret())
   const left = Buffer.from(signature)
   const right = Buffer.from(expected)
   return left.length === right.length && timingSafeEqual(left, right)
-}
-
-export async function requireAdmin() {
-  if (!(await isAuthenticated())) throw new Error("UNAUTHORIZED")
-  const workspaceId = (await headers()).get("x-rawroute-workspace-id")?.trim() || DEFAULT_WORKSPACE_ID
-  const workspace = await getWorkspace(workspaceId)
-  if (!workspace || workspace.status !== "active") throw new Error("WORKSPACE_UNAVAILABLE")
-  return () => enterWorkspace(workspace)
-}
-
-export async function requireAdminWorkspace(request: Request): Promise<Workspace> {
-  if (!(await isAuthenticated())) throw new Error("UNAUTHORIZED")
-  const workspaceId = request.headers.get("x-rawroute-workspace-id")?.trim()
-  if (!workspaceId) throw new Error("WORKSPACE_REQUIRED")
-  const workspace = await getWorkspace(workspaceId)
-  if (!workspace || workspace.status !== "active") throw new Error("WORKSPACE_UNAVAILABLE")
-  enterWorkspace(workspace)
-  return workspace
 }
 
 export async function authenticateProxyKey(request: Request) {
@@ -84,7 +60,6 @@ export async function authenticateProxyKey(request: Request) {
   // to warm proxy authentications.
   const workspace = await getWorkspace(indexed.workspaceId)
   if (!workspace || workspace.status !== "active") return undefined
-  enterWorkspace(workspace)
   return { workspace, apiKey: indexed.apiKey } satisfies AuthenticatedGatewayKey
 }
 

@@ -54,13 +54,13 @@ This discovers **CLIProxy-supported routes**, not proof that OpenAI has enabled 
 ### 3. Integrate refresh and dashboard behavior
 
 - Trigger refresh after successful account connection and account enable/remove changes.
-- On Codex provider reads and gateway model-list reads, return saved models promptly and schedule a due refresh through the existing Next.js `after()` pattern, carrying explicit workspace context. Bound any cold-start wait.
+- On Codex provider reads and gateway model-list reads, return saved models promptly and schedule a due refresh through the workspace-scoped `scheduleWorkspaceTask()` runner, carrying explicit workspace context. Bound any cold-start wait.
 - This is demand-driven refresh: an idle deployment catches up on its next relevant request. If updates must occur during complete inactivity, add a scheduled worker invoking the same synchronizer.
 - Keep inference requests independent of catalog-fetch availability.
 - Add **Refresh models**, **Auto-discovered / Custom**, last successful refresh, and stale/error status to `src/components/dashboard/provider-detail-view.tsx`.
 - Add an authenticated, workspace-scoped refresh route. It forces RawRoute to reread CLIProxy; the UI must not imply it forces CLIProxy's remote catalog updater.
 - Update admin mutation rules so discovered identity fields are system-managed while enable/disable remains user-controlled. Custom model CRUD remains user-owned.
-- Update provider counts, `/v1/models`, and routing caches consistently after reconciliation. Read the installed Next.js route/`after` documentation before implementing those hooks.
+- Update provider counts, `/v1/models`, and routing caches consistently after reconciliation. Use the task runner so refreshes retain workspace ownership and drain on shutdown.
 
 ### 4. Verify behavior
 

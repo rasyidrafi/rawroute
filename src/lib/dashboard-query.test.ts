@@ -1,6 +1,7 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, test } from "bun:test"
 
-import { DEFAULT_DASHBOARD_QUERY, parseDashboardQuery } from "@/lib/dashboard-query"
+import { parseDashboardQuery } from "@/lib/dashboard-query"
+import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-defaults"
 
 describe("parseDashboardQuery", () => {
   test("defaults missing presets to the budget window", () => {

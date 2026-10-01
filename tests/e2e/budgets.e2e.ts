@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
 async function authenticate(page: Page) {
-  let login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "change-me-now" } })
+  let login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "private-password" } })
   expect(login.ok()).toBe(true)
   const account = await page.request.get("/api/admin/account")
@@ -11,8 +11,8 @@ async function authenticate(page: Page) {
   }
 }
 
-async function restoreDefaultPassword(page: Page) {
-  const response = await page.request.post("/api/admin/account/password", { data: { password: "change-me-now" } })
+async function restoreInitialPassword(page: Page) {
+  const response = await page.request.post("/api/admin/account/password", { data: { password: "e2e-initial-password" } })
   expect(response.ok()).toBe(true)
 }
 
@@ -59,7 +59,7 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
     unlimited: { excludedModelIds: ["budget-test/over-limit"] },
     window: { bypassLimits: true, bypassAutoDeactivateAtWindowEnd: true },
   })
-  await page.getByRole("button", { name: "Deactivate" }).click()
-  await page.getByRole("button", { name: "Deactivate" }).last().click()
-  await restoreDefaultPassword(page)
+  await page.getByRole("tabpanel").getByRole("button", { name: "Deactivate", exact: true }).click()
+  await page.getByRole("alertdialog").getByRole("button", { name: "Deactivate", exact: true }).click()
+  await restoreInitialPassword(page)
 })

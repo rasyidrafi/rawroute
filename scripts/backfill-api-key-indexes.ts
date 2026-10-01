@@ -1,9 +1,6 @@
-import { loadEnvConfig } from "@next/env"
-
 import { closeLocalDatabase } from "../src/lib/local-db"
 import { backfillApiKeyIndexes } from "../src/lib/store"
 
-loadEnvConfig(process.cwd())
 
 function hasFlag(name: string) {
   return process.argv.slice(2).includes(name)

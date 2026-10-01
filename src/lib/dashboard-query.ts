@@ -1,6 +1,6 @@
 import type { DashboardQuery } from "@/lib/types"
 
-export const DEFAULT_DASHBOARD_QUERY = { preset: "budget", granularity: "auto" } satisfies DashboardQuery
+import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-defaults"
 
 const allowedPresets = new Set<DashboardQuery["preset"]>(["today", "yesterday", "week", "lastWeek", "month", "lastMonth", "year", "all", "custom", "budget"])
 const allowedGranularities = new Set<NonNullable<DashboardQuery["granularity"]>>(["auto", "hourly", "daily", "weekly", "monthly"])

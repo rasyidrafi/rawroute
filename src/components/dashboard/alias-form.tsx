@@ -1,5 +1,3 @@
-"use client"
-
 import { useMemo, useState, type FormEvent } from "react"
 
 import { FormField, FormSubmitButton } from "@/components/dashboard/shared"

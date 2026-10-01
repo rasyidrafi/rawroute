@@ -1,4 +1,5 @@
 import { authenticateProxyKey } from "@/lib/auth"
+import { runInWorkspace } from "@/lib/workspace/context"
 import { writeLog } from "@/lib/logger"
 import type { ToolGatewayStatus } from "@/lib/types"
 
@@ -165,6 +166,10 @@ export async function proxyExecutorRequest(request: Request) {
     return errorResponse(401, "invalid_gateway_api_key", "Invalid gateway API key.", id)
   }
 
+  return runInWorkspace(authenticated.workspace, () => forwardExecutorRequest(request, id))
+}
+
+async function forwardExecutorRequest(request: Request, id: string) {
   let url: URL
   let path: string | undefined
   try {

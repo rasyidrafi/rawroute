@@ -20,10 +20,6 @@ export function currentWorkspaceId() {
   return workspaceContext().id
 }
 
-export function enterWorkspace(workspace: Pick<Workspace, "id" | "storageMode">) {
-  storage.enterWith({ id: workspace.id, storageMode: workspace.storageMode || "scoped" })
-}
-
 export function runInWorkspace<T>(workspace: Pick<Workspace, "id" | "storageMode">, callback: () => T): T {
   return storage.run({ id: workspace.id, storageMode: workspace.storageMode || "scoped" }, callback)
 }

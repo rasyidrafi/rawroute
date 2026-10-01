@@ -1,5 +1,3 @@
-"use client"
-
 import { useState, type FormEvent } from "react"
 
 import { DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"

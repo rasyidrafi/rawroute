@@ -1,4 +1,4 @@
-import { expect, test } from "vitest"
+import { expect, test } from "bun:test"
 
 import { catalogLiteLlmModelInfo, catalogModels } from "@/lib/catalog"
 import type { Model, ModelAlias, ModelCombo, Provider } from "@/lib/types"

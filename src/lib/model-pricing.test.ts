@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest"
+import { beforeEach, describe, expect, test, jest } from "bun:test"
 
 import { deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPricingGroups, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
@@ -79,17 +79,17 @@ describe("model pricing catalog", () => {
   })
 
   test("does not rewrite unchanged fixed groups during synchronization", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-06T00:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-06T00:00:00.000Z"))
     try {
       const providerEntry = await upsertProvider(provider("cx"))
       await upsertModel(providerEntry.id, { id: "stable", name: "Stable", gatewayModelId: "cx/stable", upstreamModel: "stable" })
       const first = (await syncModelPricingGroups()).find((group) => group.name === "Stable")!
-      vi.advanceTimersByTime(60_000)
+      jest.advanceTimersByTime(60_000)
       const second = (await syncModelPricingGroups()).find((group) => group.id === first.id)!
       expect(second.updatedAt).toBe(first.updatedAt)
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 

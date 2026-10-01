@@ -2,7 +2,7 @@
 
 Run `bun run lint --max-warnings 0` after UI changes.
 
-`eslint.config.mjs` registers `@shadcn/lint` alongside Next.js and TypeScript
+`eslint.config.mjs` registers `@shadcn/lint` alongside React, React Hooks, accessibility, and TypeScript
 checks. It enables the five core rules from the
 [adoption guide](https://github.com/shadcn-ui/lint/blob/main/docs/adoption.md):
 
@@ -15,7 +15,7 @@ checks. It enables the five core rules from the
 Component appearances belong in named variants, such as dashboard cards, log-level badges,
 inline/code inputs, and unlimited-budget controls.
 
-Theme tokens live in `src/app/globals.css`. Console tokens intentionally keep a
+Theme tokens live in `src/index.css`. Console tokens intentionally keep a
 dark surface in both themes. Workspace surfaces and small text tokens preserve
 the existing dashboard design.
 

@@ -1,7 +1,5 @@
-"use client"
-
 import { useState, type FormEvent } from "react"
-import { useRouter } from "next/navigation"
+import { useNavigate } from "react-router"
 import { KeyRoundIcon, RouteIcon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -10,9 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { LoadingSpinner } from "@/components/loading-spinner"
+import { useSession } from "@/hooks/use-session"
 
 export function LoginForm() {
-  const router = useRouter()
+  const navigate = useNavigate()
+  const { mutate: refreshSession } = useSession()
   const [loading, setLoading] = useState(false)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -33,7 +33,8 @@ export function LoginForm() {
         setLoading(false)
         return
       }
-      router.push("/dashboard")
+      await refreshSession()
+      navigate("/dashboard", { replace: true })
     } catch {
       toast.error("Unable to reach the gateway")
       setLoading(false)

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest"
+import { beforeEach, describe, expect, test } from "bun:test"
 
 import { getDashboardPayload, recordGatewayUsage, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { authenticateProxyKey } from "@/lib/auth"

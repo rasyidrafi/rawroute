@@ -1,5 +1,3 @@
-"use client"
-
 import { AppSidebar } from "@/components/app-sidebar"
 import { DashboardPasswordGate } from "@/components/dashboard/password-gate"
 import { DashboardSWRProvider } from "@/components/dashboard/swr-provider"

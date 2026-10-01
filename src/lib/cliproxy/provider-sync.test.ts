@@ -1,40 +1,40 @@
-import { beforeEach, expect, test, vi } from "vitest"
+import { beforeEach, expect, test, mock } from "bun:test"
 
-const mocks = vi.hoisted(() => ({
-  cliproxyManagement: vi.fn(),
-  cliproxyManagementJson: vi.fn(),
-  localRedisDelete: vi.fn(),
-  localRedisCompareAndDelete: vi.fn(),
-  localRedisGet: vi.fn(),
-  localRedisSet: vi.fn(),
-  localRedisSetIfAbsent: vi.fn(),
-  writeLog: vi.fn(),
-  getProvider: vi.fn(),
-  listProviderApiKeys: vi.fn(),
-  listProviderModels: vi.fn(),
-  currentWorkspaceId: vi.fn(),
-}))
+const mocks = {
+  cliproxyManagement: mock(),
+  cliproxyManagementJson: mock(),
+  localRedisDelete: mock(),
+  localRedisCompareAndDelete: mock(),
+  localRedisGet: mock(),
+  localRedisSet: mock(),
+  localRedisSetIfAbsent: mock(),
+  writeLog: mock(),
+  getProvider: mock(),
+  listProviderApiKeys: mock(),
+  listProviderModels: mock(),
+  currentWorkspaceId: mock(),
+}
 
-vi.mock("@/lib/cliproxy/management", () => ({
+mock.module("@/lib/cliproxy/management", () => ({
   cliproxyManagement: mocks.cliproxyManagement,
   cliproxyManagementJson: mocks.cliproxyManagementJson,
 }))
-vi.mock("@/lib/local-redis", () => ({
+mock.module("@/lib/local-redis", () => ({
   localRedisCompareAndDelete: mocks.localRedisCompareAndDelete,
   localRedisDelete: mocks.localRedisDelete,
   localRedisGet: mocks.localRedisGet,
   localRedisSet: mocks.localRedisSet,
   localRedisSetIfAbsent: mocks.localRedisSetIfAbsent,
 }))
-vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
-vi.mock("@/lib/store", () => ({
+mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+mock.module("@/lib/store", () => ({
   getProvider: mocks.getProvider,
   listProviderApiKeys: mocks.listProviderApiKeys,
   listProviderModels: mocks.listProviderModels,
 }))
-vi.mock("@/lib/workspace/context", () => ({ currentWorkspaceId: mocks.currentWorkspaceId }))
+mock.module("@/lib/workspace/context", () => ({ currentWorkspaceId: mocks.currentWorkspaceId }))
 
-import { ensureNonCodexProviderProjection, nonCodexProviderPrefix, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
+const { ensureNonCodexProviderProjection, nonCodexProviderPrefix, syncNonCodexProviderProjection } = await import("@/lib/cliproxy/provider-sync")
 
 const successfulResponse = () => new Response(null, { status: 200 })
 
@@ -60,7 +60,7 @@ function setupManagement(strategy = "fill-first") {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  mock.clearAllMocks()
   process.env.CLIPROXY_MANAGEMENT_KEY = "management-secret"
   mocks.currentWorkspaceId.mockReturnValue("workspace-a")
   mocks.localRedisGet.mockResolvedValue(undefined)

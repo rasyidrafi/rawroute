@@ -1,4 +1,4 @@
-import { afterAll, expect, test, vi } from "vitest"
+import { afterAll, expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { acquireComboCircuit, retryTime, settleComboCircuit } from "@/lib/combo-circuit"
 import { closeLocalRedis, getLocalRedis } from "@/lib/local-redis"
@@ -12,7 +12,7 @@ test("retry deadlines honor seconds and HTTP dates with bounded exponential fall
 })
 
 test.skipIf(!process.env.COMBO_TEST_REDIS_URL)("real Redis coordinates cooldown, concurrent probes, recovery, and stale completions", async () => {
-  vi.stubEnv("REDIS_URL", process.env.COMBO_TEST_REDIS_URL!)
+  process.env.REDIS_URL = process.env.COMBO_TEST_REDIS_URL!
   const redis = getLocalRedis()
   if (redis.status !== "ready") await new Promise<void>((resolve, reject) => { redis.once("ready", resolve); redis.once("error", reject) })
   const model = `test-${randomUUID()}`
@@ -35,7 +35,6 @@ test.skipIf(!process.env.COMBO_TEST_REDIS_URL)("real Redis coordinates cooldown,
     expect(await redis.get(first.key)).toBeNull()
   } finally {
     await redis.del(first.key)
-    vi.unstubAllEnvs()
   }
 })
 

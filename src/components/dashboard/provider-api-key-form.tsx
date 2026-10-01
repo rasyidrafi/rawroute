@@ -1,5 +1,3 @@
-"use client"
-
 import { useState, type FormEvent } from "react"
 
 import { Checkbox } from "@/components/ui/checkbox"

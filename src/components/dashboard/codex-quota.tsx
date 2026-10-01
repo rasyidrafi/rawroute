@@ -1,5 +1,3 @@
-"use client"
-
 import { useEffect, useState } from "react"
 
 import { TableCell } from "@/components/ui/table"

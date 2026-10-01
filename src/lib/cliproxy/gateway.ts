@@ -1,6 +1,7 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { assertUnlimitedModelsAllowed, BudgetDeniedError, BudgetModelExcludedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
+import { trackBackgroundTask } from "@/lib/background-tasks"
 import { catalogModels } from "@/lib/catalog"
 import { applyComboMemberPolicy, comboMembers, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
 import { writeLog } from "@/lib/logger"
@@ -430,7 +431,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   if (response.ok && response.body && response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
     const [downstream, monitor] = response.body.tee()
     const trackedResponse = new Response(downstream, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
-    void (async () => {
+    void trackBackgroundTask((async () => {
       try {
         const collected = await collectStreamUsage(monitor)
         const streamStatus = collected.terminalEventSeen ? response.status : 502
@@ -444,7 +445,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       } finally {
         await releaseBudgetReservationWithLog(reservation)
       }
-    })()
+    })())
     return trackedResponse
   }
   const responseBody = new Uint8Array(await response.arrayBuffer())

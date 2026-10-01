@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest"
+import { describe, expect, test } from "bun:test"
 
 import { applyComboMemberPolicy, applyReasoningOverride, comboMembers, memberPolicyConfigHash, normalizeComboCustomPayload, stripReasoningFields, supportedReasoningEfforts } from "@/lib/combo-reasoning"
 

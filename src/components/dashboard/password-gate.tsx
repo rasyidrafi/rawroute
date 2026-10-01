@@ -1,7 +1,5 @@
-"use client"
-
 import type { ReactNode } from "react"
-import { usePathname } from "next/navigation"
+import { useLocation } from "react-router"
 import useSWR from "swr"
 import { toast } from "sonner"
 
@@ -24,7 +22,7 @@ function loadingVariant(pathname: string) {
 }
 
 export function DashboardPasswordGate({ children }: { children: ReactNode }) {
-  const pathname = usePathname()
+  const { pathname } = useLocation()
   const { data, error, mutate } = useSWR<AccountResponse>("/api/admin/account")
 
   async function savePassword(password: string) {

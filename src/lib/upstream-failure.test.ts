@@ -1,4 +1,4 @@
-import { expect, test } from "vitest"
+import { expect, test } from "bun:test"
 import { upstreamFailure } from "@/lib/upstream-failure"
 
 test("extracts reset timing and safe code without logging sensitive message", async () => {

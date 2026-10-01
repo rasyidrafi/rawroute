@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest"
+import { beforeEach, describe, expect, test, jest } from "bun:test"
 
 import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
@@ -51,7 +51,7 @@ beforeEach(() => {
   resetAnalyticsForTests()
 })
 
-describe.sequential("usage analytics", () => {
+describe.serial("usage analytics", () => {
   test("normalizes cache buckets and calculates integer micros", async () => {
     const key = await createApiKey("Analytics")
     await configureTestPricing({ modelId: "model-doc", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 100_000, cacheCreationMicrosPerMillion: 200_000 })
@@ -307,32 +307,32 @@ describe.sequential("usage analytics", () => {
   })
 
   test("auto-deactivates Unlimited Mode at the live budget window end", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-06T10:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-06T10:00:00.000Z"))
     try {
       await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:00:00.000Z", end: "2026-08-06T11:00:00.000Z" })
       await setBudgetBypassEnabled(true, { autoDeactivateAtWindowEnd: true })
       expect((await getBudgetWindow()).bypassAutoDeactivateAtWindowEnd).toBe(true)
-      vi.setSystemTime(new Date("2026-08-06T11:00:00.000Z"))
+      jest.setSystemTime(new Date("2026-08-06T11:00:00.000Z"))
       expect(await getBudgetWindow()).toMatchObject({ bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false })
       expect((await listBudgetBypassSessions())[0]).toMatchObject({ endedAt: "2026-08-06T11:00:00.000Z", endReason: "window_end" })
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
   test("can keep an active Unlimited session running past the window end", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-06T10:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-06T10:00:00.000Z"))
     try {
       await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:00:00.000Z", end: "2026-08-06T11:00:00.000Z" })
       await setBudgetBypassEnabled(true, { autoDeactivateAtWindowEnd: true })
       await setBudgetBypassAutoDeactivateAtWindowEnd(false)
-      vi.setSystemTime(new Date("2026-08-06T11:00:00.000Z"))
+      jest.setSystemTime(new Date("2026-08-06T11:00:00.000Z"))
       expect(await getBudgetWindow()).toMatchObject({ bypassLimits: true, bypassAutoDeactivateAtWindowEnd: false, start: "2026-08-06T11:00:00.000Z" })
     } finally {
       await setBudgetBypassEnabled(false)
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
@@ -442,8 +442,8 @@ describe.sequential("usage analytics", () => {
   })
 
   test("uses active-session events instead of scaling pre-session boundary rollups", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-07T10:37:12.359Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-07T10:37:12.359Z"))
     try {
       const key = await createApiKey("Boundary usage")
       await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
@@ -474,7 +474,7 @@ describe.sequential("usage analytics", () => {
       expect(budget).toMatchObject({ spentMicros: 300, usageStartAt: activation.session?.startedAt })
     } finally {
       await setBudgetBypassEnabled(false)
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
@@ -485,8 +485,8 @@ describe.sequential("usage analytics", () => {
   })
 
   test("recalculates budget usage from historical rollups for custom boundaries", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-08T12:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-08T12:00:00.000Z"))
     try {
       const key = await createApiKey("Historical budget")
       const event = (id: string, completedAt: string, costMicros: number): UsageEvent => ({
@@ -526,13 +526,13 @@ describe.sequential("usage analytics", () => {
       await updateBudgetWindow({ anchor: "custom", start: "2026-08-08T10:00:00.000Z", end: "2026-08-08T18:00:00.000Z" })
       expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
   test("uses event records inside partial hourly boundaries", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
     try {
       const key = await createApiKey("Partial boundary")
       await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
@@ -562,13 +562,13 @@ describe.sequential("usage analytics", () => {
 
       expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(300)
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
   test("uses the runtime event ledger when a reset-window rollup briefly lags", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
     try {
       const key = await createApiKey("Rollup lag")
       await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
@@ -607,7 +607,7 @@ describe.sequential("usage analytics", () => {
 
       expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(700)
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
@@ -682,8 +682,8 @@ describe.sequential("usage analytics", () => {
   })
 
   test("uses the budget window as an analytics range and preserves custom hours", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
     try {
       await updateBudgetWindow({ anchor: "custom", start: "2026-08-06T09:30:00.000Z", end: "2026-08-13T17:45:00.000Z" })
       const payload = await getDashboardPayload({ preset: "budget" })
@@ -691,13 +691,13 @@ describe.sequential("usage analytics", () => {
       expect(payload.range.from).toBe("2026-08-06T09:30:00.000Z")
       expect(payload.range.to).toBe("2026-08-13T17:45:00.000Z")
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
   test("keeps complete preset trend axes and supports weekly grouping", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
     try {
       const event = (id: string, completedAt: string): UsageEvent => ({
         id,
@@ -746,13 +746,13 @@ describe.sequential("usage analytics", () => {
       expect(weekly.range.granularity).toBe("weekly")
       expect(weekly.trend).toHaveLength(1)
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
   test("calculates keys and models exactly inside partial budget-window buckets", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-08-06T04:00:00.000Z"))
     try {
       const firstKey = await createApiKey("First key")
       const secondKey = await createApiKey("Second key")
@@ -787,7 +787,7 @@ describe.sequential("usage analytics", () => {
       expect(payload.keys.map((row) => [row.label, row.requests])).toEqual([["First key", 1], ["Second key", 1]])
       expect(payload.models.map((row) => [row.model, row.requests])).toEqual([["start-model", 1], ["end-model", 1]])
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
@@ -803,17 +803,17 @@ describe.sequential("usage analytics", () => {
   })
 
   test("starts the next window exactly at the previous end boundary", async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date("2026-07-01T09:00:00.000Z"))
+    jest.useFakeTimers()
+    jest.setSystemTime(new Date("2026-07-01T09:00:00.000Z"))
     try {
       await updateBudgetWindow({ anchor: "custom", start: "2026-07-01T17:45:00.000Z", end: "2026-07-08T17:45:00.000Z" })
-      vi.setSystemTime(new Date("2026-07-08T17:45:00.000Z"))
+      jest.setSystemTime(new Date("2026-07-08T17:45:00.000Z"))
 
       const window = await getBudgetWindow()
       expect(window.start).toBe("2026-07-08T17:45:00.000Z")
       expect(window.end).toBe("2026-07-15T17:45:00.000Z")
     } finally {
-      vi.useRealTimers()
+      jest.useRealTimers()
     }
   })
 
@@ -946,7 +946,8 @@ describe.sequential("usage analytics", () => {
     const budget = (await getBudgetRows()).find((row) => row.apiKeyId === key.id)
     expect(budget?.spentMicros).toBe(admission?.reservationMicros)
     const payload = await getDashboardPayload({ preset: "all" })
-    expect(payload.summary.costMicros).toBe(admission?.reservationMicros)
+    expect(admission).toBeDefined()
+    expect(payload.summary.costMicros).toBe(admission!.reservationMicros)
     expect(payload.summary.unpricedRequests).toBe(1)
   })
 })

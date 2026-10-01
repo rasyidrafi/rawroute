@@ -1,16 +1,17 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, mock, spyOn } from "bun:test"
 
-const mocks = vi.hoisted(() => ({
-  authenticateProxyKey: vi.fn(),
-  writeLog: vi.fn(),
-}))
+const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
 
-vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
-vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+const mocks = {
+  authenticateProxyKey: mock(),
+  writeLog: mock(),
+}
 
-import { executorPathFromRequest, getToolGatewayStatus, proxyExecutorRequest } from "@/lib/executor"
+mock.module("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
+mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
 
-const originalFetch = globalThis.fetch
+const { executorPathFromRequest, getToolGatewayStatus, proxyExecutorRequest } = await import("@/lib/executor")
+
 const originalUpstream = process.env.EXECUTOR_UPSTREAM_URL
 const originalApiKey = process.env.EXECUTOR_UPSTREAM_API_KEY
 
@@ -19,22 +20,22 @@ function request(path: string, init: RequestInit = {}) {
 }
 
 function fetchCalls() {
-  return (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+  return (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  mock.clearAllMocks()
   process.env.EXECUTOR_UPSTREAM_URL = "http://executor:4788"
   process.env.EXECUTOR_UPSTREAM_API_KEY = "executor-secret"
   mocks.authenticateProxyKey.mockResolvedValue({
     workspace: { id: "default", status: "active" },
     apiKey: { id: "gateway-key", name: "Gateway" },
   })
-  globalThis.fetch = vi.fn(async () => Response.json({ ok: true })) as typeof fetch
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ ok: true })))
 })
 
 afterEach(() => {
-  globalThis.fetch = originalFetch
+  mock.restore()
   if (originalUpstream === undefined) delete process.env.EXECUTOR_UPSTREAM_URL
   else process.env.EXECUTOR_UPSTREAM_URL = originalUpstream
   if (originalApiKey === undefined) delete process.env.EXECUTOR_UPSTREAM_API_KEY
@@ -50,7 +51,7 @@ describe("Executor HTTP proxy", () => {
   })
 
   test("reports Executor as available after a successful health check", async () => {
-    globalThis.fetch = vi.fn(async () => new Response("ok", { status: 200 })) as typeof fetch
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response("ok", { status: 200 })))
 
     await expect(getToolGatewayStatus()).resolves.toEqual({ state: "available" })
     const [url, init] = fetchCalls()[0] || []
@@ -59,16 +60,16 @@ describe("Executor HTTP proxy", () => {
   })
 
   test("reports Executor as unavailable for failed health checks", async () => {
-    globalThis.fetch = vi.fn(async () => Response.json({ status: "degraded" }, { status: 503 })) as typeof fetch
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ status: "degraded" }, { status: 503 })))
 
     await expect(getToolGatewayStatus()).resolves.toEqual({ state: "unavailable" })
   })
 
   test("authenticates before forwarding a GET and preserves the query string", async () => {
-    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ tools: [] }), {
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response(JSON.stringify({ tools: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch
+    })))
 
     const response = await proxyExecutorRequest(request(
       "/executor/api/tools/schema?address=https%3A%2F%2Fexample.test%2Fopenapi.json&address=second",
@@ -134,10 +135,10 @@ describe("Executor HTTP proxy", () => {
   })
 
   test("passes through upstream status, content type, and body unchanged", async () => {
-    globalThis.fetch = vi.fn(async () => new Response('{"error":"denied"}', {
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response('{"error":"denied"}', {
       status: 403,
       headers: { "content-type": "application/problem+json", "x-upstream": "executor" },
-    })) as typeof fetch
+    })))
 
     const response = await proxyExecutorRequest(request("/executor/api/executions", { method: "POST", body: "{}" }))
 
@@ -148,14 +149,14 @@ describe("Executor HTTP proxy", () => {
   })
 
   test.each([401, 403, 429, 500])("passes through upstream HTTP error %s", async (status) => {
-    globalThis.fetch = vi.fn(async () => Response.json({ error: { status } }, { status })) as typeof fetch
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ error: { status } }, { status })))
     const response = await proxyExecutorRequest(request("/executor/api/tools"))
     expect(response.status).toBe(status)
     await expect(response.json()).resolves.toEqual({ error: { status } })
   })
 
   test("returns a stable 502 when Executor is unreachable", async () => {
-    globalThis.fetch = vi.fn(async () => { throw new Error("connect failed") }) as typeof fetch
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => { throw new Error("connect failed") }))
 
     const response = await proxyExecutorRequest(request("/executor/api/tools", {
       headers: { authorization: "Bearer client-key", "x-request-id": "req-down" },
@@ -171,7 +172,7 @@ describe("Executor HTTP proxy", () => {
 
   test("returns the upstream stream without buffering it", async () => {
     let releaseSecond: (() => void) | undefined
-    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response(new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("first\n"))
         void new Promise<void>((resolve) => { releaseSecond = resolve }).then(() => {
@@ -179,7 +180,7 @@ describe("Executor HTTP proxy", () => {
           controller.close()
         })
       },
-    }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch
+    }), { headers: { "content-type": "text/event-stream" } })))
 
     const response = await proxyExecutorRequest(request("/executor/api/executions"))
     const reader = response.body!.getReader()

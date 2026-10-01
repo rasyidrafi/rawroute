@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", {
-    data: { username: "admin", password: "change-me-now" },
+    data: { username: "admin", password: "e2e-initial-password" },
   })
   if (!login.ok()) {
     login = await page.request.post("/api/auth/login", {
@@ -21,9 +21,9 @@ async function authenticate(page: Page) {
   }
 }
 
-async function restoreDefaultPassword(page: Page) {
+async function restoreInitialPassword(page: Page) {
   const response = await page.request.post("/api/admin/account/password", {
-    data: { password: "change-me-now" },
+    data: { password: "e2e-initial-password" },
   })
   expect(response.ok()).toBe(true)
 }
@@ -74,7 +74,7 @@ test("Alias menu creates, deduplicates and deletes a model alias", async ({ page
   await page.getByRole("combobox").first().click()
   await page.getByRole("option", { name: "Alias Target" }).click()
   await page.getByRole("combobox").nth(1).click()
-  await page.getByRole("option", { name: /alias-target\/target-model/ }).click()
+  await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
   await page.getByRole("dialog").getByRole("button", { name: "Add alias" }).click()
   await expect(page.getByText("my-cool-model")).toBeVisible()
   await expect(page.getByRole("cell", { name: "alias-target/target-model" })).toBeVisible()
@@ -85,11 +85,11 @@ test("Alias menu creates, deduplicates and deletes a model alias", async ({ page
   await page.getByRole("combobox").first().click()
   await page.getByRole("option", { name: "Alias Target" }).click()
   await page.getByRole("combobox").nth(1).click()
-  await page.getByRole("option", { name: /alias-target\/target-model/ }).click()
+  await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
   await page.getByRole("dialog").getByRole("button", { name: "Add alias" }).click()
   await expect(page.getByText("Alias is already in use.")).toBeVisible()
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click()
-  await expect(page.getByRole("row")).toHaveCount(2)
+  await expect(page.getByRole("table").filter({ hasText: "Target model" }).getByRole("row")).toHaveCount(2)
 
   await page.getByRole("button", { name: "Edit My Cool Model" }).click()
   await page.getByPlaceholder("My Cool Model").fill("My Cool Model Edited")
@@ -101,7 +101,7 @@ test("Alias menu creates, deduplicates and deletes a model alias", async ({ page
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
   await expect(page.getByText("No aliases yet.")).toBeVisible()
 
-  await restoreDefaultPassword(page)
+  await restoreInitialPassword(page)
 })
 
 test("Model routing menu creates, reorders and deletes a fallback combo", async ({ page }) => {
@@ -112,27 +112,36 @@ test("Model routing menu creates, reorders and deletes a fallback combo", async 
 
   await page.getByRole("main").getByRole("button", { name: "Add combo" }).click()
   const dialog = page.getByRole("dialog")
-  await dialog.getByPlaceholder("my-coding-fallback").fill("coding-fallback")
-  await dialog.getByPlaceholder("My coding fallback").fill("Coding fallback")
-  await dialog.getByRole("combobox").click()
-  await page.getByRole("option", { name: /alias-target\/target-model/ }).click()
+  await dialog.getByPlaceholder("auto", { exact: true }).fill("coding-fallback")
+  await dialog.getByPlaceholder("Automatic fallback", { exact: true }).fill("Coding fallback")
+  await dialog.getByRole("combobox").filter({ hasText: "Select a model or alias" }).click()
+  await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
   await dialog.getByRole("button", { name: "Add model" }).click()
-  await dialog.getByRole("combobox").click()
+  await dialog.getByRole("combobox").filter({ hasText: "Select a model or alias" }).click()
   await page.getByRole("option", { name: /alias-target\/target-model-2/ }).click()
   await dialog.getByRole("button", { name: "Add model" }).click()
   await dialog.getByRole("button", { name: "Add combo" }).click()
+  await expect(dialog).toBeHidden()
 
   await expect(page.getByText("coding-fallback")).toBeVisible()
   await expect(page.getByText("alias-target/target-model-2")).toBeVisible()
 
   await page.getByRole("button", { name: "Edit Coding fallback" }).click()
-  await dialog.getByRole("button", { name: "Move alias-target/target-model-2 up" }).click()
+  const dragHandle = dialog.getByRole("button", { name: "Drag alias-target/target-model-2 to reorder" })
+  const targetHandle = dialog.getByRole("button", { name: "Drag alias-target/target-model to reorder", exact: true })
+  const target = await targetHandle.boundingBox()
+  expect(target).not.toBeNull()
+  await dragHandle.hover()
+  await page.mouse.down()
+  await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 12 })
+  await page.mouse.up()
   await dialog.getByRole("button", { name: "Save changes" }).click()
+  await expect(dialog).toBeHidden()
   await expect(page.getByRole("row").filter({ hasText: "Coding fallback" }).locator("ol li")).toHaveText(["alias-target/target-model-2", "alias-target/target-model"])
 
   await page.getByRole("button", { name: "Delete Coding fallback?" }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
   await expect(page.getByText("No combos yet.")).toBeVisible()
 
-  await restoreDefaultPassword(page)
+  await restoreInitialPassword(page)
 })

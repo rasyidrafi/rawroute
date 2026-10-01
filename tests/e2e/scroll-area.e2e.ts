@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", {
-    data: { username: "admin", password: "change-me-now" },
+    data: { username: "admin", password: "e2e-initial-password" },
   })
   if (!login.ok()) {
     login = await page.request.post("/api/auth/login", {
@@ -82,10 +82,10 @@ test("console stays fixed-height and scrolls its log content", async ({ page }) 
   await expectWheelScrolls(viewport)
 })
 
-test("model dialog and long protocol select remain scrollable", async ({ page }) => {
+test("provider dialog and protocol select remain usable in a short viewport", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 500 })
   await page.goto(`/dashboard/providers/${firstProviderId}`)
-  await page.getByRole("button", { name: "Add model" }).click()
+  await page.getByRole("button", { name: "Edit", exact: true }).click()
 
   const dialog = page.getByRole("dialog")
   const dialogViewport = dialog.locator('[data-slot="scroll-area-viewport"]').first()

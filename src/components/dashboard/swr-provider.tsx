@@ -1,5 +1,3 @@
-"use client"
-
 import { SWRConfig } from "swr"
 import type { ReactNode } from "react"
 

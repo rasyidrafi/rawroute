@@ -1,6 +1,4 @@
-"use client"
-
-import Link from "next/link"
+import { Link } from "react-router"
 
 import { dashboardApps } from "@/components/dashboard/dashboard-apps"
 import { useToolGatewayStatus } from "@/components/dashboard/tool-gateway-status"
@@ -69,7 +67,7 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
           <CardDescription>Use the API proxy with a RawRoute gateway key. This dashboard provides deployment context only and does not report live Executor state.</CardDescription>
         </CardHeader>
         <CardContent spacing="compact-flow" className="grid sm:grid-cols-2">
-          {toolNavigation.filter((item) => item.href !== "/dashboard/tool-gateway").map((item) => <Link key={item.href} href={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {toolNavigation.filter((item) => item.href !== "/dashboard/tool-gateway").map((item) => <Link key={item.href} to={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <div className="flex items-center gap-2 font-medium"><item.icon className="size-4" />{item.title}</div>
             <p className="mt-1 text-sm text-muted-foreground">View current API-only availability.</p>
           </Link>)}

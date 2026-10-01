@@ -1,5 +1,3 @@
-"use client"
-
 import { useWorkspace } from "@/components/dashboard/workspace-provider"
 import { UsageView } from "@/components/dashboard/usage-view"
 

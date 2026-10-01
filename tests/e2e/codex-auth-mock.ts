@@ -1,98 +1,103 @@
-import { createServer } from "node:http"
-
-type State = {
-  pollCount: number
-  routingAttempts: number
-  routingMode?: "cooldown-once" | "always-cooldown" | "codex-cooldown" | "ambiguous-429"
-  upstreamBody?: Record<string, unknown>
-  upstreamHeaders?: Record<string, string>
-}
-
-const state: State = { pollCount: 0, routingAttempts: 0 }
-const idToken = `header.${Buffer.from(JSON.stringify({
-  email: "codex@example.com",
-  exp: Math.floor(Date.now() / 1000) + 3600,
-  "https://api.openai.com/auth": { chatgpt_account_id: "acct-1", chatgpt_plan_type: "pro" },
-})).toString("base64url")}.signature`
-
-function json(value: unknown, status = 200) {
-  return Response.json(value, { status })
-}
+// Private upstream fixtures exercise the current CLIProxy management contract.
+// No provider request leaves this local test service.
+type AuthFile = { name: string; type: string; auth_index: string; email: string; account_id: string; plan_type: string; prefix?: string; disabled: boolean; status: string }
+type RoutingMode = "cooldown-once" | "always-cooldown" | "codex-cooldown" | "ambiguous-429"
+const files: AuthFile[] = []
+const sessions = new Map<string, boolean>()
+const configuration: Record<string, unknown> = { "openai-compatibility": [], "claude-api-key": [], "routing/strategy": { strategy: "fill-first" } }
+const state = { pollCount: 0, routingAttempts: 0, routingMode: undefined as RoutingMode | undefined }
 
 async function handleRequest(request: Request) {
-    const url = new URL(request.url)
-    if (url.pathname === "/health") return new Response("ok")
-    if (url.pathname === "/reset" && request.method === "POST") {
-      state.pollCount = 0
-      state.routingAttempts = 0
-      state.routingMode = undefined
-      state.upstreamBody = undefined
-      state.upstreamHeaders = undefined
-      return json({ ok: true })
-    }
-    if (url.pathname === "/routing-mode" && request.method === "POST") {
-      const body = await request.json().catch(() => ({})) as { mode?: State["routingMode"] }
-      state.routingAttempts = 0
-      state.routingMode = body.mode
-      return json({ ok: true })
-    }
-    if (url.pathname === "/debug") return json(state)
-    if (url.pathname === "/api/accounts/deviceauth/usercode") {
-      return json({ device_auth_id: "device-1", user_code: "ABCD-EFGH", interval: 1 })
-    }
-    if (url.pathname === "/api/accounts/deviceauth/token") {
-      state.pollCount += 1
-      if (state.pollCount === 1) return new Response("pending", { status: 403 })
-      return json({ authorization_code: "authorization-code", code_verifier: "code-verifier", code_challenge: "code-challenge" })
-    }
-    if (url.pathname === "/oauth/token") {
-      const body = await request.text()
-      if (body.includes("grant_type=refresh_token")) {
-        return json({ access_token: "refreshed-access", refresh_token: "refreshed-refresh", id_token: idToken, expires_in: 3600 })
+  const url = new URL(request.url)
+  const path = url.pathname
+  if (path === "/health" || path === "/cliproxy/healthz" || path === "/executor/api/health") return Response.json({ status: "ok" })
+  if (path === "/reset" && request.method === "POST") {
+    files.length = 0
+    sessions.clear()
+    state.pollCount = 0
+    state.routingAttempts = 0
+    state.routingMode = undefined
+    return Response.json({ ok: true })
+  }
+  if (path === "/routing-mode" && request.method === "POST") {
+    state.routingAttempts = 0
+    state.routingMode = (await request.json() as { mode?: RoutingMode }).mode
+    return Response.json({ ok: true })
+  }
+  if (path === "/debug") return Response.json(state)
+
+  if (path.startsWith("/cliproxy/v0/management/")) {
+    if (request.headers.get("x-management-key") !== "e2e-management-key") return Response.json({ error: "Unauthorized" }, { status: 401 })
+    const endpoint = path.slice("/cliproxy/v0/management/".length)
+    if (Object.hasOwn(configuration, endpoint)) {
+      if (request.method === "PUT") {
+        configuration[endpoint] = await request.json()
+        return Response.json({ ok: true })
       }
-      return json({ access_token: "access-token", refresh_token: "refresh-token", id_token: idToken, expires_in: 3600 })
+      return Response.json(endpoint === "routing/strategy" ? configuration[endpoint] : { [endpoint]: configuration[endpoint] })
     }
-    if (url.pathname === "/codex/responses" && request.method === "POST") {
-      state.upstreamBody = await request.json() as Record<string, unknown>
-      state.upstreamHeaders = Object.fromEntries(request.headers.entries())
-      return new Response("data: {\"type\":\"response.completed\"}\n\n", {
-        headers: { "content-type": "text/event-stream" },
-      })
+    if (endpoint === "config") return Response.json({ debug: false, routing: { strategy: "fill-first" } })
+    if (endpoint === "codex-auth-url") {
+      const id = crypto.randomUUID()
+      sessions.set(id, false)
+      return Response.json({ state: id, url: `http://127.0.0.1:3211/signin?state=${id}` })
     }
-    if (url.pathname === "/cliproxy/v1/responses" && request.method === "POST") {
-      state.routingAttempts += 1
-      if (state.routingMode === "ambiguous-429") {
-        return Response.json({ error: { code: "upstream_error", message: "Temporary provider failure" } }, { status: 429, headers: { "retry-after": "3700" } })
+    if (endpoint === "oauth-session" && request.method === "DELETE") {
+      sessions.delete(url.searchParams.get("state") || "")
+      return Response.json({ ok: true })
+    }
+    if (endpoint === "oauth-callback") {
+      const input = await request.json() as { state: string; code?: string }
+      if (!sessions.has(input.state) || !input.code) return Response.json({ error: "Invalid callback" }, { status: 400 })
+      sessions.set(input.state, true)
+      files.push({ name: `codex-${input.state}.json`, type: "codex", auth_index: input.state, email: "codex@example.com", account_id: input.state, plan_type: "pro", disabled: false, status: "active" })
+      return Response.json({ ok: true })
+    }
+    if (endpoint === "get-auth-status") {
+      state.pollCount++
+      return Response.json({ status: sessions.get(url.searchParams.get("state") || "") ? "ok" : "wait" })
+    }
+    if (endpoint === "auth-files") {
+      if (request.method === "DELETE") {
+        const index = files.findIndex((file) => file.name === url.searchParams.get("name"))
+        if (index >= 0) files.splice(index, 1)
+        return Response.json({ ok: true })
       }
-      const shouldCooldown = state.routingMode === "always-cooldown" || state.routingMode === "codex-cooldown" || state.routingMode === "cooldown-once" && state.routingAttempts === 1
-      if (shouldCooldown) {
-        const codexCooldown = state.routingMode === "codex-cooldown"
-        return Response.json({ error: { code: codexCooldown ? "codex_cooldown" : "model_cooldown", message: codexCooldown ? "Codex cooldown is still active." : "All credentials for model are cooling down", reset_seconds: 3700 } }, {
-          status: 429,
-          headers: { "retry-after": "3700" },
-        })
-      }
-      return new Response("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n", {
-        headers: { "content-type": "text/event-stream" },
-      })
+      return Response.json({ files })
     }
-    return json({ error: "Not found" }, 404)
+    if (endpoint === "auth-files/fields" || endpoint === "auth-files/status") {
+      const body = await request.json() as Partial<AuthFile> & { name: string }
+      const file = files.find((entry) => entry.name === body.name)
+      if (!file) return Response.json({ error: "Not found" }, { status: 404 })
+      Object.assign(file, body)
+      return Response.json({ ok: true })
+    }
+    if (endpoint === "auth-files/models") {
+      const file = files.find((entry) => entry.name === url.searchParams.get("name"))
+      return Response.json({ models: ["gpt-5.4", "gpt-5.3-codex"].map((id) => ({ id: `${file?.prefix}/${id}`, display_name: id })) })
+    }
+    if (endpoint === "api-call") {
+      const input = await request.json() as { url: string }
+      const usage = input.url.includes("rate-limit-reset-credits") ? { credits: [] } : {
+        plan_type: "pro",
+        rate_limit: {
+          primary_window: { used_percent: 10, limit_window_seconds: 18_000, reset_at: Math.floor(Date.now() / 1000) + 18_000 },
+          secondary_window: { used_percent: 20, limit_window_seconds: 604_800, reset_at: Math.floor(Date.now() / 1000) + 604_800 },
+        },
+      }
+      return Response.json({ status_code: 200, body: JSON.stringify(usage) })
+    }
+  }
+  if (["/cliproxy/v1/responses", "/cliproxy/v1/chat/completions"].includes(path) && request.method === "POST") {
+    if (request.headers.get("authorization") !== "Bearer sk-e2e-internal") return Response.json({ error: "Unauthorized" }, { status: 401 })
+    state.routingAttempts++
+    if (state.routingMode === "ambiguous-429") return Response.json({ error: { code: "upstream_error", message: "Temporary provider failure" } }, { status: 429, headers: { "retry-after": "3700" } })
+    const cooldown = state.routingMode === "always-cooldown" || state.routingMode === "codex-cooldown" || state.routingMode === "cooldown-once" && state.routingAttempts === 1
+    if (cooldown) return Response.json({ error: { code: state.routingMode === "codex-cooldown" ? "codex_cooldown" : "model_cooldown", message: "All credentials for model are cooling down", reset_seconds: 3700 } }, { status: 429, headers: { "retry-after": "3700" } })
+    return new Response('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":5}}}\n\n', { headers: { "content-type": "text/event-stream" } })
+  }
+  return Response.json({ error: "Not found" }, { status: 404 })
 }
 
-const server = createServer(async (incoming, outgoing) => {
-  const chunks: Buffer[] = []
-  for await (const chunk of incoming) chunks.push(Buffer.from(chunk))
-  const body = Buffer.concat(chunks)
-  const request = new Request(`http://127.0.0.1:3211${incoming.url}`, {
-    method: incoming.method,
-    headers: incoming.headers as HeadersInit,
-    body: body.length ? body : undefined,
-  })
-  const response = await handleRequest(request)
-  outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()))
-  outgoing.end(Buffer.from(await response.arrayBuffer()))
-})
-
-server.listen(3211, "127.0.0.1", () => {
-  console.log("Codex auth mock listening on 127.0.0.1:3211")
-})
+Bun.serve({ hostname: "127.0.0.1", port: 3211, fetch: handleRequest })
+console.log("Private upstream mocks listening on 127.0.0.1:3211")

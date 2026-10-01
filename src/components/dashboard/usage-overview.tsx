@@ -1,5 +1,3 @@
-"use client"
-
 import { CalendarDaysIcon, RefreshCwIcon } from "lucide-react"
 import type { DateRange } from "react-day-picker"
 

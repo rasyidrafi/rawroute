@@ -1,13 +1,11 @@
-"use client"
-
-import { usePathname } from "next/navigation"
+import { useLocation } from "react-router"
 
 import { dashboardAppForPathname, toolGatewayTitleForPathname } from "@/components/dashboard/dashboard-apps"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 
 export function SiteHeader() {
-  const pathname = usePathname()
+  const { pathname } = useLocation()
   const activeApp = dashboardAppForPathname(pathname)
   const navigationTitle = activeApp.navigation.flatMap((group) => group.items).find((item) => item.href === pathname)?.title
   const title = navigationTitle ?? (activeApp.id === "tool-gateway" ? toolGatewayTitleForPathname(pathname) : pathname === "/dashboard/providers/codex" ? "Codex Providers" : pathname.startsWith("/dashboard/providers") ? "Providers" : pathname.startsWith("/dashboard/oauth-providers") ? "Codex Providers" : pathname === "/dashboard/logs" ? "Console Log" : pathname === "/dashboard/settings" ? "Settings" : pathname.startsWith("/dashboard/usage") ? "Usage" : pathname.startsWith("/dashboard/budgets") ? "Budgets" : pathname.startsWith("/dashboard/model-pricing") ? "Model Pricing" : "Endpoint & Key")

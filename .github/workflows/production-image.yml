@@ -35,7 +35,10 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # next build also checks TypeScript. The VM only pulls the finished image.
+      - run: bun run typecheck
+      - run: bunx --bun playwright install --with-deps chromium
+      - run: bun run test:e2e
+      # The VM only pulls the finished Bun production image.
       - name: Build production image
         run: >-
           docker build --build-arg DEPLOYMENT_VERSION="$GITHUB_SHA"

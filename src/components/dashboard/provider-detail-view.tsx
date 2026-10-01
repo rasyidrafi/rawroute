@@ -1,9 +1,7 @@
-"use client"
-
 import { useEffect, useState } from "react"
 import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LinkIcon, LogInIcon, PencilIcon, PlusIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { Link } from "react-router"
+import { useNavigate } from "react-router"
 import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
@@ -31,7 +29,7 @@ type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; m
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
 
 export function ProviderDetailView({ providerId }: { providerId: string }) {
-  const router = useRouter()
+  const navigate = useNavigate()
   const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId), fetcher, { refreshInterval: providerId === "codex" ? 15000 : 0 })
   const [refreshingModels, setRefreshingModels] = useState(false)
@@ -95,7 +93,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
     return () => { stopped = true; if (timer) clearTimeout(timer) }
   }, [accountName, device, mutate, polling, refreshCachedResource])
 
-  if (error) return <NotFoundState onBack={() => router.push("/dashboard/providers")} />
+  if (error) return <NotFoundState onBack={() => navigate("/dashboard/providers")} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="provider-detail" />
 
   const isPending = (key: string) => pending.has(key)
@@ -197,7 +195,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
       await apiDelete(`/api/admin/providers/${provider.id}`)
       toast.success("Provider deleted")
       await refreshCachedResource("/api/admin/providers")
-      router.push("/dashboard/providers")
+      navigate("/dashboard/providers")
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Request failed")
@@ -303,7 +301,7 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-7xl flex-col gap-8">
       <div>
-        <Button nativeButton={false} variant="ghost" className="-ml-3 mb-3" render={<Link href="/dashboard/providers" prefetch={false} />}><ArrowLeftIcon />Providers</Button>
+        <Button nativeButton={false} variant="ghost" className="-ml-3 mb-3" render={<Link to="/dashboard/providers" />}><ArrowLeftIcon />Providers</Button>
         <div><h2 className="text-2xl font-semibold tracking-tight">{provider.name}</h2><p className="mt-1 text-sm text-muted-foreground">{apiKeyCounts.configured} {credentialLabel} configured</p></div>
       </div>
       <Card>

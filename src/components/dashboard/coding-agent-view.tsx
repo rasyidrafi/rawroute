@@ -1,5 +1,3 @@
-"use client"
-
 import { useSyncExternalStore } from "react"
 import { CopyIcon } from "lucide-react"
 import { toast } from "sonner"

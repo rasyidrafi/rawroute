@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "vitest"
+import { beforeEach, expect, test } from "bun:test"
 
 import { clearLogs, logVersion, readLogs, writeLog } from "@/lib/logger"
 import { runInWorkspace } from "@/lib/workspace/context"

@@ -1,28 +1,29 @@
-import { beforeEach, expect, test, vi } from "vitest"
-const mocks = vi.hoisted(() => ({ files: vi.fn(), management: vi.fn(), otherWorkspace: vi.fn(), cache: new Map<string, string>() }))
-vi.mock("@/lib/local-redis", () => ({
+import { beforeEach, expect, test, mock } from "bun:test"
+const mocks = { files: mock(), management: mock(), otherWorkspace: mock(), cache: new Map<string, string>() }
+mock.module("@/lib/local-redis", () => ({
   localRedisGet: async (key: string) => mocks.cache.get(key),
   localRedisSet: async (key: string, value: string) => { mocks.cache.set(key, value); return true },
   localRedisSetIfAbsent: async () => true,
   localRedisCompareAndDelete: async () => true,
   localRedisDelete: async () => true,
 }))
-vi.mock("@/lib/codex/cliproxy", () => ({
+mock.module("@/lib/codex/cliproxy", () => ({
   codexWorkspacePrefix: (id: string) => `rr-${id}`,
   listCliProxyCodexAuthFiles: mocks.files,
   cliproxyManagement: mocks.management,
   mappedWorkspaceForFile: mocks.otherWorkspace,
+  listMappedCodexAccounts: mock(),
 }))
-import { codexDiscoveryStatus, parseCodexModels, refreshCodexModels } from "@/lib/codex/model-discovery"
-import { ensureCodexProvider } from "@/lib/codex/oauth"
-import { _resetMemoryBackend, listProviderApiKeys, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } from "@/lib/store"
-import { runInWorkspace } from "@/lib/workspace/context"
+const { codexDiscoveryStatus, parseCodexModels, refreshCodexModels } = await import("@/lib/codex/model-discovery")
+const { ensureCodexProvider } = await import("@/lib/codex/oauth")
+const { _resetMemoryBackend, listProviderApiKeys, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } = await import("@/lib/store")
+const { runInWorkspace } = await import("@/lib/workspace/context")
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"
   _resetMemoryBackend()
   mocks.cache.clear()
-  vi.clearAllMocks()
+  mock.clearAllMocks()
   mocks.files.mockResolvedValue([{ name: "account.json", disabled: false }])
   mocks.otherWorkspace.mockResolvedValue(undefined)
   mocks.management.mockImplementation(async () => Response.json({ models: [{ id: "rr-default/future-model", display_name: "Future model" }, { id: "future-model" }, { id: "rr-other/private-model" }] }))

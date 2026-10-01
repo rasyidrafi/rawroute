@@ -1,5 +1,3 @@
-"use client"
-
 import { useMemo, useState } from "react"
 import { ClipboardIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"

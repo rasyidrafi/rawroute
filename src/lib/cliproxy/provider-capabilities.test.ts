@@ -1,4 +1,4 @@
-import { expect, test } from "vitest"
+import { expect, test } from "bun:test"
 
 import { normalizeProviderBaseUrl, providerResponsesUrl, supportedProviderAuthTypes, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 

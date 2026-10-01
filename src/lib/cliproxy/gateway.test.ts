@@ -1,24 +1,26 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, mock, spyOn } from "bun:test"
 
-const mocks = vi.hoisted(() => ({
-  authenticateProxyKey: vi.fn(),
-  getBudgetRequestState: vi.fn(),
-  assertUnlimitedModelsAllowed: vi.fn(),
-  reserveBudgetAdmission: vi.fn(),
-  releaseBudgetReservation: vi.fn(),
-  createGatewayUsageEvent: vi.fn(),
-  recordUsageEvent: vi.fn(),
-  listAliases: vi.fn(),
-  listCombos: vi.fn(),
-  listModels: vi.fn(),
-  listProviders: vi.fn(),
-  listProviderApiKeys: vi.fn(),
-  writeLog: vi.fn(),
-  ensureNonCodexProviderProjection: vi.fn(),
-}))
+const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
 
-vi.mock("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
-vi.mock("@/lib/analytics", () => ({
+const mocks = {
+  authenticateProxyKey: mock(),
+  getBudgetRequestState: mock(),
+  assertUnlimitedModelsAllowed: mock(),
+  reserveBudgetAdmission: mock(),
+  releaseBudgetReservation: mock(),
+  createGatewayUsageEvent: mock(),
+  recordUsageEvent: mock(),
+  listAliases: mock(),
+  listCombos: mock(),
+  listModels: mock(),
+  listProviders: mock(),
+  listProviderApiKeys: mock(),
+  writeLog: mock(),
+  ensureNonCodexProviderProjection: mock(),
+}
+
+mock.module("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
+mock.module("@/lib/analytics", () => ({
   assertUnlimitedModelsAllowed: mocks.assertUnlimitedModelsAllowed,
   BudgetDeniedError: class BudgetDeniedError extends Error {
     status = 429
@@ -37,32 +39,37 @@ vi.mock("@/lib/analytics", () => ({
   releaseBudgetReservation: mocks.releaseBudgetReservation,
   reserveBudgetAdmission: mocks.reserveBudgetAdmission,
 }))
-vi.mock("@/lib/codex/cliproxy", () => ({ codexWorkspacePrefix: (workspaceId: string) => `rr-codex-${workspaceId}` }))
-vi.mock("@/lib/cliproxy/provider-sync", () => ({
+mock.module("@/lib/codex/cliproxy", () => ({ codexWorkspacePrefix: (workspaceId: string) => `rr-codex-${workspaceId}` }))
+mock.module("@/lib/cliproxy/provider-sync", () => ({
   ensureNonCodexProviderProjection: mocks.ensureNonCodexProviderProjection,
   nonCodexProviderPrefix: (workspaceId: string, providerId: string) => `rr-ws-${workspaceId}-p-${providerId}`,
 }))
-vi.mock("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
-vi.mock("@/lib/codex/model-refresh", () => ({ scheduleCodexModelRefresh: vi.fn() }))
-vi.mock("@/lib/store", () => ({
+mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+mock.module("@/lib/codex/model-refresh", () => ({ scheduleCodexModelRefresh: mock() }))
+mock.module("@/lib/store", () => ({
+  isMemoryBackend: () => true,
   listAliases: mocks.listAliases,
   listCombos: mocks.listCombos,
   listModels: mocks.listModels,
   listProviders: mocks.listProviders,
   listProviderApiKeys: mocks.listProviderApiKeys,
 }))
-vi.mock("@/lib/workspace/context", () => ({
+mock.module("@/lib/workspace/context", () => ({
   currentWorkspaceId: () => "default",
+  workspaceContext: () => ({ id: "default", storageMode: "scoped" }),
   runInWorkspace: (_workspace: unknown, callback: () => unknown) => callback(),
 }))
+mock.module("@/lib/workspace/repository", () => ({
+  getWorkspace: async (id: string) => ({ id, status: "active", storageMode: "scoped" }),
+  listWorkspaces: async () => [],
+}))
 
-import { BudgetDeniedError, BudgetModelExcludedError } from "@/lib/analytics"
-import { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComboMemberPolicy } from "@/lib/cliproxy/gateway"
-
-const originalFetch = globalThis.fetch
+const { BudgetDeniedError, BudgetModelExcludedError } = await import("@/lib/analytics")
+const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComboMemberPolicy } = await import("@/lib/cliproxy/gateway")
+const { drainBackgroundTasks } = await import("@/lib/background-tasks")
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  mock.clearAllMocks()
   mocks.authenticateProxyKey.mockResolvedValue({
     workspace: { id: "default", storageMode: "scoped" },
     apiKey: { id: "gateway-key", name: "Gateway" },
@@ -88,11 +95,12 @@ beforeEach(() => {
   }])
   mocks.listProviders.mockResolvedValue([{ id: "codex", name: "Codex", prefix: "codex", enabled: true }])
   mocks.listProviderApiKeys.mockResolvedValue([])
-  globalThis.fetch = vi.fn(async () => Response.json({ id: "response-1" })) as typeof fetch
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ id: "response-1" })))
 })
 
-afterEach(() => {
-  globalThis.fetch = originalFetch
+afterEach(async () => {
+  await drainBackgroundTasks()
+  mock.restore()
 })
 
 test("advertises and routes a discovered model unknown to the bundled catalog", async () => {
@@ -101,7 +109,7 @@ test("advertises and routes a discovered model unknown to the bundled catalog", 
   expect((await catalog.json()).data).toEqual(expect.arrayContaining([expect.objectContaining({ id: "codex/future-model" })]))
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "codex/future-model", input: "Hello" }) }))
   expect(response.status).toBe(200)
-  const calls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+  const calls = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls
   expect(calls.some((call) => call[1]?.body && JSON.parse(String(call[1].body)).model === "rr-codex-default/future-model")).toBe(true)
 })
 
@@ -109,12 +117,12 @@ test("tests combo member policies with a streaming probe", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true }])
   mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
   mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
-  globalThis.fetch = vi.fn(async () => new Response("data: {}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })) as typeof fetch
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response("data: {}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
 
   const result = await testComboMemberPolicy({ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { diffusing: true } })
 
   expect(result.status).toBe("verified")
-  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body))
   expect(forwarded).toMatchObject({ model: "a", input: [{ role: "user", content: "Reply with OK." }], diffusing: true, stream: true })
 })
 
@@ -175,9 +183,9 @@ test("tries combo members in order after an upstream failure", async () => {
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
   mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
-  globalThis.fetch = vi.fn()
+  spyOn(fetchTarget, "fetch").mockImplementation(mock()
     .mockResolvedValueOnce(Response.json({ error: { message: "rate limited" } }, { status: 429 }))
-    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })) as typeof fetch
+    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
     method: "POST",
@@ -187,7 +195,7 @@ test("tries combo members in order after an upstream failure", async () => {
 
   expect(response.status).toBe(200)
   await expect(response.json()).resolves.toEqual({ id: "response-from-b" })
-  const forwardedModels = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)
+  const forwardedModels = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)
   expect(forwardedModels).toEqual(["rr-ws-default-p-p/a", "rr-ws-default-p-p/b"])
 })
 
@@ -213,7 +221,7 @@ test("sends combo reasoning overrides in the request body without suffixing proj
 
   expect(response.status).toBe(200)
   await response.text()
-  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body))
   expect(forwarded).toMatchObject({ model: "rr-ws-default-p-p/a", reasoning_effort: "max" })
   expect(forwarded.model).not.toContain("(max)")
 })
@@ -238,7 +246,7 @@ test("deep merges a combo member custom payload and keeps the routed model", asy
 
   expect(response.status).toBe(200)
   await response.text()
-  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body))
   expect(forwarded).toMatchObject({ model: "rr-ws-default-p-p/a", temperature: 0.2, response_format: { type: "json_schema", json_schema: { name: "answer" } } })
   expect(forwarded.messages).toEqual([{ role: "user", content: "hello" }])
 })
@@ -250,9 +258,9 @@ test("falls back after a non-terminal provider error regardless of status class"
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
   mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
-  globalThis.fetch = vi.fn()
+  spyOn(fetchTarget, "fetch").mockImplementation(mock()
     .mockResolvedValueOnce(Response.json({ error: { message: "credential rejected" } }, { status: 403, headers: { "retry-after": "3700" } }))
-    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })) as typeof fetch
+    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
     method: "POST",
@@ -271,9 +279,9 @@ test("treats CLIProxy model cooldown as an immediate fallback signal", async () 
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
   mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
-  globalThis.fetch = vi.fn()
+  spyOn(fetchTarget, "fetch").mockImplementation(mock()
     .mockResolvedValueOnce(Response.json({ error: { code: "model_cooldown", message: "All credentials for model p/a are cooling down" } }, { status: 429, headers: { "retry-after": "3700" } }))
-    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })) as typeof fetch
+    .mockResolvedValueOnce(Response.json({ id: "response-from-b" })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
     method: "POST",
@@ -287,9 +295,9 @@ test("treats CLIProxy model cooldown as an immediate fallback signal", async () 
 })
 
 test("does not expose a synthetic cooldown or non-limit Retry-After to clients", async () => {
-  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
     error: { code: "model_cooldown", message: "All credentials for model codex/gpt-5 are cooling down" },
-  }, { status: 429, headers: { "retry-after": "3700" } })) as typeof fetch
+  }, { status: 429, headers: { "retry-after": "3700" } })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -303,9 +311,9 @@ test("does not expose a synthetic cooldown or non-limit Retry-After to clients",
 })
 
 test("does not expose Codex cooldown retry instructions", async () => {
-  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
     error: { code: "codex_cooldown", message: "Codex cooldown is still active." },
-  }, { status: 429, headers: { "retry-after": "3700" } })) as typeof fetch
+  }, { status: 429, headers: { "retry-after": "3700" } })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -319,9 +327,9 @@ test("does not expose Codex cooldown retry instructions", async () => {
 })
 
 test("preserves Retry-After only for an upstream rate limit", async () => {
-  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
     error: { code: "rate_limit_exceeded", message: "Requests per minute exceeded" },
-  }, { status: 429, headers: { "retry-after": "12" } })) as typeof fetch
+  }, { status: 429, headers: { "retry-after": "12" } })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -334,9 +342,9 @@ test("preserves Retry-After only for an upstream rate limit", async () => {
 })
 
 test("does not trust an unclassified upstream 429 as proof of exhausted usage", async () => {
-  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
     error: { code: "upstream_error", message: "Temporary provider failure" },
-  }, { status: 429, headers: { "retry-after": "3700" } })) as typeof fetch
+  }, { status: 429, headers: { "retry-after": "3700" } })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -354,7 +362,7 @@ test("skips an unavailable combo member and does not expose its internal retry m
     { id: "b", providerId: "p", gatewayModelId: "p/b", name: "B", upstreamModel: "b", enabled: true, createdAt: new Date().toISOString() },
   ])
   mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/disabled", "p/b"], createdAt: new Date().toISOString() }])
-  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ id: "response-from-b" })) as typeof fetch
+  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({ id: "response-from-b" })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
     method: "POST",
@@ -390,7 +398,7 @@ test("skips an excluded combo member and tries the next model", async () => {
   ])
   mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "coding-fallback", name: "Coding fallback", memberModelIds: ["p/a", "p/b"], createdAt: new Date().toISOString() }])
   mocks.getBudgetRequestState.mockRejectedValueOnce(new BudgetModelExcludedError("This model is excluded while Unlimited Mode is active.")).mockResolvedValueOnce({ admission: undefined, usageContext: undefined })
-  globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ id: "response-from-b" })) as typeof fetch
+  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({ id: "response-from-b" })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
     method: "POST",
@@ -426,7 +434,7 @@ test("normalizes reasoning_effort before forwarding Responses requests", async (
   }))
   await response.text()
 
-  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
   expect(forwarded.reasoning_effort).toBeUndefined()
   expect(forwarded.reasoning).toEqual({ effort: "high" })
   expect(forwarded.max_output_tokens).toBe(123)
@@ -441,7 +449,7 @@ test("strips Expect before forwarding a request to CLIProxy", async () => {
   }))
   await response.text()
 
-  const forwardedHeaders = new Headers((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.headers)
+  const forwardedHeaders = new Headers((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.headers)
   expect(forwardedHeaders.has("expect")).toBe(false)
 })
 
@@ -515,7 +523,7 @@ test("routes Codex models through the authenticated workspace namespace", async 
   }))
   await response.text()
 
-  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
   expect(forwarded.model).toBe("rr-codex-default/gpt-5")
 })
 
@@ -541,7 +549,7 @@ test("routes non-Codex models through a workspace/provider namespace", async () 
   await response.text()
 
   expect(mocks.ensureNonCodexProviderProjection).toHaveBeenCalledWith(provider.id)
-  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
   expect(forwarded.model).toBe("rr-ws-default-p-provider-a/model-a")
 })
 
@@ -559,7 +567,7 @@ test("forwards external Responses providers directly and preserves xhigh", async
   await response.text()
 
   expect(mocks.ensureNonCodexProviderProjection).not.toHaveBeenCalled()
-  const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+  const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]
   expect(String(call[0])).toBe("https://api.example.test/v1/responses")
   const forwarded = JSON.parse(String(call[1]?.body)) as Record<string, unknown>
   expect(forwarded).toMatchObject({ model: "gpt-5.6-luna", reasoning: { effort: "xhigh", summary: "auto" }, include: ["reasoning.encrypted_content"] })
@@ -573,7 +581,7 @@ test("translates Chat ingress once before calling a Responses provider", async (
   mocks.listModels.mockResolvedValue([{ id: "model-a", providerId: provider.id, gatewayModelId: "r/model-a", name: "A", upstreamModel: "model-a", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }])
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "r/model-a", messages: [{ role: "user", content: "hello" }], reasoning_effort: "xhigh" }) }))
   await response.text()
-  const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+  const call = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]
   expect(String(call[0])).toBe("https://api.example.test/v1/responses")
   expect(JSON.parse(String(call[1]?.body))).toMatchObject({ model: "model-a", input: [{ role: "user", content: "hello" }], reasoning: { effort: "xhigh" } })
 })
@@ -582,7 +590,7 @@ test("streams native Responses SSE while collecting terminal usage", async () =>
   const provider = { id: "provider-a", name: "Responses", prefix: "r", baseUrl: "https://api.example.test/v1", protocol: "openai-responses", authType: "none", headers: {}, enabled: true }
   mocks.listProviders.mockResolvedValue([provider])
   mocks.listModels.mockResolvedValue([{ id: "model-a", providerId: provider.id, gatewayModelId: "r/model-a", name: "A", upstreamModel: "model-a", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }])
-  globalThis.fetch = vi.fn(async (_url, init) => {
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => {
     expect(JSON.parse(String(init?.body))).toMatchObject({ reasoning: { effort: "xhigh" }, stream: true })
     return new Response(new ReadableStream<Uint8Array>({
       start(controller) {
@@ -591,7 +599,7 @@ test("streams native Responses SSE while collecting terminal usage", async () =>
         controller.close()
       },
     }), { headers: { "content-type": "text/event-stream" } })
-  }) as typeof fetch
+  }))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -602,7 +610,8 @@ test("streams native Responses SSE while collecting terminal usage", async () =>
   const first = await reader.read()
   expect(new TextDecoder().decode(first.value)).toContain("response.output_text.delta")
   while (!(await reader.read()).done) {}
-  await vi.waitFor(() => expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200 }), undefined))
+  await drainBackgroundTasks()
+  expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200 }), undefined)
 })
 
 test("logs the received protocol and the saved provider protocol", async () => {
@@ -640,7 +649,7 @@ test("routes every supported client/provider protocol direction", async () => {
   ]
 
   for (const scenario of cases) {
-    vi.clearAllMocks()
+    mock.clearAllMocks()
     const provider = { id: "provider-a", name: "Bynara", prefix: "bynara", baseUrl: "https://api.example.test/v1", protocol: scenario.providerProtocol, authType: scenario.providerProtocol === "openai-responses" ? "none" : "bearer", headers: {}, enabled: true }
     mocks.listProviders.mockResolvedValue([provider])
     mocks.listModels.mockResolvedValue([{
@@ -652,8 +661,8 @@ test("routes every supported client/provider protocol direction", async () => {
       enabled: true,
       createdAt: "2026-08-08T00:00:00.000Z",
     }])
-    const fetchMock = vi.fn(async () => Response.json({ id: "response-1" })) as typeof fetch
-    globalThis.fetch = fetchMock
+    const fetchMock = mock(async () => Response.json({ id: "response-1" }))
+    spyOn(fetchTarget, "fetch").mockImplementation(fetchMock)
 
     const response = await proxyGatewayRequest(new Request(`http://gateway${scenario.path}`, {
       method: "POST",
@@ -665,7 +674,7 @@ test("routes every supported client/provider protocol direction", async () => {
     await response.text()
     if (scenario.providerProtocol === "openai-responses") expect(mocks.ensureNonCodexProviderProjection, scenario.name).not.toHaveBeenCalled()
     else expect(mocks.ensureNonCodexProviderProjection, scenario.name).toHaveBeenCalledWith(provider.id)
-    const fetchCalls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls
+    const fetchCalls = (fetchMock as unknown as ReturnType<typeof mock>).mock.calls
     expect(String(fetchCalls[0]?.[0]), scenario.name).toContain(scenario.providerProtocol === "openai-responses" ? "/v1/responses" : scenario.path)
     const forwarded = JSON.parse(String(fetchCalls[0]?.[1]?.body)) as Record<string, unknown>
     expect(forwarded.model, scenario.name).toBe(scenario.providerProtocol === "openai-responses" ? "upstream-a" : "rr-ws-default-p-provider-a/model-a")

@@ -1,27 +1,31 @@
-import { beforeEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, mock, spyOn } from "bun:test"
 
-const mocks = vi.hoisted(() => ({
-  listProviderApiKeys: vi.fn(),
-  listProviders: vi.fn(),
-  upsertProviderApiKey: vi.fn(),
-  listWorkspaces: vi.fn(),
-  runInWorkspace: vi.fn(),
-}))
+const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
 
-vi.mock("@/lib/store", () => ({
+const mocks = {
+  listProviderApiKeys: mock(),
+  listProviders: mock(),
+  upsertProviderApiKey: mock(),
+  listWorkspaces: mock(),
+  runInWorkspace: mock(),
+}
+
+mock.module("@/lib/store", () => ({
   listProviderApiKeys: mocks.listProviderApiKeys,
   listProviders: mocks.listProviders,
   upsertProviderApiKey: mocks.upsertProviderApiKey,
 }))
-vi.mock("@/lib/workspace/repository", () => ({ listWorkspaces: mocks.listWorkspaces }))
-vi.mock("@/lib/workspace/context", () => ({ runInWorkspace: mocks.runInWorkspace }))
+mock.module("@/lib/workspace/repository", () => ({ listWorkspaces: mocks.listWorkspaces }))
+mock.module("@/lib/workspace/context", () => ({ runInWorkspace: mocks.runInWorkspace }))
 
-import { completeCliProxyCodexLogin, mappedWorkspaceForFile, registerCliProxyCodexAccount, startCliProxyCodexLogin } from "@/lib/codex/cliproxy"
+const { completeCliProxyCodexLogin, mappedWorkspaceForFile, registerCliProxyCodexAccount, startCliProxyCodexLogin } = await import("@/lib/codex/cliproxy")
 
 const provider = { id: "codex-provider", prefix: "codex" } as never
 
+afterEach(() => mock.restore())
+
 beforeEach(() => {
-  vi.clearAllMocks()
+  mock.clearAllMocks()
   process.env.CLIPROXY_MANAGEMENT_KEY = "management-secret"
   mocks.listWorkspaces.mockResolvedValue([])
   mocks.runInWorkspace.mockImplementation((_workspace, callback) => callback())
@@ -29,7 +33,7 @@ beforeEach(() => {
 
 test("keeps CLIProxy OAuth state and detects a refreshed existing auth file", async () => {
   let authListCalls = 0
-  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith("/auth-files")) {
       authListCalls += 1
@@ -41,7 +45,7 @@ test("keeps CLIProxy OAuth state and detects a refreshed existing auth file", as
     if (url.endsWith("/auth-files/fields") && init?.method === "PATCH") return Response.json({ status: "ok" })
     throw new Error(`Unexpected request ${url}`)
   })
-  vi.stubGlobal("fetch", fetchMock)
+  spyOn(fetchTarget, "fetch").mockImplementation(fetchMock)
 
   const started = await startCliProxyCodexLogin()
   expect(started.state).toBe("oauth-state")
@@ -52,7 +56,6 @@ test("keeps CLIProxy OAuth state and detects a refreshed existing auth file", as
     method: "PATCH",
     body: expect.stringContaining('"prefix":"rr-codex-'),
   }))
-  vi.unstubAllGlobals()
 })
 
 test("updates an existing RawRoute mapping when the same CLIProxy file is reauthorized", async () => {

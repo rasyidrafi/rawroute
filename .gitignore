@@ -15,9 +15,8 @@
 /playwright-report/
 /test-results/
 
-# next.js
-/.next/
-/out/
+# Bundled application
+/dist/
 
 # production
 /build
@@ -49,12 +48,8 @@ yarn-error.log*
 .env*
 !.env.example
 
-# vercel
-.vercel
-
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # Generated production credentials
 /.rawroute/
