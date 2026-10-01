@@ -10,13 +10,14 @@ import { Input } from "@/components/ui/input"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { useSession } from "@/hooks/use-session"
 
-export function LoginForm() {
+export function LoginForm({ checkingSession = false }: { checkingSession?: boolean }) {
   const navigate = useNavigate()
   const { mutate: refreshSession } = useSession()
   const [loading, setLoading] = useState(false)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (checkingSession) return
     setLoading(true)
     try {
       const formData = new FormData(event.currentTarget)
@@ -57,9 +58,9 @@ export function LoginForm() {
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input id="password" name="password" type="password" placeholder="Enter your password" autoComplete="current-password" required />
+              <Input id="password" name="password" type="password" placeholder="Enter your password" autoComplete="current-password" required disabled={checkingSession} />
             </Field>
-            <Button aria-busy={loading} disabled={loading} type="submit" className="w-full">
+            <Button aria-busy={loading || checkingSession} disabled={loading || checkingSession} type="submit" className="w-full">
               {loading ? <LoadingSpinner /> : <KeyRoundIcon />} {loading ? "Signing in..." : "Sign in"}
             </Button>
           </FieldGroup>

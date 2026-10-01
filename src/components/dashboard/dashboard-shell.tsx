@@ -6,7 +6,7 @@ import { DashboardApiProvider } from "./api-context"
 import { DashboardEvents } from "./dashboard-events"
 import { useWorkspace, WorkspaceProvider } from "./workspace-provider"
 import { SiteHeader } from "@/components/site-header"
-import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { dashboardPageForPath, dashboardPages } from "@/lib/dashboard/routes"
@@ -25,7 +25,7 @@ function ScopedContent({ children }: { children: React.ReactNode }) {
   const { workspace, isLoading, error, refreshWorkspaces } = useWorkspace()
   const page = dashboardPageForPath(pathname)
   if (page && dashboardPages[page].scope === "global") return children
-  if (isLoading && !workspace) return <DashboardContentSkeleton />
+  if (isLoading && !workspace) return <DashboardRouteSkeleton />
   if (!workspace || error) return <main className="flex flex-1 flex-col items-center justify-center gap-4 p-6" role="alert">
     <p>Workspace unavailable. Global pages remain available from the sidebar.</p>
     <Button onClick={() => void refreshWorkspaces()}>Retry loading workspaces</Button>

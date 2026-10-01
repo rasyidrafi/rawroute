@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { Link } from "react-router"
 
 import { dashboardApps } from "@/components/dashboard/dashboard-apps"
@@ -44,11 +45,10 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
   const status = statusCopy[state || "checking"]
   const toolNavigation = dashboardApps[1].navigation[0].items
 
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
-    <div className="mx-auto flex max-w-5xl flex-col gap-6">
+  return <DashboardPage spacing="normal" width="narrow">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={status.variant}>{status.label}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
+          <div className="flex flex-wrap items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={status.variant}>{status.label}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
           <CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription>
         </CardHeader>
         <CardContent spacing="compact-stack">
@@ -80,6 +80,5 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
         </CardHeader>
         <CardContent><div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No workspace-scoped Executor data is shown in RawRoute.</div></CardContent>
       </Card>)}
-    </div>
-  </main>
+    </DashboardPage>
 }

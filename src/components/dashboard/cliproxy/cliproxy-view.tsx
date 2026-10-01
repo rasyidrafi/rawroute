@@ -1,3 +1,5 @@
+import { CliProxySkeleton, ServiceDetailsSkeleton } from "./skeleton"
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useState } from "react"
 import useSWR from "swr"
 import { Link } from "react-router"
@@ -39,18 +41,19 @@ export function CliproxyView() {
     setAction({ action: "install", version, title: `${choice.downgrade ? "Downgrade to" : "Install"} CLIProxyAPI ${choice.version}?` })
   }
   const service = status.data
-  return <div className="space-y-6">
+  if (!service && !status.error) return <CliProxySkeleton />
+  return <DashboardPage spacing="normal">
     <ServiceCard service={service} error={status.error} actionError={error} blocked={blocked} refresh={() => void status.mutate()} choose={setAction} />
     {service?.mode === "managed" && <ReleasesCard data={versions.data} error={versions.error} refreshing={versions.isValidating} blocked={blocked} selected={selected} select={setSelected} refresh={() => void versions.mutate()} install={install} />}
     <Card><CardHeader><CardTitle>Connection</CardTitle><CardDescription>Use a workspace gateway key with the public URL below.</CardDescription></CardHeader><CardContent><p className="break-all font-mono text-sm">{window.location.origin}/v1</p><Button variant="outline" onClick={() => void navigator.clipboard.writeText(`${window.location.origin}/v1`).then(() => toast.success("Base URL copied")).catch(() => toast.error("Unable to copy URL"))}>Copy base URL</Button></CardContent></Card>
     <ManagedKeys /><GlobalOauth /><AuthFiles /><EngineLogs />
     <Confirmation title={action?.title ?? null} pending={pending} onClose={() => setAction(null)} onConfirm={() => void run()} description={action?.action === "stop" ? "Provider requests that use CLIProxyAPI will be unavailable until you start it again. If requests cannot drain, the service remains running." : "This changes the shared service for every workspace. Release changes may briefly interrupt availability; failed startup restores the previous version and configuration."} />
-  </div>
+  </DashboardPage>
 }
 
 function ServiceCard({ service, error, actionError, blocked, refresh, choose }: { service?: CliproxyInstanceStatus; error: unknown; actionError?: string; blocked: boolean; refresh: () => void; choose: (action: Action) => void }) {
   return <Card><CardHeader><CardTitle>CLIProxyAPI</CardTitle><CardDescription>Shared provider engine for all workspaces. <Link to="/dashboard/settings" className="underline">Gateway settings</Link> · <Link to="/dashboard/system-logs" className="underline">System Logs</Link></CardDescription></CardHeader><CardContent><div className="space-y-4">
-      {error ? <p role="alert">Unable to load CLIProxy status. <Button variant="outline" onClick={refresh}>Retry status</Button></p> : !service ? <p role="status">Loading service status…</p> : <>
+      {error ? <p role="alert">Unable to load CLIProxy status. <Button variant="outline" onClick={refresh}>Retry status</Button></p> : !service ? <ServiceDetailsSkeleton /> : <>
         <ServiceDetails service={service} blocked={blocked} refresh={refresh} choose={choose} />
       </>}
       {actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}

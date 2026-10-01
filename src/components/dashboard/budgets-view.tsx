@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useEffect, useMemo, useState } from "react"
 import { addDays, format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -160,7 +161,7 @@ export function BudgetsView() {
 
   if (isLoading || !data) return <DashboardContentSkeleton variant="budgets" />
 
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8"><div className="mx-auto flex max-w-7xl flex-col gap-6">
+  return <DashboardPage spacing="normal">
     <BudgetWindowCard data={data} onSaved={mutate} />
     <Card>
       <CardHeader><CardTitle variant="icon"><WalletCardsIcon className="size-5" />Budgets</CardTitle><CardDescription>Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured.</CardDescription><CardAction><Button aria-busy={isValidating} variant="outline" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></CardAction></CardHeader>
@@ -209,7 +210,7 @@ export function BudgetsView() {
         <Table><TableColumns columns={[{ id: "Key", label: "Key" }, { id: "Status", label: "Status" }, { id: "Limit", label: "Limit" }, { id: "Usage", label: "Usage" }, { id: "actions" }]} /><TableBody>{sortedBudgets.map((budget) => <BudgetRow key={budget.apiKeyId} budget={budget} bypass={bypass} windowStart={data.window.start} isPending={isPending} toggle={toggle} remove={remove} updateLimit={updateLimit} />)}{!sortedBudgets.length && <EmptyRow label="No budgets configured yet." colSpan={5} />}</TableBody></Table>
       </CardContent>
     </Card>
-  </div></main>
+  </DashboardPage>
 }
 
 function BudgetModelSelector({ title, description, modelIds, modelOptions, pending, onChange }: { title: string; description: string; modelIds: string[]; modelOptions: BudgetModelOption[]; pending: boolean; onChange: (modelIds: string[]) => void }) {

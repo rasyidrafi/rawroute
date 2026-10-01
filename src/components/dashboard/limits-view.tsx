@@ -1,3 +1,4 @@
+import { TableSkeletonRows } from "@/components/loading-layout"
 import { useState } from "react"
 import { RotateCcwIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -66,6 +67,7 @@ export function LimitsView() {
     <Table>
       <TableColumns columns={[{ id: "Account", label: "Account" }, { id: "5-hour", label: "5-hour" }, { id: "Weekly", label: "Weekly" }, { id: "State", label: "State" }, { id: "actions" }]} />
       <TableBody>
+        {isLoading && !data && <TableSkeletonRows columns={5} />}
         {(data?.accounts || []).map((account) => {
           const pendingKey = `toggle-account:${account.id}`
           const actions = <TableCell className="text-right">
@@ -103,7 +105,7 @@ export function LimitsView() {
             {actions}
           </TableRow>
         })}
-        {!data?.accounts.length && <EmptyRow label="No Codex accounts connected yet." colSpan={5} />}
+        {data?.accounts.length === 0 && <EmptyRow label="No Codex accounts connected yet." colSpan={5} />}
       </TableBody>
     </Table>
     <AlertDialog open={Boolean(target)} onOpenChange={(open) => {

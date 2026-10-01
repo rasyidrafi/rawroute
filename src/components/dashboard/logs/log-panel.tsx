@@ -1,3 +1,4 @@
+import { logPageClassName } from "@/components/dashboard/page-layout"
 import { useState } from "react"
 import { ClipboardIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
@@ -40,7 +41,7 @@ export function LogPanel({ scope }: { scope: LogScope }) {
     reportEvent({ event: value ? "logs.resumed" : "logs.paused", page }, scope)
     if (value) void refresh()
   }
-  return <main className="h-[calc(100svh-var(--header-height))] max-h-[calc(100svh-var(--header-height))] min-h-0 flex-none overflow-hidden bg-workspace p-4 dark:bg-background md:h-[calc(100svh-var(--header-height)-1rem)] md:max-h-[calc(100svh-var(--header-height)-1rem)] md:p-6 lg:p-8">
+  return <main className={logPageClassName}>
     <div className="mx-auto h-full max-w-7xl"><Card className="h-full">
       <CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{title}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."} History is kept in memory until the server restarts.</CardDescription><CardAction><div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={() => void refresh()}>{isRefreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button>

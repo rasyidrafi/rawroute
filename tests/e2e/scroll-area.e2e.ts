@@ -72,7 +72,7 @@ test("console stays fixed-height and scrolls its log content", async ({ page }) 
   const viewport = consoleArea.locator('[data-slot="scroll-area-viewport"]')
 
   await expect(consoleArea).toBeVisible()
-  await expect(page.getByText("Loading logs...")).toBeHidden()
+  await expect(page.getByLabel("Console log entries")).toHaveAttribute("aria-busy", "false")
   await expect.poll(() => main.evaluate((element) => element.getBoundingClientRect().bottom)).toBeLessThanOrEqual(720)
   await expectWheelScrolls(viewport)
 
@@ -134,6 +134,7 @@ test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) =
 
   await page.setViewportSize({ width: 600, height: 700 })
   await page.goto(`/dashboard/providers/${firstProviderId}`)
+  await expect(page.getByText("Wide model", { exact: true })).toBeVisible()
   const modelCard = page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: /^Models$/ }) })
   const viewport = modelCard.locator('[data-slot="table-container"] [data-slot="scroll-area-viewport"]')
   const dimensions = await viewport.evaluate((element) => ({

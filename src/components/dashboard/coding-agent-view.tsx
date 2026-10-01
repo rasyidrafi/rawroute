@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useSyncExternalStore } from "react"
 import { CopyIcon } from "lucide-react"
 import { useDashboardClipboard } from "@/hooks/use-dashboard-clipboard"
@@ -31,7 +32,7 @@ enabled = false`
     await copy(config, "Codex configuration copied")
   }
 
-  return <div className="flex flex-1 flex-col gap-4 p-4 lg:p-6">
+  return <DashboardPage spacing="compact">
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle>{agent}</CardTitle>
@@ -40,5 +41,5 @@ enabled = false`
       </CardHeader>
       {agent === "Codex" && <CardContent><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-4 text-sm leading-relaxed"><code>{config}</code></pre></CardContent>}
     </Card>
-  </div>
+  </DashboardPage>
 }

@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useCodexLogin } from "@/hooks/use-codex-login"
 import { CodexLoginDialog } from "@/components/dashboard/codex-login-dialog"
 import { useCallback, useState } from "react"
@@ -111,8 +112,7 @@ export function OAuthProvidersView() {
     }
   }
 
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
-    <div className="mx-auto flex max-w-7xl flex-col gap-8">
+  return <DashboardPage>
       <Card>
         <CardHeader>
           <CardTitle variant="icon"><LinkIcon className="size-5" />Codex Providers</CardTitle>
@@ -147,7 +147,6 @@ export function OAuthProvidersView() {
           </Table>
         </CardContent>
       </Card>
-    </div>
     <CodexLoginDialog login={login} />
     <AlertDialog open={Boolean(resetAccount)} onOpenChange={(open) => { if (!open) { setResetAccount(null); setResetConfirmation("") } }}>
       <AlertDialogContent>
@@ -156,5 +155,5 @@ export function OAuthProvidersView() {
         <AlertDialogFooter><AlertDialogCancel disabled={pending.has(`reset:${resetAccount?.id}`)}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={pending.has(`reset:${resetAccount?.id}`)} disabled={!resetConfirmation.toLowerCase().includes("use my codex reset") || pending.has(`reset:${resetAccount?.id}`)} onClick={() => { if (resetAccount) void redeemReset(resetAccount) }}>{pending.has(`reset:${resetAccount?.id}`) && <LoadingSpinner />}Redeem reset</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  </main>
+  </DashboardPage>
 }

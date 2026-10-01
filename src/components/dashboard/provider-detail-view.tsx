@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useDashboardClipboard } from "@/hooks/use-dashboard-clipboard"
 import { useCodexLogin } from "@/hooks/use-codex-login"
 import { CodexLoginDialog } from "@/components/dashboard/codex-login-dialog"
@@ -159,8 +160,7 @@ function ProviderDetailContent({ providerId, data, mutate }: { providerId: strin
   const { provider, apiKeys } = data
   const isOAuthProvider = provider.prefix === "codex" || (apiKeys.length > 0 && apiKeys.every((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
 
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
-    <div className="mx-auto flex max-w-7xl flex-col gap-8">
+  return <DashboardPage>
       <ProviderHeading provider={provider} credentialCount={apiKeys.length} isOAuthProvider={isOAuthProvider} />
       <ProviderDetailsCard data={data} isOAuthProvider={isOAuthProvider} mutate={mutate} />
       <Card>
@@ -195,8 +195,7 @@ function ProviderDetailContent({ providerId, data, mutate }: { providerId: strin
       <CodexResetDialog resetAccount={resetAccount} setResetAccount={setResetAccount} resetConfirmation={resetConfirmation} setResetConfirmation={setResetConfirmation} isPending={isPending} redeemReset={redeemReset} />
       <CodexToggleDialog toggleAccount={toggleAccount} setToggleAccount={setToggleAccount} isPending={isPending} setCodexAccountEnabled={setCodexAccountEnabled} />
       <ProviderModelsCard data={data} mutate={mutate} />
-    </div>
-  </main>
+    </DashboardPage>
 }
 
 function ProviderHeading({ provider, credentialCount, isOAuthProvider }: { provider: Provider; credentialCount: number; isOAuthProvider: boolean }) {
@@ -481,6 +480,6 @@ export function ProviderDetailView({ providerId }: { providerId: string }) {
   const { fetcher } = useDashboardApi()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId), fetcher, { refreshInterval: providerId === "codex" ? 15000 : 0 })
   if (error) return <NotFoundState />
-  if (isLoading || !data) return <DashboardContentSkeleton variant="provider-detail" />
+  if (isLoading || !data) return <DashboardContentSkeleton variant={providerId === "codex" ? "codex-detail" : "provider-detail"} />
   return <ProviderDetailContent providerId={providerId} data={data} mutate={mutate} />
 }

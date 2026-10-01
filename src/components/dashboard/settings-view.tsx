@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { InstanceSettingsCard } from "./settings/instance-settings"
 import { LockKeyholeIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -17,8 +18,7 @@ export function SettingsView() {
       return false
     }
   }
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
-    <div className="mx-auto flex max-w-7xl flex-col gap-8">
+  return <DashboardPage>
       <Card className="max-w-2xl">
         <CardHeader>
           <CardTitle variant="icon"><LockKeyholeIcon className="size-5" />Admin password</CardTitle>
@@ -29,6 +29,5 @@ export function SettingsView() {
         </CardContent>
       </Card>
       <InstanceSettingsCard />
-    </div>
-  </main>
+    </DashboardPage>
 }

@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/ui/skeleton"
 import { useEffect, useState } from "react"
 
 import { TableCell } from "@/components/ui/table"
@@ -53,7 +54,7 @@ function QuotaLine({ label, quota, loading }: { label: string; quota?: QuotaWind
 
   return <div className="flex items-center justify-between gap-3 text-sm">
       <span className="text-muted-foreground">{label}</span>
-      {loading ? <span className="h-4 w-10 animate-pulse rounded bg-muted" /> : <span className="font-medium text-muted-foreground">{remaining === undefined ? "N/A" : `${remaining}%`}</span>}
+      {loading ? <Skeleton className="h-4 w-10" /> : <span className="font-medium text-muted-foreground">{remaining === undefined ? "N/A" : `${remaining}%`}</span>}
       {!loading && countdown && <span>resets in {countdown}</span>}
   </div>
 }
@@ -63,7 +64,7 @@ export function CodexQuotaTableCell({ accountUsage, loading, error, routingStatu
   const message = codexUsageError(accountUsage, error)
 
   return <TableCell variant="muted" density="compact" className="min-w-40">
-    {loading ? <span className="inline-block h-4 w-20 animate-pulse rounded bg-muted" /> : !message && windows.length ? <div className="grid gap-1.5">
+    {loading && !accountUsage ? <div className="grid gap-1.5" aria-busy="true" aria-label="Loading usage limits">{["5 hour", "Weekly"].map(label => <QuotaLine key={label} label={label} loading />)}</div> : !message && windows.length ? <div className="grid gap-1.5">
       {windows.map(({ label, quota }) => <QuotaLine key={label} label={label} quota={quota} loading={false} />)}
       {routingStatus?.includes("usage_limit_reached") && <span className="text-xs text-warning-foreground">Last inference hit a quota limit. Routing may still be cooling down.</span>}
       {accountUsage?.stale && <span className="text-xs text-muted-foreground">Usage is from an earlier check.</span>}

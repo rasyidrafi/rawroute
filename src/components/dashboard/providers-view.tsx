@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useState } from "react"
 import { ChevronRightIcon, LinkIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { Link } from "react-router"
@@ -65,8 +66,7 @@ export function ProvidersView() {
     }
   }
 
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
-    <div className="mx-auto flex max-w-7xl flex-col gap-8">
+  return <DashboardPage>
       <Card>
         <CardHeader>
           <CardTitle>Providers</CardTitle>
@@ -124,6 +124,5 @@ export function ProvidersView() {
           <p className="mt-4 text-sm text-muted-foreground">Open the Codex provider page to add an account.</p>
         </CardContent>
       </Card>
-    </div>
-  </main>
+    </DashboardPage>
 }

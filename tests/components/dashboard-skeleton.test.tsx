@@ -1,28 +1,41 @@
 import { expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
 import { renderToStaticMarkup } from "react-dom/server"
+import { MemoryRouter } from "react-router"
 
-import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { DashboardContentSkeleton, DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
+import { UsageSummary } from "@/components/dashboard/usage-summary"
 
-test("dashboard loading state preserves the dashboard navigation shell", () => {
-  const markup = renderToStaticMarkup(<DashboardContentSkeleton />)
-  const layout = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8")
-  const shell = readFileSync(new URL("../../src/components/dashboard/dashboard-shell.tsx", import.meta.url), "utf8")
+for (const [path, heading] of [
+  ["/dashboard/usage", "Usage summary"],
+  ["/dashboard/settings", "Global gateway settings"],
+  ["/dashboard/system-logs", "System Logs"],
+  ["/dashboard/cliproxy", "CLIProxy API keys"],
+  ["/dashboard/providers/codex", "Usage Limits"],
+  ["/dashboard/tool-gateway", "Executor integration"],
+]) {
+  test(`route loading preserves the content for ${path}`, () => {
+    const markup = renderToStaticMarkup(<MemoryRouter initialEntries={[path!]}><DashboardRouteSkeleton /></MemoryRouter>)
+    expect(markup).toContain(heading!)
+    expect(markup).not.toContain("min-h-svh")
+    expect(markup).not.toContain("API Endpoint")
+    expect(markup).toContain('data-slot="card-header"')
+    expect(markup).toContain('data-slot="card-content"')
+  })
+}
 
-  expect(markup).toContain('data-slot="dashboard-content-skeleton"')
-  expect(markup).not.toContain("min-h-svh")
-  expect(markup).not.toContain("h-9 w-28")
-  expect(layout).toContain("<DashboardShell>")
-  expect(shell).toContain('<AppSidebar variant="inset" />')
-  expect(shell).toContain("<SiteHeader />")
+test("pricing and aliases placeholders use real card and table primitives", () => {
+  for (const variant of ["model-pricing", "aliases"] as const) {
+    const markup = renderToStaticMarkup(<DashboardContentSkeleton variant={variant} />)
+    expect(markup).toContain('data-slot="page-content"')
+    expect(markup).toContain('data-slot="card-header"')
+    expect(markup).toContain('data-slot="table-cell"')
+    expect(markup).not.toContain("rounded-xl border bg-card p-6")
+  }
 })
 
-test("model pricing loading state uses the shared dashboard content spacing", () => {
-  const markup = renderToStaticMarkup(<DashboardContentSkeleton variant="model-pricing" />)
-
-  expect(markup).toContain('aria-label="Loading model pricing"')
-  expect(markup).toContain("rounded-xl border bg-card p-6")
-  expect(markup).toContain("grid-cols-[minmax(14rem,1.4fr)_6rem_minmax(10rem,1fr)_minmax(10rem,1fr)_auto]")
-  expect(markup).not.toContain("xl:grid-cols-6")
-  expect(markup).not.toContain('data-slot="card-header"')
+test("usage loading retains the real summary footer and metric structure", () => {
+  const markup = renderToStaticMarkup(<UsageSummary />)
+  expect(markup.match(/data-slot="card-footer"/g)).toHaveLength(4)
+  expect(markup).toContain("API-equivalent cost")
+  expect(markup).toContain('aria-busy="true"')
 })

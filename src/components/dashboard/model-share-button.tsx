@@ -55,7 +55,7 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
         </DialogHeader>
         <div className="max-h-72 space-y-2 overflow-y-auto py-2">
           {isLoading
-            ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex items-center gap-3 rounded-lg border p-3"><Skeleton className="size-4" /><Skeleton className="h-4 w-40" /></div>)
+            ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex items-center gap-3 rounded-lg border p-3"><Skeleton className="size-4" /><Skeleton className="h-5 w-40" /></div>)
             : data?.targets.length
               ? data.targets.map((target) => <label key={target.id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-muted"><Checkbox checked={selectedIdSet.has(target.id)} disabled={saving} onCheckedChange={() => setSelected((current) => { const next = current || selectedIds; return next.includes(target.id) ? next.filter((id) => id !== target.id) : [...next, target.id] })} /><span className="text-sm font-medium">{target.name}</span></label>)
               : <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">No other active workspaces are available.</p>}

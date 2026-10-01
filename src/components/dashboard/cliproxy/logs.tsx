@@ -1,3 +1,4 @@
+import { LogLinesSkeleton } from "@/components/loading-layout"
 import { useState } from "react"
 import useSWR from "swr"
 import { toast } from "sonner"
@@ -25,7 +26,7 @@ export function EngineLogs() {
     <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => setPaused(value => !value)}>{paused ? "Resume engine logs" : "Pause engine logs"}</Button><Button variant="outline" onClick={() => void mutate()}>Refresh engine logs</Button><Button variant="outline" onClick={() => void navigator.clipboard.writeText(content).then(() => toast.success("Engine logs copied")).catch(() => toast.error("Unable to copy logs"))}>Copy engine logs</Button><Button variant="outline" disabled={pending} onClick={() => setConfirm(true)}>Clear engine logs</Button></div>
     <Input aria-label="Search engine logs" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search engine logs" />
     {error && <p role="alert">Engine logs are unavailable. Check service health and file logging in Settings.</p>}
-    <ScrollArea className="h-72"><pre aria-label="CLIProxy log entries" className="whitespace-pre-wrap break-all font-mono text-xs">{content}</pre></ScrollArea>
+    <ScrollArea className="h-72">{data === undefined && !error ? <LogLinesSkeleton /> : <pre aria-label="CLIProxy log entries" className="whitespace-pre-wrap break-all font-mono text-xs">{content}</pre>}</ScrollArea>
     <Confirmation title={confirm ? "Clear CLIProxy engine logs?" : null} description="This clears engine log history for every workspace. RawRoute Console Log and System Logs are retained." pending={pending} onClose={() => setConfirm(false)} onConfirm={() => void clear()} />
   </div></CardContent></Card>
 }

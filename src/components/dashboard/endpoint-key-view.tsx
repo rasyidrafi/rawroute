@@ -1,3 +1,4 @@
+import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useDashboardClipboard } from "@/hooks/use-dashboard-clipboard"
 import { useState } from "react"
 import { CopyIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon } from "lucide-react"
@@ -84,8 +85,7 @@ export function EndpointKeyView() {
     }
   }
 
-  return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
-    <div className="mx-auto flex max-w-7xl flex-col gap-8">
+  return <DashboardPage>
       <Card>
         <CardHeader>
           <CardTitle variant="icon"><RouteIcon className="size-5" />API Endpoint</CardTitle>
@@ -124,6 +124,5 @@ export function EndpointKeyView() {
           })}
         </CardContent>
       </Card>
-    </div>
-  </main>
+    </DashboardPage>
 }

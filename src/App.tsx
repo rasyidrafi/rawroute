@@ -1,8 +1,11 @@
-import { lazy, Suspense, type ComponentProps } from "react"
+import { lazy, Suspense } from "react"
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router"
 
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
-import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
+import { DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
+import { DashboardFrameSkeleton } from "@/components/dashboard/frame-skeleton"
+import { PublicPageLayout } from "@/components/public-page-layout"
+import { UsageSkeleton } from "@/components/dashboard/usage-skeleton"
 import { Button } from "@/components/ui/button"
 import { useSession } from "@/hooks/use-session"
 import { pagePaths, pageRedirects } from "@/lib/page-routes"
@@ -23,28 +26,23 @@ const SettingsView = lazy(() => import("@/components/dashboard/settings-view").t
 const CodingAgentView = lazy(() => import("@/components/dashboard/coding-agent-view").then((module) => ({ default: module.CodingAgentView })))
 const ToolGatewayView = lazy(() => import("@/components/dashboard/tool-gateway-view").then((module) => ({ default: module.ToolGatewayView })))
 
-const dashboardSkeletons: Record<string, NonNullable<ComponentProps<typeof DashboardContentSkeleton>>["variant"]> = {
-  [pagePaths.providers]: "providers",
-  [pagePaths.aliases]: "aliases",
-  [pagePaths.usage]: "usage",
-  [pagePaths.budgets]: "budgets",
-  [pagePaths.pricing]: "model-pricing",
-  [pagePaths.logs]: "console-log",
-  [pagePaths.settings]: "settings",
-}
-
 function SessionGate({ login = false }: { login?: boolean }) {
   const { data, error, mutate } = useSession()
   if (error) return <main className="p-6" role="alert"><p>Unable to check your session.</p><Button onClick={() => void mutate()}>Retry</Button></main>
-  if (!data) return <DashboardContentSkeleton />
+  if (!data) return login ? <LoginPage checkingSession /> : <DashboardFrameSkeleton />
   if (login) return data.authenticated ? <Navigate to={pagePaths.dashboard} replace /> : <LoginPage />
   return data.authenticated ? <DashboardLayout /> : <Navigate to={pagePaths.login} replace />
 }
 
 function DashboardLayout() {
+  return <DashboardShell><Suspense fallback={<DashboardRouteSkeleton />}><Outlet /></Suspense></DashboardShell>
+}
+
+function RouteFallback() {
   const { pathname } = useLocation()
-  const variant = pathname.startsWith(`${pagePaths.providers}/`) ? "provider-detail" : dashboardSkeletons[pathname] ?? "endpoint-key"
-  return <DashboardShell><Suspense fallback={<DashboardContentSkeleton variant={variant} />}><Outlet /></Suspense></DashboardShell>
+  if (pathname === pagePaths.home) return <PublicPageLayout loading><UsageSkeleton /></PublicPageLayout>
+  if (pathname === pagePaths.login) return <LoginPage checkingSession />
+  return <DashboardFrameSkeleton />
 }
 
 function ProviderPage() {
@@ -53,7 +51,7 @@ function ProviderPage() {
 }
 
 export function App() {
-  return <BrowserRouter><Suspense fallback={<DashboardContentSkeleton />}><Routes>
+  return <BrowserRouter><Suspense fallback={<RouteFallback />}><Routes>
     <Route path={pagePaths.home} element={<PublicPage />} />
     <Route path={pagePaths.login} element={<SessionGate login />} />
     <Route element={<SessionGate />}>

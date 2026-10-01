@@ -1,92 +1,82 @@
+import { Badge } from "@/components/ui/badge"
+import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, LockKeyholeIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { LogToolbar } from "@/components/dashboard/logs/log-toolbar"
+import { LogResults, LogStatus } from "@/components/dashboard/logs/log-results"
+import { CodingAgentView } from "@/components/dashboard/coding-agent-view"
+import { useLocation } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { FormSkeleton, LoadingCard, LoadingTable } from "@/components/loading-layout"
+import { DashboardPage, logPageClassName } from "@/components/dashboard/page-layout"
+import { UsageSkeleton } from "@/components/dashboard/usage-skeleton"
+import { InstanceSettingsSkeleton } from "@/components/dashboard/settings/settings-skeleton"
+import { CliProxySkeleton } from "@/components/dashboard/cliproxy/skeleton"
+import { dashboardPageForPath, pageRedirects, type DashboardPage as Page } from "@/lib/dashboard/routes"
 
-type DashboardSkeletonVariant = "default" | "endpoint-key" | "providers" | "oauth-providers" | "aliases" | "provider-detail" | "settings" | "usage" | "budgets" | "model-pricing" | "console-log"
-type DashboardSkeletonProps = { variant?: DashboardSkeletonVariant }
-
-function SkeletonTable({ columns, rows = 3 }: { columns: number; rows?: number }) {
-  return <div className="mt-8 overflow-hidden"><div className="grid grid-cols-[repeat(var(--skeleton-columns),minmax(0,1fr))] gap-4 border-b px-2 pb-3" style={{ "--skeleton-columns": columns}as React.CSSProperties}>{Array.from({ length: columns }).map((_, index) => <Skeleton key={index} className="h-4 w-20 max-w-full" />)}</div><div>{Array.from({ length: rows }).map((_, row) => <div key={row} className="grid min-h-14 grid-cols-[repeat(var(--skeleton-columns),minmax(0,1fr))] items-center gap-4 border-b px-2 last:border-0" style={{ "--skeleton-columns": columns}as React.CSSProperties}>{Array.from({ length: columns }).map((_, column) => <Skeleton key={column} className={`h-4 ${column === 0 ? "w-40 max-w-full" : "w-24 max-w-full"}`} />)}</div>)}</div></div>
+export type DashboardSkeletonVariant = "endpoint-key" | "providers" | "oauth-providers" | "aliases" | "provider-detail" | "codex-detail" | "settings" | "usage" | "budgets" | "model-pricing" | "console-log" | "system-logs" | "cliproxy" | "coding-agent" | "opencode-agent" | "claude-agent" | "tool-gateway"
+const variants: Record<Page, DashboardSkeletonVariant> = {
+  dashboard: "endpoint-key", providers: "providers", provider: "provider-detail", codex: "codex-detail", aliases: "aliases", usage: "usage", budgets: "budgets", pricing: "model-pricing",
+  logs: "console-log", systemLogs: "system-logs", cliproxy: "cliproxy", settings: "settings", codexAgent: "coding-agent", opencodeAgent: "opencode-agent", claudeAgent: "claude-agent",
+  tools: "tool-gateway", toolCatalog: "tool-gateway", toolConnections: "tool-gateway", toolActivity: "tool-gateway", toolPolicies: "tool-gateway", toolSettings: "tool-gateway",
 }
 
-function DashboardShell({ children }: { children: React.ReactNode }) {
-  return <main aria-busy="true" aria-label="Loading dashboard" className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8" data-slot="dashboard-content-skeleton"><div className="mx-auto flex max-w-7xl flex-col gap-8">{children}</div></main>
+export function dashboardSkeletonForPath(path: string): DashboardSkeletonVariant {
+  const page = dashboardPageForPath(pageRedirects[path] ?? path)
+  return page ? variants[page] : "endpoint-key"
 }
 
-function CardHeading({ titleWidth = "w-40", descriptionWidth = "w-96", actionWidth }: { titleWidth?: string; descriptionWidth?: string; actionWidth?: string }) {
-  return <div className="flex items-start justify-between gap-4"><div className="min-w-0 flex-1"><div className={titleWidth}><Skeleton className="h-6 w-full" /></div>
-        <div className={`mt-2 max-w-full ${descriptionWidth}`} ><Skeleton className="h-4 w-full" /></div></div>{actionWidth && <div className={`shrink-0 ${actionWidth}`} ><Skeleton className="h-9 w-full" /></div>}</div>
+export function DashboardRouteSkeleton() {
+  const { pathname } = useLocation()
+  return <DashboardContentSkeleton variant={dashboardSkeletonForPath(pathname)} />
 }
 
-function ProvidersSkeleton() {
-  return <><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-32" descriptionWidth="w-[28rem]" actionWidth="w-32" /><SkeletonTable columns={7} rows={3} /></section><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-80" /><SkeletonTable columns={6} rows={1} /><Skeleton className="mt-4 h-4 w-72 max-w-full" /></section></>
-}
-
-function OAuthProvidersSkeleton() {
-  return <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-48" descriptionWidth="w-[34rem]" actionWidth="w-36" /><div className="mt-6 rounded-lg border bg-muted/20 p-4"><Skeleton className="h-4 w-40" /><Skeleton className="mt-2 h-4 w-full max-w-2xl" /></div><SkeletonTable columns={7} rows={3} /></section>
+export function DashboardContentSkeleton({ variant }: { variant: DashboardSkeletonVariant }) {
+  if (variant === "usage") return <UsageSkeleton />
+  if (variant === "console-log" || variant === "system-logs") return <ConsoleLogSkeleton global={variant === "system-logs"} />
+  if (variant === "cliproxy") return <CliProxySkeleton />
+  if (variant === "coding-agent" || variant === "opencode-agent" || variant === "claude-agent") return <CodingAgentView agent={variant === "coding-agent" ? "Codex" : variant === "opencode-agent" ? "Opencode" : "Claude Code"} />
+  const content = {
+    "endpoint-key": <EndpointKeySkeleton />,
+    "providers": <ProvidersSkeleton />,
+    "oauth-providers": <LoadingCard title={<><LinkIcon className="size-5" />Codex Providers</>} description="Connect multiple Codex accounts once and route native Responses requests through this gateway. Usage limits update every five minutes." action><LoadingTable columns={["Account", "Plan", "Status", "Usage Limits", "Unused Resets", "Token expiry", "Actions"]} /></LoadingCard>,
+    "aliases": <AliasesSkeleton />,
+    "provider-detail": <ProviderDetailSkeleton codex={false} />,
+    "codex-detail": <ProviderDetailSkeleton codex />,
+    "settings": <><LoadingCard title={<><LockKeyholeIcon className="size-5" />Admin password</>} description="This administrator password applies to every workspace. Confirm the current password before choosing a new one." className="max-w-2xl"><FormSkeleton labels={["Current password", "New password", "Confirm new password"]} /></LoadingCard><LoadingCard title="Global gateway settings" description="These settings apply to the shared CLIProxy service across every workspace." className="max-w-2xl"><InstanceSettingsSkeleton /></LoadingCard></>,
+    "budgets": <BudgetsSkeleton />,
+    "model-pricing": <LoadingCard title={<><DollarSignIcon />Model pricing</>} description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage." action={<Button variant="outline" disabled><RefreshCwIcon />Refresh</Button>}><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-medium">Model groups</div><div className="text-sm text-muted-foreground">Fixed groups are refreshed from configured models; custom groups collect models you choose.</div></div><Skeleton className="h-8 w-36" /></div><LoadingTable columns={["Group", "Type", "Models", "Current pricing", ""]} /></LoadingCard>,
+    "tool-gateway": <Card><CardHeader><div className="flex flex-wrap items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant="secondary">Checking</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div><CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription></CardHeader><CardContent spacing="compact-stack"><div role="status" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Checking the optional Executor service.</div></CardContent></Card>,
+  }
+  const normal = ["budgets", "model-pricing", "tool-gateway"].includes(variant)
+  return <DashboardPage spacing={normal ? "normal" : "wide"} width={variant === "tool-gateway" ? "narrow" : "default"} aria-busy="true" aria-label="Loading dashboard" data-slot="dashboard-content-skeleton" data-variant={variant}>
+    {content[variant]}
+  </DashboardPage>
 }
 
 function EndpointKeySkeleton() {
-  return <>
-    <section className="rounded-xl border bg-card p-6"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Skeleton shape="icon" className="size-5" /><Skeleton className="h-6 w-36" /></div><Skeleton className="mt-2 h-4 w-[30rem] max-w-full" /></div></div><div className="mt-6 flex h-10 items-center gap-3 rounded-lg border p-3"><Skeleton className="h-6 w-16 shrink-0" /><Skeleton className="h-4 flex-1" /><Skeleton className="size-7 shrink-0" /></div></section>
-    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-80" actionWidth="w-28" /><div className="mt-6 space-y-3">{Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex min-h-12 items-center gap-3 rounded-lg border p-3"><div className="min-w-0 flex-1 space-y-2"><Skeleton className="h-4 w-40 max-w-full" /><Skeleton className="h-3 w-56 max-w-full" /></div><div className="flex shrink-0 gap-2"><Skeleton className="size-7" /><Skeleton className="size-7" /><Skeleton className="size-7" /></div></div>)}</div></section>
-  </>
+  return <><LoadingCard title={<><RouteIcon className="size-5" />API Endpoint</>} description="Use this base URL with the native protocol endpoint supported by each model."><div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3"><Skeleton className="h-5 w-16 shrink-0" /><Skeleton className="h-5 min-w-0 flex-1" /><Skeleton className="size-7 shrink-0" /></div></LoadingCard>
+    <LoadingCard title="Gateway API keys" description="Clients use these keys to access every proxy endpoint." action={<Button disabled><PlusIcon />Create key</Button>}><div className="space-y-3">{Array.from({ length: 3 }, (_, index) => <div key={index} className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3"><div className="min-w-0 flex-1"><Skeleton className="h-5 w-40 max-w-full" /><Skeleton className="h-4 w-56 max-w-full" /></div>{[0, 1, 2].map(key => <Skeleton key={key} className="size-7 shrink-0" />)}</div>)}</div></LoadingCard></>
+}
+
+function ProvidersSkeleton() {
+  return <><LoadingCard title="Providers" description="Choose a provider to manage its connection settings and upstream API keys." action={<Button disabled><PlusIcon />Add provider</Button>}><LoadingTable columns={["Provider", "Prefix", "Protocol", "Origin", "API keys", "Models", ""]} /></LoadingCard><LoadingCard title={<><LinkIcon className="size-5" />Codex Providers</>} description="Manage Codex accounts separately from ordinary provider API keys."><LoadingTable columns={["Provider", "Prefix", "Protocol", "Accounts", "Models", ""]} rows={1} /><p className="text-sm text-muted-foreground">Open the Codex provider page to add an account.</p></LoadingCard></>
 }
 
 function AliasesSkeleton() {
-  return <><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-20" descriptionWidth="w-[28rem]" actionWidth="w-28" /><SkeletonTable columns={5} rows={4} /></section><section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-40" descriptionWidth="w-[30rem]" /><SkeletonTable columns={4} rows={3} /></section></>
+  return <><LoadingCard title={<><ArrowLeftRightIcon className="size-5" />Aliases</>} description="Create local gateway IDs that forward to enabled local or shared models." action={<Button disabled><PlusIcon />Add alias</Button>}><LoadingTable columns={["Gateway ID", "Name", "Target model", "Status", "Actions"]} /></LoadingCard><LoadingCard title={<><ListOrderedIcon className="size-5" />Combos</>} description="Try models in order until one accepts the request." action={<Button disabled><PlusIcon />Add combo</Button>}><LoadingTable columns={["Gateway ID", "Name", "Fallback order", "Actions"]} /></LoadingCard><LoadingCard title={<><Share2Icon className="size-5" />Shared Models</>} description="Read-only models shared into this workspace. Create a local alias before gateway keys can use one."><LoadingTable columns={["Qualified model", "Source workspace", "Status", "Action"]} /></LoadingCard></>
 }
 
-function ProviderDetailSkeleton() {
-  return <>
-    <div><Skeleton className="mb-3 h-8 w-28" /><Skeleton className="h-8 w-56" /><Skeleton className="mt-2 h-4 w-40" /></div>
-    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-44" descriptionWidth="w-72" actionWidth="w-44" /><div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">{Array.from({ length: 5 }).map((_, index) => <div key={index} className="rounded-lg border p-4"><Skeleton className="h-3 w-24" /><Skeleton className="mt-3 h-4 w-28 max-w-full" /></div>)}</div></section>
-    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-28" descriptionWidth="w-[32rem]" actionWidth="w-32" /><SkeletonTable columns={6} rows={3} /></section>
-    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-24" descriptionWidth="w-72" actionWidth="w-28" /><SkeletonTable columns={5} rows={3} /></section>
-  </>
-}
-
-function SettingsSkeleton() {
-  return <section className="max-w-2xl rounded-xl border bg-card p-6"><CardHeading titleWidth="w-40" descriptionWidth="w-80" /><div className="mt-6 grid gap-5">{Array.from({ length: 3 }).map((_, index) => <div key={index} className="space-y-2"><Skeleton className="h-4 w-32" /><Skeleton className="h-8 w-full" /></div>)}<Skeleton className="h-9 w-32" /></div></section>
-}
-
-function UsageSkeleton() {
-  return <>
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div className="space-y-2"><Skeleton className="h-8 w-56" /><div className="flex gap-3"><Skeleton className="h-4 w-24" /><Skeleton className="h-4 w-20" /><Skeleton className="h-4 w-32" /></div></div><Skeleton className="h-9 w-24 self-end" /></div>
-    <div className="flex flex-col gap-2 border-y py-3 lg:flex-row lg:items-center lg:justify-between"><Skeleton className="h-8 w-64" /><div className="flex gap-2"><Skeleton className="h-8 w-64" /><Skeleton className="h-8 w-48" /></div></div>
-    <section className="space-y-4"><div><Skeleton className="h-6 w-32" /><Skeleton className="mt-2 h-4 w-72 max-w-full" /></div><div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">{Array.from({ length: 4 }).map((_, index) => <section key={index} className="rounded-xl border bg-card p-6"><Skeleton className="h-4 w-24" /><Skeleton className="mt-3 h-9 w-32" /><Skeleton className="mt-5 h-4 w-full" /></section>)}</div></section>
-    <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]">{Array.from({ length: 2 }).map((_, index) => <section key={index} className="h-[560px] rounded-xl border bg-card p-6"><CardHeading titleWidth={index ? "w-32" : "w-48"} descriptionWidth="w-48" /><Skeleton className="mt-6 h-[220px] w-full" /><Skeleton className="mt-6 h-20 w-full" /></section>)}</div>
-    <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]"><section className="h-[640px] rounded-xl border bg-card p-6"><CardHeading titleWidth="w-32" descriptionWidth="w-40" actionWidth="w-44" /><SkeletonTable columns={7} rows={5} /></section><section className="h-[640px] rounded-xl border bg-card p-6"><CardHeading titleWidth="w-28" descriptionWidth="w-48" /><Skeleton className="mt-6 h-[220px] w-full" /><div className="mt-6 space-y-3">{Array.from({ length: 4 }).map((_, index) => <div key={index} className="flex items-center justify-between rounded-lg border p-3"><div className="space-y-2"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-24" /></div><div className="space-y-2"><Skeleton className="ml-auto h-4 w-16" /><Skeleton className="ml-auto h-3 w-20" /></div></div>)}</div></section></div>
-  </>
+function ProviderDetailSkeleton({ codex }: { codex: boolean }) {
+  return <><div><Skeleton className="mb-3 h-8 w-28" /><Skeleton className="h-8 w-56 max-w-full" /><Skeleton className="mt-1 h-5 w-40" /></div><LoadingCard title="Provider details" action={!codex} description={<Skeleton className="h-5 w-64 max-w-full" />}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(120px,1fr))]">{["Gateway prefix", "Authentication", "Protocol", "Prompt cache key", codex ? "Configured accounts" : "Configured keys", "Configured models"].map(label => <div key={label} className="rounded-lg border bg-muted/20 p-4"><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div><Skeleton className="mt-2 h-5 w-24 max-w-full" /></div>)}</div></LoadingCard><LoadingCard title={<><KeyRoundIcon className="size-5" />{codex ? "Accounts" : "API keys"}</>} description="The account at the top has the highest priority. CLIProxy uses fill-first routing and only falls through when that account is unavailable." action><LoadingTable columns={codex ? ["", "Name", "Plan", "Status", "Usage Limits", "Unused Resets", "Created", ""] : ["", "Name", "Limits", "Status", "Created", ""]} /></LoadingCard><LoadingCard title={<><BoxesIcon className="size-5" />Models</>} description={codex ? "Models are discovered from connected CLIProxy accounts. Custom mappings are preserved. Waiting for first sync." : "Expose upstream models behind your provider prefix."} action><LoadingTable columns={["Model", "Gateway ID", "Upstream model", "Provider protocol", "Status", ""]} /></LoadingCard></>
 }
 
 function BudgetsSkeleton() {
-  return <>
-    <section className="rounded-xl border bg-card p-6"><div><div className="flex items-center gap-2"><Skeleton shape="icon" className="size-5" /><Skeleton className="h-6 w-36" /></div><Skeleton className="mt-2 h-4 w-[32rem] max-w-full" /></div><div className="mt-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><Skeleton className="h-16 w-full max-w-sm flex-none" /><div className="flex flex-col gap-3 sm:flex-row lg:ml-auto"><Skeleton className="h-10 w-48" /><Skeleton className="h-10 w-48" /><Skeleton className="h-10 w-28" /></div></div></section>
-    <section className="rounded-xl border bg-card p-6"><CardHeading titleWidth="w-28" descriptionWidth="w-[34rem]" actionWidth="w-24" /><div className="mt-6 grid gap-3 sm:grid-cols-2">{Array.from({ length: 2 }).map((_, index) => <div key={index} className="rounded-xl border bg-muted/20 p-4"><div className="flex items-start justify-between gap-3"><div><Skeleton className="h-4 w-40" /><Skeleton className="mt-3 h-8 w-28" /></div><Skeleton shape="tile" className="size-9" /></div><Skeleton className="mt-3 h-3 w-52 max-w-full" />{index === 1 && <><Skeleton className="mt-3 h-2 w-full" /><Skeleton className="mt-2 h-3 w-full" /></>}</div>)}</div><div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-end"><Skeleton className="h-10 w-64" /><Skeleton className="h-10 w-40" /><Skeleton className="h-10 w-32" /></div><div className="mt-5 space-y-4"><div className="flex h-8 w-56 gap-1 rounded-lg bg-muted p-1"><Skeleton className="h-6 flex-1" /><Skeleton className="h-6 flex-1" /></div><div className="rounded-xl border p-4"><div className="flex items-center justify-between gap-4"><div className="space-y-2"><Skeleton className="h-4 w-32" /><Skeleton className="h-4 w-72 max-w-full" /></div><Skeleton className="h-9 w-32" /></div></div><div className="rounded-xl border"><div className="space-y-2 border-b p-4"><Skeleton className="h-4 w-44" /><Skeleton className="h-3 w-60" /></div><SkeletonTable columns={4} rows={2} /></div></div><SkeletonTable columns={5} rows={3} /></section>
-  </>
+  return <><LoadingCard title={<><Clock3Icon className="size-5" />Budget window</>} description="Choose the shared accounting window used by every gateway key."><div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><Skeleton className="h-16 w-full max-w-sm" /><div className="flex flex-col gap-3 sm:flex-row"><Skeleton className="h-8 w-48 max-w-full" /><Skeleton className="h-8 w-48 max-w-full" /><Skeleton className="h-8 w-28" /></div></div></LoadingCard><LoadingCard title={<><WalletCardsIcon className="size-5" />Budgets</>} description="Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured." action={<Button variant="outline" disabled><RefreshCwIcon />Refresh</Button>}><div className="grid gap-3 sm:grid-cols-2">{["Total budget allocated", "Total budget used"].map(title => <div key={title} className="rounded-xl border bg-muted/20 p-4"><div className="text-sm font-medium">{title}</div><Skeleton className="mt-2 h-8 w-28" /><Skeleton className="mt-3 h-4 w-full" /></div>)}</div><div className="flex flex-col gap-3 sm:flex-row"><Skeleton className="h-8 w-full sm:w-64" /><Skeleton className="h-8 w-full sm:w-40" /><Skeleton className="h-8 w-32" /></div><Skeleton className="h-8 w-64 max-w-full" /><div className="space-y-4"><div className="rounded-xl border"><div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">Unlimited Mode</div><p className="mt-1 text-sm text-muted-foreground">Activate a temporary budget bypass while keeping expensive models blocked.</p></div><Skeleton className="h-8 w-36" /></div><div className="space-y-3 p-4"><div><div className="text-sm font-medium">Excluded models</div><p className="text-xs text-muted-foreground">These models cannot start new requests while Unlimited Mode is active.</p></div><Skeleton className="h-8 w-full" /><div className="max-h-80 divide-y overflow-hidden rounded-lg border">{[0, 1, 2].map(key => <div key={key} className="flex items-center gap-3 px-3 py-3"><Skeleton className="size-4" /><div className="min-w-0 flex-1"><Skeleton className="h-5 w-40 max-w-full" /><Skeleton className="h-4 w-56 max-w-full" /></div></div>)}</div><div className="flex flex-col gap-3 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button disabled>Save exclusions</Button></div></div></div><div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div><LoadingTable columns={["Started", "Ended", "Duration", "Result"]} rows={1} /></div></div><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="space-y-2"><span className="text-sm font-medium">Order rows by</span><Skeleton className="h-8 w-44" /></div></div><LoadingTable columns={["Key", "Status", "Limit", "Usage", ""]} /></LoadingCard></>
 }
 
-function ModelPricingSkeleton() {
-  return <section aria-busy="true" aria-label="Loading model pricing" className="rounded-xl border bg-card p-6"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Skeleton shape="icon" className="size-5" /><Skeleton className="h-6 w-36" /></div><Skeleton className="mt-2 h-4 w-[34rem] max-w-full" /></div><Skeleton className="h-9 w-24 shrink-0" /></div><div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><Skeleton className="h-4 w-28" /><Skeleton className="mt-2 h-3 w-80 max-w-full" /></div><Skeleton className="h-8 w-40" /></div><div className="mt-6 overflow-x-auto"><div className="min-w-[52rem]"><div className="grid h-10 grid-cols-[minmax(14rem,1.4fr)_6rem_minmax(10rem,1fr)_minmax(10rem,1fr)_auto] items-center gap-4 border-b px-2" >{Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className={`h-4 ${index === 4 ? "w-16" : "w-20"}`} />)}</div>{Array.from({ length: 3 }).map((_, row) => <div key={row} className="grid min-h-20 grid-cols-[minmax(14rem,1.4fr)_6rem_minmax(10rem,1fr)_minmax(10rem,1fr)_auto] items-center gap-4 border-b px-2 last:border-0" ><div className="space-y-2"><Skeleton className="h-4 w-36" /><Skeleton className="h-3 w-48 max-w-full" /><Skeleton className="h-3 w-32 max-w-full" /></div><Skeleton className="h-5 w-14" /><div className="space-y-2"><Skeleton className="h-4 w-8" /><Skeleton className="h-3 w-32 max-w-full" /></div><div className="space-y-2"><Skeleton className="h-4 w-24" /><Skeleton className="h-3 w-28 max-w-full" /></div><div className="flex justify-end gap-2"><Skeleton className="h-8 w-16" /><Skeleton className="h-8 w-16" /><Skeleton className="h-8 w-16" /></div></div>)}</div></div></section>
-}
+const noop = () => undefined
 
-function ConsoleLogSkeleton() {
-  return <main aria-busy="true" aria-label="Loading console log" className="h-[calc(100svh-var(--header-height))] max-h-[calc(100svh-var(--header-height))] min-h-0 flex-none overflow-hidden bg-workspace p-4 dark:bg-background md:h-[calc(100svh-var(--header-height)-1rem)] md:max-h-[calc(100svh-var(--header-height)-1rem)] md:p-6 lg:p-8"><div className="mx-auto h-full max-w-7xl"><section className="h-full rounded-xl border bg-card p-6"><div className="flex items-start justify-between gap-4"><div><Skeleton className="h-6 w-32" /><Skeleton className="mt-2 h-4 w-80 max-w-full" /></div><div className="flex gap-2"><Skeleton className="h-9 w-24" /><Skeleton className="h-9 w-24" /><Skeleton className="h-9 w-24" /></div></div><div className="mt-6 flex flex-col gap-3 border-y py-4 lg:flex-row lg:items-center"><div className="flex gap-2">{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-8 w-14" />)}</div><div className="flex flex-1 justify-end gap-3"><Skeleton className="h-9 w-64 max-w-full" /><Skeleton className="h-5 w-16" /></div></div><div className="mt-4 h-[calc(100%-10rem)] rounded-lg bg-console p-4">{Array.from({ length: 10 }).map((_, index) => <Skeleton key={index} tone="console" className="mb-3 h-4 w-full" />)}</div></section></div></main>
-}
-
-export function DashboardSkeleton({ variant }: DashboardSkeletonProps = {}) {
-  return <DashboardContentSkeleton variant={variant} />
-}
-
-export function DashboardContentSkeleton({ variant = "default" }: DashboardSkeletonProps = {}) {
-  if (variant === "usage") return <DashboardShell><UsageSkeleton /></DashboardShell>
-  if (variant === "budgets") return <DashboardShell><BudgetsSkeleton /></DashboardShell>
-  if (variant === "model-pricing") return <DashboardShell><ModelPricingSkeleton /></DashboardShell>
-  if (variant === "console-log") return <ConsoleLogSkeleton />
-  if (variant === "providers") return <DashboardShell><ProvidersSkeleton /></DashboardShell>
-  if (variant === "oauth-providers") return <DashboardShell><OAuthProvidersSkeleton /></DashboardShell>
-  if (variant === "aliases") return <DashboardShell><AliasesSkeleton /></DashboardShell>
-  if (variant === "endpoint-key") return <DashboardShell><EndpointKeySkeleton /></DashboardShell>
-  if (variant === "provider-detail") return <DashboardShell><ProviderDetailSkeleton /></DashboardShell>
-  if (variant === "settings") return <DashboardShell><SettingsSkeleton /></DashboardShell>
-  return <DashboardShell><EndpointKeySkeleton /></DashboardShell>
+function ConsoleLogSkeleton({ global }: { global: boolean }) {
+  return <main className={logPageClassName} aria-busy="true" aria-label="Loading logs" data-slot="dashboard-content-skeleton"><div className="mx-auto h-full max-w-7xl"><Card className="h-full"><CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{global ? "System Logs" : "Console Log"}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."} History is kept in memory until the server restarts.</CardDescription><CardAction><div className="flex flex-wrap gap-2"><Button variant="outline" disabled><RefreshCwIcon />Refresh</Button><Button variant="outline" disabled><ClipboardIcon />Copy</Button><Button variant="destructive" disabled><Trash2Icon />Clear</Button></div></CardAction></CardHeader><CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col"><LogToolbar disabled level="all" setLevel={noop} query="" setQuery={noop} source="all" setSource={noop} sources={[]} live setLive={noop} /><LogStatus count={0} snapshot={null} live /><LogResults entries={[]} loading /></CardContent></Card></div></main>
 }

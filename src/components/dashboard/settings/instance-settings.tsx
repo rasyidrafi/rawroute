@@ -1,3 +1,4 @@
+import { InstanceSettingsSkeleton } from "./settings-skeleton"
 import { useState, type FormEvent } from "react"
 import useSWR from "swr"
 import { toast } from "sonner"
@@ -14,7 +15,7 @@ import { LoadingSpinner } from "@/components/loading-spinner"
 export function InstanceSettingsCard() {
   const { data, error, isLoading, mutate } = useSWR<InstanceSettings>("/api/admin/settings", fetcher)
   return <Card className="max-w-2xl"><CardHeader><CardTitle>Global gateway settings</CardTitle><CardDescription>These settings apply to the shared CLIProxy service across every workspace.</CardDescription></CardHeader><CardContent>
-    {isLoading ? <p role="status">Loading settings...</p> : error ? <div role="alert"><p>Unable to load gateway settings. Password settings remain available.</p><Button variant="outline" onClick={() => void mutate()}>Retry</Button></div> : data ? <InstanceSettingsForm key={JSON.stringify(data)} initial={data} onSaved={() => mutate()} /> : null}
+    {isLoading ? <InstanceSettingsSkeleton /> : error ? <div role="alert"><p>Unable to load gateway settings. Password settings remain available.</p><Button variant="outline" onClick={() => void mutate()}>Retry</Button></div> : data ? <InstanceSettingsForm key={JSON.stringify(data)} initial={data} onSaved={() => mutate()} /> : null}
   </CardContent></Card>
 }
 
