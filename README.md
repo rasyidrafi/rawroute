@@ -1,7 +1,9 @@
 # RawRoute
 
-RawRoute is the public wrapper around private CLIProxyAPI and optional Executor
-containers pulled from their published images.
+RawRoute manages its private CLIProxyAPI engine directly, with optional Executor
+integration. Global → CLIProxyAPI provides lifecycle, release, credential, OAuth,
+and engine log management. See [managed CLIProxyAPI](docs/managed-cliproxy.md) for
+setup, migration from external containers, and recovery behavior.
 
 The original RawRoute dashboard remains intact, including workspaces, aliases, gateway keys, budgets, custom model pricing, usage analytics, Codex views, logs, and settings. RawRoute owns those wrapper features and the budget admission decision. CLIProxyAPI owns provider credentials, OAuth execution, protocol translation, retries, upstream routing, provider rate limits, and model execution.
 
@@ -12,18 +14,18 @@ retention limits, extension guidance and workspace API compatibility changes.
 
 ## Network boundary
 
-Only RawRoute binds a host port. CLIProxyAPI remains the private provider
-execution and translation service, while Executor remains a separate private
-service for tools, connections, integrations, and policies.
+Only RawRoute binds a host port. CLIProxyAPI runs as a managed subprocess inside
+the RawRoute container, while Executor remains a separate private service for
+tools, connections, integrations, and policies.
 
 ```text
-client -> rawroute:8080 -> cli-proxy-api:8317 (private Compose network)
+client -> rawroute:8080 -> 127.0.0.1:8317 (managed CLIProxyAPI child)
                       -> executor:4788 (optional private Compose network)
                                -> provider origin
 ```
 
-CLIProxyAPI uses `expose`, not `ports`, so its management API is not reachable
-from the host. Executor uses the same private-network boundary and does not
+Managed CLIProxyAPI binds only to loopback inside the RawRoute container; its
+management API is not reachable from the host. Executor uses the same private-network boundary and does not
 publish port 4788. RawRoute synchronizes workspace-scoped provider projections
 to CLIProxyAPI; it does not proxy or rewrite provider traffic itself.
 
@@ -42,8 +44,7 @@ It includes memory limits, persistent storage, loopback access, and boot startup
 
 ```bash
 cp .env.example .env.local
-cp cliproxy/config.example.yaml cliproxy/config.yaml
-# Put the same internal key in cliproxy/config.yaml and CLIPROXY_API_KEY.
+# Set the required RawRoute, PostgreSQL and Redis credentials.
 docker compose --env-file .env.local pull
 docker compose --env-file .env.local up -d
 ```
@@ -86,7 +87,7 @@ Executor auth and MCP endpoints are intentionally not forwarded in this phase.
 The dashboard is available at `http://localhost:8080`. Set `RAWROUTE_HOST_PORT`
 and `RAWROUTE_PUBLIC_URL` to use a different host port.
 
-Compose uses the tested CLIProxyAPI `v7.3.4` multi-architecture image pinned by digest. Set `CLI_PROXY_IMAGE` in `.env.local` to use another published Docker Hub or GCR image/tag.
+The RawRoute image bundles tested CLIProxyAPI `v7.3.4` from an upstream image pinned by digest. Manage later release changes from Global → CLIProxyAPI. Existing separate-container deployments remain supported through `docker-compose.external.yml`; migrate their configuration and auth files before switching to managed mode.
 
 `Enable CLIProxy prompt cache key support` is an opt-in provider setting. It
 projects CLIProxy's native `support-prompt-cache-key` option for
@@ -181,7 +182,8 @@ CLIProxy/Executor fixtures. Install Chromium with
 `bunx --bun playwright install --with-deps chromium` and provide a disposable Redis
 database through `E2E_REDIS_URL` (default: `redis://127.0.0.1:6379/15`).
 `COMBO_TEST_REDIS_URL` enables the Redis integration test in the unit suite; use
-a separate test database for it.
+a separate test database for it. CLIProxy lifecycle tests run on isolated ports; the
+optional real-engine test is documented in the managed CLIProxyAPI guide.
 
 Unit and integration tests use `bun:test`. Run `bun run test` (or
 `bun test --isolate`) to give each file its own module registry and globals.

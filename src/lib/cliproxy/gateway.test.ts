@@ -69,6 +69,7 @@ const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComb
 const { drainBackgroundTasks } = await import("@/lib/background-tasks")
 
 beforeEach(() => {
+  process.env.CLIPROXY_MODE = "external"
   mock.clearAllMocks()
   mocks.authenticateProxyKey.mockResolvedValue({
     workspace: { id: "default", storageMode: "scoped" },

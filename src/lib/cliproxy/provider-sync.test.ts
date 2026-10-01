@@ -220,3 +220,25 @@ test("releases an acquired distributed projection lock", async () => {
     expect.any(String),
   )
 })
+
+test("an unknown lock result is cleaned up so the next provider edit can synchronize", async () => {
+  let owner: string | undefined
+  let first = true
+  mocks.localRedisSetIfAbsent.mockImplementation(async (_key: string, token: string) => {
+    if (owner) return false
+    owner = token
+    if (first) { first = false; return undefined }
+    return true
+  })
+  mocks.localRedisCompareAndDelete.mockImplementation(async (_key: string, token: string) => {
+    if (owner !== token) return false
+    owner = undefined
+    return true
+  })
+
+  await syncNonCodexProviderProjection("provider-a")
+  expect(owner).toBeUndefined()
+  await syncNonCodexProviderProjection("provider-a")
+  expect(owner).toBeUndefined()
+  expect(mocks.localRedisSetIfAbsent).toHaveBeenCalledTimes(2)
+})

@@ -1,3 +1,6 @@
+import { withManagementMutation } from "@/server/cliproxy/mutations"
+import { cliproxyManagement } from "@/lib/cliproxy/management"
+export { cliproxyManagement } from "@/lib/cliproxy/management"
 import { mapConcurrent } from "@/lib/concurrency"
 import { createHash } from "node:crypto"
 
@@ -6,7 +9,6 @@ import type { Provider, ProviderApiKey } from "@/lib/types"
 import { runInWorkspace } from "@/lib/workspace/context"
 import { listWorkspaces } from "@/server/workspace-repository"
 
-const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 
 export type CliProxyAuthFile = {
   name: string
@@ -25,19 +27,6 @@ export type CliProxyAuthFile = {
 }
 
 type RawAuthFile = Record<string, unknown>
-
-function cliProxyUrl(path: string) {
-  const base = (process.env.CLIPROXY_URL || DEFAULT_CLIPROXY_URL).replace(/\/$/, "")
-  return `${base}${path.startsWith("/") ? path : `/${path}`}`
-}
-
-export async function cliproxyManagement(path: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers)
-  const managementKey = process.env.CLIPROXY_MANAGEMENT_KEY?.trim()
-  if (!managementKey) throw new Error("CLIPROXY_MANAGEMENT_KEY is required for Codex credentials.")
-  headers.set("x-management-key", managementKey)
-  return fetch(cliProxyUrl(path), { ...init, headers, cache: "no-store" })
-}
 
 function string(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
@@ -202,7 +191,9 @@ export async function registerCliProxyCodexAccount(provider: Provider, input: { 
   })
 }
 
-export async function setCliProxyCodexAccountEnabled(account: ProviderApiKey, enabled: boolean) {
+export function setCliProxyCodexAccountEnabled(account: ProviderApiKey, enabled: boolean) { return withManagementMutation(() => setCliProxyCodexAccountEnabledUnlocked(account, enabled)) }
+
+async function setCliProxyCodexAccountEnabledUnlocked(account: ProviderApiKey, enabled: boolean) {
   const name = account.cliProxyAuthFile
   if (!name) throw new Error("Codex account has no CLIProxy auth-file mapping.")
   const response = await cliproxyManagement("/v0/management/auth-files/status", {
@@ -213,7 +204,9 @@ export async function setCliProxyCodexAccountEnabled(account: ProviderApiKey, en
   if (!response.ok) throw new Error(`CLIProxy auth-file update failed (${response.status}).`)
 }
 
-export async function setCliProxyCodexAccountPriority(account: ProviderApiKey, priority: number) {
+export function setCliProxyCodexAccountPriority(account: ProviderApiKey, priority: number) { return withManagementMutation(() => setCliProxyCodexAccountPriorityUnlocked(account, priority)) }
+
+async function setCliProxyCodexAccountPriorityUnlocked(account: ProviderApiKey, priority: number) {
   const name = account.cliProxyAuthFile
   if (!name) throw new Error("Codex account has no CLIProxy auth-file mapping.")
   const response = await cliproxyManagement("/v0/management/auth-files/fields", {
@@ -224,7 +217,9 @@ export async function setCliProxyCodexAccountPriority(account: ProviderApiKey, p
   if (!response.ok) throw new Error(`CLIProxy auth-file priority update failed (${response.status}).`)
 }
 
-export async function deleteCliProxyCodexAccount(account: ProviderApiKey) {
+export function deleteCliProxyCodexAccount(account: ProviderApiKey) { return withManagementMutation(() => deleteCliProxyCodexAccountUnlocked(account)) }
+
+async function deleteCliProxyCodexAccountUnlocked(account: ProviderApiKey) {
   const name = account.cliProxyAuthFile
   if (!name) throw new Error("Codex account has no CLIProxy auth-file mapping.")
   const response = await cliproxyManagement(`/v0/management/auth-files?name=${encodeURIComponent(name)}`, { method: "DELETE" })
@@ -298,7 +293,9 @@ export async function completeCliProxyCodexLogin(state: string, existingAuthFile
   return { file: updated, name, previousPrefix }
 }
 
-export async function setCliProxyCodexAccountPrefix(fileName: string, prefix: string) {
+export function setCliProxyCodexAccountPrefix(fileName: string, prefix: string) { return withManagementMutation(() => setCliProxyCodexAccountPrefixUnlocked(fileName, prefix)) }
+
+async function setCliProxyCodexAccountPrefixUnlocked(fileName: string, prefix: string) {
   const response = await cliproxyManagement("/v0/management/auth-files/fields", {
     method: "PATCH",
     headers: { "content-type": "application/json" },

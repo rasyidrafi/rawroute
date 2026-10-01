@@ -30,6 +30,7 @@ export function apiRoute<Params extends Record<string, string>>(
       try {
         const handler = handlers[method] || (method === "HEAD" ? handlers.GET : undefined)
         if (!handler) return new Response(null, { status: 405, headers: { allow } })
+        if (path.startsWith("/api/admin/cliproxy/service/") || path === "/api/admin/cliproxy/versions") server?.timeout(request, 0)
         const response = await handler(request, request.params as Params)
         if (access !== "gateway" && (!quiet || response.status >= 400) && !path.startsWith("/api/admin/logs")) {
           recordLog("http.request.completed", { route, method, status: response.status, durationMs: Math.round(performance.now() - started), succeeded: response.ok }, { level: response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info" })

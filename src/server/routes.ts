@@ -1,3 +1,6 @@
+import { oauthCallback as globalOauthCallback } from "./cliproxy/oauth"
+import { deleteKey as deleteCliproxyKey } from "./cliproxy/admin"
+import * as CliproxyInstance from "./cliproxy/http"
 import * as ApiAdminGlobalLogs from "./routes/api/admin/logs/global"
 import * as ApiAdminLogEvents from "./routes/api/admin/logs/events"
 import { apiRoute } from "./http"
@@ -71,6 +74,12 @@ import * as V1 from "./routes/v1"
 import * as V1betaProxy from "./routes/v1beta/proxy"
 
 export const apiRoutes = {
+  "/api/live": apiRoute({ GET: async () => Response.json({ status: "ok", service: "rawroute" }) }, "public", "/api/live"),
+  "/api/admin/cliproxy/oauth/:provider/callback": apiRoute({ POST: globalOauthCallback }, "session", "/api/admin/cliproxy/oauth/:provider/callback"),
+  "/api/admin/cliproxy/api-keys/:keyId": apiRoute({ DELETE: deleteCliproxyKey }, "session", "/api/admin/cliproxy/api-keys/:keyId"),
+  "/api/admin/cliproxy/status": apiRoute({ GET: CliproxyInstance.status }, "session", "/api/admin/cliproxy/status"),
+  "/api/admin/cliproxy/versions": apiRoute({ GET: CliproxyInstance.versions }, "session", "/api/admin/cliproxy/versions"),
+  "/api/admin/cliproxy/service/:action": apiRoute({ POST: CliproxyInstance.lifecycle }, "session", "/api/admin/cliproxy/service/:action"),
   "/anthropic/callback": apiRoute(AnthropicCallback, "public", "/anthropic/callback"),
   "/antigravity/callback": apiRoute(AntigravityCallback, "public", "/antigravity/callback"),
   "/api/admin/account/password": apiRoute(ApiAdminAccountPassword, "session", "/api/admin/account/password"),

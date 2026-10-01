@@ -1,5 +1,6 @@
 // Stable server event names and messages. Never construct messages from request data.
 export const serverEvents = {
+  "cliproxy.lifecycle": { message: "CLIProxy lifecycle event", source: "cliproxy" },
   "auth.login.rejected": { message: "Admin login rejected", source: "auth" },
   "auth.login.succeeded": { message: "Admin signed in", source: "auth" },
   "auth.logout": { message: "Admin signed out", source: "auth" },

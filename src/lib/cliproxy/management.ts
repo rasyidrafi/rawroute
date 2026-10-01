@@ -1,18 +1,15 @@
-const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
-
-function upstreamUrl(path: string) {
-  const base = (process.env.CLIPROXY_URL || DEFAULT_CLIPROXY_URL).replace(/\/$/, "")
-  return `${base}${path.startsWith("/") ? path : `/${path}`}`
-}
+import { cliproxyBaseUrl, cliproxySecret } from "@/server/cliproxy/connection"
 
 export async function cliproxyManagement(path: string, init: RequestInit = {}) {
+  if (!path.startsWith("/v0/management/") || path.includes("..") || path.includes("\\")) throw new Error("Invalid CLIProxy management path.")
   const headers = new Headers(init.headers)
-  const managementKey = process.env.CLIPROXY_MANAGEMENT_KEY?.trim()
+  const managementKey = cliproxySecret("managementKey")
   if (managementKey) headers.set("x-management-key", managementKey)
-  return fetch(upstreamUrl(path), {
+  return fetch(`${cliproxyBaseUrl()}${path}`, {
     ...init,
     headers,
     cache: "no-store",
+    signal: init.signal ?? AbortSignal.timeout(15_000),
   })
 }
 

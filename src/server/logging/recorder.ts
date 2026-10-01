@@ -7,7 +7,7 @@ import { logs, type LogAdmission } from "./store"
 // Never accept arbitrary errors, names, URLs, bodies, headers or credential values.
 const identifierFields = new Set(["providerId", "modelId", "memberModelId", "accountId", "apiKeyId", "groupId", "versionId", "comboId", "aliasId", "workspaceId", "redeemRequestId"])
 const labelFields = new Set(["model", "upstreamModel", "protocol", "upstreamProtocol", "errorCode", "reasoningEffort", "action", "setting", "method", "route", "page", "endedAt", "source"])
-const numericFields = new Set(["status", "durationMs", "ttftMs", "inputTokens", "outputTokens", "cachedTokens", "messageCount", "toolCount", "count", "modelCount", "recipientCount", "added", "removed", "updated", "retryAfter", "providers", "keys", "models", "projectedCredentials", "projectedModels"])
+const numericFields = new Set(["exitCode", "attempt", "restartAttempts", "status", "durationMs", "ttftMs", "inputTokens", "outputTokens", "cachedTokens", "messageCount", "toolCount", "count", "modelCount", "recipientCount", "added", "removed", "updated", "retryAfter", "providers", "keys", "models", "projectedCredentials", "projectedModels"])
 const booleanFields = new Set(["succeeded", "enabled", "autoDeactivateAtWindowEnd", "terminalEvent", "usageKnown", "reordered", "streaming", "promptCacheKey", "supportPromptCacheKey"])
 
 export function safeDetails(input: Record<string, unknown>): LogDetails {

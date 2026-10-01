@@ -16,7 +16,10 @@ function loginKey(id: string) {
 
 export async function reservePendingCliProxyCodexLogin(id: string) {
   const reserved = await localRedisSetIfAbsent(GLOBAL_LOGIN_LOCK, id, LOGIN_TTL_MS)
-  if (reserved === undefined) throw new Error("Redis is required to start a Codex login safely.")
+  if (reserved === undefined) {
+    await localRedisCompareAndDelete(GLOBAL_LOGIN_LOCK, id)
+    throw new Error("Redis is required to start a Codex login safely.")
+  }
   if (!reserved) throw new Error("Another Codex login is already in progress. Finish or cancel it before starting another.")
 }
 
@@ -50,3 +53,5 @@ export async function deletePendingCliProxyCodexLogin(id: string) {
     localRedisCompareAndDelete(GLOBAL_LOGIN_LOCK, id),
   ])
 }
+
+export async function hasPendingCodexLogin() { return Boolean(await localRedisGet(GLOBAL_LOGIN_LOCK)) }

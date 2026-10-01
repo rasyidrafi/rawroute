@@ -45,7 +45,7 @@ test("System and Global logs are isolated and shared pages preserve the selected
     await expect(page.getByRole("heading", { name: "System Logs", exact: true })).toBeVisible()
     await expect(entries).toContainText("Admin signed in")
     await expect(entries).not.toContainText("Live log updates paused")
-    await expect(page.getByRole("link", { name: "CLIProxyAPI", exact: true })).toHaveCount(0)
+    await expect(page.getByRole("link", { name: "CLIProxyAPI", exact: true })).toBeVisible()
     await page.getByRole("button", { name: /RawRoute/ }).first().click()
     await page.getByRole("menuitemradio", { name: "Tool Gateway", exact: true }).click()
     await page.getByRole("link", { name: "System Logs", exact: true }).click()

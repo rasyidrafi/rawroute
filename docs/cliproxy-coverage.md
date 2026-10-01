@@ -30,4 +30,4 @@ Auto-discovered models can be disabled, but their identity is managed automatica
 
 ## Deliberate boundary
 
-RawRoute does not mirror CLIProxy’s standalone management control panel, plugin marketplace, or provider-specific management settings that are not part of the RawRoute dashboard. Those remain available only inside the private CLIProxy service and are not needed to implement a RawRoute feature. New RawRoute features should either call an existing CLIProxy management endpoint or be implemented in RawRoute’s wrapper layer; they should not be added to `../CLIProxyAPI`.
+RawRoute now exposes its own Global CLIProxyAPI page for lifecycle, versions, keys, OAuth, auth files and logs. See [managed CLIProxyAPI](managed-cliproxy.md). The standalone CLIProxy control panel, plugin marketplace, and additional provider-specific settings are not mirrored. Those remain available only inside the private CLIProxy service and are not needed to implement a RawRoute feature. New RawRoute features should either call an existing CLIProxy management endpoint or be implemented in RawRoute’s wrapper layer; they should not be added to `../CLIProxyAPI`.

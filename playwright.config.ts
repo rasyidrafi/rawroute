@@ -29,6 +29,7 @@ export default defineConfig({
         REDIS_URL: process.env.E2E_REDIS_URL || "redis://127.0.0.1:6379/15",
         EXECUTOR_UPSTREAM_URL: "http://127.0.0.1:3211/executor",
         EXECUTOR_UPSTREAM_API_KEY: "executor-test-key",
+        CLIPROXY_MODE: "external",
         CLIPROXY_API_KEY: "sk-e2e-internal",
         CLIPROXY_MANAGEMENT_KEY: "e2e-management-key",
         STORAGE_BACKEND: "memory",

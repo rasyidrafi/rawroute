@@ -34,9 +34,11 @@ beforeEach(() => {
 test("rejects concurrent or unsafe login reservations", async () => {
   mocks.setIfAbsent.mockResolvedValueOnce(false)
   await expect(reservePendingCliProxyCodexLogin("login-b")).rejects.toThrow("already in progress")
+  expect(mocks.compareAndDelete).not.toHaveBeenCalled()
 
   mocks.setIfAbsent.mockResolvedValueOnce(undefined)
   await expect(reservePendingCliProxyCodexLogin("login-c")).rejects.toThrow("Redis is required")
+  expect(mocks.compareAndDelete).toHaveBeenCalledWith("rawroute:codex-login:v2:active", "login-c")
 })
 
 test("persists and restores a workspace-bound CLIProxy state", async () => {

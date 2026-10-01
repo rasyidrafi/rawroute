@@ -1,3 +1,4 @@
+import { withManagementMutation } from "@/server/cliproxy/mutations"
 import { deletePendingCliProxyCodexLogin, takePendingCliProxyCodexLogin } from "@/lib/codex/cli-login"
 import { cancelCliProxyCodexLogin, completeCliProxyCodexLogin, registerCliProxyCodexAccount, setCliProxyCodexAccountPrefix } from "@/lib/codex/cliproxy"
 import { ensureCodexProvider } from "@/lib/codex/oauth"
@@ -6,7 +7,9 @@ import { jsonError } from "@/lib/http"
 import { recordLog } from "@/server/logging/recorder"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
-export async function POST(request: Request) {
+export function POST(request: Request) { return withManagementMutation(() => post(request)) }
+
+async function post(request: Request) {
   const body = await request.json().catch(() => null) as { loginId?: unknown; name?: unknown } | null
   const loginId = typeof body?.loginId === "string" ? body.loginId.trim() : ""
   if (!loginId) return jsonError("CLIProxy login ID is required.", 400)

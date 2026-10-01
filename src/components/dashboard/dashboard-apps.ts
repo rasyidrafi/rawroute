@@ -30,7 +30,7 @@ function nav(page: DashboardPage, icon: LucideIcon): DashboardNavigationItem {
 
 const sharedNavigation: DashboardNavigationGroup[] = [
   { label: "System", items: [nav("logs", LogsIcon)] },
-  { label: "Global", items: [nav("systemLogs", LogsIcon), nav("settings", SettingsIcon)] },
+  { label: "Global", items: [nav("cliproxy", ServerIcon), nav("systemLogs", LogsIcon), nav("settings", SettingsIcon)] },
 ]
 
 export const dashboardApps: DashboardApp[] = [

@@ -27,7 +27,7 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
 
   await page.getByRole("button", { name: "Disable Work Codex", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Disable account", exact: true }).click()
-  await expect(page.getByText("Disabled", { exact: true })).toBeVisible()
+  await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name: "Work Codex", exact: true }) }).getByRole("cell", { name: "Disabled", exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Remove Work Codex?" }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
   await expect(page.getByText("No accounts yet.")).toBeVisible()

@@ -1,3 +1,4 @@
+import { withManagementMutation } from "@/server/cliproxy/mutations"
 import { randomUUID } from "node:crypto"
 
 import { deletePendingCliProxyCodexLogin, reservePendingCliProxyCodexLogin, savePendingCliProxyCodexLogin } from "@/lib/codex/cli-login"
@@ -6,7 +7,9 @@ import { jsonError } from "@/lib/http"
 import { recordLog } from "@/server/logging/recorder"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
-export async function POST() {
+export function POST() { return withManagementMutation(post) }
+
+async function post() {
   try {
     const loginId = randomUUID()
     await reservePendingCliProxyCodexLogin(loginId)

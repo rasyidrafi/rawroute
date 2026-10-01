@@ -1,0 +1,41 @@
+[Unit]
+Description=RawRoute with managed CLIProxyAPI
+Wants=network-online.target
+After=network-online.target
+Wants=svc-postgres-shared.service svc-redis-cache.service
+After=svc-postgres-shared.service svc-redis-cache.service
+[Container]
+Image=docker.io/rasyidrafi/rawroute:latest
+Pull=missing
+ContainerName=rawroute
+Network=rawroute.network
+Network=svc-postgres-shared.network
+Network=svc-redis-cache.network
+EnvironmentFile=/etc/rawroute/app.env
+Environment=HOSTNAME=::
+Environment=CLIPROXY_MODE=managed
+Environment=RAWROUTE_DATA_DIR=/data
+Environment=GOMEMLIMIT=80MiB
+Environment=GOMAXPROCS=1
+Volume=rawroute-managed-data.volume:/data
+RunInit=true
+PublishPort=0.0.0.0:8080:8080
+HealthCmd=bun -e "fetch('http://127.0.0.1:8080/api/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=60s
+HealthRetries=3
+LogDriver=k8s-file
+LogOpt=max-size=10mb
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=45
+MemoryMax=448M
+MemorySwapMax=64M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

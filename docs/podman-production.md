@@ -1,3 +1,9 @@
+# Deployment mode
+
+This guide describes the retained external CLIProxy deployment. The managed
+alternative, volume migration, and combined resource limits are documented in
+[managed CLIProxyAPI](managed-cliproxy.md). Choose one mode before installing units.
+
 # Production on a 1 GB VM
 
 Use Podman 5 or newer with systemd and cgroup v2. The service files run rootful

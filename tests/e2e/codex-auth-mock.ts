@@ -4,7 +4,7 @@ type AuthFile = { name: string; type: string; auth_index: string; email: string;
 type RoutingMode = "cooldown-once" | "always-cooldown" | "codex-cooldown" | "ambiguous-429"
 const files: AuthFile[] = []
 const sessions = new Map<string, boolean>()
-const configuration: Record<string, unknown> = { "openai-compatibility": [], "claude-api-key": [], "routing/strategy": { strategy: "fill-first" } }
+const configuration: Record<string, unknown> = { "api-keys": ["sk-e2e-internal"], "openai-compatibility": [], "claude-api-key": [], "routing/strategy": { strategy: "fill-first" } }
 const gatewaySettings: Record<string, unknown> = { debug: false, "logging-to-file": false, "usage-statistics-enabled": false, "request-retry": 2, "max-retry-interval": 30 }
 const state = { pollCount: 0, routingAttempts: 0, routingMode: undefined as RoutingMode | undefined }
 
@@ -41,6 +41,7 @@ async function handleRequest(request: Request) {
       }
       return Response.json(endpoint === "routing/strategy" ? configuration[endpoint] : { [endpoint]: configuration[endpoint] })
     }
+    if (endpoint === "logs") return Response.json({ lines: request.method === "DELETE" ? [] : ["CLIProxy fixture ready", "Authorization: Bearer fixture-secret"] })
     if (endpoint === "config") return Response.json({ ...gatewaySettings, routing: { strategy: "fill-first" } })
     if (endpoint === "codex-auth-url") {
       const id = crypto.randomUUID()

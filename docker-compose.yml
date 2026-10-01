@@ -27,6 +27,7 @@ services:
     restart: unless-stopped
 
   rawroute:
+    init: true
     image: ${RAWROUTE_IMAGE:-docker.io/rasyidrafi/rawroute:latest}
     environment:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
@@ -79,9 +80,10 @@ services:
       CODEX_OAUTH_CLIENT_ID: ${CODEX_OAUTH_CLIENT_ID:-}
       CODEX_USAGE_URL: ${CODEX_USAGE_URL:-}
       RAWROUTE_PUBLIC_URL: ${RAWROUTE_PUBLIC_URL:-http://localhost:8080}
-      CLIPROXY_URL: http://cli-proxy-api:8317
-      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
-      CLIPROXY_API_KEY: ${CLIPROXY_API_KEY:?Set CLIPROXY_API_KEY}
+      CLIPROXY_MODE: managed
+      RAWROUTE_DATA_DIR: /data
+      GOMEMLIMIT: ${CLIPROXY_GOMEMLIMIT:-128MiB}
+      GOMAXPROCS: ${CLIPROXY_GOMAXPROCS:-2}
       # Optional private Executor integration. The Executor service is profile
       # gated below, so existing deployments do not start it accidentally.
       EXECUTOR_UPSTREAM_URL: ${EXECUTOR_UPSTREAM_URL:-http://executor:4788}
@@ -92,37 +94,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      cli-proxy-api:
-        condition: service_started
       # The Executor service is profile-gated. `required: false` keeps the
       # default RawRoute deployment independent from that optional profile.
       executor:
         condition: service_started
         required: false
+    volumes:
+      - rawroute-managed-data:/data
     ports:
       - "${RAWROUTE_HOST_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/api/live').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       start_period: 20s
       retries: 6
     stop_grace_period: 45s
-    restart: unless-stopped
-
-  cli-proxy-api:
-    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266}
-    pull_policy: always
-    environment:
-      # This enables the internal Management API without publishing it.
-      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
-    expose:
-      - "8317"
-    volumes:
-      - ${CLI_PROXY_CONFIG_PATH:-./cliproxy/config.yaml}:/CLIProxyAPI/config.yaml
-      - ${CLI_PROXY_AUTH_PATH:-./cliproxy/auths}:/root/.cli-proxy-api
-      - ${CLI_PROXY_LOG_PATH:-./cliproxy/logs}:/CLIProxyAPI/logs
-      - ${CLI_PROXY_PLUGIN_PATH:-./cliproxy/plugins}:/CLIProxyAPI/plugins
     restart: unless-stopped
 
   # Start with `docker compose --profile executor up -d`. It has no host port;
@@ -153,6 +140,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  rawroute-managed-data:
   rawroute-postgres-data:
   rawroute-redis-data:
   executor-data:

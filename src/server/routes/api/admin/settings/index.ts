@@ -1,3 +1,4 @@
+import { withManagementMutation } from "@/server/cliproxy/mutations"
 import { instanceSettingsSchema } from "@/lib/instance-settings"
 import { cliproxyManagementJson, redactSecrets } from "@/lib/cliproxy/gateway"
 import { jsonError } from "@/lib/http"
@@ -27,7 +28,9 @@ export async function GET() {
   })
 }
 
-export async function PATCH(request: Request) {
+export function PATCH(request: Request) { return withManagementMutation(() => patch(request)) }
+
+async function patch(request: Request) {
   const parsed = instanceSettingsSchema.partial().safeParse(await request.json().catch(() => null))
   if (!parsed.success || !Object.keys(parsed.data).length) return jsonError("Invalid settings payload.", 400)
   const body = parsed.data

@@ -1,3 +1,5 @@
+import { hasManagementCredential } from "@/server/cliproxy/connection"
+import { withManagementMutation } from "@/server/cliproxy/mutations"
 import { createHash, randomUUID } from "node:crypto"
 
 import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/management"
@@ -81,7 +83,7 @@ const projectionInflight = new Map<string, Promise<void>>()
 let fillFirstValidUntil = 0
 
 function managementKeyConfigured() {
-  return Boolean(process.env.CLIPROXY_MANAGEMENT_KEY?.trim())
+  return hasManagementCredential()
 }
 
 function digest(value: string) {
@@ -376,7 +378,7 @@ async function reconcile(providerId: string, force: boolean) {
       throw new CliProxyProviderSyncError(`CLIProxy projection sync timed out waiting for provider ${providerId}.`)
     }
     try {
-      await applyProjection(projection, force)
+      await withManagementMutation(() => applyProjection(projection, force))
       projectionState.set(projectionStateKey, { fingerprint: projection.fingerprint, expiresAt: Date.now() + SYNC_TTL_MS })
       await localRedisSet(redisStateKey(projection.workspaceId, providerId), projection.fingerprint, SYNC_TTL_MS)
       recordLog("admin.cliproxy.provider.projection.reconciled", {
@@ -390,7 +392,9 @@ async function reconcile(providerId: string, force: boolean) {
       await localRedisDelete(redisStateKey(projection.workspaceId, providerId))
       throw error
     } finally {
-      if (lock === true) await localRedisCompareAndDelete(lockKey, lockOwner)
+      // A timed-out SET may still have acquired the lock. The owner check
+      // makes cleanup safe even when Redis did not return its result.
+      await localRedisCompareAndDelete(lockKey, lockOwner)
     }
   })()
   projectionInflight.set(stateKey, promise)
@@ -418,3 +422,5 @@ export async function ensureNonCodexProviderProjection(providerId: string) {
     throw new CliProxyProviderSyncError(error instanceof Error ? error.message : "CLIProxy provider projection reconcile failed.")
   }
 }
+
+export function invalidateProviderProjections() { projectionState.clear(); fillFirstValidUntil = 0 }

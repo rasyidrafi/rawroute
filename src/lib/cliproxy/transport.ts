@@ -1,10 +1,10 @@
+import { cliproxyBaseUrl, cliproxyMode, cliproxySecret } from "@/server/cliproxy/connection"
+import { admitExecution } from "@/server/cliproxy/admission"
 import { applyReasoningOverride, mergeComboCustomPayload } from "@/lib/combo-reasoning"
 import { providerResponsesUrl } from "@/lib/cliproxy/provider-capabilities"
 import { normalizeResponsesRequest } from "@/lib/request-normalization"
 import type { Protocol } from "@/lib/types"
 import type { ResolvedGatewayModel } from "@/lib/cliproxy/model-resolution"
-
-const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 
 const hopByHopHeaders = new Set([
   "connection",
@@ -20,13 +20,9 @@ const hopByHopHeaders = new Set([
   "expect",
 ])
 
-function baseUrl() {
-  return (process.env.CLIPROXY_URL || DEFAULT_CLIPROXY_URL).replace(/\/$/, "")
-}
-
 function upstreamUrl(path: string, search = "") {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`
-  return `${baseUrl()}${normalizedPath}${search}`
+  return `${cliproxyBaseUrl()}${normalizedPath}${search}`
 }
 
 function forwardedHeaders(source: Headers) {
@@ -53,22 +49,36 @@ function passthroughResponse(response: Response) {
   })
 }
 
-export async function proxyToCliProxy(request: Request, path = new URL(request.url).pathname, options: { body?: BodyInit | null; headers?: HeadersInit } = {}) {
-  const url = new URL(request.url)
-  const headers = forwardedHeaders(request.headers)
-  if (options.headers) {
-    for (const [name, value] of new Headers(options.headers).entries()) headers.set(name, value)
-  }
-  const body = options.body !== undefined ? options.body : request.body
-  const response = await fetch(upstreamUrl(path, url.search), {
-    method: request.method,
-    headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
-    cache: "no-store",
-    signal: request.signal,
-    ...(body ? { duplex: "half" as const } : {}),
-  } as RequestInit & { duplex?: "half" })
-  return passthroughResponse(response)
+export async function proxyToCliProxy(request: Request, path = new URL(request.url).pathname, options: { body?: BodyInit | null; headers?: HeadersInit; admitted?: boolean } = {}) {
+  const release = options.admitted ? () => undefined : admitExecution()
+  try {
+    const url = new URL(request.url)
+    const headers = forwardedHeaders(request.headers)
+    if (options.headers) {
+      for (const [name, value] of new Headers(options.headers).entries()) headers.set(name, value)
+    }
+    const body = options.body !== undefined ? options.body : request.body
+    const response = await fetch(upstreamUrl(path, url.search), {
+      method: request.method,
+      headers,
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+      cache: "no-store",
+      signal: request.signal,
+      ...(body ? { duplex: "half" as const } : {}),
+    } as RequestInit & { duplex?: "half" })
+    if (!response.body || options.admitted) { release(); return passthroughResponse(response) }
+    const reader = response.body.getReader()
+    const tracked = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read()
+          if (done) { release(); controller.close() } else controller.enqueue(value)
+        } catch (error) { release(); controller.error(error) }
+      },
+      async cancel(reason) { try { await reader.cancel(reason) } finally { release() } },
+    })
+    return new Response(tracked, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
+  } catch (error) { release(); throw error }
 }
 
 export function protocolForPath(path: string): Protocol {
@@ -145,7 +155,8 @@ export async function rewriteForwardedBody(body: Uint8Array, forwardedModel: str
 
 export async function cliProxyHealth() {
   try {
-    const response = await fetch(upstreamUrl("/healthz"), { cache: "no-store", signal: AbortSignal.timeout(3000) })
+    const managed = cliproxyMode() === "managed"
+    const response = await fetch(upstreamUrl(managed ? "/v1/models" : "/healthz"), { cache: "no-store", signal: AbortSignal.timeout(3000), ...(managed ? { headers: { authorization: `Bearer ${cliproxySecret("apiKey")}` } } : {}) })
     return response.ok
   } catch {
     return false

@@ -1,3 +1,5 @@
+import { admitExecution } from "@/server/cliproxy/admission"
+import { cliproxySecret } from "@/server/cliproxy/connection"
 import { authenticateProxyKey } from "@/lib/auth"
 import { assertUnlimitedModelsAllowed, BudgetDeniedError, BudgetModelExcludedError, BudgetPricingUnavailableError, createGatewayUsageEvent, getBudgetRequestState, recordUsageEvent, releaseBudgetReservation, reserveBudgetAdmission, type BudgetReservation } from "@/lib/analytics"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
@@ -149,7 +151,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
     let response: Response
     if (tested.nativeResponses) response = await proxyToNativeResponses(request, tested, body, "openai-chat")
     else {
-      const internalKey = process.env.CLIPROXY_API_KEY?.trim()
+      const internalKey = cliproxySecret("apiKey")
       if (!internalKey) return { modelId: member.modelId, status: "unverified", message: "CLIProxy internal key is unavailable.", latencyMs: Date.now() - started }
       const forwardedBody = await rewriteForwardedBody(body, tested.forwardedModel, member.modelId, "/v1/chat/completions", applied.effort, applied.customPayload)
       response = await proxyToCliProxy(request, "/v1/chat/completions", { body: Buffer.from(forwardedBody), headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
@@ -314,7 +316,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       recordLog("gateway.catalog.served", { apiKeyId: apiKey.id, status: response.status, protocol: "catalog" })
       return response
     }
-    const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
+    const internalKey = cliproxySecret("apiKey") || supplied
     const response = await proxyToCliProxy(request, path, { headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
     return response
   }
@@ -340,116 +342,124 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       },
     })
   }
-  const payload = objectValue(parsed) || {}
-  const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort, resolvedModel.nativeResponses ? undefined : resolvedModel.customPayload)
-  let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
-  let reservation: BudgetReservation | undefined
+  let releaseExecution: (() => void) | undefined
+  try { if (!resolvedModel.nativeResponses) releaseExecution = admitExecution() }
+  catch { return Response.json({ error: { message: "CLIProxy is draining requests for maintenance." } }, { status: 503 }) }
+  let deferredRelease = false
   try {
-    const ownerWorkspace = resolvedModel.shared ? await getWorkspace(resolvedModel.shared.ownerWorkspaceId) : undefined
-    budgetState = resolvedModel.shared && ownerWorkspace
-      ? await runInWorkspace(ownerWorkspace, () => getBudgetRequestState(
-          `shared-workspace:${resolvedModel.shared!.consumerWorkspaceId}`,
-          resolvedModel.pricingGatewayModelId,
-          resolvedModel.providerModelId,
-          parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
-          forwardedBody.byteLength,
-          protocol,
-        ))
-      : await getBudgetRequestState(
-          apiKey.id,
-          resolvedModel.pricingGatewayModelId,
-          resolvedModel.providerModelId,
-          parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
-          forwardedBody.byteLength,
-          protocol,
-        )
-  } catch (error) {
-    if (error instanceof BudgetModelExcludedError) {
-      recordLog("gateway.budget.model.excluded", { apiKeyId: apiKey.id, model: estimate.model }, { level: "warn" })
-      return excludedModelResponse(error, true)
-    }
-    if (error instanceof BudgetDeniedError) {
-      recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
-      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" } })
-    }
-    if (error instanceof BudgetPricingUnavailableError) {
-      recordLog("gateway.budget.pricing.unavailable", { apiKeyId: apiKey.id, status: error.status, model: estimate.model }, { level: "warn" })
-      return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
-    }
-    recordLog("gateway.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
-    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
-  }
-
-  try {
-    reservation = await reserveBudgetAdmission(apiKey.id, budgetState.admission, budgetState.usageContext)
-  } catch (error) {
-    if (error instanceof BudgetDeniedError) {
-      recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
-      return new Response(JSON.stringify({ error: { message: error.message } }), {
-        status: error.status,
-        headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" },
-      })
-    }
-    recordLog("gateway.shared.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
-    return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
-  }
-
-  const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
-  const startedAtMs = Date.now()
-  const startedAt = new Date(startedAtMs).toISOString()
-  recordLog("gateway.request.started", {
-    providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, upstreamModel: resolvedModel.upstreamModel,
-    protocol, upstreamProtocol: resolvedModel.upstreamProtocol, apiKeyId: apiKey.id,
-    reasoningEffort: resolvedModel.reasoningEffort || extractReasoningEffort(payload),
-    messageCount: requestItemCount(payload, protocol), toolCount: requestToolCount(payload), promptCacheKey: resolvedModel.promptCacheKey,
-  })
-  let response: Response
-  try {
-    response = resolvedModel.nativeResponses
-      ? await proxyToNativeResponses(request, resolvedModel, body, protocol)
-      : await proxyToCliProxy(request, path, {
-          body: Buffer.from(forwardedBody),
-          headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" },
-        })
-  } catch {
-    await releaseBudgetReservationWithLog(reservation)
-    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
-    recordLog("gateway.upstream.request.failed", { providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, status: 502 }, { level: "error" })
-    return new Response(JSON.stringify({ error: { message: "Upstream request failed." } }), { status: 502, headers: { "content-type": "application/json" } })
-  }
-  if (response.ok && response.body && response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
-    const [downstream, monitor] = response.body.tee()
-    const trackedResponse = new Response(downstream, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
-    void trackBackgroundTask((async () => {
-      try {
-        const collected = await collectStreamUsage(monitor)
-        const streamStatus = collected.terminalEventSeen ? response.status : 502
-        await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared })
-          .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
-        const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
-        recordLog(streamStatus < 400 ? "gateway.request.completed" : "gateway.request.failed", {
-          ...details, ...completionDetails(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage), streaming: true,
-        }, { level: streamStatus < 400 ? "info" : "warn" })
-      } catch (recordingError) {
-        recordLog("gateway.unable.to.calculate.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" })
-      } finally {
-        await releaseBudgetReservationWithLog(reservation)
+    const payload = objectValue(parsed) || {}
+    const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort, resolvedModel.nativeResponses ? undefined : resolvedModel.customPayload)
+    let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
+    let reservation: BudgetReservation | undefined
+    try {
+      const ownerWorkspace = resolvedModel.shared ? await getWorkspace(resolvedModel.shared.ownerWorkspaceId) : undefined
+      budgetState = resolvedModel.shared && ownerWorkspace
+        ? await runInWorkspace(ownerWorkspace, () => getBudgetRequestState(
+            `shared-workspace:${resolvedModel.shared!.consumerWorkspaceId}`,
+            resolvedModel.pricingGatewayModelId,
+            resolvedModel.providerModelId,
+            parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
+            forwardedBody.byteLength,
+            protocol,
+          ))
+        : await getBudgetRequestState(
+            apiKey.id,
+            resolvedModel.pricingGatewayModelId,
+            resolvedModel.providerModelId,
+            parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
+            forwardedBody.byteLength,
+            protocol,
+          )
+    } catch (error) {
+      if (error instanceof BudgetModelExcludedError) {
+        recordLog("gateway.budget.model.excluded", { apiKeyId: apiKey.id, model: estimate.model }, { level: "warn" })
+        return excludedModelResponse(error, true)
       }
-    })())
-    return trackedResponse
-  }
-  const responseBody = new Uint8Array(await response.arrayBuffer())
-  const usage = actualResponseUsage(responseBody, response.headers.get("content-type"))
-  await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
-    .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
-  if (response.ok) recordLog("gateway.request.completed", { status: response.status, ...completionDetails(Date.now() - startedAtMs, undefined, usage), streaming: false })
-  else {
-    const failure = await upstreamFailure(new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }))
-    if (!response.headers.has("retry-after") && failure.retrySeconds) response.headers.set("retry-after", String(failure.retrySeconds))
-    recordLog("gateway.request.failed", { status: response.status, durationMs: Date.now() - startedAtMs, providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, source: resolvedModel.nativeResponses ? "provider" : "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: failure.retrySeconds }, { level: "warn" })
-  }
-  await releaseBudgetReservationWithLog(reservation)
-  return new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
+      if (error instanceof BudgetDeniedError) {
+        recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
+        return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" } })
+      }
+      if (error instanceof BudgetPricingUnavailableError) {
+        recordLog("gateway.budget.pricing.unavailable", { apiKeyId: apiKey.id, status: error.status, model: estimate.model }, { level: "warn" })
+        return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
+      }
+      recordLog("gateway.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
+      return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
+    }
+
+    try {
+      reservation = await reserveBudgetAdmission(apiKey.id, budgetState.admission, budgetState.usageContext)
+    } catch (error) {
+      if (error instanceof BudgetDeniedError) {
+        recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
+        return new Response(JSON.stringify({ error: { message: error.message } }), {
+          status: error.status,
+          headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" },
+        })
+      }
+      recordLog("gateway.shared.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
+      return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
+    }
+
+    const startedAtMs = Date.now()
+    const startedAt = new Date(startedAtMs).toISOString()
+    recordLog("gateway.request.started", {
+      providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, upstreamModel: resolvedModel.upstreamModel,
+      protocol, upstreamProtocol: resolvedModel.upstreamProtocol, apiKeyId: apiKey.id,
+      reasoningEffort: resolvedModel.reasoningEffort || extractReasoningEffort(payload),
+      messageCount: requestItemCount(payload, protocol), toolCount: requestToolCount(payload), promptCacheKey: resolvedModel.promptCacheKey,
+    })
+    let response: Response
+    try {
+      response = resolvedModel.nativeResponses
+        ? await proxyToNativeResponses(request, resolvedModel, body, protocol)
+        : await proxyToCliProxy(request, path, {
+            body: Buffer.from(forwardedBody),
+            admitted: true,
+            headers: { authorization: `Bearer ${cliproxySecret("apiKey") || supplied}`, "x-api-key": "" },
+          })
+    } catch {
+      await releaseBudgetReservationWithLog(reservation)
+      await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
+      recordLog("gateway.upstream.request.failed", { providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, status: 502 }, { level: "error" })
+      return new Response(JSON.stringify({ error: { message: "Upstream request failed." } }), { status: 502, headers: { "content-type": "application/json" } })
+    }
+    if (response.ok && response.body && response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
+      const [downstream, monitor] = response.body.tee()
+      const trackedResponse = new Response(downstream, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
+      deferredRelease = true
+      void trackBackgroundTask((async () => {
+        try {
+          const collected = await collectStreamUsage(monitor)
+          const streamStatus = collected.terminalEventSeen ? response.status : 502
+          await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared })
+            .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
+          const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
+          recordLog(streamStatus < 400 ? "gateway.request.completed" : "gateway.request.failed", {
+            ...details, ...completionDetails(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage), streaming: true,
+          }, { level: streamStatus < 400 ? "info" : "warn" })
+        } catch (recordingError) {
+          recordLog("gateway.unable.to.calculate.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" })
+        } finally {
+          await releaseBudgetReservationWithLog(reservation)
+          releaseExecution?.()
+        }
+      })())
+      return trackedResponse
+    }
+    const responseBody = new Uint8Array(await response.arrayBuffer())
+    const usage = actualResponseUsage(responseBody, response.headers.get("content-type"))
+    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
+      .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
+    if (response.ok) recordLog("gateway.request.completed", { status: response.status, ...completionDetails(Date.now() - startedAtMs, undefined, usage), streaming: false })
+    else {
+      const failure = await upstreamFailure(new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }))
+      if (!response.headers.has("retry-after") && failure.retrySeconds) response.headers.set("retry-after", String(failure.retrySeconds))
+      recordLog("gateway.request.failed", { status: response.status, durationMs: Date.now() - startedAtMs, providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, source: resolvedModel.nativeResponses ? "provider" : "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: failure.retrySeconds }, { level: "warn" })
+    }
+    await releaseBudgetReservationWithLog(reservation)
+    return new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
+  } finally { if (!deferredRelease) releaseExecution?.() }
 }
 
 type GatewayUsageRecordingInput = {

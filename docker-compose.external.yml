@@ -1,0 +1,159 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rawroute}
+      POSTGRES_USER: ${POSTGRES_USER:-rawroute}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - rawroute-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - rawroute-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  rawroute:
+    image: ${RAWROUTE_IMAGE:-docker.io/rasyidrafi/rawroute:latest}
+    environment:
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:?Set DEFAULT_ADMIN_PASSWORD}
+      DEFAULT_PROXY_API_KEY: ${DEFAULT_PROXY_API_KEY:?Set DEFAULT_PROXY_API_KEY}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY}
+      TIMEZONE: ${TIMEZONE:-UTC}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      DATABASE_COLLECTION_PREFIX: ${DATABASE_COLLECTION_PREFIX:-rawroute}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-20}
+      DATABASE_CHILD_READ_CONCURRENCY: ${DATABASE_CHILD_READ_CONCURRENCY:-16}
+      DATABASE_ANALYTICS_READ_CONCURRENCY: ${DATABASE_ANALYTICS_READ_CONCURRENCY:-8}
+      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
+      ROUTING_CACHE_TTL_MS: ${ROUTING_CACHE_TTL_MS:-60000}
+      ROUTING_FULL_REFRESH_INTERVAL_MS: ${ROUTING_FULL_REFRESH_INTERVAL_MS:-900000}
+      API_KEY_CACHE_TTL_MS: ${API_KEY_CACHE_TTL_MS:-60000}
+      API_KEY_NEGATIVE_CACHE_TTL_MS: ${API_KEY_NEGATIVE_CACHE_TTL_MS:-10000}
+      API_KEY_INDEX_REPAIR_ON_MISS: ${API_KEY_INDEX_REPAIR_ON_MISS:-}
+      MAX_WORKSPACE_CACHE_ENTRIES: ${MAX_WORKSPACE_CACHE_ENTRIES:-256}
+      MAX_PROVIDER_SCOPED_CACHE_ENTRIES: ${MAX_PROVIDER_SCOPED_CACHE_ENTRIES:-256}
+      WORKSPACE_CACHE_TTL_MS: ${WORKSPACE_CACHE_TTL_MS:-60000}
+      WORKSPACE_NEGATIVE_CACHE_TTL_MS: ${WORKSPACE_NEGATIVE_CACHE_TTL_MS:-10000}
+      BUDGET_CACHE_TTL_MS: ${BUDGET_CACHE_TTL_MS:-60000}
+      BUDGET_COUNTER_CACHE_TTL_MS: ${BUDGET_COUNTER_CACHE_TTL_MS:-30000}
+      BUDGET_DEFAULT_OUTPUT_TOKENS: ${BUDGET_DEFAULT_OUTPUT_TOKENS:-4096}
+      BUDGET_INPUT_BYTES_PER_TOKEN: ${BUDGET_INPUT_BYTES_PER_TOKEN:-3}
+      BUDGET_ESTIMATED_CACHE_READ_RATIO: ${BUDGET_ESTIMATED_CACHE_READ_RATIO:-0.5}
+      BUDGET_MISSING_USAGE_MAX_COST_MICROS: ${BUDGET_MISSING_USAGE_MAX_COST_MICROS:-2000000}
+      BUDGET_MISSING_USAGE_QUANTILE: ${BUDGET_MISSING_USAGE_QUANTILE:-0.25}
+      BUDGET_PREDICTION_PRIOR_STRENGTH: ${BUDGET_PREDICTION_PRIOR_STRENGTH:-500}
+      BUDGET_PREDICTION_BASELINE_MIN_SAMPLES: ${BUDGET_PREDICTION_BASELINE_MIN_SAMPLES:-30}
+      BUDGET_PREDICTION_SAMPLE_LIMIT: ${BUDGET_PREDICTION_SAMPLE_LIMIT:-2048}
+      DASHBOARD_CACHE_TTL_MS: ${DASHBOARD_CACHE_TTL_MS:-30000}
+      DASHBOARD_MAX_CUSTOM_RANGE_DAYS: ${DASHBOARD_MAX_CUSTOM_RANGE_DAYS:-3650}
+      DASHBOARD_MAX_HOURLY_RANGE_DAYS: ${DASHBOARD_MAX_HOURLY_RANGE_DAYS:-31}
+      DASHBOARD_MAX_DAILY_RANGE_DAYS: ${DASHBOARD_MAX_DAILY_RANGE_DAYS:-730}
+      DASHBOARD_MAX_WEEKLY_RANGE_DAYS: ${DASHBOARD_MAX_WEEKLY_RANGE_DAYS:-7300}
+      PUBLIC_DASHBOARD_MAX_CUSTOM_RANGE_DAYS: ${PUBLIC_DASHBOARD_MAX_CUSTOM_RANGE_DAYS:-366}
+      PRICING_CATALOG_CACHE_TTL_MS: ${PRICING_CATALOG_CACHE_TTL_MS:-60000}
+      PRICING_ADMIN_CACHE_TTL_MS: ${PRICING_ADMIN_CACHE_TTL_MS:-5000}
+      PRICING_JOBS_CACHE_TTL_MS: ${PRICING_JOBS_CACHE_TTL_MS:-2000}
+      CODEX_USAGE_LOCAL_CACHE_TTL_MS: ${CODEX_USAGE_LOCAL_CACHE_TTL_MS:-300000}
+      USAGE_ROLLUP_GRANULARITIES: ${USAGE_ROLLUP_GRANULARITIES:-hourly,daily}
+      ROUTING_MAX_STREAM_DURATION_SECONDS: ${ROUTING_MAX_STREAM_DURATION_SECONDS:-290}
+      ROUTING_MAX_NON_STREAM_DURATION_SECONDS: ${ROUTING_MAX_NON_STREAM_DURATION_SECONDS:-60}
+      CODEX_AUTH_BASE_URL: ${CODEX_AUTH_BASE_URL:-}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-}
+      CODEX_FEDRAMP: ${CODEX_FEDRAMP:-}
+      CODEX_OAUTH_CLIENT_ID: ${CODEX_OAUTH_CLIENT_ID:-}
+      CODEX_USAGE_URL: ${CODEX_USAGE_URL:-}
+      RAWROUTE_PUBLIC_URL: ${RAWROUTE_PUBLIC_URL:-http://localhost:8080}
+      CLIPROXY_MODE: external
+      CLIPROXY_URL: http://cli-proxy-api:8317
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
+      CLIPROXY_API_KEY: ${CLIPROXY_API_KEY:?Set CLIPROXY_API_KEY}
+      # Optional private Executor integration. The Executor service is profile
+      # gated below, so existing deployments do not start it accidentally.
+      EXECUTOR_UPSTREAM_URL: ${EXECUTOR_UPSTREAM_URL:-http://executor:4788}
+      EXECUTOR_UPSTREAM_API_KEY: ${EXECUTOR_UPSTREAM_API_KEY:-}
+      DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-unknown}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      cli-proxy-api:
+        condition: service_started
+      # The Executor service is profile-gated. `required: false` keeps the
+      # default RawRoute deployment independent from that optional profile.
+      executor:
+        condition: service_started
+        required: false
+    ports:
+      - "${RAWROUTE_HOST_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266}
+    pull_policy: always
+    environment:
+      # This enables the internal Management API without publishing it.
+      MANAGEMENT_PASSWORD: ${CLIPROXY_MANAGEMENT_KEY:?Set CLIPROXY_MANAGEMENT_KEY}
+    expose:
+      - "8317"
+    volumes:
+      - ${CLI_PROXY_CONFIG_PATH:-./cliproxy/config.yaml}:/CLIProxyAPI/config.yaml
+      - ${CLI_PROXY_AUTH_PATH:-./cliproxy/auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_LOG_PATH:-./cliproxy/logs}:/CLIProxyAPI/logs
+      - ${CLI_PROXY_PLUGIN_PATH:-./cliproxy/plugins}:/CLIProxyAPI/plugins
+    restart: unless-stopped
+
+  # Start with `docker compose --profile executor up -d`. It has no host port;
+  # RawRoute reaches it only through the Compose network.
+  executor:
+    profiles: ["executor"]
+    image: ${EXECUTOR_IMAGE:-ghcr.io/usefulsoftwareco/executor-selfhost:latest}
+    environment:
+      PORT: 4788
+      EXECUTOR_HOST: 0.0.0.0
+      EXECUTOR_DATA_DIR: /data
+      EXECUTOR_BOOTSTRAP_ADMIN_EMAIL: ${EXECUTOR_BOOTSTRAP_ADMIN_EMAIL:-}
+      EXECUTOR_BOOTSTRAP_ADMIN_PASSWORD: ${EXECUTOR_BOOTSTRAP_ADMIN_PASSWORD:-}
+      EXECUTOR_BOOTSTRAP_ADMIN_NAME: ${EXECUTOR_BOOTSTRAP_ADMIN_NAME:-Admin}
+      EXECUTOR_ALLOW_LOCAL_NETWORK: ${EXECUTOR_ALLOW_LOCAL_NETWORK:-false}
+      EXECUTOR_ALLOW_STDIO_MCP: ${EXECUTOR_ALLOW_STDIO_MCP:-false}
+      EXECUTOR_WEB_BASE_URL: ${EXECUTOR_WEB_BASE_URL:-}
+    expose:
+      - "4788"
+    volumes:
+      - executor-data:/data
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:4788/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  rawroute-postgres-data:
+  rawroute-redis-data:
+  executor-data:

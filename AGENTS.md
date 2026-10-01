@@ -10,6 +10,10 @@ uses `useDashboardApi()`; standalone dashboard API exports are global clients.
 Record server events through `src/server/logging/recorder.ts` and its event catalog.
 See `docs/scopes-and-logging.md` for scope, cache and logging conventions.
 
+CLIProxy lifecycle lives in `src/server/cliproxy/`; use its shared connection
+and mutation boundaries instead of reading transport secrets or spawning a child
+from feature handlers. See `docs/managed-cliproxy.md` for migration and ownership.
+
 Consult `.agents/skills/ask-bun/SKILL.md` and its script for Bun-specific guidance.
 `bun run build` bundles the app; TypeScript checks run separately with
 `bun run typecheck`.

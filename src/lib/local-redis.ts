@@ -27,32 +27,45 @@ export function getLocalRedis() {
 }
 
 export async function localRedisHealth() {
-  return (await boundedCommand(getLocalRedis().ping())) === "PONG"
+  return (await boundedCommand(redis => redis.ping())) === "PONG"
 }
 
-async function boundedCommand<T>(command: Promise<T>): Promise<T | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      command,
-      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), redisCommandTimeoutMs) }),
-    ])
-  } catch {
-    return undefined
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+function boundedCommand<T>(command: (redis: Redis) => Promise<T>): Promise<T | undefined> {
+  const redis = getLocalRedis()
+  return new Promise(resolve => {
+    const finish = (value: T | undefined) => {
+      clearTimeout(timer)
+      redis.off("ready", run)
+      redis.off("end", unavailable)
+      resolve(value)
+    }
+    const unavailable = () => finish(undefined)
+    const run = async () => {
+      redis.off("ready", run)
+      try { finish(await command(redis)) }
+      catch { unavailable() }
+    }
+    // Readiness and execution share one deadline. Keep the offline queue
+    // disabled so a timed-out operation cannot be sent after reconnection.
+    const timer = setTimeout(unavailable, redisCommandTimeoutMs)
+    if (redis.status === "ready") void run()
+    else if (redis.status === "end") unavailable()
+    else {
+      redis.once("ready", run)
+      redis.once("end", unavailable)
+    }
+  })
 }
 
 /** Best-effort cache operations. Redis must never become a gateway dependency. */
 export function localRedisGet(key: string) {
-  return boundedCommand(getLocalRedis().get(key))
+  return boundedCommand(redis => redis.get(key))
 }
 
 export async function localRedisSet(key: string, value: string, ttlMs: number) {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) return false
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000))
-  return (await boundedCommand(getLocalRedis().setex(key, ttlSeconds, value))) !== undefined
+  return (await boundedCommand(redis => redis.setex(key, ttlSeconds, value))) !== undefined
 }
 
 /**
@@ -61,18 +74,18 @@ export async function localRedisSet(key: string, value: string, ttlMs: number) {
  */
 export async function localRedisSetIfAbsent(key: string, value: string, ttlMs: number): Promise<boolean | undefined> {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) return false
-  const result = await boundedCommand(getLocalRedis().set(key, value, "PX", Math.max(1, Math.ceil(ttlMs)), "NX"))
+  const result = await boundedCommand(redis => redis.set(key, value, "PX", Math.max(1, Math.ceil(ttlMs)), "NX"))
   return result === undefined ? undefined : result === "OK"
 }
 
 export async function localRedisDelete(...keys: string[]) {
   if (!keys.length) return false
-  return (await boundedCommand(getLocalRedis().del(...keys))) !== undefined
+  return (await boundedCommand(redis => redis.del(...keys))) !== undefined
 }
 
 /** Delete a distributed lock only when it is still owned by the caller. */
 export async function localRedisCompareAndDelete(key: string, expectedValue: string) {
-  const result = await boundedCommand(getLocalRedis().eval(
+  const result = await boundedCommand(redis => redis.eval(
     "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
     1,
     key,

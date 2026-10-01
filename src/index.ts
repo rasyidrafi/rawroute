@@ -1,3 +1,4 @@
+import { initializeInstance, shutdownInstance } from "@/server/cliproxy/runtime"
 import { recordLog } from "@/server/logging/recorder"
 import { serve } from "bun"
 import index from "./index.html"
@@ -34,6 +35,7 @@ const server = serve({
 
 console.log(`RawRoute listening on ${server.url}`)
 recordLog("system.started")
+void initializeInstance()
 
 let shutdown: Promise<void> | undefined
 function stop() {
@@ -45,6 +47,7 @@ function stop() {
       await server.stop(false)
       // Stream monitoring must settle budgets before database/Redis close.
       await drainBackgroundTasks()
+      await shutdownInstance()
       await Promise.all([closeLocalDatabase(), closeLocalRedis()])
     } finally {
       clearTimeout(force)
