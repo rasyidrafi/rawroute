@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import type { Server } from "bun"
 import { createSession } from "@/lib/auth"
 import { runInWorkspace } from "@/lib/workspace/context"
-import { _resetMemoryBackend, createApiKey } from "@/server/store"
+import { updateMeta, _resetMemoryBackend, createApiKey } from "@/server/store"
 import { createWorkspace, deleteWorkspace, resetWorkspacesForTests } from "@/server/workspace-repository"
 import { recordLog } from "@/server/logging/recorder"
 import { logs } from "@/server/logging/store"
@@ -18,6 +18,7 @@ beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
   process.env.DEFAULT_ADMIN_PASSWORD = "logging-test-password"
   _resetMemoryBackend()
+  await updateMeta(meta => { meta.admin.mustChangePassword = false })
   await resetWorkspacesForTests()
   logs.clear({ kind: "global" })
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, routes: { ...apiRoutes, "/test/failure": apiRoute({ GET: () => { throw new Error("secret-error") } }, "workspace") } })

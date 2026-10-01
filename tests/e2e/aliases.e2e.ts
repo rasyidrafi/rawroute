@@ -21,13 +21,6 @@ async function authenticate(page: Page) {
   }
 }
 
-async function restoreInitialPassword(page: Page) {
-  const response = await page.request.post("/api/admin/account/password", {
-    data: { password: "e2e-initial-password" },
-  })
-  expect(response.ok()).toBe(true)
-}
-
 async function seedProviderAndModel(page: Page) {
   const providers = await page.request.get("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(providers.ok()).toBe(true)
@@ -101,7 +94,6 @@ test("Alias menu creates, deduplicates and deletes a model alias", async ({ page
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
   await expect(page.getByText("No aliases yet.")).toBeVisible()
 
-  await restoreInitialPassword(page)
 })
 
 test("Model routing menu creates, reorders and deletes a fallback combo", async ({ page }) => {
@@ -143,5 +135,4 @@ test("Model routing menu creates, reorders and deletes a fallback combo", async 
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
   await expect(page.getByText("No combos yet.")).toBeVisible()
 
-  await restoreInitialPassword(page)
 })

@@ -38,7 +38,7 @@ test("global Codex OAuth can complete and workspace-owned auth files are protect
   expect((await page.request.post("/api/admin/oauth-providers/codex/device/poll", { headers: { "x-rawroute-workspace-id": "default" }, data: { loginId } })).ok()).toBe(true)
   await page.goto("/dashboard/cliproxy")
   const workspaceRow = page.getByRole("row").filter({ has: page.getByText("Workspace", { exact: true }) }).first()
-  await expect(workspaceRow.getByRole("checkbox")).toBeDisabled()
+  await expect(workspaceRow.getByRole("switch")).toBeDisabled()
   await expect(workspaceRow.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0)
   await page.getByRole("button", { name: "Connect codex", exact: true }).click()
   const link = page.getByRole("link", { name: "Open authorization page" })
@@ -114,3 +114,21 @@ test("a temporary OAuth cancellation error retains the session for retry", async
   await cancel.click()
   await expect(page.getByRole("dialog")).toBeHidden()
 })
+
+for (const width of [390, 1440]) {
+  test(`copied CLIProxy layout groups releases with the service at ${width}px`, async ({ page }, testInfo) => {
+    await authenticate(page)
+    await page.setViewportSize({ width, height: 1000 })
+    await page.route("**/api/admin/cliproxy/status", route => route.fulfill({ json: { mode: "managed", installed: true, version: "7.3.4", pinnedVersion: null, healthy: true, processRunning: true, desiredRunning: true, conflict: false, operation: null, restartAttempts: 0, activeRequests: 2 } }))
+    await page.route("**/api/admin/cliproxy/versions", route => route.fulfill({ json: { latest: "7.3.5", versions: [{ version: "7.3.5", publishedAt: null }] } }))
+    await page.goto("/dashboard/cliproxy")
+    await expect(page.getByRole("heading", { name: "CLIProxyAPI", exact: true, level: 2 })).toBeVisible()
+    const service = page.locator('[data-slot="card"]').filter({ hasText: "Managed process" })
+    await expect(service.getByText("Release management", { exact: true })).toBeVisible()
+    await expect(service.getByRole("button", { name: "Restart", exact: true })).toBeEnabled()
+    await expect(page.getByRole("button", { name: "Copy Client base URL", exact: true })).toBeVisible()
+    await expect(page.getByText("RawRoute transport", { exact: true })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`cliproxy-${width}.png`), fullPage: true })
+  })
+}

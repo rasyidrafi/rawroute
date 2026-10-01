@@ -1,3 +1,4 @@
+import { DEFAULT_ADMIN_PASSWORD } from "../src/lib/auth-defaults"
 import { randomBytes } from "node:crypto"
 import { mkdirSync, writeFileSync, existsSync } from "node:fs"
 import { resolve, join } from "node:path"
@@ -15,7 +16,7 @@ const apiKey = secret()
 const executorAdminPassword = secret()
 const files: Record<string, string> = {
   "app.env": `STORAGE_BACKEND=postgres
-DEFAULT_ADMIN_PASSWORD=${secret()}
+DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
 DEFAULT_PROXY_API_KEY=sk-${secret()}
 SESSION_SECRET=${secret()}
 CREDENTIAL_ENCRYPTION_KEY=${secret()}

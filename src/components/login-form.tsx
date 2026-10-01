@@ -1,4 +1,6 @@
-import { useState, type FormEvent } from "react"
+import useSWR from "swr"
+import { isLocalLoginHost, type BootstrapStatus } from "@/lib/auth-defaults"
+import { useState, useSyncExternalStore, type FormEvent } from "react"
 import { useNavigate } from "react-router"
 import { KeyRoundIcon, RouteIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -10,8 +12,19 @@ import { Input } from "@/components/ui/input"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { useSession } from "@/hooks/use-session"
 
+const subscribe = () => () => undefined
+const localHost = () => isLocalLoginHost(window.location.hostname)
+const serverHost = () => false
+async function bootstrapFetcher(url: string): Promise<BootstrapStatus> {
+  const response = await fetch(url, { cache: "no-store" })
+  if (!response.ok) throw new Error("Unable to check initial password status")
+  return response.json()
+}
+
 export function LoginForm({ checkingSession = false }: { checkingSession?: boolean }) {
   const navigate = useNavigate()
+  const local = useSyncExternalStore(subscribe, localHost, serverHost)
+  const { data: bootstrap } = useSWR<BootstrapStatus>(local ? "/api/auth/bootstrap" : null, bootstrapFetcher, { revalidateOnMount: true, dedupingInterval: 0 })
   const { mutate: refreshSession } = useSession()
   const [loading, setLoading] = useState(false)
 
@@ -63,6 +76,7 @@ export function LoginForm({ checkingSession = false }: { checkingSession?: boole
             <Button aria-busy={loading || checkingSession} disabled={loading || checkingSession} type="submit" className="w-full">
               {loading ? <LoadingSpinner /> : <KeyRoundIcon />} {loading ? "Signing in..." : "Sign in"}
             </Button>
+            {local && bootstrap?.isDefaultPassword && <p className="text-center text-xs text-muted-foreground">{bootstrap.defaultPasswordHint ? <>Initial password: <code>{bootstrap.defaultPasswordHint}</code></> : <>Use the initial password configured in <code>DEFAULT_ADMIN_PASSWORD</code>.</>} You must change it after signing in.</p>}
           </FieldGroup>
         </form>
       </CardContent>

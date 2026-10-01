@@ -1,6 +1,7 @@
+import { DEFAULT_ADMIN_PASSWORD } from "@/lib/auth-defaults"
 import { jsonError } from "@/lib/http"
 import { recordLog } from "@/server/logging/recorder"
-import { hashPassword, updateMeta, validatePasswordUpdate } from "@/server/store"
+import { hashPassword, updateMeta, validatePasswordUpdate, verifyPassword } from "@/server/store"
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
@@ -9,6 +10,9 @@ export async function POST(request: Request) {
   try {
     const meta = await updateMeta(async (current) => {
       if (typeof body.password === "string" && body.password.length > 0) {
+        if (!current.admin.mustChangePassword) throw new Error("Current password is required.")
+        if (body.password === DEFAULT_ADMIN_PASSWORD) throw new Error("Choose a private password instead of the documented default.")
+        if (verifyPassword(body.password, current.admin.passwordHash)) throw new Error("New password must be different from the current password.")
         if (body.password.length < 10) throw new Error("Password must be at least 10 characters.")
         current.admin.passwordHash = hashPassword(body.password)
         current.admin.mustChangePassword = false

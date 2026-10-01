@@ -4,13 +4,12 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
+  if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
   const existing = await page.request.get("/api/admin/oauth-providers", { headers: { "x-rawroute-workspace-id": "default" } })
   for (const account of (await existing.json()).accounts) {
     expect((await page.request.delete(`/api/admin/oauth-providers/${account.id}`, { headers: { "x-rawroute-workspace-id": "default" } })).ok()).toBe(true)
   }
   await page.request.post("http://127.0.0.1:3211/reset")
-  const password = await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })
-  expect(password.ok()).toBe(true)
   await page.goto("/dashboard/providers/codex")
 
   await expect(page.getByRole("link", { name: "Codex Providers" })).toBeVisible()

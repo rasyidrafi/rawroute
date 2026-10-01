@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, LockKeyholeIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { LogToolbar } from "@/components/dashboard/logs/log-toolbar"
 import { LogResults, LogStatus } from "@/components/dashboard/logs/log-results"
@@ -7,10 +7,10 @@ import { CodingAgentView } from "@/components/dashboard/coding-agent-view"
 import { useLocation } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { FormSkeleton, LoadingCard, LoadingTable } from "@/components/loading-layout"
+import { LoadingCard, LoadingTable } from "@/components/loading-layout"
 import { DashboardPage, logPageClassName } from "@/components/dashboard/page-layout"
 import { UsageSkeleton } from "@/components/dashboard/usage-skeleton"
-import { InstanceSettingsSkeleton } from "@/components/dashboard/settings/settings-skeleton"
+import { SettingsSkeleton } from "@/components/dashboard/settings/settings-skeleton"
 import { CliProxySkeleton } from "@/components/dashboard/cliproxy/skeleton"
 import { dashboardPageForPath, pageRedirects, type DashboardPage as Page } from "@/lib/dashboard/routes"
 
@@ -32,6 +32,7 @@ export function DashboardRouteSkeleton() {
 }
 
 export function DashboardContentSkeleton({ variant }: { variant: DashboardSkeletonVariant }) {
+  if (variant === "settings") return <SettingsSkeleton />
   if (variant === "usage") return <UsageSkeleton />
   if (variant === "console-log" || variant === "system-logs") return <ConsoleLogSkeleton global={variant === "system-logs"} />
   if (variant === "cliproxy") return <CliProxySkeleton />
@@ -43,7 +44,6 @@ export function DashboardContentSkeleton({ variant }: { variant: DashboardSkelet
     "aliases": <AliasesSkeleton />,
     "provider-detail": <ProviderDetailSkeleton codex={false} />,
     "codex-detail": <ProviderDetailSkeleton codex />,
-    "settings": <><LoadingCard title={<><LockKeyholeIcon className="size-5" />Admin password</>} description="This administrator password applies to every workspace. Confirm the current password before choosing a new one." className="max-w-2xl"><FormSkeleton labels={["Current password", "New password", "Confirm new password"]} /></LoadingCard><LoadingCard title="Global gateway settings" description="These settings apply to the shared CLIProxy service across every workspace." className="max-w-2xl"><InstanceSettingsSkeleton /></LoadingCard></>,
     "budgets": <BudgetsSkeleton />,
     "model-pricing": <LoadingCard title={<><DollarSignIcon />Model pricing</>} description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage." action={<Button variant="outline" disabled><RefreshCwIcon />Refresh</Button>}><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-medium">Model groups</div><div className="text-sm text-muted-foreground">Fixed groups are refreshed from configured models; custom groups collect models you choose.</div></div><Skeleton className="h-8 w-36" /></div><LoadingTable columns={["Group", "Type", "Models", "Current pricing", ""]} /></LoadingCard>,
     "tool-gateway": <Card><CardHeader><div className="flex flex-wrap items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant="secondary">Checking</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div><CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription></CardHeader><CardContent spacing="compact-stack"><div role="status" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Checking the optional Executor service.</div></CardContent></Card>,

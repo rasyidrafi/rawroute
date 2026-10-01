@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 
 function Input({ className, type, variant = "default", inset = "default", ...props }: React.ComponentProps<"input"> & {
   variant?: "default" | "inline" | "code" | "muted"
-  inset?: "default" | "icon" | "prefix" | "compact"
+  inset?: "default" | "icon" | "prefix" | "compact" | "trailing-icon"
 }) {
   return (
     <InputPrimitive
@@ -17,6 +17,7 @@ function Input({ className, type, variant = "default", inset = "default", ...pro
         variant === "code" && "rounded-none border-0 bg-transparent font-mono shadow-none focus-visible:ring-0",
         variant === "muted" && "bg-muted",
         inset === "icon" && "pl-9",
+        inset === "trailing-icon" && "pr-10",
         inset === "prefix" && "pl-7",
         inset === "compact" && "px-2",
         className

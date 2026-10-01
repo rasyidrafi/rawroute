@@ -11,11 +11,6 @@ async function authenticate(page: Page) {
   }
 }
 
-async function restoreInitialPassword(page: Page) {
-  const response = await page.request.post("/api/admin/account/password", { data: { password: "e2e-initial-password" } })
-  expect(response.ok()).toBe(true)
-}
-
 async function seedModel(page: Page) {
   const response = await page.request.post("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" },
     data: { provider: { name: "Budget test provider", prefix: "budget-test", baseUrl: "https://example.com/v1", protocol: "openai-chat", authType: "none", headers: {} } },
@@ -73,5 +68,4 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   await expect(page.getByRole("tabpanel").getByText("0 selected", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Save exclusions" })).toBeDisabled()
 
-  await restoreInitialPassword(page)
 })

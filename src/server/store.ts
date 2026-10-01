@@ -1,3 +1,4 @@
+import { DEFAULT_ADMIN_PASSWORD } from "@/lib/auth-defaults"
 import { mapConcurrent } from "@/lib/concurrency"
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type Transaction } from "@/lib/local-db"
@@ -108,7 +109,7 @@ const apiKeyRedisMiss = "__rawroute_missing__"
 let apiKeyLookupGeneration = 0
 let metaGeneration = 0
 
-const documentedAdminPassword = "change-me-now"
+const documentedAdminPassword = DEFAULT_ADMIN_PASSWORD
 const documentedProxyKey = "sk-local-change-me"
 
 export function stripUndefined<T>(value: T): T {
@@ -125,8 +126,8 @@ export function assertProductionBootstrap(environment: Record<string, string | u
   const adminPassword = environment.DEFAULT_ADMIN_PASSWORD
   const proxyKey = environment.DEFAULT_PROXY_API_KEY
   const sessionSecret = environment.SESSION_SECRET
-  if (!adminPassword || adminPassword === documentedAdminPassword) {
-    throw new Error("DEFAULT_ADMIN_PASSWORD must be set to a non-default value before production initialization.")
+  if (adminPassword && adminPassword.length < 10) {
+    throw new Error("DEFAULT_ADMIN_PASSWORD must be at least 10 characters.")
   }
   if (!proxyKey || proxyKey === documentedProxyKey) {
     throw new Error("DEFAULT_PROXY_API_KEY must be set to a non-default value before production initialization.")
@@ -175,6 +176,7 @@ export function verifyPassword(password: string, stored: string) {
 
 export function validatePasswordUpdate(currentPassword: string, newPassword: string, confirmPassword: string, storedHash: string) {
   if (!verifyPassword(currentPassword, storedHash)) throw new Error("Current password is incorrect.")
+  if (newPassword === DEFAULT_ADMIN_PASSWORD) throw new Error("Choose a private password instead of the documented default.")
   if (newPassword.length < 10) throw new Error("New password must be at least 10 characters.")
   if (newPassword !== confirmPassword) throw new Error("New passwords do not match.")
   if (currentPassword === newPassword) throw new Error("New password must be different from the current password.")

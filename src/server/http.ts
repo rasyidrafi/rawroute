@@ -1,3 +1,4 @@
+import { readMeta } from "@/server/store"
 import type { BunRequest, Server } from "bun"
 
 import { isAuthenticated } from "@/lib/auth"
@@ -51,6 +52,7 @@ export function apiRoute<Params extends Record<string, string>>(
       let response: Response
       if (access === "session" || access === "workspace" || access === "explicit-workspace") {
         if (!(await isAuthenticated(request))) return reject("Unauthorized", 401)
+        if (path !== "/api/admin/account" && path !== "/api/admin/account/password" && (await readMeta()).admin.mustChangePassword) return reject("Change the initial administrator password first.", 403)
         if (access === "session") response = await invoke()
         else {
           const selected = request.headers.get("x-rawroute-workspace-id")?.trim()

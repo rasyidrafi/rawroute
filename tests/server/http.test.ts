@@ -16,6 +16,7 @@ beforeEach(async () => {
   process.env.SESSION_SECRET = "rawroute-http-tests-session-secret"
   process.env.DEFAULT_ADMIN_PASSWORD = "http-test-password"
   _resetMemoryBackend()
+  await updateMeta(meta => { meta.admin.mustChangePassword = false })
   await resetWorkspacesForTests()
 })
 
@@ -70,6 +71,7 @@ test("password-only login preserves existing credentials and ignores legacy user
 })
 
 test("initial password change keeps the session and accepts only the new password on subsequent login", async () => {
+  await updateMeta(meta => { meta.admin.mustChangePassword = true })
   const base = start(apiRoutes)
   const login = (password: string) => fetch(new URL("/api/auth/login", base), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }),

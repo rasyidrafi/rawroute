@@ -1,3 +1,4 @@
+import * as AuthBootstrap from "./routes/api/auth/bootstrap"
 import { oauthCallback as globalOauthCallback } from "./cliproxy/oauth"
 import { deleteKey as deleteCliproxyKey } from "./cliproxy/admin"
 import * as CliproxyInstance from "./cliproxy/http"
@@ -74,6 +75,7 @@ import * as V1 from "./routes/v1"
 import * as V1betaProxy from "./routes/v1beta/proxy"
 
 export const apiRoutes = {
+  "/api/auth/bootstrap": apiRoute(AuthBootstrap, "public", "/api/auth/bootstrap"),
   "/api/live": apiRoute({ GET: async () => Response.json({ status: "ok", service: "rawroute" }) }, "public", "/api/live"),
   "/api/admin/cliproxy/oauth/:provider/callback": apiRoute({ POST: globalOauthCallback }, "session", "/api/admin/cliproxy/oauth/:provider/callback"),
   "/api/admin/cliproxy/api-keys/:keyId": apiRoute({ DELETE: deleteCliproxyKey }, "session", "/api/admin/cliproxy/api-keys/:keyId"),

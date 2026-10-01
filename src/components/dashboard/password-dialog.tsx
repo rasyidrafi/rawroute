@@ -10,11 +10,12 @@ export function PasswordDialog({ open, onSave }: { open: boolean; onSave: (passw
   const [pending, setPending] = useState(false)
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setPending(true)
     const formData = new FormData(event.currentTarget)
+    if (formData.get("password") !== formData.get("confirmPassword")) { toast.error("New passwords do not match."); return }
+    setPending(true)
     try { await onSave(String(formData.get("password") || "")) } finally { setPending(false) }
   }
-  return <Dialog open={open}><DialogContent showCloseButton={false}><form onSubmit={submit}><DialogHeader><DialogTitle>Set a private admin password</DialogTitle><DialogDescription>You signed in with the default password. Change it before configuring the gateway.</DialogDescription></DialogHeader><div className="py-5"><FormField label="New password"><Input name="password" type="password" minLength={10} autoComplete="new-password" required /></FormField></div><DialogFooter><FormSubmitButton pending={pending} idleLabel="Change password" pendingLabel="Changing password..." /></DialogFooter></form></DialogContent></Dialog>
+  return <Dialog open={open} disablePointerDismissal onOpenChange={(_open, details) => details.cancel()}><DialogContent showCloseButton={false}><form onSubmit={submit}><DialogHeader><DialogTitle>Set a private admin password</DialogTitle><DialogDescription>You signed in with the default password. Change it before configuring the gateway.</DialogDescription></DialogHeader><div className="grid gap-5 py-5"><FormField label="New password"><Input disabled={pending} name="password" type="password" minLength={10} autoComplete="new-password" required /></FormField><FormField label="Confirm new password"><Input name="confirmPassword" disabled={pending} type="password" minLength={10} autoComplete="new-password" required /></FormField></div><DialogFooter><FormSubmitButton pending={pending} idleLabel="Change password" pendingLabel="Changing password..." /></DialogFooter></form></DialogContent></Dialog>
 }
 
 export { toast }

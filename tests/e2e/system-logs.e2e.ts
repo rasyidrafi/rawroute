@@ -112,5 +112,5 @@ test("global settings save without a workspace header and survive reload", async
   await page.reload()
   await expect(page.getByLabel("Request retry count")).toHaveValue("4")
   await expect(page.getByLabel("Maximum retry interval (seconds)")).toHaveValue("45")
-  await expect(page.getByLabel("Routing strategy")).toHaveValue("fill-first")
+  await expect(page.getByLabel("Routing strategy", { exact: true })).toHaveText("fill-first")
 })

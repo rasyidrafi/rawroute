@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import type { Server } from "bun"
 import { createSession } from "@/lib/auth"
-import { _resetMemoryBackend } from "@/server/store"
+import { updateMeta, _resetMemoryBackend } from "@/server/store"
 import { apiRoutes } from "@/server/routes"
 import { logs } from "@/server/logging/store"
 
@@ -13,6 +13,7 @@ const writes: Array<{ path: string; value: unknown }> = []
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
   _resetMemoryBackend()
+  await updateMeta(meta => { meta.admin.mustChangePassword = false })
   logs.clear()
   writes.length = 0
   failSetting = undefined

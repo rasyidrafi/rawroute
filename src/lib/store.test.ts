@@ -283,13 +283,17 @@ describe("configuration storage", () => {
 })
 
 describe("production bootstrap", () => {
-  test("rejects missing or documented default credentials", () => {
+  test("rejects missing or documented default infrastructure secrets", () => {
     expect(() => assertProductionBootstrap({})).toThrow()
     expect(() => assertProductionBootstrap({
       DEFAULT_ADMIN_PASSWORD: "change-me-now",
       DEFAULT_PROXY_API_KEY: "sk-local-change-me",
       SESSION_SECRET: "01234567890123456789012345678901",
     })).toThrow()
+  })
+
+  test("allows the built-in password with mandatory rotation and private infrastructure secrets", () => {
+    expect(() => assertProductionBootstrap({ DEFAULT_PROXY_API_KEY: "sk-private-gateway-key", SESSION_SECRET: "01234567890123456789012345678901" })).not.toThrow()
   })
 
   test("accepts explicitly configured non-default secrets", () => {

@@ -41,7 +41,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
     login = await page.request.post("/api/auth/login", { data: { password } })
   }
   expect(login.ok()).toBe(true)
-  expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
+  if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
   await page.request.post("/api/auth/logout")
 
   await expect(page.getByLabel("Username")).toHaveCount(0)
