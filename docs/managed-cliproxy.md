@@ -74,7 +74,7 @@ docker compose -f docker-compose.external.yml --env-file .env.local up -d
 
 This retains the original CLIProxy image/config/auth/log/plugin mounts and sets
 `CLIPROXY_MODE=external`. Lifecycle buttons are unavailable in external mode;
-settings management continue to work. Existing
+engine configuration belongs to the external deployment. Existing
 environments without `CLIPROXY_MODE` remain external when any `CLIPROXY_URL`,
 `CLIPROXY_API_KEY`, or `CLIPROXY_MANAGEMENT_KEY` is configured.
 
@@ -177,3 +177,9 @@ This test uses an isolated listener, temporary data and a local fake provider.
 It exercises authenticated inference, persisted projections, stop/start and
 restart against CLIProxyAPI 7.3.4. Real provider OAuth still requires that
 provider's interactive authorization and network access.
+
+## Internal engine defaults
+
+Managed instances default to debug off, file logging on with a 100 MB total log cleanup target, usage statistics on, zero additional retry rounds, zero cooldown wait, and fill-first routing. No dashboard page or admin API exposes these settings.
+
+For existing installations, stop RawRoute and run `bun scripts/configure-cliproxy-defaults.ts --config=/path/to/cliproxy/config.yaml --apply`. This offline conversion backs up the original config and preserves credentials and provider configuration. Omit `--apply` for a dry run.

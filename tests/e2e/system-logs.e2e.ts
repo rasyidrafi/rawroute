@@ -63,8 +63,7 @@ test("global Settings and System Logs remain usable when workspace loading fails
   await page.goto("/dashboard/settings")
   await expect(page.getByText("Admin password", { exact: true })).toBeVisible()
   await page.getByRole("link", { name: "CLIProxyAPI", exact: true }).click()
-  await page.getByRole("button", { name: "Engine settings", exact: true }).click()
-  await expect(page.getByLabel("Request retry count")).toBeVisible()
+  await expect(page.getByRole("button", { name: "Recheck status", exact: true })).toBeVisible()
   await page.getByRole("link", { name: "System Logs", exact: true }).click()
   await expect(page.getByLabel("Console log entries")).toContainText("Admin signed in")
   await page.getByRole("link", { name: "Console Log", exact: true }).click()
@@ -100,22 +99,6 @@ test("a delayed workspace response cannot replace the newly selected workspace l
   }
 })
 
-test("global settings save without a workspace header and survive reload", async ({ page }) => {
-  await authenticate(page)
-  await page.goto("/dashboard/cliproxy/settings")
-  await page.getByLabel("Request retry count").fill("4")
-  await page.getByLabel("Maximum retry interval (seconds)").fill("45")
-  const saved = page.waitForResponse(response => response.url().endsWith("/api/admin/cliproxy/settings") && response.request().method() === "PATCH")
-  await page.getByRole("button", { name: "Save settings", exact: true }).click()
-  const response = await saved
-  expect(response.ok()).toBe(true)
-  expect(response.request().headers()["x-rawroute-workspace-id"]).toBeUndefined()
-  await expect(page.getByText("CLIProxyAPI settings saved", { exact: true })).toBeVisible()
-  await page.reload()
-  await expect(page.getByLabel("Request retry count")).toHaveValue("4")
-  await expect(page.getByLabel("Maximum retry interval (seconds)")).toHaveValue("45")
-  await expect(page.getByLabel("Routing strategy", { exact: true })).toHaveText("fill-first")
-})
 
 for (const global of [false, true]) {
   test(`${global ? "system" : "workspace"} log toolbar groups filters, hides redundant sources and resets unavailable selections`, async ({ page }, testInfo) => {

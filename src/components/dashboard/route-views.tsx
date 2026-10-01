@@ -12,7 +12,6 @@ const ModelPricingView = lazy(() => import("@/components/dashboard/ai/model-pric
 const SystemLogs = lazy(() => import("@/components/console-log").then((module) => ({ default: module.SystemLogs })))
 const ConsoleLog = lazy(() => import("@/components/console-log").then((module) => ({ default: module.ConsoleLog })))
 const CliproxyView = lazy(() => import("@/components/dashboard/global/cliproxy/cliproxy-view").then((module) => ({ default: module.CliproxyView })))
-const CliProxySettingsView = lazy(() => import("@/components/dashboard/global/cliproxy/settings/settings-view").then(module => ({ default: module.CliProxySettingsView })))
 const SettingsView = lazy(() => import("@/components/dashboard/global/settings-view").then((module) => ({ default: module.SettingsView })))
 const CodingAgentView = lazy(() => import("@/components/dashboard/ai/coding-agent-view").then((module) => ({ default: module.CodingAgentView })))
 const ToolGatewayView = lazy(() => import("@/components/dashboard/tools/tool-gateway-view").then((module) => ({ default: module.ToolGatewayView })))
@@ -34,7 +33,6 @@ export const dashboardViews: Record<DashboardPage, ReactElement> = {
   logs: <ConsoleLog />,
   systemLogs: <SystemLogs />,
   cliproxy: <CliproxyView />,
-  cliproxySettings: <CliProxySettingsView />,
   settings: <SettingsView />,
   codexAgent: <CodingAgentView agent="Codex" />,
   opencodeAgent: <CodingAgentView agent="Opencode" />,

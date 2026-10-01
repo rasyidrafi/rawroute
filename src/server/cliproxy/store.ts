@@ -77,6 +77,7 @@ export function renderConfig(apiKey: string, managementKey: string, authDir: str
     `port: ${CLIPROXY_PORT}`,
     "debug: false",
     "logging-to-file: true",
+    "logs-max-total-size-mb: 100",
     "usage-statistics-enabled: true",
     "request-retry: 0",
     "max-retry-credentials: 0",

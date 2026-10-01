@@ -8,7 +8,7 @@ global pages remain available even when the workspace list cannot load.
 | Gateway, Analytics, Coding Agents | Workspace | Existing providers, keys, routing, usage, budgets, pricing and setup |
 | System → Console Log | Workspace | Gateway requests, workspace administration and dashboard activity |
 | Global → System Logs | Global | Authentication, workspace lifecycle, instance administration and service activity |
-| Global → CLIProxyAPI | Global | Shared service lifecycle, releases and engine settings |
+| Global → CLIProxyAPI | Global | Shared service lifecycle and releases |
 | Global → Settings | Global | RawRoute administrator password |
 | Tool Gateway | Global | Existing shared Executor service views |
 
@@ -78,14 +78,7 @@ not persistent audit storage or a replacement for usage analytics.
 
 ## Shared settings
 
-Global Settings edits CLIProxy debug logging, file logging, usage statistics,
-request retry count and maximum retry interval. Each change affects the shared
-service across all workspaces. Routing strategy is displayed read-only because
-RawRoute's provider synchronization manages `fill-first` to preserve provider key
-priority. Attempts to set another strategy through RawRoute return HTTP 400.
-The admin password card remains usable if the upstream settings service fails.
-Upstream writes are sequential and cannot be rolled back atomically; a failure
-may leave earlier fields applied. Reload the settings after a partial failure.
+Global Settings manages the administrator password. CLIProxy configuration is internal: debug off, file logging on with a 100 MB cleanup target, usage statistics on, retry count and maximum retry interval zero, and fill-first routing.
 
 ## API compatibility
 
@@ -113,8 +106,7 @@ AI Gateway pages live under `/dashboard/ai/`: `endpoint`, `providers`,
 `pricing`, and `coding-agents/{codex,opencode,claude-code}`.
 Tool Gateway uses `/dashboard/tools/{overview,catalog,connections,policies,activity,settings}`.
 Shared workspace logs use `/dashboard/logs`. Global pages remain
-`/dashboard/{settings,cliproxy,system-logs}`. CLIProxy engine configuration is
-`/dashboard/cliproxy/settings`, served by `/api/admin/cliproxy/settings`.
+`/dashboard/{settings,cliproxy,system-logs}`. CLIProxy engine configuration is internal.
 
 Only canonical URLs are registered. Removed URLs return 404; no aliases or
 redirect compatibility layer is retained. Login and all navigation target the

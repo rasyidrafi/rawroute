@@ -45,7 +45,7 @@ test("custom initial credentials are never exposed, and disabling hints retains 
 })
 
 test("administration stays blocked until a different password is saved and the hint disappears", async () => {
-  for (const path of ["/api/admin/workspaces", "/api/admin/cliproxy/settings", "/api/admin/providers"]) {
+  for (const path of ["/api/admin/workspaces", "/api/admin/cliproxy/status", "/api/admin/providers"]) {
     expect((await fetch(new URL(path, server.url), { headers: { cookie, "x-rawroute-workspace-id": "default" } })).status).toBe(403)
   }
   expect((await change({ password: DEFAULT_ADMIN_PASSWORD })).status).toBe(400)

@@ -1,5 +1,3 @@
-import { Link, useLocation } from "react-router"
-import { pagePaths } from "@/lib/dashboard/routes"
 // Presentation copied from rawroute-simple/cliproxy-page.tsx, adapted to RawRoute's API.
 import { useState } from "react"
 import { CheckIcon, CopyIcon, RefreshCwIcon, TerminalIcon, ServerIcon } from "lucide-react"
@@ -8,7 +6,6 @@ import { CardTitle, CardDescription } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export function CliProxyHeader({ refreshing = false, refresh }: { refreshing?: boolean; refresh?: () => void }) {
-  const { state } = useLocation()
   return (
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div className="min-w-0">
@@ -21,7 +18,7 @@ export function CliProxyHeader({ refreshing = false, refresh }: { refreshing?: b
               through this dashboard origin using workspace gateway keys.
             </p>
           </div>
-          <div className="flex shrink-0 flex-wrap gap-2"><Button variant="outline" nativeButton={false} render={<Link to={pagePaths.cliproxySettings} state={state} />}>Engine settings</Button><Button
+          <div className="flex shrink-0 flex-wrap gap-2"><Button
             variant="outline"
             disabled={refreshing}
             onClick={() => refresh?.()}

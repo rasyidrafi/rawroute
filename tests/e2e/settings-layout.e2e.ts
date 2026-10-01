@@ -22,27 +22,8 @@ for (const width of [390, 900, 1440]) {
   })
 }
 
-test("gateway switches save explicitly and password visibility preserves form values", async ({ page }) => {
+test("password visibility preserves form values", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard/cliproxy")
-  await page.getByRole("button", { name: "Engine settings", exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard\/cliproxy\/settings$/)
-  const toggle = page.getByRole("switch", { name: "Debug logging", exact: true })
-  await expect(toggle).toBeVisible()
-  const previous = await toggle.isChecked()
-  let writes = 0
-  page.on("request", request => { if (request.url().endsWith("/api/admin/cliproxy/settings") && request.method() === "PATCH") writes++ })
-  await toggle.click()
-  expect(writes).toBe(0)
-  const saved = page.waitForResponse(response => response.url().endsWith("/api/admin/cliproxy/settings") && response.request().method() === "PATCH")
-  await page.getByRole("button", { name: "Save settings", exact: true }).click()
-  expect((await saved).ok()).toBe(true)
-  expect(writes).toBe(1)
-  await page.reload()
-  await expect(toggle).toBeChecked({ checked: !previous })
-  await expect(page.getByLabel("Routing strategy", { exact: true })).toHaveText("fill-first")
-  await expect(page.locator('input[readonly]')).toHaveCount(0)
-
   await page.goto("/dashboard/settings")
   const current = page.getByLabel("Current password", { exact: true })
   await current.fill("private-password")

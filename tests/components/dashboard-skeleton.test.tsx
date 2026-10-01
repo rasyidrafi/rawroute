@@ -8,7 +8,6 @@ import { UsageSummary } from "@/components/dashboard/ai/usage-summary"
 for (const [path, heading] of [
   ["/dashboard/ai/usage", "Usage summary"],
   ["/dashboard/settings", "Admin password"],
-  ["/dashboard/cliproxy/settings", "Engine settings"],
   ["/dashboard/system-logs", "System Logs"],
   ["/dashboard/cliproxy", "Connection details"],
   ["/dashboard/ai/codex-providers", "Usage Limits"],

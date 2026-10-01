@@ -43,7 +43,6 @@ import * as ApiAdminProvidersByProviderModelsRefresh from "./routes/api/admin/pr
 import * as ApiAdminProvidersByProviderModels from "./routes/api/admin/providers/by-provider/models"
 import * as ApiAdminProvidersByProvider from "./routes/api/admin/providers/by-provider"
 import * as ApiAdminProviders from "./routes/api/admin/providers"
-import * as ApiAdminCliproxySettings from "./routes/api/admin/cliproxy/settings"
 import * as ApiAdminToolGatewayStatus from "./routes/api/admin/tool-gateway/status"
 import * as ApiAdminUsage from "./routes/api/admin/usage"
 import * as ApiAdminWorkspacesByWorkspace from "./routes/api/admin/workspaces/by-workspace"
@@ -114,7 +113,6 @@ export const apiRoutes = {
   "/api/admin/providers/:providerId/models": apiRoute(ApiAdminProvidersByProviderModels, "workspace", "/api/admin/providers/:providerId/models"),
   "/api/admin/providers/:providerId": apiRoute(ApiAdminProvidersByProvider, "workspace", "/api/admin/providers/:providerId"),
   "/api/admin/providers": apiRoute(ApiAdminProviders, "workspace", "/api/admin/providers"),
-  "/api/admin/cliproxy/settings": apiRoute(ApiAdminCliproxySettings, "session", "/api/admin/cliproxy/settings"),
   "/api/admin/tool-gateway/status": apiRoute(ApiAdminToolGatewayStatus, "session", "/api/admin/tool-gateway/status"),
   "/api/admin/usage": apiRoute(ApiAdminUsage, "workspace", "/api/admin/usage"),
   "/api/admin/workspaces/:workspaceId": apiRoute(ApiAdminWorkspacesByWorkspace, "session", "/api/admin/workspaces/:workspaceId"),

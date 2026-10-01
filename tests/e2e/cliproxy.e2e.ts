@@ -17,6 +17,9 @@ test("global CLIProxy controls work without a workspace and expose no engine key
   await expect(page.getByText("Global OAuth", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Authentication files", { exact: true })).toHaveCount(0)
   await expect(page.getByText("CLIProxy logs", { exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Engine settings", exact: true })).toHaveCount(0)
+  expect((await page.request.get("/dashboard/cliproxy/settings")).status()).toBe(404)
+  for (const method of ["GET", "PATCH"]) expect((await page.request.fetch("/api/admin/cliproxy/settings", { method })).status()).toBe(404)
   for (const method of ["GET", "DELETE"]) {
     expect((await page.request.fetch("/api/admin/cliproxy/logs", { method })).status()).toBe(404)
   }

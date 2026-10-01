@@ -77,7 +77,7 @@ function ServiceDetails({ service }: { service: CliproxyInstanceStatus }) {
     </div>
     {service.lastError && <p role="alert" className="break-words text-sm text-destructive">{service.lastError}</p>}
     {service.conflict && <p role="alert" className="text-sm text-destructive">The listener is occupied by another process. Lifecycle actions are disabled to protect it.</p>}
-    {service.mode === "external" && <p className="text-sm text-muted-foreground">Process and release changes are controlled by your external deployment. Engine settings remain available here.</p>}
+    {service.mode === "external" && <p className="text-sm text-muted-foreground">Process and release changes are controlled by your external deployment.</p>}
   </>
 }
 
