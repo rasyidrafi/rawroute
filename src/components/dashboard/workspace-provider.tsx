@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import useSWR, { useSWRConfig } from "swr"
 
 import { apiFetch, setApiWorkspaceId } from "@/components/dashboard/api"
@@ -27,19 +27,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState(() => typeof window === "undefined" ? "default" : window.localStorage.getItem("rawroute_workspace") || "default")
   const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, mutate } = useSWR<{ workspaces: Workspace[] }>("/api/admin/workspaces", apiFetch)
-  const active = data?.workspaces.filter((workspace) => workspace.status === "active") || []
-  const workspaces = active.length ? active : [fallbackWorkspace]
+  const workspaces = useMemo(() => {
+    const active = data?.workspaces.filter((workspace) => workspace.status === "active") || []
+    return active.length ? active : [fallbackWorkspace]
+  }, [data])
 
-  async function refreshWorkspaces() {
+  const refreshWorkspaces = useCallback(async () => {
     await mutate()
-  }
+  }, [mutate])
 
-  function selectWorkspace(nextId: string) {
+  const selectWorkspace = useCallback((nextId: string) => {
     setWorkspaceId(nextId)
     setApiWorkspaceId(nextId)
     window.localStorage.setItem("rawroute_workspace", nextId)
     void refreshCachedResource((key) => typeof key === "string" && key.startsWith("/api/admin/"))
-  }
+  }, [refreshCachedResource])
 
   const workspace = workspaces.find((entry) => entry.id === workspaceId) || workspaces.find((entry) => entry.isDefault) || fallbackWorkspace
   useEffect(() => {
@@ -52,7 +54,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [data, workspaceId])
 
-  const value = { workspaces, workspace, selectWorkspace, refreshWorkspaces }
+  const value = useMemo(() => ({ workspaces, workspace, selectWorkspace, refreshWorkspaces }), [workspaces, workspace, selectWorkspace, refreshWorkspaces])
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>
 }
 

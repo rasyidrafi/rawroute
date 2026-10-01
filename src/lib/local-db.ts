@@ -1,3 +1,4 @@
+import { mapConcurrent } from "@/lib/concurrency"
 import { randomUUID } from "node:crypto"
 
 import { Pool, type PoolClient } from "pg"
@@ -476,7 +477,7 @@ export class LocalTransaction {
   }
 
   async commit() {
-    for (const operation of this.operations) await operation(this.client)
+    await mapConcurrent(this.operations, 1, (operation) => operation(this.client))
     this.operations.length = 0
   }
 }
@@ -504,7 +505,7 @@ class LocalWriteBatch {
 
   async commit() {
     await withTransaction(async (client) => {
-      for (const operation of this.operations) await operation(client)
+      await mapConcurrent(this.operations, 1, (operation) => operation(client))
     })
     this.operations.length = 0
   }

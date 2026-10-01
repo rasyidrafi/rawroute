@@ -1,6 +1,5 @@
 import { closeLocalDatabase } from "../src/lib/local-db"
-import { backfillApiKeyIndexes } from "../src/lib/store"
-
+import { backfillApiKeyIndexes } from "../src/server/store"
 
 function hasFlag(name: string) {
   return process.argv.slice(2).includes(name)

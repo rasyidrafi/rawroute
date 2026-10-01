@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { createWorkspace, listWorkspaces } from "@/lib/workspace/repository"
+import { createWorkspace, listWorkspaces } from "@/server/workspace-repository"
 
 export async function GET() {
   return Response.json({ workspaces: await listWorkspaces() })

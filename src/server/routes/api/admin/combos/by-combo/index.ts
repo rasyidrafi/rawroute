@@ -1,7 +1,7 @@
 import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteCombo } from "@/lib/store"
+import { deleteCombo } from "@/server/store"
 
 export async function DELETE(_request: Request, params: { comboId: string }) {
   const { comboId } = params

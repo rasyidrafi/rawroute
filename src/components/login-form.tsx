@@ -30,13 +30,13 @@ export function LoginForm() {
       await minimumSpinnerTime
       if (!response.ok) {
         toast.error(result.error?.message || "Login failed")
-        setLoading(false)
         return
       }
       await refreshSession()
       navigate("/dashboard", { replace: true })
     } catch {
       toast.error("Unable to reach the gateway")
+    } finally {
       setLoading(false)
     }
   }

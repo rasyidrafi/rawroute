@@ -1,7 +1,7 @@
 import { setBudgetUnlimitedSettings } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { listAliases, listCombos, listModels, listProviders } from "@/lib/store"
+import { listAliases, listCombos, listModels, listProviders } from "@/server/store"
 
 export async function PATCH(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, jest } from "bun:test"
 
 import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
-import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
+import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/server/store"
 import type { UsageEvent } from "@/lib/types"
 
 type TestPricing = {

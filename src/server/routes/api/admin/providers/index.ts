@@ -3,7 +3,7 @@ import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from 
 import { cleanId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { validateProviderHeaders } from "@/lib/provider-headers"
-import { listProviders, upsertProvider } from "@/lib/store"
+import { listProviders, upsertProvider } from "@/server/store"
 import type { Protocol, Provider } from "@/lib/types"
 
 export async function GET() {

@@ -46,7 +46,7 @@ mock.module("@/lib/cliproxy/provider-sync", () => ({
 }))
 mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
 mock.module("@/lib/codex/model-refresh", () => ({ scheduleCodexModelRefresh: mock() }))
-mock.module("@/lib/store", () => ({
+mock.module("@/server/store", () => ({
   isMemoryBackend: () => true,
   listAliases: mocks.listAliases,
   listCombos: mocks.listCombos,
@@ -59,7 +59,7 @@ mock.module("@/lib/workspace/context", () => ({
   workspaceContext: () => ({ id: "default", storageMode: "scoped" }),
   runInWorkspace: (_workspace: unknown, callback: () => unknown) => callback(),
 }))
-mock.module("@/lib/workspace/repository", () => ({
+mock.module("@/server/workspace-repository", () => ({
   getWorkspace: async (id: string) => ({ id, status: "active", storageMode: "scoped" }),
   listWorkspaces: async () => [],
 }))

@@ -6,7 +6,7 @@ import { testComboMemberPolicy, type ComboMemberTestResult } from "@/lib/cliprox
 import { cleanAliasId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getSharedModelForRecipient } from "@/lib/workspace/model-shares"
-import { listAliases, listCombos, listModels, listProviders, readSessionSecret, upsertCombo } from "@/lib/store"
+import { listAliases, listCombos, listModels, listProviders, readSessionSecret, upsertCombo } from "@/server/store"
 import type { ComboMember, ModelCombo } from "@/lib/types"
 
 function normalizedMembers(input: Partial<ModelCombo>) {
@@ -60,10 +60,10 @@ async function validateCombo(input: Partial<ModelCombo> & { originalId?: string 
   const enabledProviderIds = new Set(providers.filter((provider) => provider.enabled !== false).map((provider) => provider.id))
   const availableModelIds = new Set(models.filter((model) => model.enabled && enabledProviderIds.has(model.providerId)).map((model) => model.gatewayModelId || model.id))
   const availableAliasIds = new Set<string>()
-  for (const alias of aliases) {
+  await Promise.all(aliases.map(async (alias) => {
     if (!alias.sharedModelId && availableModelIds.has(alias.targetModelId)) availableAliasIds.add(alias.alias)
     if (alias.sharedModelId && (await getSharedModelForRecipient(alias.sharedModelId))?.status === "active") availableAliasIds.add(alias.alias)
-  }
+  }))
   if (memberModelIds.some((member) => !availableModelIds.has(member) && !availableAliasIds.has(member))) throw new Error("One or more combo models are unavailable.")
   if (availableModelIds.has(combo) || aliases.some((alias) => cleanAliasId(alias.alias) === combo) || combos.some((entry) => cleanAliasId(entry.combo) === combo && entry.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
   return { combo, name, members, memberModelIds, existing: input.originalId ? combos.find((entry) => entry.id === input.originalId) : undefined }

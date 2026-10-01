@@ -1,4 +1,4 @@
-import { listApiKeys } from "@/lib/store"
+import { listApiKeys } from "@/server/store"
 
 export async function GET() {
   const apiKeys = await listApiKeys()

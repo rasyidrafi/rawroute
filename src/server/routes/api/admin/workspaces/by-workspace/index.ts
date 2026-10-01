@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteWorkspace, renameWorkspace } from "@/lib/workspace/repository"
+import { deleteWorkspace, renameWorkspace } from "@/server/workspace-repository"
 
 export async function PATCH(request: Request, params: { workspaceId: string }) {
   const body = await request.json().catch(() => null) as { name?: unknown } | null

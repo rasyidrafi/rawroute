@@ -1,8 +1,11 @@
 import * as React from "react"
-import * as RechartsPrimitive from "recharts"
+import type * as RechartsTypes from "recharts"
+
 import type { TooltipValueType } from "recharts"
 
 import { cn } from "@/lib/utils"
+
+const RechartsPrimitive = await import("recharts")
 
 const INITIAL_DIMENSION = { width: 320, height: 200 } as const
 type TooltipNameType = number | string
@@ -50,9 +53,10 @@ function ChartContainer({
 }) {
   const uniqueId = React.useId()
   const chartId = `chart-${id ?? uniqueId.replace(/:/g, "")}`
+  const contextValue = React.useMemo(() => ({ config }), [config])
 
   return (
-    <ChartContext.Provider value={{ config }}>
+    <ChartContext.Provider value={contextValue}>
       <div
         data-slot="chart"
         data-chart={chartId}
@@ -96,7 +100,7 @@ function ChartTooltipContent({
     nameKey?: string
     labelKey?: string
   } & Omit<
-    RechartsPrimitive.DefaultTooltipContentProps<
+    RechartsTypes.DefaultTooltipContentProps<
       TooltipValueType,
       TooltipNameType
     >,
@@ -104,7 +108,9 @@ function ChartTooltipContent({
   >) {
   const { config } = useChart()
 
-  const tooltipLabel = React.useMemo(() => {
+  if (!active || !payload?.length) return null
+
+  const tooltipLabel = (() => {
     if (hideLabel || !payload?.length) {
       return null
     }
@@ -130,19 +136,7 @@ function ChartTooltipContent({
     }
 
     return <div className={cn("font-medium", labelClassName)}>{value}</div>
-  }, [
-    label,
-    labelFormatter,
-    payload,
-    hideLabel,
-    labelClassName,
-    config,
-    labelKey,
-  ])
-
-  if (!active || !payload?.length) {
-    return null
-  }
+  })()
 
   const nestLabel = payload.length === 1 && indicator !== "dot"
 
@@ -164,7 +158,7 @@ function ChartTooltipContent({
 
             return (
               <div
-                key={index}
+                key={String(item.dataKey ?? item.name)}
                 className={cn(
                   "flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5 [&>svg]:text-muted-foreground",
                   indicator === "dot" && "items-center"
@@ -239,7 +233,7 @@ function ChartLegendContent({
 }: React.ComponentProps<"div"> & {
   hideIcon?: boolean
   nameKey?: string
-} & RechartsPrimitive.DefaultLegendContentProps) {
+} & RechartsTypes.DefaultLegendContentProps) {
   const { config } = useChart()
 
   if (!payload?.length) {
@@ -256,13 +250,13 @@ function ChartLegendContent({
     >
       {payload
         .filter((item) => item.type !== "none")
-        .map((item, index) => {
+        .map((item) => {
           const key = `${nameKey ?? item.dataKey ?? "value"}`
           const itemConfig = getPayloadConfigFromPayload(config, item, key)
 
           return (
             <div
-              key={index}
+              key={String(item.dataKey ?? item.value)}
               className={cn(
                 "flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground"
               )}

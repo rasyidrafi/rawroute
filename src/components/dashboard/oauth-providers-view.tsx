@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react"
+import { useCodexLogin } from "@/hooks/use-codex-login"
+import { CodexLoginDialog } from "@/components/dashboard/codex-login-dialog"
+import { useCallback, useState } from "react"
 import { LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
@@ -6,16 +8,15 @@ import { toast } from "sonner"
 import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
 import { CodexResetCredits } from "@/components/dashboard/codex-reset-credits"
 import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
-import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
+import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableColumns, Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { formatAppDateTime } from "@/lib/timezone"
 
 type Account = {
@@ -37,11 +38,6 @@ type OAuthResponse = {
   accounts: Account[]
 }
 
-type DeviceCode = {
-  loginId: string
-  authorizationUrl: string
-}
-
 function expiryLabel(value?: string) {
   if (!value) return "Unknown"
   const date = new Date(value)
@@ -57,86 +53,16 @@ export function OAuthProvidersView() {
     dedupingInterval: 300000,
     revalidateOnFocus: false,
   })
-  const [device, setDevice] = useState<DeviceCode | null>(null)
-  const [accountName, setAccountName] = useState("")
-  const [polling, setPolling] = useState(false)
-  const [starting, setStarting] = useState(false)
-  const [callbackUrl, setCallbackUrl] = useState("")
-  const [submittingCallback, setSubmittingCallback] = useState(false)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
   const [resetAccount, setResetAccount] = useState<Account | null>(null)
   const [resetConfirmation, setResetConfirmation] = useState("")
 
-  useEffect(() => {
-    if (!device || !polling) return
-    let stopped = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const poll = async () => {
-      try {
-        const result = await apiPost<{ status: "pending" | "authorized"; account?: Account }>("/api/admin/oauth-providers/codex/device/poll", {
-          loginId: device.loginId,
-          name: accountName.trim() || undefined,
-        })
-        if (stopped) return
-        if (result.status === "authorized") {
-          setPolling(false)
-          setDevice(null)
-          setAccountName("")
-          await Promise.all([mutate(), mutateUsage(), refreshCachedResource("/api/admin/providers")])
-          toast.success("Codex account connected")
-          return
-        }
-        timer = setTimeout(poll, 3000)
-      } catch (pollError) {
-        if (!stopped) {
-          setPolling(false)
-          toast.error(pollError instanceof Error ? pollError.message : "Codex login failed")
-        }
-      }
-    }
-    timer = setTimeout(poll, 3000)
-    return () => {
-      stopped = true
-      if (timer) clearTimeout(timer)
-    }
-  }, [accountName, device, mutate, mutateUsage, polling, refreshCachedResource])
+  const onConnected = useCallback(() => Promise.all([mutate(), mutateUsage(), refreshCachedResource("/api/admin/providers")]), [mutate, mutateUsage, refreshCachedResource])
+  const login = useCodexLogin(onConnected)
+  const { device, starting, connect } = login
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">OAuth providers unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
+  if (error) return <LoadError title="OAuth providers unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="oauth-providers" />
-
-  async function connectCodex() {
-    setStarting(true)
-    try {
-      const nextDevice = await apiPost<DeviceCode>("/api/admin/oauth-providers/codex/device/start", {})
-      setDevice(nextDevice)
-      setCallbackUrl("")
-      setPolling(true)
-    } catch (startError) {
-      toast.error(startError instanceof Error ? startError.message : "Unable to start Codex login")
-    } finally {
-      setStarting(false)
-    }
-  }
-
-  function cancelCodexLogin() {
-    if (device) void apiPost("/api/admin/oauth-providers/codex/device/cancel", { loginId: device.loginId }).catch(() => undefined)
-    setPolling(false)
-    setDevice(null)
-    setCallbackUrl("")
-  }
-
-  async function submitCallback() {
-    if (!device) return
-    setSubmittingCallback(true)
-    try {
-      await apiPost("/api/admin/oauth-providers/codex/device/callback", { loginId: device.loginId, redirectUrl: callbackUrl })
-      toast.success("Callback accepted. Finishing Codex login…")
-    } catch (callbackError) {
-      toast.error(callbackError instanceof Error ? callbackError.message : "Unable to submit callback URL")
-    } finally {
-      setSubmittingCallback(false)
-    }
-  }
 
   async function updateAccount(account: Account, enabled: boolean) {
     const key = `update:${account.id}`
@@ -190,11 +116,11 @@ export function OAuthProvidersView() {
         <CardHeader>
           <CardTitle variant="icon"><LinkIcon className="size-5" />Codex Providers</CardTitle>
           <CardDescription>Connect multiple Codex accounts once and route native Responses requests through this gateway. Usage limits update every five minutes.</CardDescription>
-          <CardAction><Button aria-busy={starting} onClick={() => void connectCodex()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex account</Button></CardAction>
+          <CardAction><Button aria-busy={starting} onClick={() => void connect()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex account</Button></CardAction>
         </CardHeader>
         <CardContent>
           <Table>
-            <TableHeader><TableRow><TableHead>Account</TableHead><TableHead>Plan</TableHead><TableHead>Status</TableHead><TableHead>Usage Limits</TableHead><TableHead>Unused Resets</TableHead><TableHead>Token expiry</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+            <TableColumns columns={[{ id: "Account", label: "Account" }, { id: "Plan", label: "Plan" }, { id: "Status", label: "Status" }, { id: "Usage Limits", label: "Usage Limits" }, { id: "Unused Resets", label: "Unused Resets" }, { id: "Token expiry", label: "Token expiry" }, { id: "Actions", label: "Actions", className: "text-right" }]} />
             <TableBody>
               {data.accounts.map((account) => {
                 const updateKey = `update:${account.id}`
@@ -221,13 +147,7 @@ export function OAuthProvidersView() {
         </CardContent>
       </Card>
     </div>
-    <Dialog open={Boolean(device)} onOpenChange={(open) => { if (!open) cancelCodexLogin() }}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Connect Codex account</DialogTitle><DialogDescription>Sign in, then copy the localhost URL from the browser address bar and paste it below. The localhost page may fail to load; that is expected.</DialogDescription></DialogHeader>
-        {device && <div className="grid gap-4 py-2"><div className="grid gap-2"><label htmlFor="codex-account-name" className="text-sm font-medium">Account label <span className="font-normal text-muted-foreground">(optional)</span></label><Input id="codex-account-name" value={accountName} onChange={(event) => setAccountName(event.target.value)} placeholder="Work Codex" maxLength={80} /></div><div className="rounded-lg border bg-muted/20 p-4 text-center"><Button nativeButton={false} size="sm" variant="outline" render={<a href={device.authorizationUrl} target="_blank" rel="noreferrer" />}><LinkIcon />Open Codex sign-in</Button></div><div className="grid gap-2"><label htmlFor="codex-callback-url" className="text-sm font-medium">Redirect URL</label><div className="flex gap-2"><Input id="codex-callback-url" value={callbackUrl} onChange={(event) => setCallbackUrl(event.target.value)} placeholder="http://localhost:1455/auth/callback?code=...&state=..." /><Button aria-busy={submittingCallback} disabled={!callbackUrl.trim() || submittingCallback} onClick={() => void submitCallback()}>{submittingCallback && <LoadingSpinner />}Submit</Button></div><p className="text-xs text-muted-foreground">{polling ? "Waiting for the pasted callback…" : "Login paused."}</p></div></div>}
-        <DialogFooter><Button variant="outline" onClick={cancelCodexLogin}>Cancel</Button></DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <CodexLoginDialog login={login} />
     <AlertDialog open={Boolean(resetAccount)} onOpenChange={(open) => { if (!open) { setResetAccount(null); setResetConfirmation("") } }}>
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>Redeem Codex reset credit?</AlertDialogTitle><AlertDialogDescription>This consumes one banked reset credit for {resetAccount?.name}. Type <code>use my codex reset</code> to confirm.</AlertDialogDescription></AlertDialogHeader>

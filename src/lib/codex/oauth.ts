@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 
 import { listMappedCodexAccounts } from "@/lib/codex/cliproxy"
-import { getProvider, listProviders, upsertProvider } from "@/lib/store"
+import { getProvider, listProviders, upsertProvider } from "@/server/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 

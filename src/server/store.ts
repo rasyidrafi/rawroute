@@ -1,3 +1,4 @@
+import { mapConcurrent } from "@/lib/concurrency"
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type Transaction } from "@/lib/local-db"
 
@@ -426,17 +427,8 @@ async function cachedRead<T>(cache: ReadCache<T>, loader: () => Promise<T>): Pro
   return promise
 }
 
-async function parallelMap<T, R>(items: readonly T[], mapper: (item: T) => Promise<R>): Promise<R[]> {
-  if (items.length <= databaseChildReadConcurrency) return Promise.all(items.map(mapper))
-  const output = new Array<R>(items.length)
-  let nextIndex = 0
-  await Promise.all(Array.from({ length: databaseChildReadConcurrency }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++
-      output[index] = await mapper(items[index])
-    }
-  }))
-  return output
+function parallelMap<T, R>(items: readonly T[], mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  return mapConcurrent(items, databaseChildReadConcurrency, mapper)
 }
 
 function providerScopedCache<T>(cache: Map<string, ReadCache<T>>, providerId: string) {

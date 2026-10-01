@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 
-import { _resetMemoryBackend, deleteCombo, listCombos, upsertCombo, upsertModel, upsertProvider } from "@/lib/store"
+import { _resetMemoryBackend, deleteCombo, listCombos, upsertCombo, upsertModel, upsertProvider } from "@/server/store"
 
 afterEach(() => _resetMemoryBackend())
 

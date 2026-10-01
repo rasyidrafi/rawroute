@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteApiKey, updateApiKeyName } from "@/lib/store"
+import { deleteApiKey, updateApiKeyName } from "@/server/store"
 
 export async function PATCH(request: Request, params: { apiKeyId: string }) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null

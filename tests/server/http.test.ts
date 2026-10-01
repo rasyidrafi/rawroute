@@ -3,9 +3,9 @@ import type { Server } from "bun"
 
 import { createSession, isAuthenticated } from "@/lib/auth"
 import { drainBackgroundTasks, scheduleWorkspaceTask } from "@/lib/background-tasks"
-import { _resetMemoryBackend } from "@/lib/store"
+import { _resetMemoryBackend } from "@/server/store"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace/context"
-import { createWorkspace, resetWorkspacesForTests } from "@/lib/workspace/repository"
+import { createWorkspace, resetWorkspacesForTests } from "@/server/workspace-repository"
 import { apiRoute } from "@/server/http"
 import { apiRoutes } from "@/server/routes"
 

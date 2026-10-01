@@ -23,7 +23,7 @@ import {
   upsertProviderApiKey,
   validatePasswordUpdate,
   verifyPassword,
-} from "@/lib/store"
+} from "@/server/store"
 
 import type { Model, Provider } from "@/lib/types"
 

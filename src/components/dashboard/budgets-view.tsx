@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Progress, ProgressLabel } from "@/components/ui/progress"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableColumns, Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { calendarDateFromInstant, formatAppDateTime, formatAppWindowDate, getZonedParts, zonedDateTimeToDate } from "@/lib/timezone"
@@ -56,22 +56,10 @@ export function BudgetsView() {
   const [apiKeyId, setApiKeyId] = useState("")
   const [limit, setLimit] = useState("50")
   const [sortBy, setSortBy] = useState<BudgetSortKey>("limit")
-  const [windowAnchorOverride, setWindowAnchorOverride] = useState<BudgetWindowAnchor | null>(null)
-  const [codexAccountOverride, setCodexAccountOverride] = useState<string | null>(null)
-  const [customRangeOverride, setCustomRangeOverride] = useState<DateRange | null>(null)
-  const [customTimeOverride, setCustomTimeOverride] = useState<string | null>(null)
-  const [windowOpen, setWindowOpen] = useState(false)
-  const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null)
-  const [editLimitValue, setEditLimitValue] = useState("")
+
   const [bypassDialogOpen, setBypassDialogOpen] = useState(false)
   const [activationAutoDeactivate, setActivationAutoDeactivate] = useState(false)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
-  const codexAccounts = data?.codexAccounts || []
-  const windowAnchor = windowAnchorOverride ?? data?.window.anchor ?? "custom"
-  const codexAccountId = codexAccountOverride ?? data?.window.codexAccountId ?? codexAccounts[0]?.id ?? ""
-  const customRange = customRangeOverride ?? (data ? { from: calendarDateFromInstant(data.window.start), to: calendarDateFromInstant(data.window.end) } : undefined)
-  const customTime = customTimeOverride ?? (data ? formatWindowTime(data.window.start) : "00:00")
-  const [customHour, customMinute] = customTime.split(":")
   const bypass = data?.window.bypassLimits ?? false
   const isPending = (key: string) => pending.has(key)
   const totalAllocatedMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + budget.weeklyLimitMicros, 0), [data?.budgets])
@@ -113,8 +101,8 @@ export function BudgetsView() {
   async function updateLimit(id: string, weeklyLimitUsd: number, enabled: boolean) {
     const pendingKey = `update-limit:${id}`
     setPending((current) => new Set(current).add(pendingKey))
-    try { await apiPatch(`/api/admin/budgets/${id}`, { weeklyLimitUsd, enabled }); await mutate(); setEditingBudgetId(null); toast.success("Budget limit updated") }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget limit") }
+    try { await apiPatch(`/api/admin/budgets/${id}`, { weeklyLimitUsd, enabled }); await mutate(); toast.success("Budget limit updated"); return true }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget limit"); return false }
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
 
@@ -144,7 +132,8 @@ export function BudgetsView() {
       await apiPatch("/api/admin/budgets/unlimited", { excludedModelIds })
       await mutate()
       toast.success("Unlimited Mode exclusions saved")
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Unlimited Mode exclusions") }
+      return true
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Unlimited Mode exclusions"); return false }
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
 
@@ -155,26 +144,8 @@ export function BudgetsView() {
       await apiPatch("/api/admin/budgets/beyond-limits", settings)
       await mutate()
       toast.success("Beyond Limits settings saved")
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Beyond Limits settings") }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function saveWindow() {
-    const pendingKey = "budget-window"
-    if (windowAnchor === "codex" && !codexAccountId) { toast.error("Choose a Codex account to sync the budget window."); return }
-    if (windowAnchor === "custom" && (!customRange?.from || !customRange.to || !customTime || dateToAppDateTime(customRange.from, customTime) >= dateToAppDateTime(customRange.to, customTime))) { toast.error("Choose a valid custom budget range."); return }
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      const body = windowAnchor === "codex" ? { anchor: "codex", codexAccountId } : { anchor: "custom", start: dateToAppDateTime(customRange!.from!, customTime), end: dateToAppDateTime(customRange!.to!, customTime) }
-      await apiPatch("/api/admin/budgets/window", body)
-      await mutate()
-      setWindowAnchorOverride(null)
-      setCodexAccountOverride(null)
-      setCustomRangeOverride(null)
-      setCustomTimeOverride(null)
-      setWindowOpen(false)
-      toast.success(windowAnchor === "codex" ? "Budget window synced to Codex" : "Custom budget window saved")
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget window") }
+      return true
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Beyond Limits settings"); return false }
     finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
   }
 
@@ -187,18 +158,9 @@ export function BudgetsView() {
   }, [data?.window.bypassLimits, data?.window.bypassAutoDeactivateAtWindowEnd, data?.window.end, mutate])
 
   if (isLoading || !data) return <DashboardContentSkeleton variant="budgets" />
-  const currentAnchor = data.window.anchor || "custom"
-  const customRangeValid = Boolean(customRange?.from && customRange.to && dateToAppDateTime(customRange.from, customTime) < dateToAppDateTime(customRange.to, customTime))
-  const minCustomDate = addDays(calendarDateFromInstant(new Date()), -7)
-  const maxCustomDate = customRange?.from ? addDays(customRange.from, 7) : undefined
 
   return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8"><div className="mx-auto flex max-w-7xl flex-col gap-6">
-    <Card>
-      <CardHeader><CardTitle variant="icon"><Clock3Icon className="size-5" />Budget window</CardTitle><CardDescription>Choose the shared accounting window used by every gateway key.</CardDescription></CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div className="w-full max-w-sm flex-none"><div className="flex min-h-9 min-w-0 flex-col justify-center rounded-md border bg-muted/35 px-3 py-1.5"><div className="flex items-center justify-between gap-3"><span className="truncate text-sm tabular-nums">{formatWindowDate(data.window.start)} - {formatWindowDate(data.window.end)}</span><Badge variant="outline" className="shrink-0">{currentAnchor === "codex" ? <><Link2Icon className="size-3" />Codex synced</> : "Custom range"}</Badge></div><span className="text-xs text-muted-foreground">{currentAnchor === "codex" ? `Resets in ${formatBudgetResetIn(data.window.end)}; refreshed every 5 minutes` : "Manual date range; budget usage resets at the selected end date"}</span></div></div><div className="flex flex-col gap-3 sm:flex-row sm:items-end lg:ml-auto"><div className="flex w-full flex-col gap-2 sm:w-auto"><span className="text-sm font-medium">Window anchor</span><Select value={windowAnchor} onValueChange={(value) => { if (!value) return; const next = value as BudgetWindowAnchor; setWindowAnchorOverride(next); if (next === "codex" && !codexAccountId) setCodexAccountOverride(codexAccounts[0]?.id || "") }} disabled={isPending("budget-window")}><SelectTrigger className="min-w-48"><span>{windowAnchor === "codex" ? "Sync Codex account" : "Custom date range"}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Budget window</SelectLabel><SelectItem value="codex" disabled={!codexAccounts.length}>Sync Codex account{!codexAccounts.length ? " (no accounts)" : ""}</SelectItem><SelectItem value="custom">Custom date range</SelectItem></SelectGroup></SelectContent></Select></div>{windowAnchor === "codex" ? <div className="flex w-full flex-col gap-2 sm:w-auto"><span className="text-sm font-medium">Codex account</span><Select value={codexAccountId} onValueChange={(value) => setCodexAccountOverride(value || "")} disabled={!codexAccounts.length || isPending("budget-window")}><SelectTrigger className="min-w-48"><SelectValue placeholder="Select account" /></SelectTrigger><SelectContent>{codexAccounts.map((account) => <SelectItem key={account.id} value={account.id}>{account.name}</SelectItem>)}</SelectContent></Select></div> : <Popover open={windowOpen} onOpenChange={setWindowOpen}><PopoverTrigger render={<Button variant="outline" disabled={isPending("budget-window")}><CalendarDaysIcon />{customRange?.from ? format(customRange.from, "MMM d") + ", " + customTime + " - " + (customRange.to ? format(customRange.to, "MMM d") + ", " + customTime : "Choose end") : "Choose dates"}</Button>} /><PopoverContent padding="none" className="w-auto" align="start"><Calendar mode="range" selected={customRange} defaultMonth={customRange?.from} onSelect={(next) => setCustomRangeOverride(next || null)} disabled={maxCustomDate ? { before: minCustomDate, after: maxCustomDate } : { before: minCustomDate }} numberOfMonths={1} fullWidth autoFocus /><div className="border-t p-3"><div className="flex items-center gap-3"><label htmlFor="budget-window-time" className="text-sm font-medium">Time</label><div className="flex items-center gap-2"><Select value={customHour} onValueChange={(value) => setCustomTimeOverride(value + ":" + customMinute)} disabled={isPending("budget-window")}><SelectTrigger aria-label="Hour"><SelectValue /></SelectTrigger><SelectContent>{TIME_HOURS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><span className="text-muted-foreground">:</span><Select value={customMinute} onValueChange={(value) => setCustomTimeOverride(customHour + ":" + value)} disabled={isPending("budget-window")}><SelectTrigger aria-label="Minute"><SelectValue /></SelectTrigger><SelectContent>{TIME_MINUTES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div></div><p className="mt-2 text-xs text-muted-foreground">Applied to both the start and end dates.</p></div><div className="flex justify-end gap-2 border-t p-3"><Button variant="outline" size="sm" onClick={() => { setCustomRangeOverride({ from: calendarDateFromInstant(data.window.start), to: calendarDateFromInstant(data.window.end) }); setCustomTimeOverride(null); setWindowOpen(false) }}>Cancel</Button><Button size="sm" disabled={!customRangeValid} onClick={() => setWindowOpen(false)}>Apply</Button></div></PopoverContent></Popover>}<Button aria-busy={isPending("budget-window")} disabled={isPending("budget-window") || (windowAnchor === "codex" ? !codexAccountId : !customRangeValid)} onClick={() => void saveWindow()}>{isPending("budget-window") && <LoadingSpinner />}Save window</Button></div></div>
-      </CardContent>
-    </Card>
+    <BudgetWindowCard data={data} onSaved={mutate} />
     <Card>
       <CardHeader><CardTitle variant="icon"><WalletCardsIcon className="size-5" />Budgets</CardTitle><CardDescription>Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured.</CardDescription><CardAction><Button aria-busy={isValidating} variant="outline" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></CardAction></CardHeader>
       <CardContent spacing="stack">
@@ -243,8 +205,7 @@ export function BudgetsView() {
           </TabsContent>
         </Tabs>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex flex-col gap-2 sm:w-auto"><span className="text-sm font-medium">Order rows by</span><Select value={sortBy} onValueChange={(value) => { if (value) setSortBy(value as BudgetSortKey) }}><SelectTrigger className="min-w-44"><span className="truncate">{budgetSortLabel(sortBy)}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Ordering</SelectLabel>{budgetSortOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></div></div>
-        <Table><TableHeader><TableRow><TableHead>Key</TableHead><TableHead>Status</TableHead><TableHead>Limit</TableHead><TableHead>Usage</TableHead><TableHead /></TableRow></TableHeader><TableBody>{sortedBudgets.map((budget) => { const toggleKey = `toggle-budget:${budget.apiKeyId}`; const deleteKey = `delete-budget:${budget.apiKeyId}`; const updateKey = `update-limit:${budget.apiKeyId}`; const percentUsed = budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0; const remainingMicros = Math.max(0, budget.weeklyLimitMicros - budget.spentMicros); const overLimitMicros = Math.max(0, budget.spentMicros - budget.weeklyLimitMicros); return <TableRow key={budget.apiKeyId} className="align-top"><TableCell text="label">{budget.name}</TableCell><TableCell className="align-middle"><Badge variant={!budget.enabled ? "outline" : !bypass && budget.spentMicros >= budget.weeklyLimitMicros ? "destructive" : "secondary"}>{!budget.enabled ? "Disabled" : !bypass && budget.spentMicros >= budget.weeklyLimitMicros ? "Over limit" : "Active"}</Badge></TableCell><TableCell text="numeric" className="align-middle">{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-sm font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : money(budget.weeklyLimitMicros)}</TableCell><TableCell className="min-w-52"><div className="space-y-2"><div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{bypass ? `${money(budget.spentMicros)} since ${formatWindowDate(budget.usageStartAt || data.window.start)}` : `${money(budget.spentMicros)} / ${money(budget.weeklyLimitMicros)}`}</span>{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-caption font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : <span className={cn("text-xs tabular-nums", overLimitMicros > 0 ? "font-medium text-destructive" : "text-muted-foreground")}>{Math.round(percentUsed)}%</span>}</div><Progress value={bypass ? 100 : Math.min(percentUsed, 100)} variant={bypass ? "unlimited" : "default"}><ProgressLabel className="sr-only">Budget usage</ProgressLabel></Progress><div className={cn("text-xs", overLimitMicros > 0 ? "font-medium text-destructive" : "text-muted-foreground")}>{bypass ? "Unlimited Usage" : overLimitMicros > 0 ? `${money(overLimitMicros)} over limit` : `${money(remainingMicros)} remaining`}</div></div></TableCell><TableCell className="align-middle text-right"><div className="flex flex-wrap justify-end gap-2"><Button aria-busy={isPending(toggleKey)} size="sm" variant="outline" disabled={isPending(toggleKey) || isPending(deleteKey) || isPending(updateKey)} onClick={() => void toggle(budget.apiKeyId, !budget.enabled, budget.weeklyLimitMicros)}>{isPending(toggleKey) && <LoadingSpinner />}{budget.enabled ? "Disable" : "Enable"}</Button><Popover open={editingBudgetId === budget.apiKeyId} onOpenChange={(open) => { if (open) { setEditingBudgetId(budget.apiKeyId); setEditLimitValue((budget.weeklyLimitMicros / 1_000_000).toFixed(2)) } else if (!isPending(updateKey)) setEditingBudgetId(null) }}><PopoverTrigger render={<Button size="sm" variant="outline" disabled={isPending(toggleKey) || isPending(deleteKey) || isPending(updateKey)}>Limit</Button>} /><PopoverContent padding="comfortable" className="w-auto" align="end"><div className="flex flex-col gap-2"><label htmlFor={`budget-limit-${budget.apiKeyId}`} className="text-sm font-medium">Edit Limit ($)</label><div className="flex items-center gap-2"><div className="relative"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input id={`budget-limit-${budget.apiKeyId}`} type="number" value={editLimitValue} onChange={(event) => setEditLimitValue(sanitizeNonNegativeDraft(event.target.value))} min="0.01" step="0.01" inset="prefix"
-                                      className="h-8 w-28" /></div><Button aria-busy={isPending(updateKey)} size="sm" disabled={isPending(updateKey) || Number(editLimitValue) <= 0} onClick={() => void updateLimit(budget.apiKeyId, Number(editLimitValue), budget.enabled)}>{isPending(updateKey) && <LoadingSpinner />}Save</Button></div></div></PopoverContent></Popover><ConfirmAction buttonLabel="Delete" title={`Delete ${budget.name}?`} description="This permanently deletes the budget configuration for this gateway key." pending={isPending(deleteKey)} disabled={isPending(deleteKey) || isPending(toggleKey) || isPending(updateKey)} onConfirm={() => remove(budget.apiKeyId)} /></div></TableCell></TableRow> })}{!sortedBudgets.length && <EmptyRow label="No budgets configured yet." colSpan={5} />}</TableBody></Table>
+        <Table><TableColumns columns={[{ id: "Key", label: "Key" }, { id: "Status", label: "Status" }, { id: "Limit", label: "Limit" }, { id: "Usage", label: "Usage" }, { id: "actions" }]} /><TableBody>{sortedBudgets.map((budget) => <BudgetRow key={budget.apiKeyId} budget={budget} bypass={bypass} windowStart={data.window.start} isPending={isPending} toggle={toggle} remove={remove} updateLimit={updateLimit} />)}{!sortedBudgets.length && <EmptyRow label="No budgets configured yet." colSpan={5} />}</TableBody></Table>
       </CardContent>
     </Card>
   </div></main>
@@ -255,12 +216,13 @@ function BudgetModelSelector({ title, description, modelIds, modelOptions, pendi
   const normalizedSearch = search.trim().toLowerCase()
   const uniqueOptions = useMemo(() => [...new Map(modelOptions.map((model) => [model.id, model])).values()], [modelOptions])
   const filteredOptions = useMemo(() => uniqueOptions.filter((model) => !normalizedSearch || `${model.name} ${model.id} ${model.provider}`.toLowerCase().includes(normalizedSearch)), [normalizedSearch, uniqueOptions])
+  const selectedIds = new Set(modelIds)
   const toggleModel = (id: string, selected: boolean) => onChange(selected ? [...new Set([...modelIds, id])] : modelIds.filter((modelId) => modelId !== id))
 
   return <div className="space-y-3">
     <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><div className="text-sm font-medium">{title}</div><p className="text-xs text-muted-foreground">{description}</p></div><div className="flex items-center gap-2"><Badge variant="outline">{modelIds.length} selected</Badge>{modelIds.length > 0 && <Button size="sm" variant="ghost" disabled={pending} onClick={() => onChange([])}>Clear all</Button>}</div></div>
     <Input aria-label={`Search ${title.toLowerCase()}`} placeholder="Search model name, ID, or provider" value={search} onChange={(event) => setSearch(event.target.value)} disabled={pending} />
-    <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">{filteredOptions.map((model) => { const selected = modelIds.includes(model.id); return <label key={model.id} className="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-muted/40"><Checkbox checked={selected} onCheckedChange={(checked) => toggleModel(model.id, checked === true)} disabled={pending} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{model.name}</span><span className="block truncate text-xs text-muted-foreground">{model.id} · {model.provider}</span></span></label> })}{!filteredOptions.length && <div className="px-4 py-8 text-center text-sm text-muted-foreground">{uniqueOptions.length ? "No models match your search." : "No enabled models are available."}</div>}</div>
+    <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">{filteredOptions.map((model) => { const selected = selectedIds.has(model.id); return <label key={model.id} className="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-muted/40"><Checkbox checked={selected} onCheckedChange={(checked) => toggleModel(model.id, checked === true)} disabled={pending} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{model.name}</span><span className="block truncate text-xs text-muted-foreground">{model.id} · {model.provider}</span></span></label> })}{!filteredOptions.length && <div className="px-4 py-8 text-center text-sm text-muted-foreground">{uniqueOptions.length ? "No models match your search." : "No enabled models are available."}</div>}</div>
   </div>
 }
 
@@ -278,9 +240,10 @@ function UnlimitedSettings({ settings, modelOptions, window, sessions, dialogOpe
   onActivationAutoDeactivateChange: (enabled: boolean) => void
   onToggle: (enabled: boolean, autoDeactivateAtWindowEnd?: boolean) => Promise<boolean>
   onUpdateAutoDeactivate: (enabled: boolean) => Promise<void>
-  onSave: (excludedModelIds: string[]) => Promise<void>
+  onSave: (excludedModelIds: string[]) => Promise<boolean>
 }) {
-  const [excludedModelIds, setExcludedModelIds] = useState(settings.excludedModelIds)
+  const [excludedDraft, setExcludedModelIds] = useState<string[] | null>(null)
+  const excludedModelIds = excludedDraft ?? settings.excludedModelIds
   const active = window.bypassLimits
   const autoDeactivate = window.bypassAutoDeactivateAtWindowEnd === true
   const dirty = [...excludedModelIds].sort().join("\0") !== [...settings.excludedModelIds].sort().join("\0")
@@ -288,19 +251,152 @@ function UnlimitedSettings({ settings, modelOptions, window, sessions, dialogOpe
 
   return <>
     <div className="rounded-xl border">
-      <div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2 font-medium"><SparklesIcon className="size-4 text-warning" />Unlimited Mode <Badge variant={active ? "secondary" : "outline"}>{active ? "Active" : "Inactive"}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{active ? autoDeactivate ? `Budget limits are bypassed until ${endLabel}.` : "Budget limits are bypassed until you deactivate Unlimited Mode." : "Activate a temporary budget bypass while keeping expensive models blocked."}</p>{active && <div className="mt-3 flex items-start gap-3 rounded-lg border bg-background px-3 py-2"><Checkbox id="unlimited-auto-deactivate-active" checked={autoDeactivate} onCheckedChange={(checked) => void onUpdateAutoDeactivate(checked === true)} disabled={autoPending || togglePending} /><label htmlFor="unlimited-auto-deactivate-active" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">{autoDeactivate ? `Scheduled for ${endLabel}.` : "This session will continue into the next budget window."}</span></label></div>}</div><AlertDialog open={dialogOpen} onOpenChange={onDialogOpenChange}><Button aria-busy={togglePending} variant={active ? "unlimited" : "unlimited-idle"} className="h-9 min-w-40" disabled={togglePending} onClick={() => onDialogOpenChange(true)}>{togglePending ? <LoadingSpinner /> : <SparklesIcon className="size-4" />}{active ? "Deactivate" : "Activate"}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{active ? "Deactivate Unlimited Mode?" : "Activate Unlimited Mode?"}</AlertDialogTitle><AlertDialogDescription>{active ? "Budget enforcement will resume immediately for every gateway key." : "Configured gateway keys will bypass their budget limits. Excluded models will stay blocked."}</AlertDialogDescription></AlertDialogHeader>{!active && <div className="space-y-3"><div className={cn("rounded-lg border p-3 text-sm", excludedModelIds.length ? "bg-muted/25" : "border-warning/30 bg-warning/5")}><div className="font-medium">{excludedModelIds.length ? `${excludedModelIds.length} model${excludedModelIds.length === 1 ? "" : "s"} will stay blocked` : "No models are excluded"}</div><div className="mt-1 text-xs text-muted-foreground">{excludedModelIds.length ? "You can change this list while Unlimited Mode is active." : "Every available model can be used during this session."}</div></div><div className="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="unlimited-auto-deactivate-activation" checked={activationAutoDeactivate} onCheckedChange={(checked) => onActivationAutoDeactivateChange(checked === true)} disabled={togglePending} /><label htmlFor="unlimited-auto-deactivate-activation" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">Stop this session on {endLabel}.</span></label></div></div>}<AlertDialogFooter><AlertDialogCancel disabled={togglePending}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={togglePending} disabled={togglePending} onClick={async () => { if (await onToggle(!active, activationAutoDeactivate)) onDialogOpenChange(false) }}>{togglePending && <LoadingSpinner />}{active ? "Deactivate" : "Activate Unlimited Mode"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div>
-      <div className="space-y-3 p-4"><BudgetModelSelector title="Excluded models" description="These models cannot start new requests while Unlimited Mode is active." modelIds={excludedModelIds} modelOptions={modelOptions} pending={savePending} onChange={setExcludedModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button aria-busy={savePending} disabled={savePending || !dirty} onClick={() => void onSave(excludedModelIds)}>{savePending && <LoadingSpinner />}Save exclusions</Button></div></div>
+      <div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2 font-medium"><SparklesIcon className="size-4 text-warning" />Unlimited Mode <Badge variant={active ? "secondary" : "outline"}>{active ? "Active" : "Inactive"}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{active ? autoDeactivate ? `Budget limits are bypassed until ${endLabel}.` : "Budget limits are bypassed until you deactivate Unlimited Mode." : "Activate a temporary budget bypass while keeping expensive models blocked."}</p>{active && <div className="mt-3 flex items-start gap-3 rounded-lg border bg-background px-3 py-2"><Checkbox id="unlimited-auto-deactivate-active" checked={autoDeactivate} onCheckedChange={(checked) => void onUpdateAutoDeactivate(checked === true)} disabled={autoPending || togglePending} /><label htmlFor="unlimited-auto-deactivate-active" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">{autoDeactivate ? `Scheduled for ${endLabel}.` : "This session will continue into the next budget window."}</span></label></div>}</div><UnlimitedActivation active={active} dialogOpen={dialogOpen} togglePending={togglePending} excludedModelIds={excludedModelIds} activationAutoDeactivate={activationAutoDeactivate} endLabel={endLabel} onDialogOpenChange={onDialogOpenChange} onActivationAutoDeactivateChange={onActivationAutoDeactivateChange} onToggle={onToggle} /></div>
+      <div className="space-y-3 p-4"><BudgetModelSelector title="Excluded models" description="These models cannot start new requests while Unlimited Mode is active." modelIds={excludedModelIds} modelOptions={modelOptions} pending={savePending} onChange={setExcludedModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button aria-busy={savePending} disabled={savePending || !dirty} onClick={async () => { if (await onSave(excludedModelIds)) setExcludedModelIds(null) }}>{savePending && <LoadingSpinner />}Save exclusions</Button></div></div>
     </div>
-    <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div>{sessions.length ? <Table><TableHeader><TableRow><TableHead>Started</TableHead><TableHead>Ended</TableHead><TableHead>Duration</TableHead><TableHead>Result</TableHead></TableRow></TableHeader><TableBody>{sessions.map((session) => <TableRow key={session.id}><TableCell >{formatSessionDate(session.startedAt)}</TableCell><TableCell tone="muted">{formatSessionDate(session.endedAt)}</TableCell><TableCell text="numeric">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{!session.endedAt ? "Active" : session.endReason === "window_end" ? "Window ended" : session.endReason === "manual" ? "Deactivated" : "Completed"}</Badge></TableCell></TableRow>)}</TableBody></Table> : <div className="px-4 py-8 text-center text-sm text-muted-foreground">No Unlimited Mode sessions yet.</div>}</div>
+    <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div>{sessions.length ? <Table><TableColumns columns={[{ id: "Started", label: "Started" }, { id: "Ended", label: "Ended" }, { id: "Duration", label: "Duration" }, { id: "Result", label: "Result" }]} /><TableBody>{sessions.map((session) => <TableRow key={session.id}><TableCell >{formatSessionDate(session.startedAt)}</TableCell><TableCell tone="muted">{formatSessionDate(session.endedAt)}</TableCell><TableCell text="numeric">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{!session.endedAt ? "Active" : session.endReason === "window_end" ? "Window ended" : session.endReason === "manual" ? "Deactivated" : "Completed"}</Badge></TableCell></TableRow>)}</TableBody></Table> : <div className="px-4 py-8 text-center text-sm text-muted-foreground">No Unlimited Mode sessions yet.</div>}</div>
   </>
 }
 
-function BeyondLimitsSettings({ settings, modelOptions, pending, onSave }: { settings: BudgetBeyondLimitsSettings; modelOptions: BudgetModelOption[]; pending: boolean; onSave: (settings: Pick<BudgetBeyondLimitsSettings, "enabled" | "modelIds">) => Promise<void> }) {
-  const [enabled, setEnabled] = useState(settings.enabled)
-  const [modelIds, setModelIds] = useState(settings.modelIds)
+function BeyondLimitsSettings({ settings, modelOptions, pending, onSave }: { settings: BudgetBeyondLimitsSettings; modelOptions: BudgetModelOption[]; pending: boolean; onSave: (settings: Pick<BudgetBeyondLimitsSettings, "enabled" | "modelIds">) => Promise<boolean> }) {
+  const [enabledDraft, setEnabled] = useState<boolean | null>(null)
+  const [modelDraft, setModelIds] = useState<string[] | null>(null)
+  const enabled = enabledDraft ?? settings.enabled
+  const modelIds = modelDraft ?? settings.modelIds
 
   return <div className="rounded-xl border">
     <div className="flex flex-col gap-4 border-b p-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex items-center gap-2 font-medium"><ShieldCheckIcon className="size-4 text-primary" />Beyond Limits</div><p className="mt-1 text-sm text-muted-foreground">Let selected models continue after a gateway key reaches its budget. Their usage still counts and can exceed the limit.</p></div><div className="flex items-center gap-3 rounded-lg border bg-muted/20 px-3 py-2"><Checkbox id="beyond-limits-enabled" checked={enabled} onCheckedChange={(checked) => setEnabled(checked === true)} disabled={pending} /><label htmlFor="beyond-limits-enabled" className="cursor-pointer text-sm font-medium">Enabled</label></div></div>
-    <div className="space-y-3 p-4"><BudgetModelSelector title="Allowed models" description="These exceptions apply only after a key reaches its limit." modelIds={modelIds} modelOptions={modelOptions} pending={pending} onChange={setModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Budget rows will show actual usage above the limit when these models keep running.</span><Button aria-busy={pending} disabled={pending} onClick={() => void onSave({ enabled, modelIds })}>{pending && <LoadingSpinner />}Save settings</Button></div></div>
+    <div className="space-y-3 p-4"><BudgetModelSelector title="Allowed models" description="These exceptions apply only after a key reaches its limit." modelIds={modelIds} modelOptions={modelOptions} pending={pending} onChange={setModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Budget rows will show actual usage above the limit when these models keep running.</span><Button aria-busy={pending} disabled={pending} onClick={async () => { if (await onSave({ enabled, modelIds })) { setEnabled(null); setModelIds(null) } }}>{pending && <LoadingSpinner />}Save settings</Button></div></div>
   </div>
+}
+
+function BudgetRow({ budget, bypass, windowStart, isPending, toggle, remove, updateLimit }: {
+  budget: BudgetEntry
+  bypass: boolean
+  windowStart: string
+  isPending: (key: string) => boolean
+  toggle: (id: string, enabled: boolean, limit: number) => Promise<void>
+  remove: (id: string) => Promise<boolean>
+  updateLimit: (id: string, limit: number, enabled: boolean) => Promise<boolean>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [editLimitValue, setEditLimitValue] = useState("")
+  const toggleKey = `toggle-budget:${budget.apiKeyId}`; const deleteKey = `delete-budget:${budget.apiKeyId}`; const updateKey = `update-limit:${budget.apiKeyId}`; const busy = isPending(toggleKey) || isPending(deleteKey) || isPending(updateKey); return <TableRow className="align-top"><TableCell text="label">{budget.name}</TableCell><TableCell className="align-middle"><Badge variant={!budget.enabled ? "outline" : !bypass && budget.spentMicros >= budget.weeklyLimitMicros ? "destructive" : "secondary"}>{!budget.enabled ? "Disabled" : !bypass && budget.spentMicros >= budget.weeklyLimitMicros ? "Over limit" : "Active"}</Badge></TableCell><TableCell text="numeric" className="align-middle">{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-sm font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : money(budget.weeklyLimitMicros)}</TableCell><BudgetUsageCell budget={budget} bypass={bypass} windowStart={windowStart} /><TableCell className="align-middle text-right"><div className="flex flex-wrap justify-end gap-2"><Button aria-busy={isPending(toggleKey)} size="sm" variant="outline" disabled={busy} onClick={() => void toggle(budget.apiKeyId, !budget.enabled, budget.weeklyLimitMicros)}>{isPending(toggleKey) && <LoadingSpinner />}{budget.enabled ? "Disable" : "Enable"}</Button><Popover open={editing} onOpenChange={(open) => { if (open) { setEditing(true); setEditLimitValue((budget.weeklyLimitMicros / 1_000_000).toFixed(2)) } else if (!isPending(updateKey)) setEditing(false) }}><PopoverTrigger render={<Button size="sm" variant="outline" disabled={busy}>Limit</Button>} /><PopoverContent padding="comfortable" className="w-auto" align="end"><div className="flex flex-col gap-2"><label htmlFor={`budget-limit-${budget.apiKeyId}`} className="text-sm font-medium">Edit Limit ($)</label><div className="flex items-center gap-2"><div className="relative"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input id={`budget-limit-${budget.apiKeyId}`} type="number" value={editLimitValue} onChange={(event) => setEditLimitValue(sanitizeNonNegativeDraft(event.target.value))} min="0.01" step="0.01" inset="prefix"
+                                      className="h-8 w-28" /></div><Button aria-busy={isPending(updateKey)} size="sm" disabled={isPending(updateKey) || Number(editLimitValue) <= 0} onClick={async () => { if (await updateLimit(budget.apiKeyId, Number(editLimitValue), budget.enabled)) setEditing(false) }}>{isPending(updateKey) && <LoadingSpinner />}Save</Button></div></div></PopoverContent></Popover><ConfirmAction buttonLabel="Delete" title={`Delete ${budget.name}?`} description="This permanently deletes the budget configuration for this gateway key." pending={isPending(deleteKey)} disabled={busy} onConfirm={() => remove(budget.apiKeyId)} /></div></TableCell></TableRow>
+}
+
+function UnlimitedActivation({ active, dialogOpen, togglePending, excludedModelIds, activationAutoDeactivate, endLabel, onDialogOpenChange, onActivationAutoDeactivateChange, onToggle }: {
+  active: boolean
+  dialogOpen: boolean
+  togglePending: boolean
+  excludedModelIds: string[]
+  activationAutoDeactivate: boolean
+  endLabel: string
+  onDialogOpenChange: (open: boolean) => void
+  onActivationAutoDeactivateChange: (enabled: boolean) => void
+  onToggle: (enabled: boolean, autoDeactivateAtWindowEnd?: boolean) => Promise<boolean>
+}) {
+  return <AlertDialog open={dialogOpen} onOpenChange={onDialogOpenChange}><Button aria-busy={togglePending} variant={active ? "unlimited" : "unlimited-idle"} className="h-9 min-w-40" disabled={togglePending} onClick={() => onDialogOpenChange(true)}>{togglePending ? <LoadingSpinner /> : <SparklesIcon className="size-4" />}{active ? "Deactivate" : "Activate"}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{active ? "Deactivate Unlimited Mode?" : "Activate Unlimited Mode?"}</AlertDialogTitle><AlertDialogDescription>{active ? "Budget enforcement will resume immediately for every gateway key." : "Configured gateway keys will bypass their budget limits. Excluded models will stay blocked."}</AlertDialogDescription></AlertDialogHeader>{!active && <div className="space-y-3"><div className={cn("rounded-lg border p-3 text-sm", excludedModelIds.length ? "bg-muted/25" : "border-warning/30 bg-warning/5")}><div className="font-medium">{excludedModelIds.length ? `${excludedModelIds.length} model${excludedModelIds.length === 1 ? "" : "s"} will stay blocked` : "No models are excluded"}</div><div className="mt-1 text-xs text-muted-foreground">{excludedModelIds.length ? "You can change this list while Unlimited Mode is active." : "Every available model can be used during this session."}</div></div><div className="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="unlimited-auto-deactivate-activation" checked={activationAutoDeactivate} onCheckedChange={(checked) => onActivationAutoDeactivateChange(checked === true)} disabled={togglePending} /><label htmlFor="unlimited-auto-deactivate-activation" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">Stop this session on {endLabel}.</span></label></div></div>}<AlertDialogFooter><AlertDialogCancel disabled={togglePending}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={togglePending} disabled={togglePending} onClick={async () => { if (await onToggle(!active, activationAutoDeactivate)) onDialogOpenChange(false) }}>{togglePending && <LoadingSpinner />}{active ? "Deactivate" : "Activate Unlimited Mode"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+}
+
+function BudgetWindowCard({ data, onSaved }: { data: Pick<BudgetsResponse, "window" | "codexAccounts">; onSaved: () => Promise<unknown> }) {
+  const [pending, setPending] = useState(false)
+  const [windowAnchorOverride, setWindowAnchorOverride] = useState<BudgetWindowAnchor | null>(null)
+  const [codexAccountOverride, setCodexAccountOverride] = useState<string | null>(null)
+  const [customRangeOverride, setCustomRangeOverride] = useState<DateRange | null>(null)
+  const [customTimeOverride, setCustomTimeOverride] = useState<string | null>(null)
+  const [windowOpen, setWindowOpen] = useState(false)
+  const codexAccounts = data.codexAccounts || []
+  const windowAnchor = windowAnchorOverride ?? data.window.anchor ?? "custom"
+  const codexAccountId = codexAccountOverride ?? data.window.codexAccountId ?? codexAccounts[0]?.id ?? ""
+  const customRange = customRangeOverride ?? ({ from: calendarDateFromInstant(data.window.start), to: calendarDateFromInstant(data.window.end) })
+  const customTime = customTimeOverride ?? formatWindowTime(data.window.start)
+
+  async function saveWindow() {
+    if (windowAnchor === "codex" && !codexAccountId) { toast.error("Choose a Codex account to sync the budget window."); return }
+    if (windowAnchor === "custom" && (!customRange?.from || !customRange.to || !customTime || dateToAppDateTime(customRange.from, customTime) >= dateToAppDateTime(customRange.to, customTime))) { toast.error("Choose a valid custom budget range."); return }
+    setPending(true)
+    try {
+      const body = windowAnchor === "codex" ? { anchor: "codex", codexAccountId } : { anchor: "custom", start: dateToAppDateTime(customRange!.from!, customTime), end: dateToAppDateTime(customRange!.to!, customTime) }
+      await apiPatch("/api/admin/budgets/window", body)
+      await onSaved()
+      setWindowAnchorOverride(null)
+      setCodexAccountOverride(null)
+      setCustomRangeOverride(null)
+      setCustomTimeOverride(null)
+      setWindowOpen(false)
+      toast.success(windowAnchor === "codex" ? "Budget window synced to Codex" : "Custom budget window saved")
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget window") }
+    finally { setPending(false) }
+  }
+  const customRangeValid = Boolean(customRange?.from && customRange.to && dateToAppDateTime(customRange.from, customTime) < dateToAppDateTime(customRange.to, customTime))
+
+  return <Card>
+      <CardHeader><CardTitle variant="icon"><Clock3Icon className="size-5" />Budget window</CardTitle><CardDescription>Choose the shared accounting window used by every gateway key.</CardDescription></CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><BudgetWindowSummary window={data.window} /><div className="flex flex-col gap-3 sm:flex-row sm:items-end lg:ml-auto"><BudgetWindowSource anchor={windowAnchor} accountId={codexAccountId} accounts={codexAccounts} pending={pending} onAnchorChange={setWindowAnchorOverride} onAccountChange={setCodexAccountOverride} />{windowAnchor === "custom" && <CustomBudgetRange customRange={customRange} customTime={customTime} customRangeValid={customRangeValid} setCustomRangeOverride={setCustomRangeOverride} setCustomTimeOverride={setCustomTimeOverride} data={data} pending={pending} windowOpen={windowOpen} setWindowOpen={setWindowOpen} />}<Button aria-busy={pending} disabled={pending || (windowAnchor === "codex" ? !codexAccountId : !customRangeValid)} onClick={() => void saveWindow()}>{pending && <LoadingSpinner />}Save window</Button></div></div>
+      </CardContent>
+    </Card>
+}
+
+function BudgetWindowSource({ anchor, accountId, accounts, pending, onAnchorChange, onAccountChange }: {
+  anchor: BudgetWindowAnchor
+  accountId: string
+  accounts: BudgetsResponse["codexAccounts"]
+  pending: boolean
+  onAnchorChange: (anchor: BudgetWindowAnchor) => void
+  onAccountChange: (id: string) => void
+}) {
+  return <>
+    <div className="flex w-full flex-col gap-2 sm:w-auto">
+      <span className="text-sm font-medium">Window anchor</span>
+      <Select value={anchor} onValueChange={(value) => {
+        if (!value) return
+        const next = value as BudgetWindowAnchor
+        onAnchorChange(next)
+        if (next === "codex" && !accountId) onAccountChange(accounts[0]?.id || "")
+      }} disabled={pending}>
+        <SelectTrigger className="min-w-48"><span>{anchor === "codex" ? "Sync Codex account" : "Custom date range"}</span></SelectTrigger>
+        <SelectContent><SelectGroup>
+          <SelectLabel>Budget window</SelectLabel>
+          <SelectItem value="codex" disabled={!accounts.length}>Sync Codex account{!accounts.length ? " (no accounts)" : ""}</SelectItem>
+          <SelectItem value="custom">Custom date range</SelectItem>
+        </SelectGroup></SelectContent>
+      </Select>
+    </div>
+    {anchor === "codex" && <div className="flex w-full flex-col gap-2 sm:w-auto">
+      <span className="text-sm font-medium">Codex account</span>
+      <Select value={accountId} onValueChange={(value) => onAccountChange(value || "")} disabled={!accounts.length || pending}>
+        <SelectTrigger className="min-w-48"><SelectValue placeholder="Select account" /></SelectTrigger>
+        <SelectContent>{accounts.map((account) => <SelectItem key={account.id} value={account.id}>{account.name}</SelectItem>)}</SelectContent>
+      </Select>
+    </div>}
+  </>
+}
+
+function BudgetWindowSummary({ window }: { window: BudgetsResponse["window"] }) {
+  const currentAnchor = window.anchor || "custom"
+  return <div className="w-full max-w-sm flex-none"><div className="flex min-h-9 min-w-0 flex-col justify-center rounded-md border bg-muted/35 px-3 py-1.5"><div className="flex items-center justify-between gap-3"><span className="truncate text-sm tabular-nums">{formatWindowDate(window.start)} - {formatWindowDate(window.end)}</span><Badge variant="outline" className="shrink-0">{currentAnchor === "codex" ? <><Link2Icon className="size-3" />Codex synced</> : "Custom range"}</Badge></div><span className="text-xs text-muted-foreground">{currentAnchor === "codex" ? `Resets in ${formatBudgetResetIn(window.end)}; refreshed every 5 minutes` : "Manual date range; budget usage resets at the selected end date"}</span></div></div>
+}
+
+function BudgetUsageCell({ budget, bypass, windowStart }: { budget: BudgetEntry; bypass: boolean; windowStart: string }) {
+  const percentUsed = budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0; const remainingMicros = Math.max(0, budget.weeklyLimitMicros - budget.spentMicros); const overLimitMicros = Math.max(0, budget.spentMicros - budget.weeklyLimitMicros);
+  return <TableCell className="min-w-52"><div className="space-y-2"><div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{bypass ? `${money(budget.spentMicros)} since ${formatWindowDate(budget.usageStartAt || windowStart)}` : `${money(budget.spentMicros)} / ${money(budget.weeklyLimitMicros)}`}</span>{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-caption font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : <span className={cn("text-xs tabular-nums", overLimitMicros > 0 ? "font-medium text-destructive" : "text-muted-foreground")}>{Math.round(percentUsed)}%</span>}</div><Progress value={bypass ? 100 : Math.min(percentUsed, 100)} variant={bypass ? "unlimited" : "default"}><ProgressLabel className="sr-only">Budget usage</ProgressLabel></Progress><div className={cn("text-xs", overLimitMicros > 0 ? "font-medium text-destructive" : "text-muted-foreground")}>{bypass ? "Unlimited Usage" : overLimitMicros > 0 ? `${money(overLimitMicros)} over limit` : `${money(remainingMicros)} remaining`}</div></div></TableCell>
+}
+
+function CustomBudgetRange({ customRange, customTime, customRangeValid, setCustomRangeOverride, setCustomTimeOverride, data, pending, windowOpen, setWindowOpen }: {
+  customRange: DateRange
+  customTime: string
+  customRangeValid: boolean
+  setCustomRangeOverride: (range: DateRange | null) => void
+  setCustomTimeOverride: (time: string | null) => void
+  data: Pick<BudgetsResponse, "window">
+  pending: boolean
+  windowOpen: boolean
+  setWindowOpen: (open: boolean) => void
+}) {
+  const [customHour, customMinute] = customTime.split(":")
+  const minCustomDate = addDays(calendarDateFromInstant(new Date()), -7)
+  const maxCustomDate = customRange?.from ? addDays(customRange.from, 7) : undefined
+  return <Popover open={windowOpen} onOpenChange={setWindowOpen}><PopoverTrigger render={<Button variant="outline" disabled={pending}><CalendarDaysIcon />{customRange?.from ? format(customRange.from, "MMM d") + ", " + customTime + " - " + (customRange.to ? format(customRange.to, "MMM d") + ", " + customTime : "Choose end") : "Choose dates"}</Button>} /><PopoverContent padding="none" className="w-auto" align="start"><Calendar mode="range" selected={customRange} defaultMonth={customRange?.from} onSelect={(next) => setCustomRangeOverride(next || null)} disabled={maxCustomDate ? { before: minCustomDate, after: maxCustomDate } : { before: minCustomDate }} numberOfMonths={1} fullWidth autoFocus /><div className="border-t p-3"><div className="flex items-center gap-3"><label htmlFor="budget-window-time" className="text-sm font-medium">Time</label><div className="flex items-center gap-2"><Select value={customHour} onValueChange={(value) => setCustomTimeOverride(value + ":" + customMinute)} disabled={pending}><SelectTrigger aria-label="Hour"><SelectValue /></SelectTrigger><SelectContent>{TIME_HOURS.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select><span className="text-muted-foreground">:</span><Select value={customMinute} onValueChange={(value) => setCustomTimeOverride(customHour + ":" + value)} disabled={pending}><SelectTrigger aria-label="Minute"><SelectValue /></SelectTrigger><SelectContent>{TIME_MINUTES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div></div><p className="mt-2 text-xs text-muted-foreground">Applied to both the start and end dates.</p></div><div className="flex justify-end gap-2 border-t p-3"><Button variant="outline" size="sm" onClick={() => { setCustomRangeOverride({ from: calendarDateFromInstant(data.window.start), to: calendarDateFromInstant(data.window.end) }); setCustomTimeOverride(null); setWindowOpen(false) }}>Cancel</Button><Button size="sm" disabled={!customRangeValid} onClick={() => setWindowOpen(false)}>Apply</Button></div></PopoverContent></Popover>
 }

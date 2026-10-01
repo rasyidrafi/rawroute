@@ -4,7 +4,7 @@ import { codexDiscoveryStatus } from "@/lib/codex/model-discovery"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteProvider, getProvider, listProviderApiKeys, listProviderModels } from "@/lib/store"
+import { deleteProvider, getProvider, listProviderApiKeys, listProviderModels } from "@/server/store"
 
 function stripUnprefixed<T>(value: T): Omit<T, "unprefixed"> {
   const { unprefixed, ...rest } = value as T & { unprefixed?: unknown }

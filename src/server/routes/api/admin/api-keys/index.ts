@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { ApiKeyConflictError, createApiKey } from "@/lib/store"
+import { ApiKeyConflictError, createApiKey } from "@/server/store"
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null

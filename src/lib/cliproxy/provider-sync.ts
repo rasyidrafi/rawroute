@@ -4,7 +4,7 @@ import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/manag
 import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 import { localRedisCompareAndDelete, localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
-import { listProviderApiKeys, listProviderModels, getProvider } from "@/lib/store"
+import { listProviderApiKeys, listProviderModels, getProvider } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 import type { Model, Provider } from "@/lib/types"
 

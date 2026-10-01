@@ -44,6 +44,11 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   expect(budgets.ok()).toBe(true)
   expect((await budgets.json()).beyondLimits).toMatchObject({ enabled: true, modelIds: ["budget-test/over-limit"] })
 
+  expect((await page.request.patch("/api/admin/budgets/beyond-limits", { data: { enabled: false, modelIds: [] } })).ok()).toBe(true)
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByRole("checkbox", { name: "Enabled", exact: true })).not.toBeChecked()
+  await expect(page.getByRole("tabpanel").getByText("0 selected", { exact: true })).toBeVisible()
+
   await page.getByRole("tab", { name: "Unlimited Mode" }).click()
   await page.getByText("Over-limit model").click()
   await page.getByRole("button", { name: "Save exclusions" }).click()
@@ -61,5 +66,12 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   })
   await page.getByRole("tabpanel").getByRole("button", { name: "Deactivate", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Deactivate", exact: true }).click()
+
+  // Once a draft is saved, refreshed server settings must become the source of truth.
+  expect((await page.request.patch("/api/admin/budgets/unlimited", { data: { excludedModelIds: [] } })).ok()).toBe(true)
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByRole("tabpanel").getByText("0 selected", { exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Save exclusions" })).toBeDisabled()
+
   await restoreInitialPassword(page)
 })

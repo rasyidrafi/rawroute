@@ -24,7 +24,7 @@ function configuredTimeZone() {
   const value = (typeof window === "undefined" ? process.env.TIMEZONE : browserTimeZone) || DEFAULT_TIME_ZONE
   if (value === cachedTimeZoneSource) return cachedTimeZone
   try {
-    new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: value }).format()
+    dateFormatter("validation", DISPLAY_LOCALE, value, {}).format()
     cachedTimeZone = value
   } catch {
     cachedTimeZone = DEFAULT_TIME_ZONE

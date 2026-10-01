@@ -1,7 +1,7 @@
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { getProvider, upsertProviderApiKey } from "@/lib/store"
+import { getProvider, upsertProviderApiKey } from "@/server/store"
 import type { ProviderApiKey } from "@/lib/types"
 
 function parseInteger(value: unknown, label: string, minimum: number, maximum?: number): number | undefined {

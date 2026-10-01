@@ -1,7 +1,7 @@
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { gatewayModelId, jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { getProvider, listProviderModels, upsertModel } from "@/lib/store"
+import { getProvider, listProviderModels, upsertModel } from "@/server/store"
 import type { Model } from "@/lib/types"
 
 export async function POST(request: Request, params: { providerId: string }) {

@@ -55,3 +55,7 @@ export function NotFoundState({ label = "Provider not found", description = "Thi
     </div>
   </main>
 }
+
+export function LoadError({ title, error, retrying, onRetry }: { title: string; error: Error; retrying: boolean; onRetry: () => void }) {
+  return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">{title}</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={retrying} className="mt-4" disabled={retrying} onClick={onRetry}>{retrying && <LoadingSpinner />}Try again</Button></div></main>
+}

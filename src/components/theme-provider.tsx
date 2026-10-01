@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react"
 
 type Theme = "light" | "dark" | "system"
 const ThemeContext = createContext<{ theme: Theme; setTheme: (theme: string) => void } | undefined>(undefined)
@@ -34,13 +34,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("storage", sync)
   }, [])
 
-  function setTheme(value: string) {
+  const setTheme = useCallback((value: string) => {
     if (value !== "light" && value !== "dark" && value !== "system") return
     updateTheme(value)
     try { localStorage.setItem("theme", value) } catch {}
-  }
+  }, [])
 
-  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>
+  const value = useMemo(() => ({ theme, setTheme }), [theme, setTheme])
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
 export function useTheme() {

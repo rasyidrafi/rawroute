@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, mock, jest } from "bun:test"
 
 const mocks = { accounts: mock(), files: mock(), call: mock(), management: mock(), lock: mock() }
-mock.module("@/lib/store", () => ({ listProviderApiKeys: mocks.accounts }))
+mock.module("@/server/store", () => ({ listProviderApiKeys: mocks.accounts }))
 mock.module("@/lib/codex/cliproxy", () => ({ listCliProxyCodexAuthFiles: mocks.files, cliProxyCodexApiCall: mocks.call, cliproxyManagement: mocks.management }))
 mock.module("@/lib/local-redis", () => ({ localRedisSetIfAbsent: mocks.lock }))
 mock.module("@/lib/logger", () => ({ writeLog: mock() }))

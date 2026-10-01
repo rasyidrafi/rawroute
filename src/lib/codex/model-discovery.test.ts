@@ -16,7 +16,7 @@ mock.module("@/lib/codex/cliproxy", () => ({
 }))
 const { codexDiscoveryStatus, parseCodexModels, refreshCodexModels } = await import("@/lib/codex/model-discovery")
 const { ensureCodexProvider } = await import("@/lib/codex/oauth")
-const { _resetMemoryBackend, listProviderApiKeys, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } = await import("@/lib/store")
+const { _resetMemoryBackend, listProviderApiKeys, listProviderModels, reconcileDiscoveredModel, upsertModel, upsertProviderApiKey, deleteModel, upsertAlias, listAliases } = await import("@/server/store")
 const { runInWorkspace } = await import("@/lib/workspace/context")
 
 beforeEach(() => {

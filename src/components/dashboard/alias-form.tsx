@@ -7,8 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { Model, ModelAlias, Provider, SharedModelView } from "@/lib/types"
 
 const SHARED_PROVIDER_ID = "__shared_models__"
+const EMPTY_SHARED_MODELS: SharedModelView[] = []
 
-export function AliasForm({ alias, providers, models, sharedModels = [], onSave }: { alias: ModelAlias | null; providers: Provider[]; models: Model[]; sharedModels?: SharedModelView[]; onSave: (alias: Partial<ModelAlias> & { originalId?: string }) => Promise<boolean> }) {
+export function AliasForm({ alias, providers, models, sharedModels = EMPTY_SHARED_MODELS, onSave }: { alias: ModelAlias | null; providers: Provider[]; models: Model[]; sharedModels?: SharedModelView[]; onSave: (alias: Partial<ModelAlias> & { originalId?: string }) => Promise<boolean> }) {
   const [pending, setPending] = useState(false)
   const [providerId, setProviderId] = useState<string | null>(() => alias?.sharedModelId ? SHARED_PROVIDER_ID : alias ? models.find((model) => (model.gatewayModelId || model.id) === alias.targetModelId)?.providerId ?? null : null)
   const [targetModelId, setTargetModelId] = useState<string | null>(alias?.targetModelId ?? null)

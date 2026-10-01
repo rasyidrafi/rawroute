@@ -1,8 +1,9 @@
+import { mapConcurrent } from "@/lib/concurrency"
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getLocalFirestore, listLocalDocuments, type Firestore, type LocalQuery } from "@/lib/local-db"
 
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
-import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/lib/store"
+import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/server/store"
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { getCodexUsageForAccount } from "@/lib/codex/usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
@@ -13,7 +14,7 @@ import { writeLog } from "@/lib/logger"
 import { listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
 import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSettings, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
-import { listWorkspaces } from "@/lib/workspace/repository"
+import { listWorkspaces } from "@/server/workspace-repository"
 
 let localDatabase: Firestore | undefined
 interface AnalyticsMemoryState {
@@ -299,17 +300,8 @@ function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1
   cache.set(key, value)
 }
 
-async function parallelMap<T, R>(items: readonly T[], mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  if (items.length <= analyticsReadConcurrency) return Promise.all(items.map(mapper))
-  const output = new Array<R>(items.length)
-  let nextIndex = 0
-  await Promise.all(Array.from({ length: analyticsReadConcurrency }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++
-      output[index] = await mapper(items[index], index)
-    }
-  }))
-  return output
+function parallelMap<T, R>(items: readonly T[], mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  return mapConcurrent(items, analyticsReadConcurrency, mapper)
 }
 
 async function settledParallelMap<T, R>(items: readonly T[], mapper: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {

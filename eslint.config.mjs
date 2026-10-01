@@ -45,7 +45,7 @@ const eslintConfig = defineConfig([
     rules: {
       "no-restricted-imports": ["error", {
         patterns: [
-          { group: ["@/server/**", "@/lib/auth", "@/lib/store", "@/lib/analytics", "@/lib/local-db", "@/lib/local-redis", "@/lib/credential-secrets", "@/lib/background-tasks", "bun", "node:*"], message: "Browser code must access server resources through HTTP APIs." },
+          { group: ["@/server/**", "@/lib/auth", "@/lib/analytics", "@/lib/local-db", "@/lib/local-redis", "@/lib/credential-secrets", "@/lib/background-tasks", "bun", "node:*"], message: "Browser code must access server resources through HTTP APIs." },
         ],
       }],
     },

@@ -1,7 +1,7 @@
 import { getDashboardPayload } from "@/lib/analytics"
 import { parseDashboardQuery } from "@/lib/dashboard-query"
 import { runInWorkspace, DEFAULT_WORKSPACE_ID } from "@/lib/workspace/context"
-import { getPublicWorkspace } from "@/lib/workspace/repository"
+import { getPublicWorkspace } from "@/server/workspace-repository"
 
 const configuredPublicDashboardRangeDays = Number(process.env.PUBLIC_DASHBOARD_MAX_CUSTOM_RANGE_DAYS || 366)
 const publicDashboardRangeDays = Number.isSafeInteger(configuredPublicDashboardRangeDays) && configuredPublicDashboardRangeDays > 0

@@ -24,7 +24,7 @@ function validationVariant(status: "verified" | "unverified" | "invalid" | "stal
   return status === "verified" ? "secondary" : status === "invalid" ? "destructive" : "outline"
 }
 
-function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, payloadError, testing, onToggle, onRemove, onUpdate, onPayloadChange, onFormatPayload, onTest }: {
+type MemberCardProps = {
   member: ComboMember
   index: number
   open: boolean
@@ -38,7 +38,9 @@ function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, 
   onPayloadChange: (value: string) => void
   onFormatPayload: () => void
   onTest: () => void
-}) {
+}
+
+function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, payloadError, testing, onToggle, onRemove, onUpdate, onPayloadChange, onFormatPayload, onTest }: MemberCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: member.modelId })
   const mode = member.reasoning?.mode || "inherit"
   const panelId = `combo-member-${index}`
@@ -60,20 +62,7 @@ function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, 
       <Button type="button" size="icon-sm" variant="ghost" aria-label={`Remove ${member.modelId}`} onClick={onRemove}><Trash2Icon /></Button>
     </div>
 
-    {open && <div id={panelId} className="grid gap-3 border-t bg-muted/10 p-3 sm:p-4">
-      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-        <FormField label="Reasoning"><Select value={mode} onValueChange={(value) => value && onUpdate((current) => ({ ...current, reasoning: { mode: value as "inherit" | "provider-default" | "override", ...(value === "override" ? { effort: current.reasoning?.effort || effortOptions[0] || "medium" } : {}) } }))}><SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit client</SelectItem><SelectItem value="provider-default">Provider default</SelectItem><SelectItem value="override">Override client</SelectItem></SelectContent></Select></FormField>
-        <FormField label="Effort"><Input value={member.reasoning?.effort || ""} list={`efforts-${index}`} placeholder="high" disabled={mode !== "override" || !effortOptions.length} onChange={(event) => onUpdate((current) => ({ ...current, reasoning: { mode: "override", effort: event.target.value } }))} /><datalist id={`efforts-${index}`}>{effortOptions.map((effort) => <option key={effort} value={effort} />)}</datalist></FormField>
-        <div className="flex items-end"><Button type="button" variant="outline" disabled={Boolean(payloadError) || testing || mode !== "override" && !member.customPayload} onClick={onTest}>{testing ? <LoadingSpinner /> : <TestTube2Icon />}Test model</Button></div>
-      </div>
-
-      <details className="rounded-md border bg-background" open={Boolean(payloadError)}>
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium"><BracesIcon className="size-4" />Custom payload{member.customPayload && <span className="text-xs font-normal text-muted-foreground">Configured</span>}<ChevronDownIcon className="ml-auto size-4" /></summary>
-        <div className="grid gap-2 border-t p-3"><Textarea aria-label={`Custom payload for ${member.modelId}`} value={payloadDraft} onChange={(event) => onPayloadChange(event.target.value)} variant="code"
-                className="min-h-32" spellCheck={false} /><div className="flex flex-wrap items-center justify-between gap-2"><p className={payloadError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{payloadError || `Protected: ${protectedComboPayloadFields.join(", ")}. Nested objects merge; arrays and values replace.`}</p><div className="flex gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => onPayloadChange("{}")}>Clear</Button><Button type="button" size="sm" variant="outline" onClick={onFormatPayload}>Format JSON</Button></div></div></div>
-      </details>
-      {member.validation?.message && configured && <p className="text-xs text-muted-foreground">{member.validation.message}</p>}
-    </div>}
+    {open && <MemberPolicyEditor panelId={panelId} member={member} index={index} effortOptions={effortOptions} payloadDraft={payloadDraft} payloadError={payloadError} testing={testing} onUpdate={onUpdate} onPayloadChange={onPayloadChange} onFormatPayload={onFormatPayload} onTest={onTest} />}
   </div>
 }
 
@@ -189,4 +178,23 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
     </div>
     <DialogFooter><FormSubmitButton pending={pending} disabled={members.some((member) => Boolean(payloadErrors[member.modelId]))} idleLabel={combo?.id ? "Save changes" : "Add combo"} pendingLabel="Testing and saving..." /></DialogFooter>
   </form>
+}
+
+function MemberPolicyEditor({ panelId, member, index, effortOptions, payloadDraft, payloadError, testing, onUpdate, onPayloadChange, onFormatPayload, onTest }: Pick<MemberCardProps, "member" | "index" | "effortOptions" | "payloadDraft" | "payloadError" | "testing" | "onUpdate" | "onPayloadChange" | "onFormatPayload" | "onTest"> & { panelId: string }) {
+  const mode = member.reasoning?.mode || "inherit"
+  const configured = mode !== "inherit" || Boolean(member.customPayload)
+  return <div id={panelId} className="grid gap-3 border-t bg-muted/10 p-3 sm:p-4">
+      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+        <FormField label="Reasoning"><Select value={mode} onValueChange={(value) => value && onUpdate((current) => ({ ...current, reasoning: { mode: value as "inherit" | "provider-default" | "override", ...(value === "override" ? { effort: current.reasoning?.effort || effortOptions[0] || "medium" } : {}) } }))}><SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit client</SelectItem><SelectItem value="provider-default">Provider default</SelectItem><SelectItem value="override">Override client</SelectItem></SelectContent></Select></FormField>
+        <FormField label="Effort"><Input value={member.reasoning?.effort || ""} list={`efforts-${index}`} placeholder="high" disabled={mode !== "override" || !effortOptions.length} onChange={(event) => onUpdate((current) => ({ ...current, reasoning: { mode: "override", effort: event.target.value } }))} /><datalist id={`efforts-${index}`}>{effortOptions.map((effort) => <option key={effort} value={effort} />)}</datalist></FormField>
+        <div className="flex items-end"><Button type="button" variant="outline" disabled={Boolean(payloadError) || testing || mode !== "override" && !member.customPayload} onClick={onTest}>{testing ? <LoadingSpinner /> : <TestTube2Icon />}Test model</Button></div>
+      </div>
+
+      <details className="rounded-md border bg-background" open={Boolean(payloadError)}>
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium"><BracesIcon className="size-4" />Custom payload{member.customPayload && <span className="text-xs font-normal text-muted-foreground">Configured</span>}<ChevronDownIcon className="ml-auto size-4" /></summary>
+        <div className="grid gap-2 border-t p-3"><Textarea aria-label={`Custom payload for ${member.modelId}`} value={payloadDraft} onChange={(event) => onPayloadChange(event.target.value)} variant="code"
+                className="min-h-32" spellCheck={false} /><div className="flex flex-wrap items-center justify-between gap-2"><p className={payloadError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{payloadError || `Protected: ${protectedComboPayloadFields.join(", ")}. Nested objects merge; arrays and values replace.`}</p><div className="flex gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => onPayloadChange("{}")}>Clear</Button><Button type="button" size="sm" variant="outline" onClick={onFormatPayload}>Format JSON</Button></div></div></div>
+      </details>
+      {member.validation?.message && configured && <p className="text-xs text-muted-foreground">{member.validation.message}</p>}
+    </div>
 }

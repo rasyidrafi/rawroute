@@ -1,7 +1,7 @@
 import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteAlias } from "@/lib/store"
+import { deleteAlias } from "@/server/store"
 
 export async function DELETE(_request: Request, params: { aliasId: string }) {
   const { aliasId } = params

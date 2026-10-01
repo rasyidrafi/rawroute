@@ -5,16 +5,15 @@ import { useNavigate } from "react-router"
 import useSWR from "swr"
 import { toast } from "sonner"
 
-import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
+import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { ProviderForm } from "@/components/dashboard/provider-form"
 import { apiDelete, apiPost } from "@/components/dashboard/api"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
-import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableColumns, Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { protocolLabels, type Provider, type ProviderSummary } from "@/lib/types"
 
 type ProvidersResponse = { providers: ProviderSummary[] }
@@ -26,7 +25,7 @@ export function ProvidersView() {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
+  if (error) return <LoadError title="Dashboard unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="providers" />
 
   const isPending = (key: string) => pending.has(key)
@@ -80,17 +79,7 @@ export function ProvidersView() {
         </Dialog>
         <CardContent>
           <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Provider</TableHead>
-                <TableHead>Prefix</TableHead>
-                <TableHead>Protocol</TableHead>
-                <TableHead>Origin</TableHead>
-                <TableHead>API keys</TableHead>
-                <TableHead>Models</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
+            <TableColumns columns={[{ id: "Provider", label: "Provider" }, { id: "Prefix", label: "Prefix" }, { id: "Protocol", label: "Protocol" }, { id: "Origin", label: "Origin" }, { id: "API keys", label: "API keys" }, { id: "Models", label: "Models" }, { id: "actions" }]} />
             <TableBody>
               {regularProviders.map((provider) => {
                 const pendingKey = `delete-provider:${provider.id}`
@@ -121,7 +110,7 @@ export function ProvidersView() {
         </CardHeader>
         <CardContent>
           <Table>
-            <TableHeader><TableRow><TableHead>Provider</TableHead><TableHead>Prefix</TableHead><TableHead>Protocol</TableHead><TableHead>Accounts</TableHead><TableHead>Models</TableHead><TableHead /></TableRow></TableHeader>
+            <TableColumns columns={[{ id: "Provider", label: "Provider" }, { id: "Prefix", label: "Prefix" }, { id: "Protocol", label: "Protocol" }, { id: "Accounts", label: "Accounts" }, { id: "Models", label: "Models" }, { id: "actions" }]} />
             <TableBody>
               {codexProvider && <TableRow className="cursor-pointer" onClick={() => navigate("/dashboard/providers/codex")}>
                 <TableCell text="label">Codex Providers</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>

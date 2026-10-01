@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto"
 
-import { findIndexedApiKeyByValue, readSessionSecret } from "@/lib/store"
+import { findIndexedApiKeyByValue, readSessionSecret } from "@/server/store"
 import type { AuthenticatedGatewayKey } from "@/lib/types"
-import { getWorkspace } from "@/lib/workspace/repository"
+import { getWorkspace } from "@/server/workspace-repository"
 
 const COOKIE_NAME = "rawroute_session"
 

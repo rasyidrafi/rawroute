@@ -1,9 +1,10 @@
+import { mapConcurrent } from "@/lib/concurrency"
 import { createHash } from "node:crypto"
 
-import { listProviderApiKeys, listProviders, upsertProviderApiKey } from "@/lib/store"
+import { listProviderApiKeys, listProviders, upsertProviderApiKey } from "@/server/store"
 import type { Provider, ProviderApiKey } from "@/lib/types"
 import { runInWorkspace } from "@/lib/workspace/context"
-import { listWorkspaces } from "@/lib/workspace/repository"
+import { listWorkspaces } from "@/server/workspace-repository"
 
 const DEFAULT_CLIPROXY_URL = "http://cli-proxy-api:8317"
 
@@ -109,12 +110,11 @@ export async function mappedWorkspaceForFile(fileName: string, targetWorkspaceId
 export async function migrateLegacyCodexAccounts(provider: Provider, workspaceId: string, accounts: ProviderApiKey[]) {
   const files = await listCliProxyCodexAuthFiles()
   const byName = new Map(files.map((file) => [file.name, file]))
-  const migrated: ProviderApiKey[] = []
-  for (const account of accounts) {
-    if (account.credentialKind !== "codex-oauth") continue
+  const migrated = await mapConcurrent(accounts, 4, async (account) => {
+    if (account.credentialKind !== "codex-oauth") return false
     const file = byName.get(legacyAuthFileName(workspaceId, account))
-    if (!file) continue
-    migrated.push(await upsertProviderApiKey(provider.id, {
+    if (!file) return false
+    await upsertProviderApiKey(provider.id, {
       originalId: account.id,
       name: account.name,
       key: "",
@@ -130,9 +130,10 @@ export async function migrateLegacyCodexAccounts(provider: Provider, workspaceId
       cliProxyStatusMessage: file.statusMessage,
       enabled: !file.disabled,
       priority: account.priority,
-    }))
-  }
-  return migrated.length
+    })
+    return true
+  })
+  return migrated.filter(Boolean).length
 }
 
 export async function listMappedCodexAccounts(provider: Provider, workspaceId: string) {

@@ -10,12 +10,12 @@ const mocks = {
   runInWorkspace: mock(),
 }
 
-mock.module("@/lib/store", () => ({
+mock.module("@/server/store", () => ({
   listProviderApiKeys: mocks.listProviderApiKeys,
   listProviders: mocks.listProviders,
   upsertProviderApiKey: mocks.upsertProviderApiKey,
 }))
-mock.module("@/lib/workspace/repository", () => ({ listWorkspaces: mocks.listWorkspaces }))
+mock.module("@/server/workspace-repository", () => ({ listWorkspaces: mocks.listWorkspaces }))
 mock.module("@/lib/workspace/context", () => ({ runInWorkspace: mocks.runInWorkspace }))
 
 const { completeCliProxyCodexLogin, mappedWorkspaceForFile, registerCliProxyCodexAccount, startCliProxyCodexLogin } = await import("@/lib/codex/cliproxy")

@@ -1,7 +1,7 @@
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteProviderApiKey, getProvider } from "@/lib/store"
+import { deleteProviderApiKey, getProvider } from "@/server/store"
 
 export async function DELETE(_request: Request, params: { providerId: string; apiKeyId: string }) {
   const { providerId, apiKeyId } = params

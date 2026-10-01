@@ -146,7 +146,8 @@ function indexedSearchText(model: CatalogModel) {
 
 function searchScore(model: CatalogModel, normalized: string, tokens: string[]) {
   const indexed = indexedSearchText(model)
-  for (const token of tokens) if (!indexed.searchable.includes(token)) return -1
+  const searchable: string = indexed.searchable
+  if (tokens.some((token) => !searchable.includes(token))) return -1
   if (indexed.id === normalized) return 0
   if (indexed.id.startsWith(normalized)) return 1
   if (indexed.name.startsWith(normalized)) return 2

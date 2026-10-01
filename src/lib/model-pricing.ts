@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { getLocalFirestore, type Firestore } from "@/lib/local-db"
 
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
-import { listModels, listProviders } from "@/lib/store"
+import { listModels, listProviders } from "@/server/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 

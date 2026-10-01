@@ -134,3 +134,7 @@ export {
   TableCell,
   TableCaption,
 }
+
+export function TableColumns({ columns }: { columns: Array<{ id: string; label?: React.ReactNode; className?: string }> }) {
+  return <TableHeader><TableRow>{columns.map((column) => <TableHead key={column.id} className={column.className}>{column.label}</TableHead>)}</TableRow></TableHeader>
+}

@@ -1,4 +1,4 @@
-import { listWorkspaces } from "@/lib/workspace/repository"
+import { listWorkspaces } from "@/server/workspace-repository"
 
 export async function GET() {
   const workspaces = (await listWorkspaces())

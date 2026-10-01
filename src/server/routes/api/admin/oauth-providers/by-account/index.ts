@@ -3,7 +3,7 @@ import { listCodexAccounts } from "@/lib/codex/oauth"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { deleteProviderApiKey, upsertProviderApiKey } from "@/lib/store"
+import { deleteProviderApiKey, upsertProviderApiKey } from "@/server/store"
 
 export async function PATCH(request: Request, params: { accountId: string }) {
   const { accountId } = params

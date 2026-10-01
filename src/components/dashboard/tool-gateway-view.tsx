@@ -30,24 +30,25 @@ const pageCopy: Record<Exclude<ToolGatewayPage, "overview">, { title: string; de
   },
 }
 
+const statusCopy = {
+  available: { label: "Available", variant: "default", description: "Executor is available." },
+  disabled: { label: "Not configured", variant: "secondary", description: "Executor is not configured. Enable the optional Executor service and configure its server-side API key to use this gateway." },
+  unavailable: { label: "Unavailable", variant: "destructive", description: "Executor is configured but is not reachable. The Tool Gateway will remain disabled until the service becomes healthy." },
+  checking: { label: "Checking", variant: "secondary", description: "Checking the optional Executor service." },
+} as const
+
 export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
   const { data, error } = useToolGatewayStatus()
   const state = error ? "unavailable" : data?.state
   const available = state === "available"
-  const statusLabel = state === "available" ? "Available" : state === "disabled" ? "Not configured" : state === "unavailable" ? "Unavailable" : "Checking"
-  const statusVariant = state === "available" ? "default" : state === "unavailable" ? "destructive" : "secondary"
-  const statusDescription = state === "disabled"
-    ? "Executor is not configured. Enable the optional Executor service and configure its server-side API key to use this gateway."
-    : state === "unavailable"
-      ? "Executor is configured but is not reachable. The Tool Gateway will remain disabled until the service becomes healthy."
-      : "Checking the optional Executor service."
+  const status = statusCopy[state || "checking"]
   const toolNavigation = dashboardApps[1].navigation[0].items
 
   return <main className="flex-1 bg-workspace p-4 dark:bg-background md:p-6 lg:p-8">
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={statusVariant}>{statusLabel}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
+          <div className="flex items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={status.variant}>{status.label}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
           <CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription>
         </CardHeader>
         <CardContent spacing="compact-stack">
@@ -57,7 +58,7 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
               <code className="mt-1 block text-sm">/executor/api</code>
             </div>
             <p className="text-sm text-muted-foreground">This is a shared Executor deployment. Switching RawRoute workspaces does not isolate Executor tools, connections, integrations, policies, or activity.</p>
-          </> : <div role="status" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{statusDescription}</div>}
+          </> : <div role="status" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{status.description}</div>}
         </CardContent>
       </Card>
 

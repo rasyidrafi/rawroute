@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { hashPassword, updateMeta, validatePasswordUpdate } from "@/lib/store"
+import { hashPassword, updateMeta, validatePasswordUpdate } from "@/server/store"
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null

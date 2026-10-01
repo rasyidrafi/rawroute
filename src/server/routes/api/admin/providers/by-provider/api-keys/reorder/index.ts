@@ -1,9 +1,10 @@
+import { mapConcurrent } from "@/lib/concurrency"
 import { setCliProxyCodexAccountPriority } from "@/lib/codex/cliproxy"
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
-import { getProvider, reorderProviderApiKeys } from "@/lib/store"
+import { getProvider, reorderProviderApiKeys } from "@/server/store"
 
 export async function POST(request: Request, params: { providerId: string }) {
   const { providerId } = params
@@ -23,10 +24,10 @@ export async function POST(request: Request, params: { providerId: string }) {
       })
       const changed: typeof mapped = []
       try {
-        for (const entry of mapped) {
+        await mapConcurrent(mapped, 1, async (entry) => {
           await setCliProxyCodexAccountPriority(entry.account, entry.priority)
           changed.push(entry)
-        }
+        })
         await reorderProviderApiKeys(providerId, body.orderedIds)
       } catch (error) {
         await Promise.allSettled(changed.map(({ account }) => setCliProxyCodexAccountPriority(account, account.priority ?? 0)))

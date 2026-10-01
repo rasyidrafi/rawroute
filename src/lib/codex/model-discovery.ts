@@ -1,6 +1,7 @@
+import { mapConcurrent } from "@/lib/concurrency"
 import { cliproxyManagement, codexWorkspacePrefix, listCliProxyCodexAuthFiles, mappedWorkspaceForFile } from "@/lib/codex/cliproxy"
 import { localRedisCompareAndDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
-import { listProviderApiKeys, listProviderModels, listProviders, reconcileDiscoveredModel } from "@/lib/store"
+import { listProviderApiKeys, listProviderModels, listProviders, reconcileDiscoveredModel } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export type CodexDiscoveryStatus = { attemptedAt: string; succeededAt?: string; error?: string; added: number; skipped: number }
@@ -37,6 +38,22 @@ export function refreshCodexModels(force = false): Promise<CodexDiscoveryStatus>
   return task
 }
 
+type CodexAccount = Awaited<ReturnType<typeof listProviderApiKeys>>[number]
+
+async function readMappedWorkspaces(accounts: CodexAccount[], workspaceId: string) {
+  const fileNames = [...new Set(accounts.map((account) => account.cliProxyAuthFile).filter((name): name is string => Boolean(name)))]
+  return new Map(await mapConcurrent(fileNames, 4, async (name) => [name, await mappedWorkspaceForFile(name, workspaceId)] as const))
+}
+
+// This snapshot detects changes to catalog inputs; it is not an authentication signature.
+function accountSnapshot(accounts: CodexAccount[], files: Awaited<ReturnType<typeof listCliProxyCodexAuthFiles>>, mappedWorkspaces: Map<string, string | undefined>) {
+  const byName = new Map(files.map((file) => [file.name, file]))
+  return JSON.stringify(accounts.map((account) => {
+    const file = byName.get(account.cliProxyAuthFile || "")
+    return [account.id, account.cliProxyAuthFile, account.enabled, file?.authIndex, file?.accountId, file?.disabled, file?.unavailable, mappedWorkspaces.get(account.cliProxyAuthFile || "")]
+  }).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
+}
+
 async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscoveryStatus> {
   const previousValue = await localRedisGet(statusKey(workspaceId))
   let previous: CodexDiscoveryStatus | undefined
@@ -54,18 +71,8 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
     const files = await listCliProxyCodexAuthFiles()
     const prefix = codexWorkspacePrefix(workspaceId)
     const fileByName = new Map(files.map((file) => [file.name, file]))
-    const mappedWorkspaceByFile = new Map<string, string | undefined>()
-    for (const account of mappings) {
-      const fileName = account.cliProxyAuthFile
-      if (fileName && !mappedWorkspaceByFile.has(fileName)) {
-        mappedWorkspaceByFile.set(fileName, await mappedWorkspaceForFile(fileName, workspaceId))
-      }
-    }
-    const accountSignature = (rows: typeof mappings, authFiles: typeof files, mappedWorkspaces: Map<string, string | undefined>) => JSON.stringify(rows.map((account) => {
-      const file = account.cliProxyAuthFile ? authFiles.find((entry) => entry.name === account.cliProxyAuthFile) : undefined
-      return [account.id, account.cliProxyAuthFile, account.enabled, file?.authIndex, file?.accountId, file?.disabled, file?.unavailable, mappedWorkspaces.get(account.cliProxyAuthFile || "")]
-    }).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
-    const startingAccounts = accountSignature(mappings, files, mappedWorkspaceByFile)
+    const mappedWorkspaceByFile = await readMappedWorkspaces(mappings, workspaceId)
+    const startingAccounts = accountSnapshot(mappings, files, mappedWorkspaceByFile)
     const failed = new Set<string>()
     const errors: string[] = []
     const activeMappings = mappings.filter((account) => {
@@ -98,8 +105,7 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
     }
     const observations = new Map<string, { name: string; accountIds: string[] }>()
     const deadline = Date.now() + 60_000
-    for (let index = 0; index < accounts.length; index += 4) {
-      await Promise.all(accounts.slice(index, index + 4).map(async (account) => {
+    await mapConcurrent(accounts, 4, async (account) => {
         try {
           if (Date.now() >= deadline) throw new Error("Model discovery deadline exceeded.")
           const response = await cliproxyManagement(`/v0/management/auth-files/models?name=${encodeURIComponent(account.cliProxyAuthFile!)}`, { signal: AbortSignal.timeout(Math.min(10_000, deadline - Date.now())) })
@@ -113,18 +119,11 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
           failed.add(account.id)
           errors.push(error instanceof Error ? error.message : "Model discovery failed.")
         }
-      }))
-    }
+    })
     const currentMappings = (await listProviderApiKeys(provider.id)).filter((entry) => entry.credentialKind === "codex-cli-proxy")
     const currentFiles = await listCliProxyCodexAuthFiles()
-    const currentMappedWorkspaceByFile = new Map<string, string | undefined>()
-    for (const account of currentMappings) {
-      const fileName = account.cliProxyAuthFile
-      if (fileName && !currentMappedWorkspaceByFile.has(fileName)) {
-        currentMappedWorkspaceByFile.set(fileName, await mappedWorkspaceForFile(fileName, workspaceId))
-      }
-    }
-    if (startingAccounts !== accountSignature(currentMappings, currentFiles, currentMappedWorkspaceByFile)) throw new Error("Codex accounts changed during discovery. Refresh again to use the current accounts.")
+    const currentMappedWorkspaceByFile = await readMappedWorkspaces(currentMappings, workspaceId)
+    if (startingAccounts !== accountSnapshot(currentMappings, currentFiles, currentMappedWorkspaceByFile)) throw new Error("Codex accounts changed during discovery. Refresh again to use the current accounts.")
     if (accounts.length > 0 && observations.size === 0 && errors.length > 0) {
       throw new Error(`${[...new Set(errors)].join(" ")} Keeping the saved catalog.`)
     }
@@ -133,10 +132,11 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
     for (const model of existing) {
       if ((model.source === "builtin" || model.source === "discovered") && !candidates.has(model.upstreamModel)) candidates.set(model.upstreamModel, { name: model.name, accountIds: [] })
     }
-    for (const [id, observed] of candidates) {
+    const existingByGatewayId = new Map(existing.map((model) => [model.gatewayModelId, model]))
+    await mapConcurrent([...candidates], 1, async ([id, observed]) => {
       const gatewayModelId = `codex/${id}`
-      const model = existing.find((entry) => entry.gatewayModelId === gatewayModelId)
-      if (model && model.source !== "builtin" && model.source !== "discovered") { status.skipped++; continue }
+      const model = existingByGatewayId.get(gatewayModelId)
+      if (model && model.source !== "builtin" && model.source !== "discovered") { status.skipped++; return }
       const retained = model?.discovery?.accountIds.filter((accountId) => failed.has(accountId)) || []
       const accountIds = [...new Set([...observed.accountIds, ...retained])].sort()
       const discovery = { lastSeenAt: observed.accountIds.length ? status.attemptedAt : model?.discovery?.lastSeenAt, accountIds, stale: !observed.accountIds.length }
@@ -147,7 +147,7 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
         if (error instanceof Error && error.message === "Custom model owns this gateway ID.") status.skipped++
         else throw error
       }
-    }
+    })
     if (errors.length) status.error = [...new Set(errors)].join(" ")
     else status.succeededAt = status.attemptedAt
   } catch (error) {

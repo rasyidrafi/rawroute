@@ -44,7 +44,7 @@ This discovers **CLIProxy-supported routes**, not proof that OpenAI has enabled 
 ### 2. Reconcile managed models safely
 
 - Introduce `source: "discovered"` alongside `custom` and transitional legacy `builtin`.
-- Add an internal transactional reconciliation operation in `src/lib/store.ts`, covering the PostgreSQL-backed document abstraction and memory test backend. Preserve gateway reservations, provider counts, routing revisions, and cache invalidation.
+- Add an internal transactional reconciliation operation in `src/server/store.ts`, covering the PostgreSQL-backed document abstraction and memory test backend. Preserve gateway reservations, provider counts, routing revisions, and cache invalidation.
 - Import new models as `codex/<registered suffix>` and enable them by default when a valid eligible route exists. Preserve the existing model/document ID when updating managed metadata.
 - Keep manual names, upstream mappings, reasoning overrides, and enabled state user-owned. A gateway-ID collision with a custom model is skipped and reported, never converted into a discovered entry. Enforce this within the write transaction as well as discovery's initial read.
 - Migrate existing built-ins in place; stop reseeding the fixed array. Preserve aliases, combos, model shares, pricing associations, and user-disabled state. Legacy rows not observed in the catalog remain retained/unverified initially.

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react"
+import { lazy, Suspense, type ComponentProps } from "react"
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router"
 
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
@@ -21,6 +21,16 @@ const SettingsView = lazy(() => import("@/components/dashboard/settings-view").t
 const CodingAgentView = lazy(() => import("@/components/dashboard/coding-agent-view").then((module) => ({ default: module.CodingAgentView })))
 const ToolGatewayView = lazy(() => import("@/components/dashboard/tool-gateway-view").then((module) => ({ default: module.ToolGatewayView })))
 
+const dashboardSkeletons: Record<string, NonNullable<ComponentProps<typeof DashboardContentSkeleton>>["variant"]> = {
+  [pagePaths.providers]: "providers",
+  [pagePaths.aliases]: "aliases",
+  [pagePaths.usage]: "usage",
+  [pagePaths.budgets]: "budgets",
+  [pagePaths.pricing]: "model-pricing",
+  [pagePaths.logs]: "console-log",
+  [pagePaths.settings]: "settings",
+}
+
 function SessionGate({ login = false }: { login?: boolean }) {
   const { data, error, mutate } = useSession()
   if (error) return <main className="p-6" role="alert"><p>Unable to check your session.</p><Button onClick={() => void mutate()}>Retry</Button></main>
@@ -31,14 +41,7 @@ function SessionGate({ login = false }: { login?: boolean }) {
 
 function DashboardLayout() {
   const { pathname } = useLocation()
-  const variant = pathname === pagePaths.providers ? "providers"
-    : pathname.startsWith(`${pagePaths.providers}/`) ? "provider-detail"
-    : pathname === pagePaths.aliases ? "aliases"
-    : pathname === pagePaths.usage ? "usage"
-    : pathname === pagePaths.budgets ? "budgets"
-    : pathname === pagePaths.pricing ? "model-pricing"
-    : pathname === pagePaths.logs ? "console-log"
-    : pathname === pagePaths.settings ? "settings" : "endpoint-key"
+  const variant = pathname.startsWith(`${pagePaths.providers}/`) ? "provider-detail" : dashboardSkeletons[pathname] ?? "endpoint-key"
   return <DashboardShell><Suspense fallback={<DashboardContentSkeleton variant={variant} />}><Outlet /></Suspense></DashboardShell>
 }
 

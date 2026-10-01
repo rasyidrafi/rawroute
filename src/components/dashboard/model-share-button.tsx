@@ -20,6 +20,7 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
   const { data, isLoading, mutate } = useSWR<ShareData>(`/api/admin/model-shares?modelId=${encodeURIComponent(modelId)}`, fetcher)
   const sharedTargetIds = data?.targets.filter((target) => target.shared).map((target) => target.id) || []
   const selectedIds = selected || sharedTargetIds
+  const selectedIdSet = new Set(selectedIds)
   const isShared = sharedTargetIds.length > 0
 
   async function save() {
@@ -55,7 +56,7 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
           {isLoading
             ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex items-center gap-3 rounded-lg border p-3"><Skeleton className="size-4" /><Skeleton className="h-4 w-40" /></div>)
             : data?.targets.length
-              ? data.targets.map((target) => <label key={target.id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-muted"><Checkbox checked={selectedIds.includes(target.id)} disabled={saving} onCheckedChange={() => setSelected((current) => { const next = current || selectedIds; return next.includes(target.id) ? next.filter((id) => id !== target.id) : [...next, target.id] })} /><span className="text-sm font-medium">{target.name}</span></label>)
+              ? data.targets.map((target) => <label key={target.id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-muted"><Checkbox checked={selectedIdSet.has(target.id)} disabled={saving} onCheckedChange={() => setSelected((current) => { const next = current || selectedIds; return next.includes(target.id) ? next.filter((id) => id !== target.id) : [...next, target.id] })} /><span className="text-sm font-medium">{target.name}</span></label>)
               : <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">No other active workspaces are available.</p>}
         </div>
         <DialogFooter>

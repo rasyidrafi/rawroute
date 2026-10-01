@@ -4,9 +4,9 @@ import { getDashboardPayload, recordGatewayUsage, resetAnalyticsForTests, upsert
 import { authenticateProxyKey } from "@/lib/auth"
 import { clearLogs, readLogs, writeLog } from "@/lib/logger"
 import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "@/lib/model-pricing"
-import { _deleteMemoryApiKeyIndex, _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listModels, listProviders, upsertModel, upsertProvider } from "@/lib/store"
+import { _deleteMemoryApiKeyIndex, _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listModels, listProviders, upsertModel, upsertProvider } from "@/server/store"
 import { runInWorkspace } from "@/lib/workspace/context"
-import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, renameWorkspace, resetWorkspacesForTests } from "@/lib/workspace/repository"
+import { createWorkspace, deleteWorkspace, getWorkspace, listWorkspaces, renameWorkspace, resetWorkspacesForTests } from "@/server/workspace-repository"
 
 async function configureWorkspacePricing(gatewayModelId: string, upstreamModel: string, inputMicrosPerMillion: number, outputMicrosPerMillion: number) {
   const prefix = gatewayModelId.slice(0, gatewayModelId.indexOf("/"))

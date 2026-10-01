@@ -1,10 +1,10 @@
 import { codexWorkspacePrefix } from "@/lib/codex/cliproxy"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "@/lib/cliproxy/provider-sync"
 import { resolveSharedModelForRecipient } from "@/lib/workspace/model-shares"
-import { listAliases, listModels, listProviderApiKeys, listProviders } from "@/lib/store"
+import { listAliases, listModels, listProviderApiKeys, listProviders } from "@/server/store"
 import type { AuthType, ModelReasoningCapability, Protocol, ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace/context"
-import { getWorkspace } from "@/lib/workspace/repository"
+import { getWorkspace } from "@/server/workspace-repository"
 
 export interface ResolvedGatewayModel {
   forwardedModel: string

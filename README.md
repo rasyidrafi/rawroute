@@ -183,6 +183,10 @@ can use `bun run test ./tests/server/http.test.ts`.
 
 ## Verification
 
+`bun run lint` runs ESLint and React Doctor together. Both must pass without
+warnings; React Doctor scans the full source tree. See
+[lint documentation](docs/design-system-lint.md) for the checks and Bun runner configuration.
+
 ```bash
 bun install --frozen-lockfile
 bun run lint

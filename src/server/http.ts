@@ -4,7 +4,7 @@ import { isAuthenticated } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { DEFAULT_WORKSPACE_ID, runInWorkspace } from "@/lib/workspace/context"
-import { getWorkspace } from "@/lib/workspace/repository"
+import { getWorkspace } from "@/server/workspace-repository"
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD"
 type Access = "public" | "session" | "workspace" | "explicit-workspace" | "gateway"

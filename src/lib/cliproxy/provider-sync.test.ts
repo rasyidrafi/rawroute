@@ -27,7 +27,7 @@ mock.module("@/lib/local-redis", () => ({
   localRedisSetIfAbsent: mocks.localRedisSetIfAbsent,
 }))
 mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
-mock.module("@/lib/store", () => ({
+mock.module("@/server/store", () => ({
   getProvider: mocks.getProvider,
   listProviderApiKeys: mocks.listProviderApiKeys,
   listProviderModels: mocks.listProviderModels,

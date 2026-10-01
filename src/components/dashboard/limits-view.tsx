@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableColumns, Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import type { CodexUsageResult } from "@/lib/codex/usage"
 
 type LimitAccount = { id: string; name: string; email?: string; enabled: boolean; usage?: CodexUsageResult }
@@ -63,9 +63,7 @@ export function LimitsView() {
 
   return <Panel title="Codex limits" description="Quota state and banked reset redemption for Codex OAuth accounts." icon={<RotateCcwIcon />} refresh={() => void mutate()} loading={isLoading || isValidating}>
     <Table>
-      <TableHeader>
-        <TableRow><TableHead>Account</TableHead><TableHead>5-hour</TableHead><TableHead>Weekly</TableHead><TableHead>State</TableHead><TableHead /></TableRow>
-      </TableHeader>
+      <TableColumns columns={[{ id: "Account", label: "Account" }, { id: "5-hour", label: "5-hour" }, { id: "Weekly", label: "Weekly" }, { id: "State", label: "State" }, { id: "actions" }]} />
       <TableBody>
         {(data?.accounts || []).map((account) => {
           const pendingKey = `toggle-account:${account.id}`

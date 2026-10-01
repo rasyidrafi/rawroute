@@ -19,7 +19,7 @@ function withWorkspace(init?: RequestInit): RequestInit {
   return { ...init, headers }
 }
 
-async function parseError(response: Response) {
+async function parseError(response: Response): Promise<never> {
   if (response.status === 401) {
     if (typeof window !== "undefined") window.location.assign(new URL("/login", window.location.origin).toString())
     throw new UnauthorizedError()
@@ -36,7 +36,7 @@ async function parseError(response: Response) {
 
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, withWorkspace({ cache: "no-store", ...init }))
-  if (!response.ok) await parseError(response)
+  if (!response.ok) return parseError(response)
   return response.json() as Promise<T>
 }
 
@@ -44,18 +44,18 @@ export const fetcher = <T,>(url: string) => apiFetch<T>(url)
 
 export async function apiPost<T = { ok: true }>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, withWorkspace({ method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
-  if (!response.ok) await parseError(response)
+  if (!response.ok) return parseError(response)
   return response.json() as Promise<T>
 }
 
 export async function apiPatch<T = { ok: true }>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, withWorkspace({ method: "PATCH", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
-  if (!response.ok) await parseError(response)
+  if (!response.ok) return parseError(response)
   return response.json() as Promise<T>
 }
 
 export async function apiDelete<T = { ok: true }>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, withWorkspace({ method: "DELETE", cache: "no-store", ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) }))
-  if (!response.ok) await parseError(response)
+  if (!response.ok) return parseError(response)
   return response.json() as Promise<T>
 }

@@ -1,6 +1,6 @@
 import { writeLog } from "@/lib/logger"
 import { runInWorkspace, workspaceContext } from "@/lib/workspace/context"
-import { getWorkspace } from "@/lib/workspace/repository"
+import { getWorkspace } from "@/server/workspace-repository"
 
 const pending = new Set<Promise<void>>()
 const scheduled = new Map<string, Promise<void>>()

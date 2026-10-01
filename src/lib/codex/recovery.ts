@@ -1,7 +1,7 @@
 import { cliProxyCodexApiCall, cliproxyManagement, listCliProxyCodexAuthFiles } from "@/lib/codex/cliproxy"
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
 import { writeLog } from "@/lib/logger"
-import { listProviderApiKeys } from "@/lib/store"
+import { listProviderApiKeys } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
 type UsagePayload = {
@@ -22,9 +22,10 @@ export function quotaAllowsProbe(payload: UsagePayload, model: string) {
 export async function recoverCodexQuota(providerId: string, model: string): Promise<boolean> {
   try {
     const [accounts, files] = await Promise.all([listProviderApiKeys(providerId), listCliProxyCodexAuthFiles()])
+    const filesByName = new Map(files.map((file) => [file.name, file]))
     for (const account of accounts) {
       if (!account.enabled || account.credentialKind !== "codex-cli-proxy") continue
-      const file = files.find((entry) => entry.name === account.cliProxyAuthFile)
+      const file = filesByName.get(account.cliProxyAuthFile || "")
       if (!file || file.disabled || !file.authIndex || !file.statusMessage?.includes("usage_limit_reached")) continue
       // Account lock spans models and gateway instances. Keep it after completion
       // so an inconsistent usage endpoint cannot trigger repeated quota resets.

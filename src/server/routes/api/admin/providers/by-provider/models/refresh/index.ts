@@ -1,5 +1,5 @@
 import { refreshCodexModels } from "@/lib/codex/model-discovery"
-import { getProvider } from "@/lib/store"
+import { getProvider } from "@/server/store"
 import { jsonError } from "@/lib/http"
 
 export async function POST(_request: Request, params: { providerId: string }) {

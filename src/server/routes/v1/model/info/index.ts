@@ -1,7 +1,7 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { catalogLiteLlmModelInfo } from "@/lib/catalog"
 import { jsonError } from "@/lib/http"
-import { readCatalogData } from "@/lib/store"
+import { readCatalogData } from "@/server/store"
 import { runInWorkspace } from "@/lib/workspace/context"
 
 export async function GET(request: Request) {

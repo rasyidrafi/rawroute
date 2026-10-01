@@ -1,4 +1,4 @@
-import { readMeta } from "@/lib/store"
+import { readMeta } from "@/server/store"
 
 export async function GET() {
   const meta = await readMeta()

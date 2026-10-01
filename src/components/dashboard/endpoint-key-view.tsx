@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { ApiKeyForm } from "@/components/dashboard/api-key-form"
-import { ConfirmAction, EndpointValue, maskApiKey } from "@/components/dashboard/shared"
+import { LoadError, ConfirmAction, EndpointValue, maskApiKey } from "@/components/dashboard/shared"
 import { apiDelete, apiPatch, apiPost } from "@/components/dashboard/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -25,7 +25,7 @@ export function EndpointKeyView() {
   const [createdKey, setCreatedKey] = useState<string>()
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
-  if (error) return <main className="grid min-h-[calc(100svh-var(--header-height))] place-items-center p-6 text-center"><div><p className="font-medium">Dashboard unavailable</p><p className="mt-2 text-sm text-muted-foreground">{error.message}</p><Button aria-busy={isValidating} className="mt-4" disabled={isValidating} onClick={() => void mutate()}>{isValidating && <LoadingSpinner />}Try again</Button></div></main>
+  if (error) return <LoadError title="Dashboard unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="endpoint-key" />
 
   const isPending = (key: string) => pending.has(key)

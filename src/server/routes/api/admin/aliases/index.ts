@@ -2,7 +2,7 @@ import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { writeLog } from "@/lib/logger"
 import { getSharedModelForRecipient, listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
-import { listAliases, listCombos, listModels, listProviders, upsertAlias } from "@/lib/store"
+import { listAliases, listCombos, listModels, listProviders, upsertAlias } from "@/server/store"
 import type { ModelAlias } from "@/lib/types"
 
 export async function GET() {

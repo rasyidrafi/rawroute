@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, jest } from "bun:test"
 
 import { deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPricingGroups, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
-import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/lib/store"
+import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/server/store"
 import type { Provider, UsageEvent } from "@/lib/types"
 
 beforeEach(() => {

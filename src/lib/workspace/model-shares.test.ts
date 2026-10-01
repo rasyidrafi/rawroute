@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, test } from "bun:test"
 
 import { getDashboardPayload, recordUsageEvent, resetAnalyticsForTests } from "@/lib/analytics"
 import { listShareTargets, listSharedModelsForRecipient, resolveSharedModelForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/workspace/model-shares"
-import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/lib/store"
+import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/server/store"
 import { runInWorkspace } from "@/lib/workspace/context"
-import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/lib/workspace/repository"
+import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/server/workspace-repository"
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"

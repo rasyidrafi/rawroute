@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 
-import { _resetMemoryBackend, deleteAlias, listAliases, upsertAlias } from "@/lib/store"
+import { _resetMemoryBackend, deleteAlias, listAliases, upsertAlias } from "@/server/store"
 import type { ModelAlias } from "@/lib/types"
 
 beforeEach(() => {

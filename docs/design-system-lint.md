@@ -1,6 +1,19 @@
 # Design-system lint
 
-Run `bun run lint --max-warnings 0` after UI changes.
+Run `bun run lint` after UI changes. This runs ESLint with zero warnings allowed,
+then React Doctor across the full project, blocking on warnings and errors.
+There is no separate doctor script.
+
+React Doctor is pinned in `devDependencies` and runs through Bun. Its worker pool
+uses Node IPC channel methods that Bun 1.4.2 does not implement, so the lint command
+sets `REACT_DOCTOR_DISABLE_OXLINT_WORKER_POOL=1` to use Doctor's subprocess runner.
+All diagnostics remain enabled. Score uploads and crash reporting are disabled.
+
+`doctor.config.json` excludes generated `dist/` artifacts, matching the source lint
+boundary. Bun places both server and browser chunks there; the directory is not a
+public web root. Source checks cover the entire project, including `src/server/`,
+without rule overrides or inline suppressions. PostgreSQL storage and workspace
+persistence live in `src/server/` and cannot be imported by browser components.
 
 `eslint.config.mjs` registers `@shadcn/lint` alongside React, React Hooks, accessibility, and TypeScript
 checks. It enables the five core rules from the

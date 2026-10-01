@@ -28,6 +28,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
   page.on("pageerror", (error) => errors.push(error.message))
   await page.goto("/?workspace=missing-workspace")
   await expect(page.getByText("Usage summary", { exact: true })).toBeVisible()
+  await expect(page.locator('[data-slot="chart"] .recharts-surface').first()).toBeVisible()
   await expect(page.getByRole("link", { name: "Admin login", exact: true })).toBeVisible()
   await page.goto("/dashboard/providers/codex")
   await expect(page).toHaveURL(/\/login$/)
@@ -44,6 +45,10 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await page.request.post("/api/auth/logout")
 
   await page.getByLabel("Username").fill("admin")
+  await page.getByLabel("Password", { exact: true }).fill("invalid-password")
+  await page.getByRole("button", { name: "Sign in", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeEnabled()
+  await expect(page).toHaveURL(/\/login$/)
   await page.getByLabel("Password", { exact: true }).fill("private-password")
   await page.getByRole("button", { name: "Sign in", exact: true }).click()
   await expect(page).toHaveURL(/\/dashboard$/)
@@ -58,6 +63,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page.locator("html")).toHaveClass(/dark/)
   await page.goto("/dashboard/usage")
   await expect(page.getByText("Usage summary", { exact: true })).toBeVisible()
+  await expect(page.locator('[data-slot="chart"] .recharts-surface').first()).toBeVisible()
   expect(await page.locator("html").evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Plus Jakarta Sans")
 
   await page.getByRole("button", { name: "Sign out", exact: true }).click()

@@ -5,6 +5,7 @@ test("providers use a list page and a dynamic detail page", () => {
   const routes = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8")
   const list = readFileSync(new URL("../../src/components/dashboard/providers-view.tsx", import.meta.url), "utf8")
   const detail = readFileSync(new URL("../../src/components/dashboard/provider-detail-view.tsx", import.meta.url), "utf8")
+  const loginDialog = readFileSync(new URL("../../src/components/dashboard/codex-login-dialog.tsx", import.meta.url), "utf8")
 
   expect(routes).toContain("<ProviderPage />")
   expect(routes).toContain('providerId="codex"')
@@ -16,6 +17,8 @@ test("providers use a list page and a dynamic detail page", () => {
   expect(detail).toContain("moveProviderApiKey(index, -1)")
   expect(detail).toContain("moveProviderApiKey(index, 1)")
   expect(detail).toContain("deleteModel")
-  expect(detail.match(/nativeButton=\{false\}/g)).toHaveLength(2)
+  expect(detail).toContain("<CodexLoginDialog login={login} />")
+  expect(detail.match(/nativeButton=\{false\}/g)).toHaveLength(1)
+  expect(loginDialog.match(/nativeButton=\{false\}/g)).toHaveLength(1)
   expect(list.match(/nativeButton=\{false\}/g)).toHaveLength(2)
 })
