@@ -35,18 +35,21 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
 
   let password = "e2e-initial-password"
-  let login = await page.request.post("/api/auth/login", { data: { username: "admin", password } })
+  let login = await page.request.post("/api/auth/login", { data: { password } })
   if (!login.ok()) {
     password = "private-password"
-    login = await page.request.post("/api/auth/login", { data: { username: "admin", password } })
+    login = await page.request.post("/api/auth/login", { data: { password } })
   }
   expect(login.ok()).toBe(true)
   expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
   await page.request.post("/api/auth/logout")
 
-  await page.getByLabel("Username").fill("admin")
+  await expect(page.getByLabel("Username")).toHaveCount(0)
   await page.getByLabel("Password", { exact: true }).fill("invalid-password")
+  const loginRequest = page.waitForRequest((request) => request.url().endsWith("/api/auth/login") && request.method() === "POST")
   await page.getByRole("button", { name: "Sign in", exact: true }).click()
+  expect((await loginRequest).postDataJSON()).toEqual({ password: "invalid-password" })
+  await expect(page.getByText("Invalid password.", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeEnabled()
   await expect(page).toHaveURL(/\/login$/)
   await page.getByLabel("Password", { exact: true }).fill("private-password")

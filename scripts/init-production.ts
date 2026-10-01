@@ -15,7 +15,6 @@ const apiKey = secret()
 const executorAdminPassword = secret()
 const files: Record<string, string> = {
   "app.env": `STORAGE_BACKEND=postgres
-DEFAULT_ADMIN_USERNAME=admin
 DEFAULT_ADMIN_PASSWORD=${secret()}
 DEFAULT_PROXY_API_KEY=sk-${secret()}
 SESSION_SECRET=${secret()}

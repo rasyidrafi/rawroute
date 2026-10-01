@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
 test("Codex Providers menu connects and manages a Codex account", async ({ page }) => {
-  let login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "e2e-initial-password" } })
-  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "private-password" } })
+  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   const existing = await page.request.get("/api/admin/oauth-providers")
   for (const account of (await existing.json()).accounts) {

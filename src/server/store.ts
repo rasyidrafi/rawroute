@@ -191,7 +191,8 @@ function initialMeta(): Meta {
   return {
     version: 4,
     admin: {
-      username: process.env.DEFAULT_ADMIN_USERNAME || "admin",
+      // Retained for metadata compatibility; dashboard authentication uses only the password.
+      username: "admin",
       passwordHash: hashPassword(process.env.DEFAULT_ADMIN_PASSWORD || documentedAdminPassword),
       mustChangePassword: true,
     },

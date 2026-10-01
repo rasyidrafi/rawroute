@@ -2,11 +2,11 @@ import { expect, test, type Page } from "@playwright/test"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", {
-    data: { username: "admin", password: "e2e-initial-password" },
+    data: { password: "e2e-initial-password" },
   })
   if (!login.ok()) {
     login = await page.request.post("/api/auth/login", {
-      data: { username: "admin", password: "private-password" },
+      data: { password: "private-password" },
     })
   }
   expect(login.ok()).toBe(true)

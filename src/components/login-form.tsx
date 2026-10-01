@@ -24,7 +24,7 @@ export function LoginForm() {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(Object.fromEntries(formData)),
+        body: JSON.stringify({ password: formData.get("password") }),
       })
       const result = await response.json()
       await minimumSpinnerTime
@@ -56,12 +56,8 @@ export function LoginForm() {
         <form onSubmit={submit}>
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="username">Username</FieldLabel>
-              <Input id="username" name="username" defaultValue="admin" autoComplete="username" required />
-            </Field>
-            <Field>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input id="password" name="password" type="password" placeholder="Default: change-me-now" autoComplete="current-password" required />
+              <Input id="password" name="password" type="password" placeholder="Enter your password" autoComplete="current-password" required />
             </Field>
             <Button aria-busy={loading} disabled={loading} type="submit" className="w-full">
               {loading ? <LoadingSpinner /> : <KeyRoundIcon />} {loading ? "Signing in..." : "Sign in"}

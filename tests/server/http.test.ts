@@ -3,7 +3,7 @@ import type { Server } from "bun"
 
 import { createSession, isAuthenticated } from "@/lib/auth"
 import { drainBackgroundTasks, scheduleWorkspaceTask } from "@/lib/background-tasks"
-import { _resetMemoryBackend } from "@/server/store"
+import { _resetMemoryBackend, readMeta, updateMeta } from "@/server/store"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace/context"
 import { createWorkspace, resetWorkspacesForTests } from "@/server/workspace-repository"
 import { apiRoute } from "@/server/http"
@@ -30,10 +30,73 @@ function start(routes: Parameters<typeof Bun.serve<undefined>>[0]["routes"]) {
   return server.url
 }
 
+test.each(["", "{", "null", "[]", '"password"', "42", "true", "{}", '{"username":"admin"}', '{"password":null}', '{"password":123}', '{"password":true}', '{"password":[]}', '{"password":{}}', '{"password":""}'])("login rejects malformed or missing passwords: %s", async (body) => {
+  const base = start(apiRoutes)
+  const response = await fetch(new URL("/api/auth/login", base), {
+    method: "POST", headers: { "content-type": "application/json" }, body,
+  })
+  expect(response.status).toBe(400)
+  expect(await response.json()).toEqual({ error: { message: "Password is required." } })
+  expect(response.headers.get("set-cookie")).toBeNull()
+})
+
+test("login rejects incorrect passwords without creating a session", async () => {
+  const base = start(apiRoutes)
+  const response = await fetch(new URL("/api/auth/login", base), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "incorrect-password" }),
+  })
+  expect(response.status).toBe(401)
+  expect(await response.json()).toEqual({ error: { message: "Invalid password." } })
+  expect(response.headers.get("set-cookie")).toBeNull()
+})
+
+test("password-only login preserves existing credentials and ignores legacy usernames", async () => {
+  const base = start(apiRoutes)
+  await updateMeta((meta) => { meta.admin.username = "custom-admin"; meta.admin.mustChangePassword = false })
+  const saved = await readMeta()
+  process.env.DEFAULT_ADMIN_PASSWORD = "changed-bootstrap-password"
+  for (const body of [{ password: "http-test-password" }, { username: "old-client-username", password: "http-test-password" }]) {
+    const response = await fetch(new URL("/api/auth/login", base), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, mustChangePassword: false })
+    const cookie = response.headers.get("set-cookie")!.split(";", 1)[0]
+    const account = await fetch(new URL("/api/admin/account", base), { headers: { cookie } })
+    expect(account.status).toBe(200)
+    expect(await account.json()).toEqual({ mustChangePassword: false })
+  }
+  expect(await readMeta()).toEqual(saved)
+})
+
+test("initial password change keeps the session and accepts only the new password on subsequent login", async () => {
+  const base = start(apiRoutes)
+  const login = (password: string) => fetch(new URL("/api/auth/login", base), {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }),
+  })
+  const initialLogin = await login("http-test-password")
+  expect(initialLogin.status).toBe(200)
+  expect(await initialLogin.json()).toEqual({ ok: true, mustChangePassword: true })
+  const cookie = initialLogin.headers.get("set-cookie")!.split(";", 1)[0]
+  const changed = await fetch(new URL("/api/admin/account/password", base), {
+    method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ password: "new-private-password" }),
+  })
+  expect(changed.status).toBe(200)
+  expect(await changed.json()).toEqual({ ok: true, mustChangePassword: false })
+  const session = await fetch(new URL("/api/auth/session", base), { headers: { cookie } })
+  expect(await session.json()).toEqual({ authenticated: true })
+  const rejected = await login("http-test-password")
+  expect(rejected.status).toBe(401)
+  await rejected.body?.cancel()
+  const accepted = await login("new-private-password")
+  expect(accepted.status).toBe(200)
+  expect(await accepted.json()).toEqual({ ok: true, mustChangePassword: false })
+})
+
 test("session cookies are explicit, signed, expiring, and removed on logout", async () => {
   const base = start(apiRoutes)
   const login = await fetch(new URL("/api/auth/login", base), {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "admin", password: "http-test-password" }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "http-test-password" }),
   })
   expect(login.status).toBe(200)
   const setCookie = login.headers.get("set-cookie")!

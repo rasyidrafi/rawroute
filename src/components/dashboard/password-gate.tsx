@@ -7,7 +7,7 @@ import { PasswordDialog } from "@/components/dashboard/password-dialog"
 import { apiPost } from "@/components/dashboard/api"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 
-type AccountResponse = { username: string; mustChangePassword: boolean }
+type AccountResponse = { mustChangePassword: boolean }
 
 function loadingVariant(pathname: string) {
   if (pathname === "/dashboard/providers") return "providers" as const

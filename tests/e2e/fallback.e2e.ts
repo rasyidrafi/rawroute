@@ -1,8 +1,8 @@
 import { expect, test, type APIRequestContext } from "@playwright/test"
 
 async function authenticate(request: APIRequestContext) {
-  let login = await request.post("/api/auth/login", { data: { username: "admin", password: "e2e-initial-password" } })
-  if (!login.ok()) login = await request.post("/api/auth/login", { data: { username: "admin", password: "private-password" } })
+  let login = await request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  if (!login.ok()) login = await request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
 }
 

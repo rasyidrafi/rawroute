@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
 test("pricing dialogs preserve existing context rates and save edited drafts", async ({ page }) => {
-  let login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "e2e-initial-password" } })
-  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { username: "admin", password: "private-password" } })
+  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
 

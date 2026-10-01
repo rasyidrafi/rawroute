@@ -88,7 +88,9 @@ projects CLIProxy's native `support-prompt-cache-key` option for
 OpenAI-compatible providers without adding RawRoute-side cache-key or user
 rewriting.
 
-Replace all placeholder credentials before production use. The dashboard login is configured by `DEFAULT_ADMIN_USERNAME` and `DEFAULT_ADMIN_PASSWORD`.
+Replace all placeholder credentials before production use. The dashboard uses one shared administrator password; no username is required. `DEFAULT_ADMIN_PASSWORD` sets the initial password for a fresh installation. After signing in, set a private password when prompted. Changing the environment variable does not overwrite a saved password; use the dashboard settings to change it.
+
+Existing installations keep their current password and sessions, including those previously configured with a custom username. `DEFAULT_ADMIN_USERNAME` is no longer used.
 
 ## Wrapper behavior
 
