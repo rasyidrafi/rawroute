@@ -3,7 +3,7 @@ import { ensureCodexProvider } from "@/lib/codex/oauth"
 import { codexDiscoveryStatus } from "@/lib/codex/model-discovery"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { deleteProvider, getProvider, listProviderApiKeys, listProviderModels } from "@/server/store"
 
 function stripUnprefixed<T>(value: T): Omit<T, "unprefixed"> {
@@ -41,10 +41,10 @@ export async function DELETE(_request: Request, params: { providerId: string }) 
     if (provider?.prefix === "codex") throw new Error("The Codex provider is fixed and cannot be deleted.")
     await deleteProvider(providerId)
     await syncNonCodexProviderProjection(providerId)
-    writeLog("info", "admin", "Provider deleted", { providerId })
+    recordLog("admin.provider.deleted", { providerId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Provider delete failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.provider.delete.failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to delete provider.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }

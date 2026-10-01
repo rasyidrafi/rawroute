@@ -5,6 +5,7 @@ type RoutingMode = "cooldown-once" | "always-cooldown" | "codex-cooldown" | "amb
 const files: AuthFile[] = []
 const sessions = new Map<string, boolean>()
 const configuration: Record<string, unknown> = { "openai-compatibility": [], "claude-api-key": [], "routing/strategy": { strategy: "fill-first" } }
+const gatewaySettings: Record<string, unknown> = { debug: false, "logging-to-file": false, "usage-statistics-enabled": false, "request-retry": 2, "max-retry-interval": 30 }
 const state = { pollCount: 0, routingAttempts: 0, routingMode: undefined as RoutingMode | undefined }
 
 async function handleRequest(request: Request) {
@@ -29,6 +30,10 @@ async function handleRequest(request: Request) {
   if (path.startsWith("/cliproxy/v0/management/")) {
     if (request.headers.get("x-management-key") !== "e2e-management-key") return Response.json({ error: "Unauthorized" }, { status: 401 })
     const endpoint = path.slice("/cliproxy/v0/management/".length)
+    if (Object.hasOwn(gatewaySettings, endpoint) && request.method === "PUT") {
+      gatewaySettings[endpoint] = (await request.json() as { value: unknown }).value
+      return Response.json({ ok: true })
+    }
     if (Object.hasOwn(configuration, endpoint)) {
       if (request.method === "PUT") {
         configuration[endpoint] = await request.json()
@@ -36,7 +41,7 @@ async function handleRequest(request: Request) {
       }
       return Response.json(endpoint === "routing/strategy" ? configuration[endpoint] : { [endpoint]: configuration[endpoint] })
     }
-    if (endpoint === "config") return Response.json({ debug: false, routing: { strategy: "fill-first" } })
+    if (endpoint === "config") return Response.json({ ...gatewaySettings, routing: { strategy: "fill-first" } })
     if (endpoint === "codex-auth-url") {
       const id = crypto.randomUUID()
       sessions.set(id, false)

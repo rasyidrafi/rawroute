@@ -1,3 +1,4 @@
+import { useDashboardClipboard } from "@/hooks/use-dashboard-clipboard"
 import { useCodexLogin } from "@/hooks/use-codex-login"
 import { CodexLoginDialog } from "@/components/dashboard/codex-login-dialog"
 import { useCallback, useState } from "react"
@@ -7,7 +8,7 @@ import useSWR, { useSWRConfig, type KeyedMutator } from "swr"
 import { toast } from "sonner"
 
 import { ConfirmAction, DetailValue, EmptyRow, NotFoundState } from "@/components/dashboard/shared"
-import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { ModelForm } from "@/components/dashboard/model-form"
 import { ModelShareButton } from "@/components/dashboard/model-share-button"
@@ -30,6 +31,7 @@ type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; m
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
 
 function ProviderDetailContent({ providerId, data, mutate }: { providerId: string; data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse> }) {
+  const { fetcher, apiPost, apiDelete, apiPatch } = useDashboardApi()
   const { mutate: refreshCachedResource } = useSWRConfig()
 
   const usageKey = (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
@@ -212,6 +214,8 @@ function ProviderHeading({ provider, credentialCount, isOAuthProvider }: { provi
 }
 
 function ProviderModelsCard({ data, mutate }: { data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse> }) {
+  const copy = useDashboardClipboard()
+  const { apiPost, apiDelete } = useDashboardApi()
   const { provider, models } = data
   const { mutate: refreshCachedResource } = useSWRConfig()
   const [pending, setPending] = useState<Set<string>>(() => new Set())
@@ -289,7 +293,7 @@ function ProviderModelsCard({ data, mutate }: { data: ProviderDetailResponse; mu
                 const builtin = model.source === "builtin" || model.source === "discovered"
                 return <TableRow key={model.id} variant={model.enabled ? "default" : "disabled"}>
                   <TableCell text="label">{model.name}</TableCell>
-                  <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{gatewayModelId}</span></div><Button aria-label={`Copy gateway ID ${gatewayModelId}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void navigator.clipboard.writeText(gatewayModelId); toast.success("Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
+                  <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{gatewayModelId}</span></div><Button aria-label={`Copy gateway ID ${gatewayModelId}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void copy(gatewayModelId, "Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
                   <TableCell>{model.upstreamModel}</TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
                   <TableCell><div className="flex items-center gap-2"><Badge variant={builtin ? "secondary" : "outline"}>{model.source === "discovered" ? "Auto-discovered" : builtin ? "Legacy" : "Custom"}</Badge><Badge variant={model.enabled ? "secondary" : "outline"}>{model.enabled ? "Enabled" : "Disabled"}</Badge>{(model.discovery?.stale || model.source === "builtin") && <Badge variant="outline">Not recently observed</Badge>}{model.source === "discovered" && <Button size="icon-sm" variant="ghost" aria-label={`${model.enabled ? "Disable" : "Enable"} ${model.name}`} onClick={() => void toggleDiscoveredModel(model)}><PowerIcon /></Button>}</div></TableCell>
@@ -389,6 +393,7 @@ function AccountResetCell({ apiKey, usageData, isPending, setResetAccount }: Pic
 }
 
 function ProviderDetailsCard({ data, isOAuthProvider, mutate }: { data: ProviderDetailResponse; isOAuthProvider: boolean; mutate: KeyedMutator<ProviderDetailResponse> }) {
+  const { apiPost, apiDelete } = useDashboardApi()
   const { provider, apiKeys, models } = data
   const apiKeyCounts = { configured: apiKeys.length }
   const navigate = useNavigate()
@@ -473,6 +478,7 @@ function ProviderKeyMetadata({ apiKey, isOAuthProvider }: Pick<ProviderKeyRowPro
 }
 
 export function ProviderDetailView({ providerId }: { providerId: string }) {
+  const { fetcher } = useDashboardApi()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId), fetcher, { refreshInterval: providerId === "codex" ? 15000 : 0 })
   if (error) return <NotFoundState />
   if (isLoading || !data) return <DashboardContentSkeleton variant="provider-detail" />

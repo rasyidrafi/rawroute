@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react"
 import { CopyIcon } from "lucide-react"
-import { toast } from "sonner"
+import { useDashboardClipboard } from "@/hooks/use-dashboard-clipboard"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,6 +10,7 @@ const getOrigin = () => window.location.origin
 const getServerOrigin = () => "[DETECT GATEWAY BASE URL]"
 
 export function CodingAgentView({ agent }: { agent: "Codex" | "Opencode" | "Claude Code" }) {
+  const copy = useDashboardClipboard()
   const origin = useSyncExternalStore(subscribe, getOrigin, getServerOrigin)
   const config = `model_provider = "rawroute"
 model = "gpt-6-luna"
@@ -27,12 +28,7 @@ experimental_bearer_token="PUT_TOKEN_HERE"
 enabled = false`
 
   async function copyConfig() {
-    try {
-      await navigator.clipboard.writeText(config)
-      toast.success("Codex configuration copied")
-    } catch {
-      toast.error("Unable to copy. Select and copy the configuration manually.")
-    }
+    await copy(config, "Codex configuration copied")
   }
 
   return <div className="flex flex-1 flex-col gap-4 p-4 lg:p-6">

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
-import { apiFetch, apiPost } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 
 type DeviceCode = { loginId: string; authorizationUrl: string }
 
 export function useCodexLogin(onConnected: () => Promise<unknown>) {
+  const { apiFetch, apiPost } = useDashboardApi()
   const [device, setDevice] = useState<DeviceCode | null>(null)
   const [accountName, setAccountName] = useState("")
   const [polling, setPolling] = useState(false)
@@ -48,7 +49,7 @@ export function useCodexLogin(onConnected: () => Promise<unknown>) {
       controller.abort()
       clearInterval(timer)
     }
-  }, [accountName, device, onConnected, polling])
+  }, [accountName, device, onConnected, polling, apiFetch])
 
   async function connect() {
     setStarting(true)

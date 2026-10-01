@@ -1,7 +1,7 @@
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 import { cleanId, jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { validateProviderHeaders } from "@/lib/provider-headers"
 import { listProviders, upsertProvider } from "@/server/store"
 import type { Protocol, Provider } from "@/lib/types"
@@ -43,10 +43,10 @@ export async function POST(request: Request) {
       enabled: input.enabled !== false,
     })
     if (provider.prefix !== "codex") await syncNonCodexProviderProjection(provider.id)
-    writeLog("info", "admin", "Provider saved", { providerId: provider.id })
+    recordLog("admin.provider.saved", { providerId: provider.id }, { level: "info" })
     return Response.json({ ok: true, providerId: provider.id })
   } catch (error) {
-    writeLog("error", "admin", "Provider save failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.provider.save.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to save provider.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }

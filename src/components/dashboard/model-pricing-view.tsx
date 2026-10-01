@@ -4,7 +4,7 @@ import { LegendList } from "@legendapp/list/react"
 import { toast } from "sonner"
 import useSWR from "swr"
 
-import { apiFetch, apiPost, fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { formatCost } from "@/components/dashboard/usage-utils"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
@@ -50,6 +50,7 @@ function formatCanonicalRate(value: number) { return formatCost(value) }
 function canonicalSourceLabel(value: PricingCanonicalSource) { return value === "models.dev" ? "models.dev" : "Custom ID" }
 
 export function ModelPricingView() {
+  const { fetcher, apiPost } = useDashboardApi()
   const { data, mutate, isValidating } = useSWR<PricingAdminData>("/api/admin/model-pricing", fetcher, {
     refreshInterval: (latest) => latest?.jobs.some((job) => job.status === "queued" || job.status === "running") ? 3000 : 0,
     refreshWhenHidden: false,
@@ -195,6 +196,7 @@ function CanonicalModelPicker({ pending, groupName, setGroupName, canonicalModel
   setCanonicalModel: (model: CanonicalModelSummary | null) => void
   setCanonicalModelId: (id: string) => void
 }) {
+  const { apiFetch } = useDashboardApi()
   const [canonicalPopoverOpen, setCanonicalPopoverOpen] = useState(false)
   const [canonicalSearch, setCanonicalSearch] = useState("")
   const [canonicalDebouncedSearch, setCanonicalDebouncedSearch] = useState("")
@@ -215,7 +217,7 @@ function CanonicalModelPicker({ pending, groupName, setGroupName, canonicalModel
       .catch((error) => { if (!controller.signal.aborted) setCanonicalError(error instanceof Error ? error.message : "Unable to load canonical models") })
       .finally(() => { if (!controller.signal.aborted) setCanonicalLoading(false) })
     return () => controller.abort()
-  }, [canonicalDebouncedSearch, canonicalPopoverOpen])
+  }, [canonicalDebouncedSearch, canonicalPopoverOpen, apiFetch])
   return <div className="flex min-h-full flex-col gap-4">
             <div className="space-y-2"><label htmlFor="pricing-group-name" className="block text-sm font-medium">Group name</label><Input id="pricing-group-name" value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="Group name" /></div>
             <div className="space-y-2">
@@ -250,6 +252,7 @@ function PricingGroupIdentity({ group }: { group: PricingGroupRow }) {
 }
 
 function PricingVersionDialog({ group, onClose, onSaved }: { group: PricingGroupRow; onClose: () => void; onSaved: () => Promise<unknown> }) {
+  const { apiPost } = useDashboardApi()
   const [pending, setPending] = useState(false)
   const [rateDrafts, setRateDrafts] = useState<Record<keyof PricingRates, string>>(() => {
     const version = group.currentVersion || blankRates()

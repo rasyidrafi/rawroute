@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, test } from "bun:test"
 
 import { getDashboardPayload, recordGatewayUsage, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { authenticateProxyKey } from "@/lib/auth"
-import { clearLogs, readLogs, writeLog } from "@/lib/logger"
+import { logs } from "@/server/logging/store"
+import { requestContext } from "@/server/request-context"
+import { recordLog } from "@/server/logging/recorder"
 import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "@/lib/model-pricing"
 import { _deleteMemoryApiKeyIndex, _resetMemoryBackend, createApiKey, findIndexedApiKeyByValue, listApiKeys, listModels, listProviders, upsertModel, upsertProvider } from "@/server/store"
 import { runInWorkspace } from "@/lib/workspace/context"
@@ -99,22 +101,22 @@ describe("workspace isolation", () => {
     const defaultWorkspace = (await listWorkspaces())[0]
     const workspace = await createWorkspace("Routing")
     await runInWorkspace(defaultWorkspace, async () => {
-      clearLogs()
+      logs.clear(requestContext().logScope)
       await configureWorkspacePricing("shared/model", "default-upstream", 1, 2)
-      writeLog("info", "admin", "default-only")
+      recordLog("gateway.request.started")
     })
     await runInWorkspace(workspace, async () => {
       await createApiKey("Routing key", "routing-secret")
       await configureWorkspacePricing("shared/model", "routing-upstream", 10, 20)
-      writeLog("info", "admin", "routing-only")
+      recordLog("gateway.request.completed")
     })
 
     const authenticated = await authenticateProxyKey(new Request("https://gateway.test/v1/models", { headers: { authorization: "Bearer routing-secret" } }))
     expect(authenticated?.workspace.id).toBe(workspace.id)
     await runInWorkspace(authenticated!.workspace, async () => {
       expect((await listModels()).find((model) => model.gatewayModelId === "shared/model")?.upstreamModel).toBe("routing-upstream")
-      expect(readLogs().map((entry) => entry.message)).toContain("routing-only")
-      expect(readLogs().map((entry) => entry.message)).not.toContain("default-only")
+      expect(logs.snapshot(requestContext().logScope).entries.map((entry) => entry.event)).toContain("gateway.request.completed")
+      expect(logs.snapshot(requestContext().logScope).entries.map((entry) => entry.event)).not.toContain("gateway.request.started")
     })
 
     await deleteWorkspace(workspace.id, workspace.name)

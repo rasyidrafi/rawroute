@@ -16,6 +16,7 @@ const AliasesView = lazy(() => import("@/components/dashboard/aliases-view").the
 const AdminUsageView = lazy(() => import("@/components/dashboard/admin-usage-view").then((module) => ({ default: module.AdminUsageView })))
 const BudgetsView = lazy(() => import("@/components/dashboard/budgets-view").then((module) => ({ default: module.BudgetsView })))
 const ModelPricingView = lazy(() => import("@/components/dashboard/model-pricing-view").then((module) => ({ default: module.ModelPricingView })))
+const SystemLogs = lazy(() => import("@/components/console-log").then((module) => ({ default: module.SystemLogs })))
 const ConsoleLog = lazy(() => import("@/components/console-log").then((module) => ({ default: module.ConsoleLog })))
 const SettingsView = lazy(() => import("@/components/dashboard/settings-view").then((module) => ({ default: module.SettingsView })))
 const CodingAgentView = lazy(() => import("@/components/dashboard/coding-agent-view").then((module) => ({ default: module.CodingAgentView })))
@@ -64,6 +65,7 @@ export function App() {
       <Route path={pagePaths.budgets} element={<BudgetsView />} />
       <Route path={pagePaths.pricing} element={<ModelPricingView />} />
       <Route path={pagePaths.logs} element={<ConsoleLog />} />
+      <Route path={pagePaths.systemLogs} element={<SystemLogs />} />
       <Route path={pagePaths.settings} element={<SettingsView />} />
       <Route path={pagePaths.codexAgent} element={<CodingAgentView agent="Codex" />} />
       <Route path={pagePaths.opencodeAgent} element={<CodingAgentView agent="Opencode" />} />

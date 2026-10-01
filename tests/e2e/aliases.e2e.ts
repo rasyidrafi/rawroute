@@ -29,10 +29,10 @@ async function restoreInitialPassword(page: Page) {
 }
 
 async function seedProviderAndModel(page: Page) {
-  const providers = await page.request.get("/api/admin/providers")
+  const providers = await page.request.get("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(providers.ok()).toBe(true)
   const existing = ((await providers.json()).providers as Array<{ id: string; prefix: string }>).find((provider) => provider.prefix === "alias-target")
-  const providerResponse = await page.request.post("/api/admin/providers", {
+  const providerResponse = await page.request.post("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" },
     data: {
       provider: {
         ...(existing ? { originalId: existing.id } : {}),
@@ -48,7 +48,7 @@ async function seedProviderAndModel(page: Page) {
   expect(providerResponse.ok()).toBe(true)
   const providerId = (await providerResponse.json()).providerId as string
 
-  const detail = await page.request.get(`/api/admin/providers/${providerId}`)
+  const detail = await page.request.get(`/api/admin/providers/${providerId}`, { headers: { "x-rawroute-workspace-id": "default" } })
   expect(detail.ok()).toBe(true)
   const existingModels = new Set(((await detail.json()).models as Array<{ gatewayModelId: string }>).map((model) => model.gatewayModelId))
   for (const model of [
@@ -56,7 +56,7 @@ async function seedProviderAndModel(page: Page) {
     { gatewayModelId: "target-model-2", name: "Target Model Two", upstreamModel: "upstream/target-model-2" },
   ]) {
     if (existingModels.has(`alias-target/${model.gatewayModelId}`)) continue
-    const modelResponse = await page.request.post(`/api/admin/providers/${providerId}/models`, { data: { model } })
+    const modelResponse = await page.request.post(`/api/admin/providers/${providerId}/models`, { headers: { "x-rawroute-workspace-id": "default" },  data: { model } })
     expect(modelResponse.ok()).toBe(true)
   }
 }

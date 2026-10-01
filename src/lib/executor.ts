@@ -1,6 +1,6 @@
 import { authenticateProxyKey } from "@/lib/auth"
 import { runInWorkspace } from "@/lib/workspace/context"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import type { ToolGatewayStatus } from "@/lib/types"
 
 const EXECUTOR_PUBLIC_PREFIX = "/executor"
@@ -157,12 +157,12 @@ export async function proxyExecutorRequest(request: Request) {
   try {
     authenticated = await authenticateProxyKey(request)
   } catch {
-    writeLog("error", "gateway", "Executor authentication is unavailable", { requestId: id })
+    recordLog("gateway.executor.authentication.is.unavailable", { requestId: id }, { level: "error" })
     return errorResponse(503, "executor_auth_unavailable", "Executor authentication is unavailable.", id)
   }
 
   if (!authenticated) {
-    writeLog("warn", "gateway", "Executor request rejected: invalid API key", { requestId: id })
+    recordLog("gateway.executor.request.rejected.invalid.api.key", { requestId: id }, { level: "warn" })
     return errorResponse(401, "invalid_gateway_api_key", "Invalid gateway API key.", id)
   }
 
@@ -180,13 +180,13 @@ async function forwardExecutorRequest(request: Request, id: string) {
     url = new URL("http://rawroute.invalid/executor/api")
   }
   if (!path) {
-    writeLog("warn", "gateway", "Executor request rejected: invalid path", { requestId: id })
+    recordLog("gateway.executor.request.rejected.invalid.path", { requestId: id }, { level: "warn" })
     return errorResponse(400, "invalid_executor_path", "Invalid Executor path.", id)
   }
 
   const config = executorConfig()
   if (!config) {
-    writeLog("warn", "gateway", "Executor proxy is not configured", { requestId: id })
+    recordLog("gateway.executor.proxy.is.not.configured", { requestId: id }, { level: "warn" })
     return errorResponse(503, "executor_not_configured", "Executor integration is not configured.", id)
   }
 
@@ -210,21 +210,21 @@ async function forwardExecutorRequest(request: Request, id: string) {
       statusText: response.statusText,
       headers: responseHeaders(response.headers, id),
     })
-    writeLog(response.ok ? "info" : "warn", "gateway", "Executor request completed", {
+    recordLog("gateway.executor.response.received", {
       method: request.method,
       path,
       requestId: id,
       status: response.status,
       durationMs: Date.now() - startedAt,
-    })
+    }, { level: response.ok ? "info" : "warn" })
     return forwarded
   } catch {
-    writeLog("error", "gateway", "Executor upstream request failed", {
+    recordLog("gateway.executor.upstream.request.failed", {
       method: request.method,
       path,
       requestId: id,
       durationMs: Date.now() - startedAt,
-    })
+    }, { level: "error" })
     return errorResponse(502, "executor_unavailable", "Executor is unavailable.", id)
   }
 }

@@ -1,3 +1,4 @@
+import { useDashboardClipboard } from "@/hooks/use-dashboard-clipboard"
 import { useState } from "react"
 import { CopyIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
@@ -7,7 +8,7 @@ import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { ApiKeyForm } from "@/components/dashboard/api-key-form"
 import { LoadError, ConfirmAction, EndpointValue, maskApiKey } from "@/components/dashboard/shared"
-import { apiDelete, apiPatch, apiPost } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -18,6 +19,8 @@ import type { ApiKey } from "@/lib/types"
 type EndpointKeyResponse = { endpoint: string; apiKeys: ApiKey[] }
 
 export function EndpointKeyView() {
+  const copy = useDashboardClipboard()
+  const { apiPost, apiDelete, apiPatch } = useDashboardApi()
   const { data, error, isLoading, isValidating, mutate } = useSWR<EndpointKeyResponse>("/api/admin/endpoint-key")
   const [keyOpen, setKeyOpen] = useState(false)
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null)
@@ -92,7 +95,7 @@ export function EndpointKeyView() {
           <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
             <Badge variant="secondary" className="shrink-0">Gateway</Badge>
             <EndpointValue />
-            <Button aria-label="Copy API endpoint" size="icon-sm" variant="outline" onClick={() => { void navigator.clipboard.writeText(`${window.location.origin}/v1`); toast.success("Endpoint copied") }}><CopyIcon /></Button>
+            <Button aria-label="Copy API endpoint" size="icon-sm" variant="outline" onClick={() => { void copy(`${window.location.origin}/v1`, "Endpoint copied") }}><CopyIcon /></Button>
           </div>
         </CardContent>
       </Card>
@@ -104,7 +107,7 @@ export function EndpointKeyView() {
         </CardHeader>
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}><DialogContent><ApiKeyForm onSave={createKey} /></DialogContent></Dialog>
       <Dialog open={Boolean(editingKey)} onOpenChange={(open) => { if (!open) setEditingKey(null) }}><DialogContent><form onSubmit={(event) => { event.preventDefault(); void renameKey() }}><DialogHeader><DialogTitle>Edit API key name</DialogTitle><DialogDescription>The key value cannot be changed.</DialogDescription></DialogHeader><div className="py-5"><label htmlFor="gateway-api-key-name" className="text-sm font-medium">Key Name</label><Input id="gateway-api-key-name" value={editingName} onChange={(event) => setEditingName(event.target.value)} maxLength={80} autoFocus className="mt-2" /></div><DialogFooter><Button type="button" variant="outline" disabled={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} onClick={() => setEditingKey(null)}>Cancel</Button><Button type="submit" aria-busy={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} disabled={!editingName.trim() || Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))}>{editingKey && isPending(`rename-api-key:${editingKey.id}`) && <LoadingSpinner />}Save name</Button></DialogFooter></form></DialogContent></Dialog>
-      <Dialog open={Boolean(createdKey)} onOpenChange={(open) => { if (!open) setCreatedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>API key created</DialogTitle><DialogDescription>Copy this value now. It will only be available from the admin dashboard.</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{createdKey}</code><Button aria-label="Copy created API key" size="icon-sm" variant="outline" onClick={() => { if (createdKey) { void navigator.clipboard.writeText(createdKey); toast.success("Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setCreatedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={Boolean(createdKey)} onOpenChange={(open) => { if (!open) setCreatedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>API key created</DialogTitle><DialogDescription>Copy this value now. It will only be available from the admin dashboard.</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{createdKey}</code><Button aria-label="Copy created API key" size="icon-sm" variant="outline" onClick={() => { if (createdKey) { void copy(createdKey, "Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setCreatedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
         <CardContent spacing="compact-stack">
           {!data.apiKeys.length ? <div className="rounded-lg border border-dashed p-8 text-center"><p className="font-medium">No gateway API keys</p><p className="mt-1 text-sm text-muted-foreground">Create a key before sending requests through this workspace.</p></div> : null}
           {data.apiKeys.map((key) => {
@@ -114,7 +117,7 @@ export function EndpointKeyView() {
                 <div className="text-sm font-medium">{key.name}</div>
                 <code className="block truncate text-xs text-muted-foreground">{maskApiKey(key.key)}</code>
               </div>
-              <Button aria-label={`Copy ${key.name}`} size="icon-sm" variant="outline" onClick={() => { void navigator.clipboard.writeText(key.key); toast.success("Copied") }}><CopyIcon /></Button>
+              <Button aria-label={`Copy ${key.name}`} size="icon-sm" variant="outline" onClick={() => { void copy(key.key, "Copied") }}><CopyIcon /></Button>
               <Button aria-label={`Edit ${key.name}`} size="icon-sm" variant="outline" onClick={() => { setEditingKey(key); setEditingName(key.name) }}><PencilIcon /></Button>
               <ConfirmAction title={`Delete ${key.name}?`} description="Clients using this key will immediately lose access." pending={isPending(pendingKey)} onConfirm={() => deleteKey(key)}><Trash2Icon /></ConfirmAction>
             </div>

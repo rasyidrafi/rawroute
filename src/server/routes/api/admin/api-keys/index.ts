@@ -1,5 +1,5 @@
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { ApiKeyConflictError, createApiKey } from "@/server/store"
 
 export async function POST(request: Request) {
@@ -13,10 +13,10 @@ export async function POST(request: Request) {
 
   try {
     const apiKey = await createApiKey(name, customKey as string | undefined)
-    writeLog("info", "admin", "Gateway API key created")
+    recordLog("admin.gateway.api.key.created", {}, { level: "info" })
     return Response.json({ ok: true, apiKey })
   } catch (error) {
-    writeLog("error", "admin", "Gateway API key create failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.gateway.api.key.create.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to create API key.", error instanceof ApiKeyConflictError ? 409 : 400)
   }
 }

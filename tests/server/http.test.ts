@@ -166,8 +166,8 @@ test("concurrent requests and deferred jobs retain their own workspace", async (
   await drainBackgroundTasks()
   expect(jobs.sort()).toEqual([first.id, second.id].sort())
   expect(currentWorkspaceId()).toBe("default")
-  expect((await fetch(new URL("/explicit", base), { headers: { cookie } })).status).toBe(401)
-  expect((await fetch(new URL("/scoped", base), { headers: { cookie, "x-rawroute-workspace-id": "deleted" } })).status).toBe(401)
+  expect((await fetch(new URL("/explicit", base), { headers: { cookie } })).status).toBe(400)
+  expect((await fetch(new URL("/scoped", base), { headers: { cookie, "x-rawroute-workspace-id": "deleted" } })).status).toBe(404)
 })
 
 test("background work deduplicates within a workspace and drains before shutdown", async () => {

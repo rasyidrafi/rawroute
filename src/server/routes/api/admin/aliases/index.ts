@@ -1,6 +1,6 @@
 import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { getSharedModelForRecipient, listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
 import { listAliases, listCombos, listModels, listProviders, upsertAlias } from "@/server/store"
 import type { ModelAlias } from "@/lib/types"
@@ -50,10 +50,10 @@ export async function POST(request: Request) {
       sharedModelId,
     })
     invalidateDashboardPresentation()
-    writeLog("info", "admin", "Alias saved", { alias })
+    recordLog("admin.alias.saved", { alias }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Alias save failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.alias.save.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to save alias.", 400)
   }
 }

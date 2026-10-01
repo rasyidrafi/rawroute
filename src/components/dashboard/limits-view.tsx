@@ -3,7 +3,7 @@ import { RotateCcwIcon } from "lucide-react"
 import { toast } from "sonner"
 import useSWR from "swr"
 
-import { apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { CodexResetCredits } from "@/components/dashboard/codex-reset-credits"
 import { EmptyRow } from "@/components/dashboard/shared"
 import { LoadingSpinner } from "@/components/loading-spinner"
@@ -18,6 +18,7 @@ import type { CodexUsageResult } from "@/lib/codex/usage"
 type LimitAccount = { id: string; name: string; email?: string; enabled: boolean; usage?: CodexUsageResult }
 
 export function LimitsView() {
+  const { fetcher, apiPatch, apiPost } = useDashboardApi()
   const { data, mutate, isLoading, isValidating } = useSWR<{ accounts: LimitAccount[] }>("/api/admin/limits", fetcher)
   const [target, setTarget] = useState<LimitAccount>()
   const [confirmation, setConfirmation] = useState("")

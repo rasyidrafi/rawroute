@@ -22,6 +22,7 @@ export default defineConfig({
       reuseExistingServer: false,
       env: {
         PORT: "3100",
+        RAWROUTE_PUBLIC_URL: "http://127.0.0.1:3100",
         HOSTNAME: "127.0.0.1",
         SESSION_SECRET: "rawroute-browser-tests-session-secret",
         CREDENTIAL_ENCRYPTION_KEY: "rawroute-browser-tests-encryption-key",

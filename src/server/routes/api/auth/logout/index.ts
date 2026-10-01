@@ -1,7 +1,7 @@
 import { destroySession } from "@/lib/auth"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 
 export async function POST() {
-  writeLog("info", "auth", "Admin signed out")
+  recordLog("auth.logout", {}, { level: "info" })
   return Response.json({ ok: true }, { headers: { "set-cookie": destroySession(), "cache-control": "no-store" } })
 }

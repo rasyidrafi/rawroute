@@ -1,5 +1,5 @@
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { hashPassword, updateMeta, validatePasswordUpdate } from "@/server/store"
 
 export async function POST(request: Request) {
@@ -21,10 +21,10 @@ export async function POST(request: Request) {
       current.admin.passwordHash = hashPassword(newPassword)
       current.admin.mustChangePassword = false
     })
-    writeLog("info", "admin", "Password updated")
+    recordLog("auth.password.changed", {}, { level: "info" })
     return Response.json({ ok: true, mustChangePassword: meta.admin.mustChangePassword })
   } catch (error) {
-    writeLog("error", "admin", "Password update failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("auth.password.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update password.", 400)
   }
 }

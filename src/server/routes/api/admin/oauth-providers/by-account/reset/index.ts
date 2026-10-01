@@ -1,7 +1,7 @@
 import { redeemCodexReset } from "@/lib/codex/reset"
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 
 export async function POST(request: Request, params: { accountId: string }) {
   const accountId = params.accountId
@@ -12,7 +12,7 @@ export async function POST(request: Request, params: { accountId: string }) {
   try {
     return Response.json(await redeemCodexReset(account, typeof body?.confirmation === "string" ? body.confirmation : ""))
   } catch (error) {
-    writeLog("error", "admin", "Codex reset credit redemption failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.codex.reset.credit.redemption.failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to redeem Codex reset credit.", 400)
   }
 }

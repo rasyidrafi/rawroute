@@ -17,12 +17,12 @@ async function restoreInitialPassword(page: Page) {
 }
 
 async function seedModel(page: Page) {
-  const response = await page.request.post("/api/admin/providers", {
+  const response = await page.request.post("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" },
     data: { provider: { name: "Budget test provider", prefix: "budget-test", baseUrl: "https://example.com/v1", protocol: "openai-chat", authType: "none", headers: {} } },
   })
   expect(response.ok()).toBe(true)
   const providerId = (await response.json()).providerId as string
-  const model = await page.request.post(`/api/admin/providers/${providerId}/models`, {
+  const model = await page.request.post(`/api/admin/providers/${providerId}/models`, { headers: { "x-rawroute-workspace-id": "default" },
     data: { model: { gatewayModelId: "over-limit", name: "Over-limit model", upstreamModel: "over-limit" } },
   })
   expect(model.ok()).toBe(true)
@@ -40,11 +40,11 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   await page.getByRole("button", { name: "Save settings" }).click()
   await expect(page.getByText("Beyond Limits settings saved")).toBeVisible()
 
-  const budgets = await page.request.get("/api/admin/budgets")
+  const budgets = await page.request.get("/api/admin/budgets", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(budgets.ok()).toBe(true)
   expect((await budgets.json()).beyondLimits).toMatchObject({ enabled: true, modelIds: ["budget-test/over-limit"] })
 
-  expect((await page.request.patch("/api/admin/budgets/beyond-limits", { data: { enabled: false, modelIds: [] } })).ok()).toBe(true)
+  expect((await page.request.patch("/api/admin/budgets/beyond-limits", { headers: { "x-rawroute-workspace-id": "default" },  data: { enabled: false, modelIds: [] } })).ok()).toBe(true)
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByRole("checkbox", { name: "Enabled", exact: true })).not.toBeChecked()
   await expect(page.getByRole("tabpanel").getByText("0 selected", { exact: true })).toBeVisible()
@@ -58,7 +58,7 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   await page.getByRole("button", { name: "Activate Unlimited Mode" }).click()
   await expect(page.getByText("Scheduled for", { exact: false })).toBeVisible()
 
-  const unlimited = await page.request.get("/api/admin/budgets")
+  const unlimited = await page.request.get("/api/admin/budgets", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(unlimited.ok()).toBe(true)
   expect((await unlimited.json())).toMatchObject({
     unlimited: { excludedModelIds: ["budget-test/over-limit"] },
@@ -68,7 +68,7 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   await page.getByRole("alertdialog").getByRole("button", { name: "Deactivate", exact: true }).click()
 
   // Once a draft is saved, refreshed server settings must become the source of truth.
-  expect((await page.request.patch("/api/admin/budgets/unlimited", { data: { excludedModelIds: [] } })).ok()).toBe(true)
+  expect((await page.request.patch("/api/admin/budgets/unlimited", { headers: { "x-rawroute-workspace-id": "default" },  data: { excludedModelIds: [] } })).ok()).toBe(true)
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByRole("tabpanel").getByText("0 selected", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Save exclusions" })).toBeDisabled()

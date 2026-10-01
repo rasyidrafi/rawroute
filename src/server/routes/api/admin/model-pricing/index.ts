@@ -3,7 +3,7 @@ import { scheduleWorkspaceTask } from "@/lib/background-tasks"
 import { findModelsDevCanonicalModel, searchModelsDevCanonicalModels } from "@/lib/models-dev"
 import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricingJob, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import type { PricingCanonicalSource } from "@/lib/types"
 
 export async function GET(request: Request) {
@@ -40,23 +40,23 @@ export async function POST(request: Request) {
   try {
     if (action === "sync") {
       const groups = await syncModelPricingGroups()
-      writeLog("info", "admin", "Model pricing groups synced", { count: groups.length })
+      recordLog("admin.model.pricing.groups.synced", { count: groups.length }, { level: "info" })
       return Response.json({ groups })
     }
     if (action === "create-group") {
       const group = await createPricingGroup(String(body?.name || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical)
-      writeLog("info", "admin", "Model pricing group created", { groupId: group.id })
+      recordLog("admin.model.pricing.group.created", { groupId: group.id }, { level: "info" })
       return Response.json({ group })
     }
     if (action === "update-group") {
       const group = await updatePricingGroup(String(body?.groupId || ""), Array.isArray(body?.modelIds) ? body.modelIds.filter((value): value is string => typeof value === "string") : [], canonical, typeof body?.name === "string" ? body.name : undefined)
-      writeLog("info", "admin", "Model pricing group updated", { groupId: group.id })
+      recordLog("admin.model.pricing.group.updated", { groupId: group.id }, { level: "info" })
       return Response.json({ group })
     }
     if (action === "delete-group") {
       const groupId = String(body?.groupId || "")
       await deletePricingGroup(groupId)
-      writeLog("info", "admin", "Model pricing group deleted", { groupId })
+      recordLog("admin.model.pricing.group.deleted", { groupId }, { level: "info" })
       return Response.json({ ok: true })
     }
     if (action === "save-version") {
@@ -75,11 +75,11 @@ export async function POST(request: Request) {
       if (job) {
         void scheduleWorkspaceTask(`pricing:${job.id}`, () => runPricingJob(job.id))
       }
-      writeLog("info", "admin", "Model pricing version saved", { groupId: result.version.groupId, versionId: result.version.id })
+      recordLog("admin.model.pricing.version.saved", { groupId: result.version.groupId, versionId: result.version.id }, { level: "info" })
       return Response.json(result)
     }
   } catch (error) {
-    writeLog("error", "admin", "Model pricing update failed", { action, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.model.pricing.update.failed", { action, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update model pricing.", 400)
   }
   return jsonError("Unsupported model pricing action.", 400)

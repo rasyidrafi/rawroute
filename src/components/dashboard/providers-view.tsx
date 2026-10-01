@@ -7,7 +7,7 @@ import { toast } from "sonner"
 
 import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { ProviderForm } from "@/components/dashboard/provider-form"
-import { apiDelete, apiPost } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,7 @@ import { protocolLabels, type Provider, type ProviderSummary } from "@/lib/types
 type ProvidersResponse = { providers: ProviderSummary[] }
 
 export function ProvidersView() {
+  const { apiPost, apiDelete } = useDashboardApi()
   const navigate = useNavigate()
   const { data, error, isLoading, isValidating, mutate } = useSWR<ProvidersResponse>("/api/admin/providers")
   const [providerOpen, setProviderOpen] = useState(false)

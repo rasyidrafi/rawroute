@@ -4,7 +4,7 @@ import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { cleanReasoningEffort, memberPolicyConfigHash, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
 import { testComboMemberPolicy, type ComboMemberTestResult } from "@/lib/cliproxy/gateway"
 import { cleanAliasId, jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { getSharedModelForRecipient } from "@/lib/workspace/model-shares"
 import { listAliases, listCombos, listModels, listProviders, readSessionSecret, upsertCombo } from "@/server/store"
 import type { ComboMember, ModelCombo } from "@/lib/types"
@@ -105,10 +105,10 @@ export async function POST(request: Request) {
     })
     const combo = await upsertCombo({ ...value, originalId: input.originalId })
     invalidateDashboardPresentation()
-    writeLog("info", "admin", "Combo saved", { combo: combo.combo })
+    recordLog("admin.combo.saved", { combo: combo.combo }, { level: "info" })
     return Response.json({ combo })
   } catch (error) {
-    writeLog("error", "admin", "Combo save failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.combo.save.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to save combo.", 400)
   }
 }

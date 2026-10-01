@@ -1,6 +1,6 @@
 import { cliProxyCodexApiCall, cliproxyManagement, listCliProxyCodexAuthFiles } from "@/lib/codex/cliproxy"
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { listProviderApiKeys } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
@@ -45,14 +45,14 @@ export async function recoverCodexQuota(providerId: string, model: string): Prom
       })
       void reset.body?.cancel().catch(() => undefined)
       if (!reset.ok) {
-        writeLog("warn", "gateway", "Codex quota recovery unavailable", { status: reset.status, providerId, model })
+        recordLog("gateway.codex.quota.recovery.unavailable", { status: reset.status, providerId, model }, { level: "warn" })
         continue
       }
-      writeLog("info", "gateway", "Codex quota available; allowing inference probe", { providerId, model, accountId: account.id })
+      recordLog("gateway.codex.quota.available.allowing.inference.probe", { providerId, model, accountId: account.id }, { level: "info" })
       return true
     }
   } catch {
-    writeLog("warn", "gateway", "Codex quota recovery check failed", { providerId, model })
+    recordLog("gateway.codex.quota.recovery.check.failed", { providerId, model }, { level: "warn" })
   }
   return false
 }

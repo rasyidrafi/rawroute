@@ -1,3 +1,4 @@
+import { logs } from "@/server/logging/store"
 import { createHash } from "node:crypto"
 
 import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getLocalDatabase, isMemoryBackend } from "@/server/store"
@@ -291,6 +292,7 @@ export async function deleteWorkspace(workspaceId: string, confirmation: unknown
 
   if (isMemoryBackend()) {
     memoryWorkspaces().set(workspaceId, { ...workspace, status: "deleting", updatedAt: new Date().toISOString() })
+    logs.deleteWorkspace(workspaceId)
     _deleteMemoryWorkspace(workspaceId)
     memoryWorkspaces().delete(workspaceId)
     return
@@ -299,6 +301,7 @@ export async function deleteWorkspace(workspaceId: string, confirmation: unknown
   const deleting = { ...workspace, status: "deleting" as const, updatedAt: new Date().toISOString() }
   await workspaceRef(workspaceId).update({ status: deleting.status, updatedAt: deleting.updatedAt })
   publishWorkspace(deleting)
+  logs.deleteWorkspace(workspaceId)
   const apiKeys = await workspaceRef(workspaceId).collection("apiKeys").get()
   const hashes: string[] = []
   for (let offset = 0; offset < apiKeys.docs.length; offset += 400) {

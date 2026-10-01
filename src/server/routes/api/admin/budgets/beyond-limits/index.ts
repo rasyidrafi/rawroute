@@ -1,6 +1,6 @@
 import { setBudgetBeyondLimitsSettings } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { listModels, listProviders } from "@/server/store"
 
 export async function PATCH(request: Request) {
@@ -17,10 +17,10 @@ export async function PATCH(request: Request) {
       .map((model) => model.gatewayModelId || model.id))
     if (modelIds.some((id) => !availableModelIds.has(id))) return jsonError("One or more selected models are unavailable.", 400)
     const settings = await setBudgetBeyondLimitsSettings({ enabled: body.enabled, modelIds })
-    writeLog("info", "admin", "Beyond Limits settings updated", { enabled: settings.enabled, modelCount: settings.modelIds.length })
+    recordLog("admin.beyond.limits.settings.updated", { enabled: settings.enabled, modelCount: settings.modelIds.length }, { level: "info" })
     return Response.json({ settings })
   } catch (error) {
-    writeLog("error", "admin", "Beyond Limits settings update failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.beyond.limits.settings.update.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update Beyond Limits settings.", 400)
   }
 }

@@ -2,7 +2,7 @@ import { deleteCliProxyCodexAccount, setCliProxyCodexAccountEnabled } from "@/li
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { deleteProviderApiKey, upsertProviderApiKey } from "@/server/store"
 
 export async function PATCH(request: Request, params: { accountId: string }) {
@@ -31,11 +31,11 @@ export async function PATCH(request: Request, params: { accountId: string }) {
       await setCliProxyCodexAccountEnabled(account, account.enabled).catch(() => undefined)
       throw error
     }
-    writeLog("info", "admin", "Codex account updated", { accountId })
+    recordLog("admin.codex.account.updated", { accountId }, { level: "info" })
     scheduleCodexModelRefresh(true)
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Codex account update failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.codex.account.update.failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update Codex account.", 502)
   }
 }
@@ -49,11 +49,11 @@ export async function DELETE(_request: Request, params: { accountId: string }) {
     if (!account) return jsonError("Codex account not found.", 404)
     if (account.credentialKind === "codex-cli-proxy" && account.cliProxyAuthFile) await deleteCliProxyCodexAccount(account)
     await deleteProviderApiKey(result.provider.id, accountId)
-    writeLog("info", "admin", "Codex account deleted", { accountId })
+    recordLog("admin.codex.account.deleted", { accountId }, { level: "info" })
     scheduleCodexModelRefresh(true)
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Codex account delete failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.codex.account.delete.failed", { accountId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to delete Codex account.", 502)
   }
 }

@@ -1,6 +1,6 @@
 import { invalidateDashboardPresentation } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { deleteCombo } from "@/server/store"
 
 export async function DELETE(_request: Request, params: { comboId: string }) {
@@ -8,10 +8,10 @@ export async function DELETE(_request: Request, params: { comboId: string }) {
   try {
     await deleteCombo(comboId)
     invalidateDashboardPresentation()
-    writeLog("info", "admin", "Combo deleted", { comboId })
+    recordLog("admin.combo.deleted", { comboId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Combo delete failed", { comboId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.combo.delete.failed", { comboId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to delete combo.", 400)
   }
 }

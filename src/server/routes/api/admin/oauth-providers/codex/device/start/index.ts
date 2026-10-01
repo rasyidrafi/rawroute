@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { deletePendingCliProxyCodexLogin, reservePendingCliProxyCodexLogin, savePendingCliProxyCodexLogin } from "@/lib/codex/cli-login"
 import { cancelCliProxyCodexLogin, startCliProxyCodexLogin } from "@/lib/codex/cliproxy"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export async function POST() {
@@ -20,10 +20,10 @@ export async function POST() {
       throw error
     }
     if (!login) throw new Error("CLIProxy Codex login did not start.")
-    writeLog("info", "admin", "CLIProxy Codex login started")
+    recordLog("admin.cliproxy.codex.login.started", {}, { level: "info" })
     return Response.json({ loginId, authorizationUrl: login.url })
   } catch (error) {
-    writeLog("error", "admin", "CLIProxy Codex login start failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.cliproxy.codex.login.start.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to start Codex login.", 502)
   }
 }

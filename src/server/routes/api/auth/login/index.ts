@@ -1,6 +1,6 @@
 import { createSession } from "@/lib/auth"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { readMeta, verifyPassword } from "@/server/store"
 
 export async function POST(request: Request) {
@@ -10,10 +10,10 @@ export async function POST(request: Request) {
   }
   const data = await readMeta()
   if (!verifyPassword(body.password, data.admin.passwordHash)) {
-    writeLog("warn", "auth", "Admin login rejected")
+    recordLog("auth.login.rejected", {}, { level: "warn" })
     return jsonError("Invalid password.", 401)
   }
   const cookie = await createSession(request)
-  writeLog("info", "auth", "Admin signed in")
+  recordLog("auth.login.succeeded", {}, { level: "info" })
   return Response.json({ ok: true, mustChangePassword: data.admin.mustChangePassword }, { headers: { "set-cookie": cookie, "cache-control": "no-store" } })
 }

@@ -8,7 +8,7 @@ const mocks = {
   localRedisGet: mock(),
   localRedisSet: mock(),
   localRedisSetIfAbsent: mock(),
-  writeLog: mock(),
+  recordLog: mock(),
   getProvider: mock(),
   listProviderApiKeys: mock(),
   listProviderModels: mock(),
@@ -26,7 +26,7 @@ mock.module("@/lib/local-redis", () => ({
   localRedisSet: mocks.localRedisSet,
   localRedisSetIfAbsent: mocks.localRedisSetIfAbsent,
 }))
-mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+mock.module("@/server/logging/recorder", () => ({ recordLog: mocks.recordLog }))
 mock.module("@/server/store", () => ({
   getProvider: mocks.getProvider,
   listProviderApiKeys: mocks.listProviderApiKeys,
@@ -113,9 +113,9 @@ test("projects OpenAI-compatible credentials and priority without deleting unman
   expect(managed[0]["api-key-entries"]).toEqual([{ "api-key": "secret-primary" }])
   expect(managed[1]).not.toHaveProperty("priority")
   expect(managed[1]["api-key-entries"]).toEqual([{ "api-key": "secret-backup" }])
-  expect(mocks.writeLog).toHaveBeenCalledWith("info", "admin", "CLIProxy provider projection reconciled", expect.objectContaining({ providerId: "provider-a", projectedCredentials: 2, projectedModels: 1 }))
-  expect(JSON.stringify(mocks.writeLog.mock.calls)).not.toContain("secret-primary")
-  expect(JSON.stringify(mocks.writeLog.mock.calls)).not.toContain("secret-backup")
+  expect(mocks.recordLog).toHaveBeenCalledWith("admin.cliproxy.provider.projection.reconciled", expect.objectContaining({ providerId: "provider-a", projectedCredentials: 2, projectedModels: 1 }), { level: "info" })
+  expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-primary")
+  expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-backup")
 })
 
 test("separates the same RawRoute prefix across workspaces", async () => {
@@ -197,7 +197,7 @@ test("surfaces management failures without logging credentials", async () => {
   mocks.cliproxyManagementJson.mockImplementation(async (path: string) => ({ response: new Response(null, { status: path.endsWith("openai-compatibility") ? 503 : 200 }), data: path.endsWith("claude-api-key") ? { "claude-api-key": [] } : { "openai-compatibility": [] } }))
 
   await expect(syncNonCodexProviderProjection("provider-a")).rejects.toThrow("CLIProxy OpenAI-compatible configuration read failed (503).")
-  expect(JSON.stringify(mocks.writeLog.mock.calls)).not.toContain("secret-primary")
+  expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-primary")
   expect(mocks.localRedisDelete).toHaveBeenCalledWith("rawroute:cliproxy-provider-sync:v1:state:workspace-a:provider-a")
 })
 

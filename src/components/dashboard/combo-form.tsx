@@ -5,7 +5,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { BracesIcon, ChevronDownIcon, GripVerticalIcon, PlusIcon, TestTube2Icon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
-import { apiPost } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { FormField, FormSubmitButton } from "@/components/dashboard/shared"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
@@ -67,6 +67,7 @@ function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, 
 }
 
 export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { combo: ModelCombo | null; models: Model[]; aliases: ModelAlias[]; sharedModels: SharedModelView[]; onSave: (combo: Partial<ModelCombo> & { originalId?: string }) => Promise<boolean> }) {
+  const { apiPost } = useDashboardApi()
   const initialMembers = combo ? comboMembers(combo) : []
   const [pending, setPending] = useState(false)
   const [testing, setTesting] = useState<Set<string>>(() => new Set())

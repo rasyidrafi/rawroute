@@ -25,10 +25,10 @@ let firstProviderId = ""
 
 async function saveProvider(page: Page, index: number) {
   const prefix = `provider-${index}`
-  const providers = await page.request.get("/api/admin/providers")
+  const providers = await page.request.get("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(providers.ok()).toBe(true)
   const existing = ((await providers.json()).providers as Array<{ id: string; prefix: string }>).find((provider) => provider.prefix === prefix)
-  const response = await page.request.post("/api/admin/providers", {
+  const response = await page.request.post("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" },
     data: {
       provider: {
         ...(existing ? { originalId: existing.id } : {}),
@@ -121,7 +121,7 @@ test("dropdown menu interaction survives ScrollArea composition", async ({ page 
 })
 
 test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) => {
-  const response = await page.request.post(`/api/admin/providers/${firstProviderId}/models`, {
+  const response = await page.request.post(`/api/admin/providers/${firstProviderId}/models`, { headers: { "x-rawroute-workspace-id": "default" },
     data: {
       model: {
         gatewayModelId: "model-with-an-intentionally-long-suffix-name",

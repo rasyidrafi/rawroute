@@ -3,7 +3,7 @@ import { Share2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
-import { apiPost, fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -14,6 +14,7 @@ type ShareTarget = { id: string; name: string; shared: boolean }
 type ShareData = { targets: ShareTarget[] }
 
 export function ModelShareButton({ modelId, modelName, disabled = false, onSaved }: { modelId: string; modelName: string; disabled?: boolean; onSaved?: () => Promise<unknown> | unknown }) {
+  const { fetcher, apiPost } = useDashboardApi()
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[] | null>(null)
   const [saving, setSaving] = useState(false)

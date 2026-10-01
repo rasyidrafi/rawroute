@@ -4,7 +4,7 @@ const mocks = { accounts: mock(), files: mock(), call: mock(), management: mock(
 mock.module("@/server/store", () => ({ listProviderApiKeys: mocks.accounts }))
 mock.module("@/lib/codex/cliproxy", () => ({ listCliProxyCodexAuthFiles: mocks.files, cliProxyCodexApiCall: mocks.call, cliproxyManagement: mocks.management }))
 mock.module("@/lib/local-redis", () => ({ localRedisSetIfAbsent: mocks.lock }))
-mock.module("@/lib/logger", () => ({ writeLog: mock() }))
+mock.module("@/server/logging/recorder", () => ({ recordLog: mock() }))
 mock.module("@/lib/workspace/context", () => ({ currentWorkspaceId: () => "workspace" }))
 const { quotaAllowsProbe, recoverCodexQuota } = await import("@/lib/codex/recovery")
 

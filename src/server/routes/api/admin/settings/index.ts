@@ -1,6 +1,7 @@
+import { instanceSettingsSchema } from "@/lib/instance-settings"
 import { cliproxyManagementJson, redactSecrets } from "@/lib/cliproxy/gateway"
-import { errorMessage, jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { jsonError } from "@/lib/http"
+import { recordLog } from "@/server/logging/recorder"
 
 const editable: Record<string, string> = {
   debug: "debug",
@@ -17,32 +18,34 @@ export async function GET() {
   const config = redactSecrets(data) as Record<string, unknown>
   const routing = config.routing && typeof config.routing === "object" ? config.routing as Record<string, unknown> : {}
   return Response.json({
-    debug: config.debug,
-    loggingToFile: config["logging-to-file"],
-    usageStatisticsEnabled: config["usage-statistics-enabled"],
-    requestRetry: config["request-retry"],
-    maxRetryInterval: config["max-retry-interval"],
-    routingStrategy: routing.strategy,
+    debug: config.debug === true,
+    loggingToFile: config["logging-to-file"] === true,
+    usageStatisticsEnabled: config["usage-statistics-enabled"] === true,
+    requestRetry: Number(config["request-retry"] ?? 0),
+    maxRetryInterval: Number(config["max-retry-interval"] ?? 0),
+    routingStrategy: routing.strategy === "fill-first" ? "fill-first" : "round-robin",
   })
 }
 
 export async function PATCH(request: Request) {
-  const body = await request.json().catch(() => null) as Record<string, unknown> | null
-  if (!body) return jsonError("Invalid settings payload.", 400)
+  const parsed = instanceSettingsSchema.partial().safeParse(await request.json().catch(() => null))
+  if (!parsed.success || !Object.keys(parsed.data).length) return jsonError("Invalid settings payload.", 400)
+  const body = parsed.data
+  if (body.routingStrategy && body.routingStrategy !== "fill-first") return jsonError("RawRoute requires fill-first routing to preserve provider key priority.", 400)
   try {
     for (const [key, value] of Object.entries(body)) {
       const endpoint = editable[key]
       if (!endpoint) continue
       const { response } = await cliproxyManagementJson(`/v0/management/${endpoint}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) })
       if (!response.ok) {
-        writeLog("warn", "admin", "CLIProxy setting update failed", { setting: key, status: response.status })
-        return jsonError(`CLIProxy setting ${key} could not be updated.`, response.status)
+        recordLog("admin.cliproxy.setting.update.failed", { setting: key, status: response.status }, { level: "warn" })
+        return jsonError(`CLIProxy setting ${key} could not be updated. Earlier fields may already have been applied; reload to check.`, response.status)
       }
     }
-    writeLog("info", "admin", "CLIProxy settings updated", { count: Object.keys(body).length })
+    recordLog("admin.cliproxy.settings.updated", { count: Object.keys(body).length }, { level: "info" })
     return Response.json({ ok: true })
-  } catch (error) {
-    writeLog("error", "admin", "CLIProxy settings update failed", { error: errorMessage(error, "Unknown error") })
-    return jsonError(errorMessage(error, "CLIProxy settings could not be updated."), 502)
+  } catch {
+    recordLog("admin.cliproxy.settings.update.failed", {}, { level: "error" })
+    return jsonError("CLIProxy settings could not be updated. Earlier fields may already have been applied; reload to check.", 502)
   }
 }

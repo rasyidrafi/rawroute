@@ -1,6 +1,6 @@
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { gatewayModelId, jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { getProvider, listProviderModels, upsertModel } from "@/server/store"
 import type { Model } from "@/lib/types"
 
@@ -48,10 +48,10 @@ export async function POST(request: Request, params: { providerId: string }) {
     }
     await upsertModel(providerId, modelInput)
     if (provider.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
-    writeLog("info", "admin", "Model saved", { providerId })
+    recordLog("admin.model.saved", { providerId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Model save failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.model.save.failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to save model.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }

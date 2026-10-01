@@ -8,23 +8,23 @@ async function authenticate(request: APIRequestContext) {
 
 async function codexModels(request: APIRequestContext) {
   await authenticate(request)
-  const accounts = await request.get("/api/admin/oauth-providers")
+  const accounts = await request.get("/api/admin/oauth-providers", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(accounts.ok()).toBe(true)
   if (!(await accounts.json()).accounts.length) {
-    const start = await request.post("/api/admin/oauth-providers/codex/device/start")
+    const start = await request.post("/api/admin/oauth-providers/codex/device/start", { headers: { "x-rawroute-workspace-id": "default" } })
     expect(start.ok(), await start.text()).toBe(true)
     const { loginId, authorizationUrl } = await start.json()
     const state = new URL(authorizationUrl).searchParams.get("state")
-    const callback = await request.post("/api/admin/oauth-providers/codex/device/callback", {
+    const callback = await request.post("/api/admin/oauth-providers/codex/device/callback", { headers: { "x-rawroute-workspace-id": "default" },
       data: { loginId, redirectUrl: `http://localhost:1455/auth/callback?code=e2e-code&state=${state}` },
     })
     expect(callback.ok(), await callback.text()).toBe(true)
-    const poll = await request.post("/api/admin/oauth-providers/codex/device/poll", { data: { loginId, name: "Routing test account" } })
+    const poll = await request.post("/api/admin/oauth-providers/codex/device/poll", { headers: { "x-rawroute-workspace-id": "default" },  data: { loginId, name: "Routing test account" } })
     expect((await poll.json()).status).toBe("authorized")
   }
-  const catalog = await request.get("/api/admin/oauth-providers")
+  const catalog = await request.get("/api/admin/oauth-providers", { headers: { "x-rawroute-workspace-id": "default" } })
   const { provider } = await catalog.json()
-  const refresh = await request.post(`/api/admin/providers/${provider.id}/models/refresh`)
+  const refresh = await request.post(`/api/admin/providers/${provider.id}/models/refresh`, { headers: { "x-rawroute-workspace-id": "default" } })
   expect(refresh.ok(), await refresh.text()).toBe(true)
   const response = await request.get("/v1/models", { headers: { authorization: "Bearer sk-e2e-gateway" } })
   expect(response.ok()).toBe(true)
@@ -79,7 +79,7 @@ test("combo immediately falls back instead of forwarding model cooldown", async 
   const models = await codexModels(request)
   expect(models.length).toBeGreaterThanOrEqual(2)
   const comboId = `e2e-fallback-${Date.now()}`
-  const saved = await request.post("/api/admin/combos", {
+  const saved = await request.post("/api/admin/combos", { headers: { "x-rawroute-workspace-id": "default" },
     data: { combo: { combo: comboId, name: "E2E immediate fallback", memberModelIds: models.slice(0, 2) } },
   })
   expect(saved.ok()).toBe(true)

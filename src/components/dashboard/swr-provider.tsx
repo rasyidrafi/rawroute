@@ -1,8 +1,9 @@
+import { useMemo, type ReactNode } from "react"
 import { SWRConfig } from "swr"
-import type { ReactNode } from "react"
-
-import { fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "./api-context"
 
 export function DashboardSWRProvider({ children }: { children: ReactNode }) {
-  return <SWRConfig value={{ fetcher, revalidateOnFocus: false, dedupingInterval: 10_000, keepPreviousData: true, provider: () => new Map() }}>{children}</SWRConfig>
+  const { fetcher } = useDashboardApi()
+  const value = useMemo(() => ({ fetcher, revalidateOnFocus: false, dedupingInterval: 10_000, keepPreviousData: false, provider: () => new Map() }), [fetcher])
+  return <SWRConfig value={value}>{children}</SWRConfig>
 }

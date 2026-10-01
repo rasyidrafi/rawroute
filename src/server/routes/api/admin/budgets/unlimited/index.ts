@@ -1,6 +1,6 @@
 import { setBudgetUnlimitedSettings } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { listAliases, listCombos, listModels, listProviders } from "@/server/store"
 
 export async function PATCH(request: Request) {
@@ -20,10 +20,10 @@ export async function PATCH(request: Request) {
     ])
     if (excludedModelIds.some((id) => !availableModelIds.has(id))) return jsonError("One or more selected models are unavailable.", 400)
     const settings = await setBudgetUnlimitedSettings({ excludedModelIds })
-    writeLog("info", "admin", "Unlimited Mode exclusions updated", { modelCount: settings.excludedModelIds.length })
+    recordLog("admin.unlimited.mode.exclusions.updated", { modelCount: settings.excludedModelIds.length }, { level: "info" })
     return Response.json({ settings })
   } catch (error) {
-    writeLog("error", "admin", "Unlimited Mode exclusions update failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.unlimited.mode.exclusions.update.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update Unlimited Mode exclusions.", 400)
   }
 }

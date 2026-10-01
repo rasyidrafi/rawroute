@@ -1,6 +1,6 @@
 import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/gateway"
 import { errorMessage, jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 
 export async function GET() {
   const { response, data } = await cliproxyManagementJson<{ files?: unknown[] }>("/v0/management/auth-files")
@@ -12,7 +12,7 @@ export async function DELETE(request: Request) {
   const query = new URL(request.url).search
   const response = await cliproxyManagement(`/v0/management/auth-files${query}`, { method: "DELETE" })
   if (!response.ok) return jsonError("CLIProxy authentication record could not be deleted.", response.status)
-  writeLog("info", "admin", "CLIProxy authentication record deleted")
+  recordLog("admin.cliproxy.authentication.record.deleted", {}, { level: "info" })
   return Response.json({ ok: true })
 }
 
@@ -20,6 +20,6 @@ export async function PATCH(request: Request) {
   const body = await request.text()
   const response = await cliproxyManagement("/v0/management/auth-files/status", { method: "PATCH", headers: { "content-type": "application/json" }, body })
   if (!response.ok) return jsonError(errorMessage(await response.text(), "CLIProxy authentication record could not be updated."), response.status)
-  writeLog("info", "admin", "CLIProxy authentication record updated")
+  recordLog("admin.cliproxy.authentication.record.updated", {}, { level: "info" })
   return Response.json({ ok: true })
 }

@@ -1,6 +1,6 @@
 import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { deleteProviderApiKey, getProvider } from "@/server/store"
 
 export async function DELETE(_request: Request, params: { providerId: string; apiKeyId: string }) {
@@ -10,10 +10,10 @@ export async function DELETE(_request: Request, params: { providerId: string; ap
     if (provider?.prefix === "codex") throw new Error("Codex accounts are managed by CLIProxy. Use the Codex account flow.")
     await deleteProviderApiKey(providerId, apiKeyId)
     if (provider?.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
-    writeLog("info", "admin", "Provider API key deleted", { providerId, apiKeyId })
+    recordLog("admin.provider.api.key.deleted", { providerId, apiKeyId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Provider API key delete failed", { providerId, apiKeyId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.provider.api.key.delete.failed", { providerId, apiKeyId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to delete provider API key.", error instanceof CliProxyProviderSyncError ? error.status : 400)
   }
 }

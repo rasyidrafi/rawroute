@@ -12,12 +12,12 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await page.getByRole("button", { name: "Save group", exact: true }).click()
   await expect(page.getByRole("dialog")).toBeHidden()
 
-  const initial = await (await page.request.get("/api/admin/model-pricing")).json()
+  const initial = await (await page.request.get("/api/admin/model-pricing", { headers: { "x-rawroute-workspace-id": "default" } })).json()
   const group = initial.groups.find((entry: { name: string }) => entry.name === "Pricing editor test")
   expect(group).toBeDefined()
   const rates = { inputMicrosPerMillion: 2_500_000, outputMicrosPerMillion: 8_000_000, cacheReadMicrosPerMillion: 250_000, cacheCreationMicrosPerMillion: 3_000_000 }
   const tier = { id: "long-context", thresholdTokens: 32000, ...rates, inputMicrosPerMillion: 5_000_000 }
-  expect((await page.request.post("/api/admin/model-pricing", {
+  expect((await page.request.post("/api/admin/model-pricing", { headers: { "x-rawroute-workspace-id": "default" },
     data: { action: "save-version", groupId: group.id, mode: "new", ...rates, contextTiers: [tier] },
   })).ok()).toBe(true)
   await page.reload()
@@ -41,7 +41,7 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await outputRates.nth(1).fill("9")
   await dialog.getByRole("button", { name: "Save as new version" }).click()
   await expect(dialog).toBeHidden()
-  const saved = await (await page.request.get("/api/admin/model-pricing")).json()
+  const saved = await (await page.request.get("/api/admin/model-pricing", { headers: { "x-rawroute-workspace-id": "default" } })).json()
   expect(saved.groups.find((entry: { id: string }) => entry.id === group.id).currentVersion).toMatchObject({
     ...rates,
     inputMicrosPerMillion: 2_750_000,

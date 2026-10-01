@@ -1,4 +1,4 @@
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { runInWorkspace, workspaceContext } from "@/lib/workspace/context"
 import { getWorkspace } from "@/server/workspace-repository"
 
@@ -8,7 +8,7 @@ const scheduled = new Map<string, Promise<void>>()
 /** Track work already started by a request so shutdown can drain accounting. */
 export function trackBackgroundTask(task: Promise<void>) {
   const tracked = task.catch((error: unknown) => {
-    writeLog("error", "system", "Background task failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("background.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
   }).finally(() => pending.delete(tracked))
   pending.add(tracked)
   return tracked

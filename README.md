@@ -5,6 +5,11 @@ containers pulled from their published images.
 
 The original RawRoute dashboard remains intact, including workspaces, aliases, gateway keys, budgets, custom model pricing, usage analytics, Codex views, logs, and settings. RawRoute owns those wrapper features and the budget admission decision. CLIProxyAPI owns provider credentials, OAuth execution, protocol translation, retries, upstream routing, provider rate limits, and model execution.
 
+System → Console Log follows the active workspace. Global → System Logs and
+Settings are shared across workspaces and available from both gateway apps.
+See [dashboard scopes and logging](docs/scopes-and-logging.md) for architecture,
+retention limits, extension guidance and workspace API compatibility changes.
+
 ## Network boundary
 
 Only RawRoute binds a host port. CLIProxyAPI remains the private provider

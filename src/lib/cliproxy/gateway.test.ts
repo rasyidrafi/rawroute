@@ -15,7 +15,7 @@ const mocks = {
   listModels: mock(),
   listProviders: mock(),
   listProviderApiKeys: mock(),
-  writeLog: mock(),
+  recordLog: mock(),
   ensureNonCodexProviderProjection: mock(),
 }
 
@@ -44,7 +44,7 @@ mock.module("@/lib/cliproxy/provider-sync", () => ({
   ensureNonCodexProviderProjection: mocks.ensureNonCodexProviderProjection,
   nonCodexProviderPrefix: (workspaceId: string, providerId: string) => `rr-ws-${workspaceId}-p-${providerId}`,
 }))
-mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+mock.module("@/server/logging/recorder", () => ({ recordLog: mocks.recordLog }))
 mock.module("@/lib/codex/model-refresh", () => ({ scheduleCodexModelRefresh: mock() }))
 mock.module("@/server/store", () => ({
   isMemoryBackend: () => true,
@@ -126,7 +126,7 @@ test("tests combo member policies with a streaming probe", async () => {
   expect(forwarded).toMatchObject({ model: "a", input: [{ role: "user", content: "Reply with OK." }], diffusing: true, stream: true })
 })
 
-test("restores the pre-rewrite request and completion console logs", async () => {
+test("records structured request and completion events", async () => {
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
     headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
@@ -139,9 +139,9 @@ test("restores the pre-rewrite request and completion console logs", async () =>
   }))
   await response.text()
 
-  const messages = mocks.writeLog.mock.calls.map((call) => call[2])
-  expect(messages).toContain("POST PROVIDER:Codex MODEL:codex/gpt-5 -> gpt-5 FMT:openai-responses -> openai-responses KEY:Gateway THINK:low MSG:2 TOOL:2")
-  expect(messages.some((message) => typeof message === "string" && /^DONE \d+ms/.test(message))).toBe(true)
+  const events = mocks.recordLog.mock.calls.map((call) => call[0])
+  expect(mocks.recordLog).toHaveBeenCalledWith("gateway.request.started", expect.objectContaining({ model: "codex/gpt-5", protocol: "openai-responses", reasoningEffort: "low", messageCount: 2, toolCount: 2, apiKeyId: "gateway-key" }))
+  expect(events).toContain("gateway.request.completed")
 })
 
 test("logs invalid gateway authentication failures", async () => {
@@ -154,7 +154,7 @@ test("logs invalid gateway authentication failures", async () => {
   }))
 
   expect(response.status).toBe(401)
-  expect(mocks.writeLog).toHaveBeenCalledWith("warn", "gateway", "Request rejected: invalid API key", { protocol: "openai-responses" })
+  expect(mocks.recordLog).toHaveBeenCalledWith("gateway.authentication.rejected", { protocol: "openai-responses" }, { level: "warn" })
 })
 
 test("returns 429 when budget reservation is denied", async () => {
@@ -169,10 +169,11 @@ test("returns 429 when budget reservation is denied", async () => {
   expect(response.status).toBe(429)
   expect(response.headers.get("retry-after")).toBe("1")
   await expect(response.json()).resolves.toEqual({ error: { message: "Weekly budget exceeded." } })
-  expect(mocks.writeLog).toHaveBeenCalledWith("warn", "gateway", "Budget admission denied", {
+  expect(mocks.recordLog).toHaveBeenCalledWith("gateway.budget.admission.denied", {
     apiKeyId: "gateway-key",
-    error: "Weekly budget exceeded.",
-  })
+    status: 429,
+    retryAfter: 1,
+  }, { level: "warn" })
   expect(globalThis.fetch).not.toHaveBeenCalled()
 })
 
@@ -572,7 +573,7 @@ test("forwards external Responses providers directly and preserves xhigh", async
   const forwarded = JSON.parse(String(call[1]?.body)) as Record<string, unknown>
   expect(forwarded).toMatchObject({ model: "gpt-5.6-luna", reasoning: { effort: "xhigh", summary: "auto" }, include: ["reasoning.encrypted_content"] })
   expect(forwarded).not.toHaveProperty("reasoning_effort")
-  expect(mocks.writeLog.mock.calls.map((entry) => entry[2])).toContain("POST PROVIDER:Halotec MODEL:ht/gpt-5.6-luna -> gpt-5.6-luna FMT:openai-responses -> openai-responses KEY:Gateway THINK:xhigh MSG:1")
+  expect(mocks.recordLog).toHaveBeenCalledWith("gateway.request.started", expect.objectContaining({ model: "ht/gpt-5.6-luna", reasoningEffort: "xhigh", messageCount: 1 }))
 })
 
 test("translates Chat ingress once before calling a Responses provider", async () => {
@@ -634,8 +635,9 @@ test("logs the received protocol and the saved provider protocol", async () => {
   }))
   await response.text()
 
-  const messages = mocks.writeLog.mock.calls.map((call) => call[2])
-  expect(messages).toContain("POST PROVIDER:Nara MODEL:nara/grok-4.5 -> grok-4.5 FMT:anthropic-messages -> openai-chat KEY:Gateway MSG:1")
+  const events = mocks.recordLog.mock.calls.map((call) => call[0])
+  expect(events).toContain("gateway.request.started")
+  expect(mocks.recordLog).toHaveBeenCalledWith("gateway.request.started", expect.objectContaining({ model: "nara/grok-4.5", protocol: "anthropic-messages", upstreamProtocol: "openai-chat" }))
 })
 
 test("routes every supported client/provider protocol direction", async () => {

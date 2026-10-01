@@ -4,11 +4,11 @@ const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<ty
 
 const mocks = {
   authenticateProxyKey: mock(),
-  writeLog: mock(),
+  recordLog: mock(),
 }
 
 mock.module("@/lib/auth", () => ({ authenticateProxyKey: mocks.authenticateProxyKey }))
-mock.module("@/lib/logger", () => ({ writeLog: mocks.writeLog }))
+mock.module("@/server/logging/recorder", () => ({ recordLog: mocks.recordLog }))
 
 const { executorPathFromRequest, getToolGatewayStatus, proxyExecutorRequest } = await import("@/lib/executor")
 
@@ -167,7 +167,7 @@ describe("Executor HTTP proxy", () => {
     await expect(response.json()).resolves.toEqual({
       error: { code: "executor_unavailable", message: "Executor is unavailable." },
     })
-    expect(JSON.stringify(mocks.writeLog.mock.calls)).not.toContain("executor-secret")
+    expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("executor-secret")
   })
 
   test("returns the upstream stream without buffering it", async () => {

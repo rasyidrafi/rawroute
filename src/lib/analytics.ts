@@ -10,7 +10,7 @@ import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForM
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "@/lib/usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@/lib/timezone"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
 import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSettings, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent, UsageRollup } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
@@ -287,7 +287,7 @@ async function warmUsagePredictionSamples() {
     for (const entry of events) rememberUsagePrediction(entry.event, entry.workspaceId)
   })().catch((error) => {
     usagePredictionWarmup = undefined
-    writeLog("warn", "system", "Unable to warm usage prediction history", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("system.unable.to.warm.usage.prediction.history", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "warn" })
   })
   return usagePredictionWarmup
 }
@@ -1085,13 +1085,13 @@ async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now
       } else if (result !== window) {
         boundedSet(budgetWindowCaches, workspaceId, { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
       }
-      if (autoDeactivatedAt) writeLog("info", "admin", "Unlimited Mode auto-deactivated at budget window end", { endedAt: autoDeactivatedAt }, workspaceId)
+      if (autoDeactivatedAt) recordLog("admin.unlimited.mode.auto.deactivated.at.budget.window.end", { endedAt: autoDeactivatedAt }, { level: "info" })
       return result
     } catch (error) {
-      writeLog("warn", "admin", "Unable to sync Codex budget window", {
+      recordLog("admin.unable.to.sync.codex.budget.window", {
         accountId: window.codexAccountId || "unknown",
         error: error instanceof Error ? error.message : "Unknown error",
-      }, workspaceId)
+      }, { level: "warn" })
       return window
     }
   })().finally(() => {
@@ -1161,7 +1161,7 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     if (autoDeactivated) {
       invalidateBudgetReadCaches({ preserveWindowInflight: true })
       boundedSet(budgetWindowCaches, workspaceId, { value: result, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
-      writeLog("info", "admin", "Unlimited Mode auto-deactivated at budget window end", { endedAt: autoDeactivatedAt }, workspaceId)
+      recordLog("admin.unlimited.mode.auto.deactivated.at.budget.window.end", { endedAt: autoDeactivatedAt }, { level: "info" })
     }
     return result
   })().then((window) => {

@@ -1,6 +1,6 @@
 import { cliproxyManagementJson, maskSecret } from "@/lib/cliproxy/gateway"
 import { errorMessage, jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 
 export async function GET() {
   const { response, data } = await cliproxyManagementJson<{ "api-keys"?: unknown[] }>("/v0/management/api-keys")
@@ -13,10 +13,10 @@ export async function PUT(request: Request) {
   if (!Array.isArray(body?.apiKeys) || !body.apiKeys.every((value) => typeof value === "string" && value.trim())) return jsonError("A non-empty API key list is required.", 400)
   try {
     const { response, data } = await cliproxyManagementJson("/v0/management/api-keys", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body.apiKeys) })
-    writeLog(response.ok ? "info" : "warn", "admin", response.ok ? "CLIProxy API keys updated" : "CLIProxy API key update failed", { count: body.apiKeys.length, status: response.status })
+    recordLog(response.ok ? "admin.cliproxy.keys.updated" : "admin.cliproxy.keys.failed", { count: body.apiKeys.length, status: response.status }, { level: response.ok ? "info" : "warn" })
     return new Response(data ? JSON.stringify(data) : null, { status: response.status, headers: { "content-type": "application/json" } })
   } catch (error) {
-    writeLog("error", "admin", "CLIProxy API key update failed", { error: errorMessage(error, "Unknown error") })
+    recordLog("admin.cliproxy.api.key.update.failed", { error: errorMessage(error, "Unknown error") }, { level: "error" })
     return jsonError(errorMessage(error, "Unable to update CLIProxy API keys."), 502)
   }
 }

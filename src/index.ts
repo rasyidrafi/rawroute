@@ -1,3 +1,4 @@
+import { recordLog } from "@/server/logging/recorder"
 import { serve } from "bun"
 import index from "./index.html"
 
@@ -32,11 +33,13 @@ const server = serve({
 })
 
 console.log(`RawRoute listening on ${server.url}`)
+recordLog("system.started")
 
 let shutdown: Promise<void> | undefined
 function stop() {
   if (shutdown) return shutdown
   shutdown = (async () => {
+    recordLog("system.stopping")
     const force = setTimeout(() => { void server.stop(true) }, 30_000)
     try {
       await server.stop(false)
@@ -46,7 +49,9 @@ function stop() {
     } finally {
       clearTimeout(force)
     }
+    recordLog("system.stopped")
   })().catch((error: unknown) => {
+    recordLog("system.shutdown.failed", {}, { level: "error" })
     console.error("RawRoute shutdown failed", error)
     process.exitCode = 1
   })

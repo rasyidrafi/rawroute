@@ -1,5 +1,5 @@
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { deleteApiKey, updateApiKeyName } from "@/server/store"
 
 export async function PATCH(request: Request, params: { apiKeyId: string }) {
@@ -10,10 +10,10 @@ export async function PATCH(request: Request, params: { apiKeyId: string }) {
   const { apiKeyId } = params
   try {
     const apiKey = await updateApiKeyName(apiKeyId, name)
-    writeLog("info", "admin", "Gateway API key renamed", { apiKeyId })
+    recordLog("admin.gateway.api.key.renamed", { apiKeyId }, { level: "info" })
     return Response.json({ ok: true, apiKey })
   } catch (error) {
-    writeLog("error", "admin", "Gateway API key rename failed", { apiKeyId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.gateway.api.key.rename.failed", { apiKeyId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update API key.", 400)
   }
 }
@@ -22,10 +22,10 @@ export async function DELETE(_request: Request, params: { apiKeyId: string }) {
   const { apiKeyId } = params
   try {
     await deleteApiKey(apiKeyId)
-    writeLog("info", "admin", "Gateway API key deleted", { apiKeyId })
+    recordLog("admin.gateway.api.key.deleted", { apiKeyId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Gateway API key delete failed", { apiKeyId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.gateway.api.key.delete.failed", { apiKeyId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to delete API key.", 400)
   }
 }

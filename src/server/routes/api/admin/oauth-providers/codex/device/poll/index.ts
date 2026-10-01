@@ -3,7 +3,7 @@ import { cancelCliProxyCodexLogin, completeCliProxyCodexLogin, registerCliProxyC
 import { ensureCodexProvider } from "@/lib/codex/oauth"
 import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
 export async function POST(request: Request) {
@@ -28,12 +28,12 @@ export async function POST(request: Request) {
     }
     await deletePendingCliProxyCodexLogin(loginId)
     scheduleCodexModelRefresh(true)
-    writeLog("info", "admin", "CLIProxy Codex account mapped", { accountId: account.id })
+    recordLog("admin.cliproxy.codex.account.mapped", { accountId: account.id }, { level: "info" })
     return Response.json({ status: "authorized", account: { id: account.id, name: account.name, email: account.email, accountId: account.accountId, planType: account.planType, providerId: provider.id } })
   } catch (error) {
     await cancelCliProxyCodexLogin(login.state).catch(() => undefined)
     await deletePendingCliProxyCodexLogin(loginId)
-    writeLog("error", "admin", "CLIProxy Codex login failed", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.cliproxy.codex.login.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to finish Codex login.", 502)
   }
 }

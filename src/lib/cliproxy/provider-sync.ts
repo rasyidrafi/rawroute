@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/management"
 import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
 import { localRedisCompareAndDelete, localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { listProviderApiKeys, listProviderModels, getProvider } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 import type { Model, Provider } from "@/lib/types"
@@ -379,12 +379,12 @@ async function reconcile(providerId: string, force: boolean) {
       await applyProjection(projection, force)
       projectionState.set(projectionStateKey, { fingerprint: projection.fingerprint, expiresAt: Date.now() + SYNC_TTL_MS })
       await localRedisSet(redisStateKey(projection.workspaceId, providerId), projection.fingerprint, SYNC_TTL_MS)
-      writeLog("info", "admin", "CLIProxy provider projection reconciled", {
+      recordLog("admin.cliproxy.provider.projection.reconciled", {
         providerId,
         projectedCredentials: projection.openai.length || projection.claude.length,
         projectedModels: projection.openai[0]?.models.length || projection.claude[0]?.models.length || 0,
         supportPromptCacheKey: projection.openai.some((entry) => entry["support-prompt-cache-key"] === true),
-      })
+      }, { level: "info" })
     } catch (error) {
       projectionState.delete(projectionStateKey)
       await localRedisDelete(redisStateKey(projection.workspaceId, providerId))

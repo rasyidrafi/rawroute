@@ -1,3 +1,4 @@
+import { InstanceSettingsCard } from "./settings/instance-settings"
 import { LockKeyholeIcon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -27,6 +28,7 @@ export function SettingsView() {
           <ChangePasswordForm onSave={updatePassword} />
         </CardContent>
       </Card>
+      <InstanceSettingsCard />
     </div>
   </main>
 }

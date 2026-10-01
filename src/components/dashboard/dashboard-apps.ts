@@ -1,7 +1,8 @@
 import type { LucideIcon } from "lucide-react"
 import { ActivityIcon, ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, PlugIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon, WrenchIcon } from "lucide-react"
 
-export type DashboardAppId = "ai-gateway" | "tool-gateway"
+import { dashboardPages, pagePaths, type DashboardPage, type DashboardAppId } from "@/lib/dashboard/routes"
+export type { DashboardAppId } from "@/lib/dashboard/routes"
 
 export type DashboardNavigationItem = {
   title: string
@@ -23,6 +24,15 @@ export type DashboardApp = {
   navigation: DashboardNavigationGroup[]
 }
 
+function nav(page: DashboardPage, icon: LucideIcon): DashboardNavigationItem {
+  return { title: dashboardPages[page].title, icon, href: pagePaths[page] }
+}
+
+const sharedNavigation: DashboardNavigationGroup[] = [
+  { label: "System", items: [nav("logs", LogsIcon)] },
+  { label: "Global", items: [nav("systemLogs", LogsIcon), nav("settings", SettingsIcon)] },
+]
+
 export const dashboardApps: DashboardApp[] = [
   {
     id: "ai-gateway",
@@ -34,35 +44,29 @@ export const dashboardApps: DashboardApp[] = [
       {
         label: "Gateway",
         items: [
-          { title: "Endpoint & Key", icon: KeyRoundIcon, href: "/dashboard" },
-          { title: "Providers", icon: ServerIcon, href: "/dashboard/providers" },
-          { title: "Codex Providers", icon: ShieldCheckIcon, href: "/dashboard/providers/codex" },
-          { title: "Model routing", icon: ArrowLeftRightIcon, href: "/dashboard/aliases" },
+          nav("dashboard", KeyRoundIcon),
+          nav("providers", ServerIcon),
+          nav("codex", ShieldCheckIcon),
+          nav("aliases", ArrowLeftRightIcon),
         ],
       },
       {
         label: "Analytics",
         items: [
-          { title: "Usage", icon: ChartNoAxesCombinedIcon, href: "/dashboard/usage" },
-          { title: "Budgets", icon: WalletCardsIcon, href: "/dashboard/budgets" },
-          { title: "Model Pricing", icon: DollarSignIcon, href: "/dashboard/model-pricing" },
-        ],
-      },
-      {
-        label: "System",
-        items: [
-          { title: "Console Log", icon: LogsIcon, href: "/dashboard/logs" },
-          { title: "Settings", icon: SettingsIcon, href: "/dashboard/settings" },
+          nav("usage", ChartNoAxesCombinedIcon),
+          nav("budgets", WalletCardsIcon),
+          nav("pricing", DollarSignIcon),
         ],
       },
       {
         label: "Coding Agents",
         items: [
-          { title: "Codex", icon: WrenchIcon, href: "/dashboard/coding-agents/codex" },
-          { title: "Opencode", icon: WrenchIcon, href: "/dashboard/coding-agents/opencode" },
-          { title: "Claude Code", icon: WrenchIcon, href: "/dashboard/coding-agents/claude-code" },
+          nav("codexAgent", WrenchIcon),
+          nav("opencodeAgent", WrenchIcon),
+          nav("claudeAgent", WrenchIcon),
         ],
       },
+      ...sharedNavigation,
     ],
   },
   {
@@ -75,14 +79,15 @@ export const dashboardApps: DashboardApp[] = [
       {
         label: "Tool Gateway",
         items: [
-          { title: "Overview", icon: WrenchIcon, href: "/dashboard/tool-gateway" },
-          { title: "Tools", icon: WrenchIcon, href: "/dashboard/tool-gateway/tools" },
-          { title: "Connections", icon: PlugIcon, href: "/dashboard/tool-gateway/connections" },
-          { title: "Policies", icon: ShieldCheckIcon, href: "/dashboard/tool-gateway/policies" },
-          { title: "Activity", icon: ActivityIcon, href: "/dashboard/tool-gateway/activity" },
-          { title: "Settings", icon: SettingsIcon, href: "/dashboard/tool-gateway/settings" },
+          nav("tools", WrenchIcon),
+          nav("toolCatalog", WrenchIcon),
+          nav("toolConnections", PlugIcon),
+          nav("toolPolicies", ShieldCheckIcon),
+          nav("toolActivity", ActivityIcon),
+          nav("toolSettings", SettingsIcon),
         ],
       },
+      ...sharedNavigation,
     ],
   },
 ]

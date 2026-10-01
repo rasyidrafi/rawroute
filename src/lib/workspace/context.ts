@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 
 import type { Workspace, WorkspaceStorageMode } from "@/lib/types"
+import { runWithWorkspaceLogScope } from "@/server/request-context"
 
 export const DEFAULT_WORKSPACE_ID = "default"
 export const DEFAULT_WORKSPACE_NAME = "Default"
@@ -10,7 +11,11 @@ export interface WorkspaceContext {
   storageMode: WorkspaceStorageMode
 }
 
-const storage = new AsyncLocalStorage<WorkspaceContext>()
+const storage = new AsyncLocalStorage<WorkspaceContext | undefined>()
+
+export function runWithoutWorkspace<T>(callback: () => T): T {
+  return storage.run(undefined, callback)
+}
 
 export function workspaceContext(): WorkspaceContext {
   return storage.getStore() || { id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" }
@@ -21,5 +26,5 @@ export function currentWorkspaceId() {
 }
 
 export function runInWorkspace<T>(workspace: Pick<Workspace, "id" | "storageMode">, callback: () => T): T {
-  return storage.run({ id: workspace.id, storageMode: workspace.storageMode || "scoped" }, callback)
+  return storage.run({ id: workspace.id, storageMode: workspace.storageMode || "scoped" }, () => runWithWorkspaceLogScope(workspace.id, callback))
 }

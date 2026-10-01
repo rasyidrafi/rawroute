@@ -1,7 +1,7 @@
 import { invalidateCodexUsageCache, parseUnusedCodexResetCredits } from "@/lib/codex/usage"
 import { cliProxyCodexApiCall } from "@/lib/codex/cliproxy"
 import { getLocalRedis } from "@/lib/local-redis"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
@@ -68,7 +68,7 @@ export async function redeemCodexReset(account: ProviderApiKey, confirmation: st
     const response = await cliProxyCodexApiCall(account, { method: "POST", url: consumeUrl, headers: { ...headers, "content-type": "application/json" }, data: JSON.stringify({ redeem_request_id: redeemRequestId }) })
     if (response.status < 200 || response.status >= 300) throw new Error(`Codex reset redemption failed (${response.status})`)
     await invalidateCodexUsageCache(account.id)
-    writeLog("info", "admin", "Codex reset credit redeemed", { accountId: account.id, redeemRequestId })
+    recordLog("admin.codex.reset.credit.redeemed", { accountId: account.id, redeemRequestId }, { level: "info" })
     return { ok: true, redeemRequestId, status: response.status, message: "Codex reset credit redeemed." }
   } finally { await release(lock) }
 }

@@ -5,7 +5,7 @@ import { CalendarDaysIcon, ChartNoAxesCombinedIcon, Clock3Icon, DollarSignIcon, 
 import { toast } from "sonner"
 import useSWR from "swr"
 
-import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
@@ -48,6 +48,7 @@ function formatWindowTime(value: string) { const parts = getZonedParts(value); r
 function dateToAppDateTime(value: Date, time: string) { return zonedDateTimeToDate(value, time).toISOString() }
 
 export function BudgetsView() {
+  const { fetcher, apiPost, apiDelete, apiPatch } = useDashboardApi()
   const { data, mutate, isLoading, isValidating } = useSWR<BudgetsResponse>("/api/admin/budgets", fetcher, {
     refreshInterval: 300000,
     dedupingInterval: 300000,
@@ -300,6 +301,7 @@ function UnlimitedActivation({ active, dialogOpen, togglePending, excludedModelI
 }
 
 function BudgetWindowCard({ data, onSaved }: { data: Pick<BudgetsResponse, "window" | "codexAccounts">; onSaved: () => Promise<unknown> }) {
+  const { apiPatch } = useDashboardApi()
   const [pending, setPending] = useState(false)
   const [windowAnchorOverride, setWindowAnchorOverride] = useState<BudgetWindowAnchor | null>(null)
   const [codexAccountOverride, setCodexAccountOverride] = useState<string | null>(null)

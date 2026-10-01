@@ -3,7 +3,7 @@ import { setCliProxyCodexAccountPriority } from "@/lib/codex/cliproxy"
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { syncNonCodexProviderProjection } from "@/lib/cliproxy/provider-sync"
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { getProvider, reorderProviderApiKeys } from "@/server/store"
 
 export async function POST(request: Request, params: { providerId: string }) {
@@ -37,10 +37,10 @@ export async function POST(request: Request, params: { providerId: string }) {
       await reorderProviderApiKeys(providerId, body.orderedIds)
       await syncNonCodexProviderProjection(providerId)
     }
-    writeLog("info", "admin", "Provider API keys reordered", { providerId, count: body.orderedIds.length })
+    recordLog("admin.provider.api.keys.reordered", { providerId, count: body.orderedIds.length }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
-    writeLog("error", "admin", "Provider API key reorder failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.provider.api.key.reorder.failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to reorder provider API keys.", 502)
   }
 }

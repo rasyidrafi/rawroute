@@ -4,7 +4,7 @@ import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { trackBackgroundTask } from "@/lib/background-tasks"
 import { catalogModels } from "@/lib/catalog"
 import { applyComboMemberPolicy, comboMembers, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { extractUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { listAliases, listCombos, listModels, listProviders } from "@/server/store"
 import type { ComboMember, Protocol, UsageEvent } from "@/lib/types"
@@ -85,29 +85,8 @@ function extractReasoningEffort(payload: Record<string, unknown>) {
   return unique.size === 1 ? found[0].effort : found.map(({ path, effort }) => `${path}:${effort}`).join(", ")
 }
 
-function requestSummary(provider: string, gatewayModel: string, upstreamModel: string, receivedProtocol: Protocol, upstreamProtocol: Protocol, account: string, payload: Record<string, unknown>, reasoningEffort?: string) {
-  const parts = [
-    `POST PROVIDER:${provider}`,
-    `MODEL:${gatewayModel} -> ${upstreamModel}`,
-    `FMT:${receivedProtocol} -> ${upstreamProtocol}`,
-    `KEY:${account}`,
-  ]
-  if (reasoningEffort) parts.push(`THINK:${reasoningEffort}`)
-  parts.push(`MSG:${requestItemCount(payload, receivedProtocol)}`)
-  const toolCount = requestToolCount(payload)
-  if (toolCount) parts.push(`TOOL:${toolCount}`)
-  return parts.join(" ")
-}
-
-function completionSummary(durationMs: number, ttftMs: number | undefined, usage: UsageMetrics | undefined) {
-  const parts = [`DONE ${durationMs}ms`]
-  if (ttftMs !== undefined) parts.push(`TTFT:${ttftMs}ms`)
-  if (usage) {
-    if (usage.input !== undefined) parts.push(`IN:${usage.input}`)
-    if (usage.cached !== undefined) parts.push(`(CACHE ↻${usage.cached})`)
-    if (usage.output !== undefined) parts.push(`OUT:${usage.output}`)
-  } else parts.push("USAGE:unknown")
-  return parts.join(" ")
+function completionDetails(durationMs: number, ttftMs: number | undefined, usage: UsageMetrics | undefined) {
+  return { durationMs, ttftMs, usageKnown: usage !== undefined, inputTokens: usage?.input, cachedTokens: usage?.cached, outputTokens: usage?.output }
 }
 
 function suppliedGatewayKey(request: Request) {
@@ -197,7 +176,7 @@ async function canonicalModelsResponse() {
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
   const authenticated = await authenticateProxyKey(request)
   if (!authenticated) {
-    writeLog("warn", "gateway", "Request rejected: invalid API key", { protocol: protocolForLogPath(path) })
+    recordLog("gateway.authentication.rejected", { protocol: protocolForLogPath(path) }, { level: "warn" })
     return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
   }
   return runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey))
@@ -209,7 +188,7 @@ async function releaseBudgetReservationWithLog(reservation: BudgetReservation | 
   try {
     await releaseBudgetReservation(reservation)
   } catch (error) {
-    writeLog("warn", "gateway", "Unable to release routing lease", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("gateway.unable.to.release.routing.lease", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "warn" })
   }
 }
 
@@ -304,7 +283,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       reasoningEffort = applied.effort
       customPayload = applied.customPayload
     } catch (error) {
-      writeLog("warn", "gateway", "Combo member policy is invalid", { combo: combo.combo, memberModelId, error: error instanceof Error ? error.message : "Unknown error" })
+      recordLog("gateway.combo.member.policy.is.invalid", { comboId: combo.id, memberModelId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "warn" })
       continue
     }
     const memberRequest = new Request(request.url, {
@@ -320,7 +299,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     }
     if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
     lastResponse = response
-    writeLog("warn", "gateway", "Combo member failed, trying next", { combo: combo.combo, memberModelId, status: response.status })
+    recordLog("gateway.combo.member.failed.trying.next", { comboId: combo.id, memberModelId, status: response.status }, { level: "warn" })
   }
   return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
 }
@@ -330,7 +309,11 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
   if (!isInference) {
-    if (request.method === "GET" && path.endsWith("/models")) return canonicalModelsResponse()
+    if (request.method === "GET" && path.endsWith("/models")) {
+      const response = await canonicalModelsResponse()
+      recordLog("gateway.catalog.served", { apiKeyId: apiKey.id, status: response.status, protocol: "catalog" })
+      return response
+    }
     const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
     const response = await proxyToCliProxy(request, path, { headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" } })
     return response
@@ -348,7 +331,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     const resolution = error instanceof GatewayModelResolutionError
       ? error
       : new GatewayModelResolutionError("Model resolver is unavailable.", 503, "model_resolver_unavailable")
-    writeLog(resolution.status === 400 ? "warn" : "error", "gateway", "Model resolution failed", { model: estimate.model, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("gateway.model.resolution.failed", { model: estimate.model, errorCode: resolution.code, status: resolution.status }, { level: resolution.status === 400 ? "warn" : "error" })
     return new Response(JSON.stringify({ error: { message: resolution.message, code: resolution.code } }), {
       status: resolution.status,
       headers: {
@@ -381,14 +364,19 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
           protocol,
         )
   } catch (error) {
-    if (error instanceof BudgetModelExcludedError) return excludedModelResponse(error, true)
+    if (error instanceof BudgetModelExcludedError) {
+      recordLog("gateway.budget.model.excluded", { apiKeyId: apiKey.id, model: estimate.model }, { level: "warn" })
+      return excludedModelResponse(error, true)
+    }
     if (error instanceof BudgetDeniedError) {
+      recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
       return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" } })
     }
     if (error instanceof BudgetPricingUnavailableError) {
+      recordLog("gateway.budget.pricing.unavailable", { apiKeyId: apiKey.id, status: error.status, model: estimate.model }, { level: "warn" })
       return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
     }
-    writeLog("error", "gateway", "Budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("gateway.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
   }
 
@@ -396,23 +384,24 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     reservation = await reserveBudgetAdmission(apiKey.id, budgetState.admission, budgetState.usageContext)
   } catch (error) {
     if (error instanceof BudgetDeniedError) {
-      writeLog("warn", "gateway", "Budget admission denied", { apiKeyId: apiKey.id, error: error.message })
+      recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
       return new Response(JSON.stringify({ error: { message: error.message } }), {
         status: error.status,
         headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" },
       })
     }
-    writeLog("error", "gateway", "Shared budget state unavailable", { error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("gateway.shared.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
   }
 
   const internalKey = process.env.CLIPROXY_API_KEY?.trim() || supplied
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
-  const provider = resolvedModel.providerName || resolvedModel.providerId || "RawRoute"
-  const account = apiKey.name || "CLIProxyAPI"
-  writeLog("info", "gateway", requestSummary(provider, resolvedModel.pricingGatewayModelId, resolvedModel.upstreamModel, protocol, resolvedModel.upstreamProtocol, account, payload, resolvedModel.reasoningEffort || extractReasoningEffort(payload)), {
-    promptCacheKey: resolvedModel.promptCacheKey,
+  recordLog("gateway.request.started", {
+    providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, upstreamModel: resolvedModel.upstreamModel,
+    protocol, upstreamProtocol: resolvedModel.upstreamProtocol, apiKeyId: apiKey.id,
+    reasoningEffort: resolvedModel.reasoningEffort || extractReasoningEffort(payload),
+    messageCount: requestItemCount(payload, protocol), toolCount: requestToolCount(payload), promptCacheKey: resolvedModel.promptCacheKey,
   })
   let response: Response
   try {
@@ -422,10 +411,10 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
           body: Buffer.from(forwardedBody),
           headers: { authorization: `Bearer ${internalKey}`, "x-api-key": "" },
         })
-  } catch (error) {
+  } catch {
     await releaseBudgetReservationWithLog(reservation)
     await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
-    writeLog("error", "gateway", "Upstream request failed", { provider, model: resolvedModel.pricingGatewayModelId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("gateway.upstream.request.failed", { providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, status: 502 }, { level: "error" })
     return new Response(JSON.stringify({ error: { message: "Upstream request failed." } }), { status: 502, headers: { "content-type": "application/json" } })
   }
   if (response.ok && response.body && response.headers.get("content-type")?.toLowerCase().includes("text/event-stream")) {
@@ -436,12 +425,13 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
         const collected = await collectStreamUsage(monitor)
         const streamStatus = collected.terminalEventSeen ? response.status : 502
         await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared })
-          .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
+          .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
         const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
-        if (streamStatus >= 200 && streamStatus < 400) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage), details)
-        else writeLog("warn", "gateway", `FAILED ${streamStatus} ${Date.now() - startedAtMs}ms`, details)
+        recordLog(streamStatus < 400 ? "gateway.request.completed" : "gateway.request.failed", {
+          ...details, ...completionDetails(Date.now() - startedAtMs, collected.firstByteAt === undefined ? undefined : collected.firstByteAt - startedAtMs, collected.usage), streaming: true,
+        }, { level: streamStatus < 400 ? "info" : "warn" })
       } catch (recordingError) {
-        writeLog("warn", "gateway", "Unable to calculate usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" })
+        recordLog("gateway.unable.to.calculate.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" })
       } finally {
         await releaseBudgetReservationWithLog(reservation)
       }
@@ -451,12 +441,12 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   const responseBody = new Uint8Array(await response.arrayBuffer())
   const usage = actualResponseUsage(responseBody, response.headers.get("content-type"))
   await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
-    .catch((recordingError) => writeLog("warn", "gateway", "Unable to persist usage event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }))
-  if (response.ok) writeLog("info", "gateway", completionSummary(Date.now() - startedAtMs, undefined, usage))
+    .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
+  if (response.ok) recordLog("gateway.request.completed", { status: response.status, ...completionDetails(Date.now() - startedAtMs, undefined, usage), streaming: false })
   else {
     const failure = await upstreamFailure(new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }))
     if (!response.headers.has("retry-after") && failure.retrySeconds) response.headers.set("retry-after", String(failure.retrySeconds))
-    writeLog("warn", "gateway", `FAILED ${response.status} ${Date.now() - startedAtMs}ms`, { provider, model: resolvedModel.pricingGatewayModelId, source: resolvedModel.nativeResponses ? "provider" : "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: response.headers.get("retry-after") || "unspecified" })
+    recordLog("gateway.request.failed", { status: response.status, durationMs: Date.now() - startedAtMs, providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, source: resolvedModel.nativeResponses ? "provider" : "cliproxy", errorCode: failure.errorCode || "unknown", retryAfter: failure.retrySeconds }, { level: "warn" })
   }
   await releaseBudgetReservationWithLog(reservation)
   return new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })

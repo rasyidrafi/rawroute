@@ -1,5 +1,5 @@
 import { jsonError } from "@/lib/http"
-import { writeLog } from "@/lib/logger"
+import { recordLog } from "@/server/logging/recorder"
 import { listModelSharesForSourceModel, listShareTargets, setModelShareTargets } from "@/lib/workspace/model-shares"
 
 export async function GET(request: Request) {
@@ -22,10 +22,10 @@ export async function POST(request: Request) {
   if (!modelId) return jsonError("Model ID is required.", 400)
   try {
     const shares = await setModelShareTargets(modelId, recipientWorkspaceIds)
-    writeLog("info", "admin", "Model sharing updated", { modelId, recipientCount: recipientWorkspaceIds.length })
+    recordLog("admin.model.sharing.updated", { modelId, recipientCount: recipientWorkspaceIds.length }, { level: "info" })
     return Response.json({ shares })
   } catch (error) {
-    writeLog("error", "admin", "Model sharing update failed", { modelId, error: error instanceof Error ? error.message : "Unknown error" })
+    recordLog("admin.model.sharing.update.failed", { modelId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
     return jsonError(error instanceof Error ? error.message : "Unable to update model sharing.", 400)
   }
 }

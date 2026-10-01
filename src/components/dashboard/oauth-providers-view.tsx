@@ -5,7 +5,7 @@ import { LinkIcon, LogInIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import useSWR, { useSWRConfig } from "swr"
 import { toast } from "sonner"
 
-import { apiDelete, apiPatch, apiPost, fetcher } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 import { CodexResetCredits } from "@/components/dashboard/codex-reset-credits"
 import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/codex-quota"
 import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
@@ -46,6 +46,7 @@ function expiryLabel(value?: string) {
 }
 
 export function OAuthProvidersView() {
+  const { fetcher, apiPatch, apiDelete, apiPost } = useDashboardApi()
   const { mutate: refreshCachedResource } = useSWRConfig()
   const { data, error, isLoading, isValidating, mutate } = useSWR<OAuthResponse>("/api/admin/oauth-providers", fetcher)
   const { data: usageData, error: usageError, isLoading: usageLoading, mutate: mutateUsage } = useSWR<UsageResponse>("/api/admin/oauth-providers/usage", fetcher, {

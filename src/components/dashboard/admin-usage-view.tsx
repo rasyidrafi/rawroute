@@ -7,5 +7,6 @@ import { UsageView } from "@/components/dashboard/usage-view"
  */
 export function AdminUsageView() {
   const { workspace } = useWorkspace()
+  if (!workspace) return null
   return <UsageView key={workspace.id} workspaceId={workspace.id} />
 }

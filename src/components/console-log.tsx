@@ -1,55 +1,11 @@
-import { useMemo, useState } from "react"
-import { ClipboardIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
-import useSWR from "swr"
-import { toast } from "sonner"
-
-import { LoadingSpinner } from "@/components/loading-spinner"
-import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import type { LogEntry, LogLevel } from "@/lib/logger"
-import { formatAppDateTime, formatAppTime } from "@/lib/timezone"
-import { apiDelete, apiFetch } from "@/components/dashboard/api"
-
-async function fetchLogs(url: string) {
-  return apiFetch<{ logs: LogEntry[] }>(url)
-}
-
-function formatLog(entry: LogEntry) {
-  const details = entry.details ? ` ${Object.entries(entry.details).map(([key, value]) => `${key}=${value}`).join(" ")}` : ""
-  return `${formatAppDateTime(entry.timestamp)} ${entry.level.toUpperCase().padEnd(5)} [${entry.source}] ${entry.message}${details}`
-}
+import { useWorkspace } from "@/components/dashboard/workspace-provider"
+import { LogPanel } from "@/components/dashboard/logs/log-panel"
 
 export function ConsoleLog() {
-  const [live, setLive] = useState(true)
-  const [query, setQuery] = useState("")
-  const [level, setLevel] = useState<LogLevel | "all">("all")
-  const [clearing, setClearing] = useState(false)
-  const [clearOpen, setClearOpen] = useState(false)
-  const { data, error, isLoading, isValidating, mutate } = useSWR("/api/admin/logs", fetchLogs, { refreshInterval: live ? 3000 : 0, revalidateOnFocus: false, dedupingInterval: 2000 })
-  const logs = useMemo(() => {
-    const normalizedQuery = query.toLowerCase()
-    return (data?.logs || []).filter((entry) => (level === "all" || entry.level === level) && formatLog(entry).toLowerCase().includes(normalizedQuery))
-  }, [data, level, query])
+  const { workspace } = useWorkspace()
+  return workspace ? <LogPanel key={workspace.id} scope={{ kind: "workspace", workspaceId: workspace.id }} /> : null
+}
 
-  if (isLoading && !data) return <DashboardContentSkeleton variant="console-log" />
-
-  async function clear() {
-    setClearing(true)
-    try {
-      await apiDelete("/api/admin/logs")
-      await mutate()
-      setClearOpen(false)
-      toast.success("Console logs cleared")
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to clear logs") } finally { setClearing(false) }
-  }
-
-  return <main className="h-[calc(100svh-var(--header-height))] max-h-[calc(100svh-var(--header-height))] min-h-0 flex-none overflow-hidden bg-workspace p-4 dark:bg-background md:h-[calc(100svh-var(--header-height)-1rem)] md:max-h-[calc(100svh-var(--header-height)-1rem)] md:p-6 lg:p-8"><div className="mx-auto h-full max-w-7xl"><Card className="h-full"><CardHeader><CardTitle>Console Log</CardTitle><CardDescription>Recent gateway, authentication, and dashboard activity from this running instance.</CardDescription><CardAction><div className="flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button><Button variant="outline" disabled={!logs.length} onClick={() => { void navigator.clipboard.writeText(logs.map(formatLog).join("\n")); toast.success("Logs copied") }}><ClipboardIcon />Copy</Button><Button variant="destructive" disabled={!data?.logs.length} onClick={() => setClearOpen(true)}><Trash2Icon />Clear</Button></div></CardAction></CardHeader><CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col"><div className="flex shrink-0 flex-col gap-3 border-y py-4 lg:flex-row lg:items-center"><div className="flex flex-wrap gap-2">{(["all", "error", "warn", "info"] as const).map((item) => <Button key={item} size="sm" variant={level === item ? "default" : "outline"} onClick={() => setLevel(item)}>{item === "all" ? "All" : item[0].toUpperCase() + item.slice(1)}</Button>)}</div><div className="flex flex-1 flex-wrap items-center gap-3 lg:justify-end"><Input aria-label="Search logs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search log text..." className="max-w-sm" /><label className="flex shrink-0 items-center gap-2 text-sm"><Checkbox checked={live} onCheckedChange={setLive} /><span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full bg-success" />Live</span></label></div></div><ScrollArea orientation="vertical" variant="console"
-              className="min-h-0 flex-1">{isLoading && <div className="flex items-center gap-2 text-console-muted"><LoadingSpinner />Loading logs...</div>}{error && (
-                <div className="text-error-bright">{error.message}</div>)}{!isLoading && !error && !logs.length && <div className="text-console-subtle">No matching logs.</div>}{logs.map((entry) => <div key={entry.id} className="flex items-start border-b border-white/5 py-1 last:border-0"><span className="mr-3 shrink-0 text-console-subtle">{formatAppTime(entry.timestamp)}</span><Badge className="mr-3" variant={entry.level === "error" ? "log-error" : entry.level === "warn" ? "log-warning" : "log-info"}>{entry.level}</Badge><span className="min-w-0 break-words"><span className="text-console-subtle">[{entry.source}]</span> {entry.message}{entry.details && <span className="text-console-muted"> {Object.entries(entry.details).map(([key, value]) => `${key}=${value}`).join(" ")}</span>}</span></div>)}</ScrollArea></CardContent></Card></div><AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clear console logs?</AlertDialogTitle><AlertDialogDescription>This removes the in-memory log history for this running instance.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={clearing}>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={clearing} onClick={() => void clear()}>{clearing && <LoadingSpinner />}Clear logs</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></main>
+export function SystemLogs() {
+  return <LogPanel scope={{ kind: "global" }} />
 }

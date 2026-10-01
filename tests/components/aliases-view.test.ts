@@ -5,8 +5,7 @@ test("aliases expose copyable gateway IDs", () => {
   const view = readFileSync(new URL("../../src/components/dashboard/aliases-view.tsx", import.meta.url), "utf8")
 
   expect(view).toContain('id: "Gateway ID", label: "Gateway ID"')
-  expect(view).toContain("navigator.clipboard.writeText(alias.alias)")
-  expect(view).toContain('toast.success("Gateway ID copied")')
+  expect(view).toContain('copy(alias.alias, "Gateway ID copied")')
   expect(view).toContain('variant="outline"')
   expect(view).toContain('id: "Status", label: "Status"')
   expect(view).toContain("Shared Models")

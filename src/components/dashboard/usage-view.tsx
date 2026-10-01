@@ -9,9 +9,10 @@ import { DEFAULT_GRANULARITY, formatCalendarSelection, formatCost, formatNumber,
 import type { DashboardPayload, DashboardQuery } from "@/lib/types"
 import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-defaults"
 import { calendarDateFromInstant } from "@/lib/timezone"
-import { apiFetch } from "@/components/dashboard/api"
+import { useDashboardApi } from "@/components/dashboard/api-context"
 
 export function UsageView({ publicView = false, workspaceId }: { publicView?: boolean; workspaceId?: string }) {
+  const { apiFetch } = useDashboardApi()
   const endpoint = publicView ? "/api/public/dashboard" : "/api/admin/usage"
   const defaultPreset: DashboardQuery["preset"] = DEFAULT_DASHBOARD_QUERY.preset
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null)
@@ -51,7 +52,7 @@ export function UsageView({ publicView = false, workspaceId }: { publicView?: bo
         if (activeRequest.current === controller) activeRequest.current = null
       }
     })
-  }, [endpoint, publicView, workspaceId])
+  }, [endpoint, publicView, workspaceId, apiFetch])
 
   useEffect(() => {
     query(defaultPreset)
