@@ -83,7 +83,7 @@ for (const width of [390, 1440]) {
     await expect(service.getByText("Release management", { exact: true })).toBeVisible()
     await expect(service.getByRole("button", { name: "Restart", exact: true })).toBeEnabled()
     await expect(page.getByRole("button", { name: "Copy Client base URL", exact: true })).toBeVisible()
-    await expect(page.getByText("RawRoute transport", { exact: true })).toBeVisible()
+    await expect(page.getByText("RawRoute transport", { exact: true })).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`cliproxy-${width}.png`), fullPage: true })
   })
