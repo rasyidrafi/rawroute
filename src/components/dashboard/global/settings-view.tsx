@@ -1,5 +1,4 @@
 import { SettingsLayout, PasswordSettingsCard } from "./settings/settings-layout"
-import { InstanceSettingsCard } from "./settings/instance-settings"
 import { toast } from "sonner"
 
 import { ChangePasswordForm } from "@/components/dashboard/change-password-form"
@@ -16,5 +15,5 @@ export function SettingsView() {
       return false
     }
   }
-  return <SettingsLayout gateway={<InstanceSettingsCard />} password={<PasswordSettingsCard><ChangePasswordForm onSave={updatePassword} /></PasswordSettingsCard>} />
+  return <SettingsLayout password={<PasswordSettingsCard><ChangePasswordForm onSave={updatePassword} /></PasswordSettingsCard>} />
 }

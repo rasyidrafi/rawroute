@@ -1,8 +1,9 @@
+import { CliProxySettingsPageSkeleton } from "@/components/dashboard/global/cliproxy/settings/settings-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { LogToolbar } from "@/components/dashboard/logs/log-toolbar"
-import { LogResults, LogStatus } from "@/components/dashboard/logs/log-results"
+import { LogResults } from "@/components/dashboard/logs/log-results"
 import { CodingAgentView } from "@/components/dashboard/ai/coding-agent-view"
 import { useLocation } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -25,6 +26,7 @@ export function DashboardRouteSkeleton() {
 }
 
 export function DashboardContentSkeleton({ variant }: { variant: DashboardSkeletonVariant }) {
+  if (variant === "cliproxy-settings") return <CliProxySettingsPageSkeleton />
   if (variant === "settings") return <SettingsSkeleton />
   if (variant === "usage") return <UsageSkeleton />
   if (variant === "console-log" || variant === "system-logs") return <ConsoleLogSkeleton global={variant === "system-logs"} />
@@ -70,5 +72,5 @@ function BudgetsSkeleton() {
 const noop = () => undefined
 
 function ConsoleLogSkeleton({ global }: { global: boolean }) {
-  return <main className={logPageClassName} aria-busy="true" aria-label="Loading logs" data-slot="dashboard-content-skeleton"><div className="mx-auto h-full max-w-7xl"><Card className="h-full"><CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{global ? "System Logs" : "Console Log"}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."} History is kept in memory until the server restarts.</CardDescription><CardAction><div className="flex flex-wrap gap-2"><Button variant="outline" disabled><RefreshCwIcon />Refresh</Button><Button variant="outline" disabled><ClipboardIcon />Copy</Button><Button variant="destructive" disabled><Trash2Icon />Clear</Button></div></CardAction></CardHeader><CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col"><LogToolbar disabled level="all" setLevel={noop} query="" setQuery={noop} source="all" setSource={noop} sources={[]} live setLive={noop} /><LogStatus count={0} snapshot={null} live /><LogResults entries={[]} loading /></CardContent></Card></div></main>
+  return <main className={logPageClassName} aria-busy="true" aria-label="Loading logs" data-slot="dashboard-content-skeleton"><div className="mx-auto h-full max-w-7xl"><Card className="h-full"><CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{global ? "System Logs" : "Console Log"}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."}</CardDescription><CardAction><div className="flex flex-wrap gap-2"><Button variant="outline" disabled><RefreshCwIcon />Refresh</Button><Button variant="outline" disabled><ClipboardIcon />Copy</Button><Button variant="destructive" disabled><Trash2Icon />Clear</Button></div></CardAction></CardHeader><CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col"><LogToolbar disabled level="all" setLevel={noop} query="" setQuery={noop} source="all" setSource={noop} sources={[]} live setLive={noop} /><LogResults entries={[]} loading /></CardContent></Card></div></main>
 }

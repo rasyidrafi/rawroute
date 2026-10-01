@@ -2,7 +2,7 @@
 
 Global → CLIProxyAPI controls the shared provider engine from either gateway app.
 It includes service health, start/stop/restart, latest or pinned release installs,
-downgrades, masked engine keys, global OAuth, auth files, and redacted engine logs.
+downgrades.
 Global Settings retains debug, file logging, usage statistics, and retry settings.
 RawRoute retains fill-first routing to preserve workspace credential priority.
 
@@ -50,8 +50,7 @@ cliproxy/
   logs/
 ```
 
-RawRoute generates private management and transport credentials. The transport
-credential cannot be revoked or omitted by a key replacement. Engine credentials
+RawRoute generates private management and transport credentials. These credentials are internal; the dashboard and public admin API do not expose engine key management. Engine credentials
 are separate from public workspace gateway keys.
 
 For source development, set `CLIPROXY_MODE=managed` and optionally
@@ -75,7 +74,7 @@ docker compose -f docker-compose.external.yml --env-file .env.local up -d
 
 This retains the original CLIProxy image/config/auth/log/plugin mounts and sets
 `CLIPROXY_MODE=external`. Lifecycle buttons are unavailable in external mode;
-global credential, OAuth, settings, and log management continue to work. Existing
+settings management continue to work. Existing
 environments without `CLIPROXY_MODE` remain external when any `CLIPROXY_URL`,
 `CLIPROXY_API_KEY`, or `CLIPROXY_MANAGEMENT_KEY` is configured.
 
@@ -159,10 +158,9 @@ container healthcheck, so an intentionally stopped engine does not make the
 management UI unhealthy. `/api/health` retains dependency readiness checks and
 returns 503 when CLIProxy, PostgreSQL, or Redis is unavailable.
 
-Global OAuth accounts are engine resources, not automatically shared workspace
-providers. Connect workspace Codex accounts from their workspace page. Both
-global and workspace Codex logins use the same login lease. Global auth-file
-mutations reject workspace mappings and reserved workspace prefixes.
+OAuth connections are supported only for Codex inside a workspace. Connect accounts
+from that workspace’s Codex Providers page. Account visibility and management
+remain scoped to the owning workspace.
 
 ## Validation
 

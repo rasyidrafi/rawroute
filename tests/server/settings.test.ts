@@ -31,11 +31,11 @@ beforeEach(async () => {
 })
 afterEach(async () => { await server.stop(true); await upstream.stop(true) })
 function patch(body: unknown) {
-  return fetch(new URL("/api/admin/settings", server.url), { method: "PATCH", headers: { cookie, "content-type": "application/json", "x-rawroute-workspace-id": "ignored-global-header" }, body: JSON.stringify(body) })
+  return fetch(new URL("/api/admin/cliproxy/settings", server.url), { method: "PATCH", headers: { cookie, "content-type": "application/json", "x-rawroute-workspace-id": "ignored-global-header" }, body: JSON.stringify(body) })
 }
 
 test("global settings normalize the upstream config and save only validated fields", async () => {
-  const response = await fetch(new URL("/api/admin/settings", server.url), { headers: { cookie } })
+  const response = await fetch(new URL("/api/admin/cliproxy/settings", server.url), { headers: { cookie } })
   expect(await response.json()).toEqual({ debug: false, loggingToFile: false, usageStatisticsEnabled: false, requestRetry: 2, maxRetryInterval: 0, routingStrategy: "fill-first" })
   expect((await patch({ debug: true, requestRetry: 4 })).status).toBe(200)
   expect(writes).toEqual([

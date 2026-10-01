@@ -14,20 +14,9 @@ for (const width of [390, 900, 1440]) {
     await authenticate(page)
     await page.setViewportSize({ width, height: 1000 })
     await page.goto("/dashboard/settings")
-    await expect(page.getByRole("switch", { name: "Debug logging", exact: true })).toBeVisible()
-    const cards = page.locator('[data-slot="settings-grid"] > [data-slot="card"]')
-    const gateway = await cards.nth(0).boundingBox()
-    const password = await cards.nth(1).boundingBox()
-    expect(gateway).not.toBeNull()
-    expect(password).not.toBeNull()
-    if (width >= 1280) {
-      expect(password!.y).toBe(gateway!.y)
-      expect(password!.x - gateway!.x - gateway!.width).toBeCloseTo(24, 0)
-      expect(gateway!.width / password!.width).toBeCloseTo(1.5, 1)
-    } else {
-      expect(password!.x).toBe(gateway!.x)
-      expect(password!.y - gateway!.y - gateway!.height).toBeCloseTo(24, 0)
-    }
+    await expect(page.getByLabel("Current password", { exact: true })).toBeVisible()
+    await expect(page.getByRole("switch", { name: "Debug logging", exact: true })).toHaveCount(0)
+    await expect(page.locator('main [data-slot="card"]')).toHaveCount(1)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`settings-${width}.png`), fullPage: true })
   })
@@ -35,15 +24,17 @@ for (const width of [390, 900, 1440]) {
 
 test("gateway switches save explicitly and password visibility preserves form values", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard/settings")
+  await page.goto("/dashboard/cliproxy")
+  await page.getByRole("button", { name: "Engine settings", exact: true }).click()
+  await expect(page).toHaveURL(/\/dashboard\/cliproxy\/settings$/)
   const toggle = page.getByRole("switch", { name: "Debug logging", exact: true })
   await expect(toggle).toBeVisible()
   const previous = await toggle.isChecked()
   let writes = 0
-  page.on("request", request => { if (request.url().endsWith("/api/admin/settings") && request.method() === "PATCH") writes++ })
+  page.on("request", request => { if (request.url().endsWith("/api/admin/cliproxy/settings") && request.method() === "PATCH") writes++ })
   await toggle.click()
   expect(writes).toBe(0)
-  const saved = page.waitForResponse(response => response.url().endsWith("/api/admin/settings") && response.request().method() === "PATCH")
+  const saved = page.waitForResponse(response => response.url().endsWith("/api/admin/cliproxy/settings") && response.request().method() === "PATCH")
   await page.getByRole("button", { name: "Save settings", exact: true }).click()
   expect((await saved).ok()).toBe(true)
   expect(writes).toBe(1)
@@ -52,6 +43,7 @@ test("gateway switches save explicitly and password visibility preserves form va
   await expect(page.getByLabel("Routing strategy", { exact: true })).toHaveText("fill-first")
   await expect(page.locator('input[readonly]')).toHaveCount(0)
 
+  await page.goto("/dashboard/settings")
   const current = page.getByLabel("Current password", { exact: true })
   await current.fill("private-password")
   await expect(current).toHaveAttribute("type", "password")

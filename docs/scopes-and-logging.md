@@ -8,8 +8,8 @@ global pages remain available even when the workspace list cannot load.
 | Gateway, Analytics, Coding Agents | Workspace | Existing providers, keys, routing, usage, budgets, pricing and setup |
 | System → Console Log | Workspace | Gateway requests, workspace administration and dashboard activity |
 | Global → System Logs | Global | Authentication, workspace lifecycle, instance administration and service activity |
-| Global → CLIProxyAPI | Global | Shared service lifecycle, releases, credentials, OAuth and engine logs |
-| Global → Settings | Global | Admin password and shared gateway settings |
+| Global → CLIProxyAPI | Global | Shared service lifecycle, releases and engine settings |
+| Global → Settings | Global | RawRoute administrator password |
 | Tool Gateway | Global | Existing shared Executor service views |
 
 System and Global groups appear in both AI Gateway and Tool Gateway. Shared pages
@@ -113,7 +113,8 @@ AI Gateway pages live under `/dashboard/ai/`: `endpoint`, `providers`,
 `pricing`, and `coding-agents/{codex,opencode,claude-code}`.
 Tool Gateway uses `/dashboard/tools/{overview,catalog,connections,policies,activity,settings}`.
 Shared workspace logs use `/dashboard/logs`. Global pages remain
-`/dashboard/{settings,cliproxy,system-logs}`.
+`/dashboard/{settings,cliproxy,system-logs}`. CLIProxy engine configuration is
+`/dashboard/cliproxy/settings`, served by `/api/admin/cliproxy/settings`.
 
 Only canonical URLs are registered. Removed URLs return 404; no aliases or
 redirect compatibility layer is retained. Login and all navigation target the

@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const instanceSettingsSchema = z.strictObject({
+export const cliproxySettingsSchema = z.strictObject({
   debug: z.boolean(),
   loggingToFile: z.boolean(),
   usageStatisticsEnabled: z.boolean(),
@@ -8,4 +8,4 @@ export const instanceSettingsSchema = z.strictObject({
   maxRetryInterval: z.number().int().min(0).max(3600),
   routingStrategy: z.enum(["round-robin", "fill-first"]),
 })
-export type InstanceSettings = z.infer<typeof instanceSettingsSchema>
+export type CliProxySettings = z.infer<typeof cliproxySettingsSchema>

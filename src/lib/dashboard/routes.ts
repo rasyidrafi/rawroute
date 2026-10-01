@@ -13,6 +13,7 @@ export const dashboardPages = {
   logs: { path: "/dashboard/logs", skeleton: "console-log", title: "Console Log", scope: "workspace", app: "shared" },
   cliproxy: { path: "/dashboard/cliproxy", skeleton: "cliproxy", title: "CLIProxyAPI", scope: "global", app: "shared" },
   systemLogs: { path: "/dashboard/system-logs", skeleton: "system-logs", title: "System Logs", scope: "global", app: "shared" },
+  cliproxySettings: { path: "/dashboard/cliproxy/settings", skeleton: "cliproxy-settings", title: "CLIProxyAPI settings", scope: "global", app: "shared" },
   settings: { path: "/dashboard/settings", skeleton: "settings", title: "Settings", scope: "global", app: "shared" },
   codexAgent: { path: "/dashboard/ai/coding-agents/codex", skeleton: "coding-agent", title: "Codex", scope: "workspace", app: "ai-gateway" },
   opencodeAgent: { path: "/dashboard/ai/coding-agents/opencode", skeleton: "opencode-agent", title: "Opencode", scope: "workspace", app: "ai-gateway" },

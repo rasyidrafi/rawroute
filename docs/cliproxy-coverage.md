@@ -16,7 +16,7 @@ Audit date: 2026-08-08. The audit was performed against the checked-out `../CLIP
 | Budgets and admission control | RawRoute | Reservations and rejections happen before forwarding; CLIProxy remains responsible for upstream execution. |
 | Usage events, rollups, cost/pricing, and public dashboard | RawRoute | Recorded around the CLIProxy response/stream and persisted in the canonical scoped PostgreSQL layout. CLIProxy request logs are not treated as the RawRoute usage database. |
 | RawRoute provider/API-key/model administration | RawRoute | Implemented by the existing admin APIs and dashboard. Codex records are mapping-only and quota views use the mapped CLIProxy auth index. |
-| CLIProxy management config, API-key list, logs, OAuth start/status/cancel, and auth-file status/delete | RawRoute wrapper over CLIProxy | Exposed only through authenticated RawRoute admin routes. CLIProxy management is not published directly to the host. |
+| CLIProxy management config; workspace Codex OAuth and account controls | RawRoute wrapper over CLIProxy | Exposed only through authenticated RawRoute admin routes. CLIProxy management is not published directly to the host. |
 
 ## Codex mapping contract
 
@@ -30,4 +30,4 @@ Auto-discovered models can be disabled, but their identity is managed automatica
 
 ## Deliberate boundary
 
-RawRoute now exposes its own Global CLIProxyAPI page for lifecycle, versions, keys, OAuth, auth files and logs. See [managed CLIProxyAPI](managed-cliproxy.md). The standalone CLIProxy control panel, plugin marketplace, and additional provider-specific settings are not mirrored. Those remain available only inside the private CLIProxy service and are not needed to implement a RawRoute feature. New RawRoute features should either call an existing CLIProxy management endpoint or be implemented in RawRoute’s wrapper layer; they should not be added to `../CLIProxyAPI`.
+RawRoute now exposes its own Global CLIProxyAPI page for lifecycle, versions and settings. See [managed CLIProxyAPI](managed-cliproxy.md). The standalone CLIProxy control panel, plugin marketplace, and additional provider-specific settings are not mirrored. Those remain available only inside the private CLIProxy service and are not needed to implement a RawRoute feature. New RawRoute features should either call an existing CLIProxy management endpoint or be implemented in RawRoute’s wrapper layer; they should not be added to `../CLIProxyAPI`.

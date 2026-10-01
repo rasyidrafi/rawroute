@@ -10,7 +10,7 @@ test("production serves every dashboard deep link and keeps unknown APIs out of 
     expect(html).toContain("<title>RawRoute</title>")
     expect(html).not.toContain("/_next/")
   }
-  for (const path of ["/api/missing", "/dashboard/missing", "/v0/management/config", "/executor/auth", "/index.ts"]) {
+  for (const path of ["/api/admin/settings", "/api/missing", "/dashboard/missing", "/v0/management/config", "/executor/auth", "/index.ts"]) {
     const response = await request.get(path)
     expect(response.status(), path).toBe(404)
     expect(response.headers()["content-type"]).toContain("application/json")

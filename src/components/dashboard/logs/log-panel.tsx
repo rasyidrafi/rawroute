@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { LoadingSpinner } from "@/components/loading-spinner"
-import { LogResults, LogStatus } from "./log-results"
+import { LogResults } from "./log-results"
 import { LogToolbar } from "./log-toolbar"
 
 export function LogPanel({ scope }: { scope: LogScope }) {
@@ -22,7 +22,9 @@ export function LogPanel({ scope }: { scope: LogScope }) {
   const { snapshot, error, clearError, isInitialLoading, isRefreshing, isClearing, busy, refresh, clear } = useConsoleLogs(live, scope)
   const entries = snapshot?.entries ?? []
   const sources = [...new Set(entries.map(entry => entry.source))].sort()
-  const visible = entries.filter(entry => (level === "all" || entry.level === level) && (source === "all" || entry.source === source) && formatLog(entry).toLowerCase().includes(query.toLowerCase()))
+  const activeSource = sources.length > 1 && sources.includes(source) ? source : "all"
+  if (source !== activeSource) setSource(activeSource)
+  const visible = entries.filter(entry => (level === "all" || entry.level === level) && (activeSource === "all" || entry.source === activeSource) && formatLog(entry).toLowerCase().includes(query.toLowerCase()))
   const global = scope.kind === "global"
   const page = global ? "systemLogs" : "logs"
   const title = global ? "System Logs" : "Console Log"
@@ -43,14 +45,13 @@ export function LogPanel({ scope }: { scope: LogScope }) {
   }
   return <main className={logPageClassName}>
     <div className="mx-auto h-full max-w-7xl"><Card className="h-full">
-      <CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{title}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."} History is kept in memory until the server restarts.</CardDescription><CardAction><div className="flex flex-wrap gap-2">
+      <CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{title}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."}</CardDescription><CardAction><div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={() => void refresh()}>{isRefreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button>
         <Button variant="outline" disabled={!visible.length} onClick={() => void copy()}><ClipboardIcon />Copy</Button>
         <Button variant="destructive" disabled={busy || !entries.length} onClick={() => setClearOpen(true)}><Trash2Icon />Clear</Button>
       </div></CardAction></CardHeader>
       <CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col">
-        <LogToolbar level={level} setLevel={setLevel} query={query} setQuery={setQuery} source={source} setSource={setSource} sources={sources} live={live} setLive={toggleLive} />
-        <LogStatus count={visible.length} snapshot={snapshot} live={live} />
+        <LogToolbar level={level} setLevel={setLevel} query={query} setQuery={setQuery} source={activeSource} setSource={setSource} sources={sources} live={live} setLive={toggleLive} />
         {error && <p className="text-sm text-destructive" role="alert">{error} Existing entries may be stale.</p>}
         <LogResults entries={visible} loading={isInitialLoading} />
       </CardContent>

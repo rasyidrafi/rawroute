@@ -5,7 +5,6 @@ import * as path from "node:path"
 import { importLegacyInstance } from "../../scripts/migrations/cliproxy-instance"
 import { getServicePaths, validateLoopbackConfig } from "../../src/server/cliproxy/store"
 import { snapshotConfiguration, restoreConfiguration } from "../../src/server/cliproxy/backup"
-import { hasManagedAuthPrefix } from "../../src/server/cliproxy/auth-ownership"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
@@ -32,13 +31,6 @@ test("offline migration preserves credentials, identity, custom options and sour
   expect(config["remote-management"]["allow-remote"]).toBe(false)
   expect(fs.readFileSync(path.join(paths.auth, "codex-existing.json"), "utf8")).toBe(fs.readFileSync(path.join(source, "auths", "codex-existing.json"), "utf8"))
   expect(fs.readFileSync(path.join(source, "config.yaml"), "utf8")).toBe(before)
-  process.env.CLIPROXY_MODE = "managed"
-  process.env.RAWROUTE_DATA_DIR = destination
-  expect(hasManagedAuthPrefix("codex-existing.json")).toBe(true)
-  expect(hasManagedAuthPrefix("missing.json")).toBe(true)
-  expect(hasManagedAuthPrefix("../outside")).toBe(true)
-  fs.writeFileSync(path.join(paths.auth, "global.json"), JSON.stringify({ refresh_token: "private-global-token" }))
-  expect(hasManagedAuthPrefix("global.json")).toBe(false)
   await expect(importLegacyInstance(source, destination)).rejects.toThrow("already exists")
 })
 

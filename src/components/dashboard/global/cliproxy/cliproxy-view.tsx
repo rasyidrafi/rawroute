@@ -13,7 +13,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Confirmation } from "./confirmation"
-import { CliproxyManagementPanel } from "./management-panel"
 
 type Action = { action: "install" | "start" | "stop" | "restart"; version?: string; title: string }
 
@@ -46,7 +45,6 @@ export function CliproxyView() {
       {service?.mode === "managed" && <ReleasesCard data={versions.data} error={versions.error} refreshing={versions.isValidating} blocked={blocked} selected={selected} select={setSelected} refresh={() => void versions.mutate()} install={install} />}
     </ServiceCard>
     <ConnectionDetails service={service} />
-    <CliproxyManagementPanel />
     <Confirmation title={action?.title ?? null} pending={pending} onClose={() => setAction(null)} onConfirm={() => void run()} description={action?.action === "stop" ? "Provider requests that use CLIProxyAPI will be unavailable until you start it again. If requests cannot drain, the service remains running." : "This changes the shared service for every workspace. Release changes may briefly interrupt availability; failed startup restores the previous version and configuration."} />
   </DashboardPage>
 }
@@ -79,7 +77,7 @@ function ServiceDetails({ service }: { service: CliproxyInstanceStatus }) {
     </div>
     {service.lastError && <p role="alert" className="break-words text-sm text-destructive">{service.lastError}</p>}
     {service.conflict && <p role="alert" className="text-sm text-destructive">The listener is occupied by another process. Lifecycle actions are disabled to protect it.</p>}
-    {service.mode === "external" && <p className="text-sm text-muted-foreground">Process and release changes are controlled by your external deployment. Global credentials, OAuth, logs, and settings remain available here.</p>}
+    {service.mode === "external" && <p className="text-sm text-muted-foreground">Process and release changes are controlled by your external deployment. Engine settings remain available here.</p>}
   </>
 }
 

@@ -84,28 +84,33 @@ for (const width of [390, 1280, 1600]) {
 }
 
 for (const width of [390, 1280]) {
-  test(`settings loading preserves card and form bounds at ${width}px`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 1000 })
-    await authenticate(page)
-    const session = await hold(page, "**/api/auth/session")
-    const account = await hold(page, "**/api/admin/account")
-    const settings = await hold(page, "**/api/admin/settings")
-    await page.goto("/dashboard/settings")
-    await session.reached
-    await expect(page.getByText("Global gateway settings", { exact: true })).toBeVisible()
-    const selector = 'main [data-slot="card"], main [data-slot="card-header"], main [data-slot="card-content"]'
-    const initial = await geometry(page, selector)
-    session.release()
-    await account.reached
-    sameGeometry(initial, await geometry(page, selector))
-    account.release()
-    await settings.reached
-    await expect(page.getByRole("button", { name: "Update password", exact: true })).toBeVisible()
-    sameGeometry(initial, await geometry(page, selector))
-    settings.release()
-    await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeVisible()
-    sameGeometry(initial, await geometry(page, selector))
-  })
+  for (const engine of [false, true]) {
+    test(`${engine ? "CLIProxy" : "administrator"} settings loading preserves bounds at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 1000 })
+      await authenticate(page)
+      const session = await hold(page, "**/api/auth/session")
+      const account = await hold(page, "**/api/admin/account")
+      const settings = engine ? await hold(page, "**/api/admin/cliproxy/settings") : undefined
+      await page.goto(engine ? "/dashboard/cliproxy/settings" : "/dashboard/settings")
+      await session.reached
+      await expect(page.getByText(engine ? "Engine settings" : "Admin password", { exact: true })).toBeVisible()
+      const selector = 'main [data-slot="card"], main [data-slot="card-header"], main [data-slot="card-content"]'
+      const initial = await geometry(page, selector)
+      session.release()
+      await account.reached
+      sameGeometry(initial, await geometry(page, selector))
+      account.release()
+      if (settings) {
+        await settings.reached
+        sameGeometry(initial, await geometry(page, selector))
+        settings.release()
+        await expect(page.getByRole("switch", { name: "Debug logging", exact: true })).toBeVisible()
+      } else {
+        await expect(page.getByLabel("Current password", { exact: true })).toBeEnabled()
+      }
+      sameGeometry(initial, await geometry(page, selector))
+    })
+  }
 }
 
 test("system logs retain console geometry through account and log loading", async ({ page }) => {

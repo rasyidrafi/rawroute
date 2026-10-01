@@ -62,7 +62,9 @@ test("global Settings and System Logs remain usable when workspace loading fails
   await page.route("**/api/admin/workspaces", route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: { message: "Workspace service unavailable" } }) }))
   await page.goto("/dashboard/settings")
   await expect(page.getByText("Admin password", { exact: true })).toBeVisible()
-  await expect(page.getByText("Global gateway settings", { exact: true })).toBeVisible()
+  await page.getByRole("link", { name: "CLIProxyAPI", exact: true }).click()
+  await page.getByRole("button", { name: "Engine settings", exact: true }).click()
+  await expect(page.getByLabel("Request retry count")).toBeVisible()
   await page.getByRole("link", { name: "System Logs", exact: true }).click()
   await expect(page.getByLabel("Console log entries")).toContainText("Admin signed in")
   await page.getByRole("link", { name: "Console Log", exact: true }).click()
@@ -100,17 +102,58 @@ test("a delayed workspace response cannot replace the newly selected workspace l
 
 test("global settings save without a workspace header and survive reload", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard/settings")
+  await page.goto("/dashboard/cliproxy/settings")
   await page.getByLabel("Request retry count").fill("4")
   await page.getByLabel("Maximum retry interval (seconds)").fill("45")
-  const saved = page.waitForResponse(response => response.url().endsWith("/api/admin/settings") && response.request().method() === "PATCH")
+  const saved = page.waitForResponse(response => response.url().endsWith("/api/admin/cliproxy/settings") && response.request().method() === "PATCH")
   await page.getByRole("button", { name: "Save settings", exact: true }).click()
   const response = await saved
   expect(response.ok()).toBe(true)
   expect(response.request().headers()["x-rawroute-workspace-id"]).toBeUndefined()
-  await expect(page.getByText("Global settings saved", { exact: true })).toBeVisible()
+  await expect(page.getByText("CLIProxyAPI settings saved", { exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByLabel("Request retry count")).toHaveValue("4")
   await expect(page.getByLabel("Maximum retry interval (seconds)")).toHaveValue("45")
   await expect(page.getByLabel("Routing strategy", { exact: true })).toHaveText("fill-first")
 })
+
+for (const global of [false, true]) {
+  test(`${global ? "system" : "workspace"} log toolbar groups filters, hides redundant sources and resets unavailable selections`, async ({ page }, testInfo) => {
+    await authenticate(page)
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    let sources = ["http", "system"]
+    await page.route(global ? "**/api/admin/logs/global" : "**/api/admin/logs", route => route.fulfill({ json: {
+      scope: global ? "global" : "workspace", workspaceId: global ? null : "default", capacity: 2000, evicted: 0,
+      entries: sources.map((source, index) => ({ id: String(index), timestamp: "2026-10-01T12:00:00Z", level: "info", source, event: "test.event", message: `${source} activity`, origin: "server", scope: global ? "global" : "workspace", workspaceId: global ? null : "default", requestId: null, details: {} })),
+    } }))
+    await page.goto(global ? "/dashboard/system-logs" : "/dashboard/logs")
+    const source = page.getByRole("combobox", { name: "Log source" })
+    await expect(source).toBeVisible()
+    await expect(page.getByText(/capacity 2000|Refreshes every|newest first/)).toHaveCount(0)
+    const search = page.getByRole("textbox", { name: "Search logs" })
+    const live = page.getByRole("checkbox", { name: "Live", exact: true })
+    const searchBox = (await search.boundingBox())!
+    const sourceBox = (await source.boundingBox())!
+    const liveBox = (await live.boundingBox())!
+    expect(searchBox.x).toBeGreaterThan(sourceBox.x + sourceBox.width)
+    expect(liveBox.x).toBeGreaterThan(searchBox.x + searchBox.width)
+    expect(Math.abs(searchBox.y - sourceBox.y)).toBeLessThan(3)
+    await source.click()
+    await page.getByRole("option", { name: "http", exact: true }).click()
+    await expect(page.getByLabel("Console log entries")).not.toContainText("system activity")
+    await search.fill("missing")
+    await expect(page.getByLabel("Console log entries")).toContainText("No matching logs")
+    await search.clear()
+    sources = ["system"]
+    await page.getByRole("button", { name: "Refresh", exact: true }).click()
+    await expect(source).toHaveCount(0)
+    await expect(page.getByLabel("Console log entries")).toContainText("system activity")
+    await live.uncheck()
+    await expect(page.getByRole("checkbox", { name: "Paused", exact: true })).not.toBeChecked()
+    await page.screenshot({ path: testInfo.outputPath("toolbar-desktop.png"), fullPage: true })
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect(search).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath("toolbar-mobile.png"), fullPage: true })
+  })
+}

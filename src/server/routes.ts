@@ -1,6 +1,4 @@
 import * as AuthBootstrap from "./routes/api/auth/bootstrap"
-import { oauthCallback as globalOauthCallback } from "./cliproxy/oauth"
-import { deleteKey as deleteCliproxyKey } from "./cliproxy/admin"
 import * as CliproxyInstance from "./cliproxy/http"
 import * as ApiAdminGlobalLogs from "./routes/api/admin/logs/global"
 import * as ApiAdminLogEvents from "./routes/api/admin/logs/events"
@@ -19,12 +17,6 @@ import * as ApiAdminBudgetsBypass from "./routes/api/admin/budgets/bypass"
 import * as ApiAdminBudgets from "./routes/api/admin/budgets"
 import * as ApiAdminBudgetsUnlimited from "./routes/api/admin/budgets/unlimited"
 import * as ApiAdminBudgetsWindow from "./routes/api/admin/budgets/window"
-import * as ApiAdminCliproxyApiKeys from "./routes/api/admin/cliproxy/api-keys"
-import * as ApiAdminCliproxyAuthFiles from "./routes/api/admin/cliproxy/auth-files"
-import * as ApiAdminCliproxyLogs from "./routes/api/admin/cliproxy/logs"
-import * as ApiAdminCliproxyOauthByProviderStart from "./routes/api/admin/cliproxy/oauth/by-provider/start"
-import * as ApiAdminCliproxyOauthCancel from "./routes/api/admin/cliproxy/oauth/cancel"
-import * as ApiAdminCliproxyOauthStatus from "./routes/api/admin/cliproxy/oauth/status"
 import * as ApiAdminCombosByCombo from "./routes/api/admin/combos/by-combo"
 import * as ApiAdminCombos from "./routes/api/admin/combos"
 import * as ApiAdminCombosTest from "./routes/api/admin/combos/test"
@@ -51,7 +43,7 @@ import * as ApiAdminProvidersByProviderModelsRefresh from "./routes/api/admin/pr
 import * as ApiAdminProvidersByProviderModels from "./routes/api/admin/providers/by-provider/models"
 import * as ApiAdminProvidersByProvider from "./routes/api/admin/providers/by-provider"
 import * as ApiAdminProviders from "./routes/api/admin/providers"
-import * as ApiAdminSettings from "./routes/api/admin/settings"
+import * as ApiAdminCliproxySettings from "./routes/api/admin/cliproxy/settings"
 import * as ApiAdminToolGatewayStatus from "./routes/api/admin/tool-gateway/status"
 import * as ApiAdminUsage from "./routes/api/admin/usage"
 import * as ApiAdminWorkspacesByWorkspace from "./routes/api/admin/workspaces/by-workspace"
@@ -77,8 +69,6 @@ import * as V1betaProxy from "./routes/v1beta/proxy"
 export const apiRoutes = {
   "/api/auth/bootstrap": apiRoute(AuthBootstrap, "public", "/api/auth/bootstrap"),
   "/api/live": apiRoute({ GET: async () => Response.json({ status: "ok", service: "rawroute" }) }, "public", "/api/live"),
-  "/api/admin/cliproxy/oauth/:provider/callback": apiRoute({ POST: globalOauthCallback }, "session", "/api/admin/cliproxy/oauth/:provider/callback"),
-  "/api/admin/cliproxy/api-keys/:keyId": apiRoute({ DELETE: deleteCliproxyKey }, "session", "/api/admin/cliproxy/api-keys/:keyId"),
   "/api/admin/cliproxy/status": apiRoute({ GET: CliproxyInstance.status }, "session", "/api/admin/cliproxy/status"),
   "/api/admin/cliproxy/versions": apiRoute({ GET: CliproxyInstance.versions }, "session", "/api/admin/cliproxy/versions"),
   "/api/admin/cliproxy/service/:action": apiRoute({ POST: CliproxyInstance.lifecycle }, "session", "/api/admin/cliproxy/service/:action"),
@@ -96,12 +86,6 @@ export const apiRoutes = {
   "/api/admin/budgets": apiRoute(ApiAdminBudgets, "workspace", "/api/admin/budgets"),
   "/api/admin/budgets/unlimited": apiRoute(ApiAdminBudgetsUnlimited, "workspace", "/api/admin/budgets/unlimited"),
   "/api/admin/budgets/window": apiRoute(ApiAdminBudgetsWindow, "workspace", "/api/admin/budgets/window"),
-  "/api/admin/cliproxy/api-keys": apiRoute(ApiAdminCliproxyApiKeys, "session", "/api/admin/cliproxy/api-keys"),
-  "/api/admin/cliproxy/auth-files": apiRoute(ApiAdminCliproxyAuthFiles, "session", "/api/admin/cliproxy/auth-files"),
-  "/api/admin/cliproxy/logs": apiRoute(ApiAdminCliproxyLogs, "session", "/api/admin/cliproxy/logs"),
-  "/api/admin/cliproxy/oauth/:provider/start": apiRoute(ApiAdminCliproxyOauthByProviderStart, "session", "/api/admin/cliproxy/oauth/:provider/start"),
-  "/api/admin/cliproxy/oauth/cancel": apiRoute(ApiAdminCliproxyOauthCancel, "session", "/api/admin/cliproxy/oauth/cancel"),
-  "/api/admin/cliproxy/oauth/status": apiRoute(ApiAdminCliproxyOauthStatus, "session", "/api/admin/cliproxy/oauth/status"),
   "/api/admin/combos/:comboId": apiRoute(ApiAdminCombosByCombo, "workspace", "/api/admin/combos/:comboId"),
   "/api/admin/combos": apiRoute(ApiAdminCombos, "workspace", "/api/admin/combos"),
   "/api/admin/combos/test": apiRoute(ApiAdminCombosTest, "workspace", "/api/admin/combos/test"),
@@ -130,7 +114,7 @@ export const apiRoutes = {
   "/api/admin/providers/:providerId/models": apiRoute(ApiAdminProvidersByProviderModels, "workspace", "/api/admin/providers/:providerId/models"),
   "/api/admin/providers/:providerId": apiRoute(ApiAdminProvidersByProvider, "workspace", "/api/admin/providers/:providerId"),
   "/api/admin/providers": apiRoute(ApiAdminProviders, "workspace", "/api/admin/providers"),
-  "/api/admin/settings": apiRoute(ApiAdminSettings, "session", "/api/admin/settings"),
+  "/api/admin/cliproxy/settings": apiRoute(ApiAdminCliproxySettings, "session", "/api/admin/cliproxy/settings"),
   "/api/admin/tool-gateway/status": apiRoute(ApiAdminToolGatewayStatus, "session", "/api/admin/tool-gateway/status"),
   "/api/admin/usage": apiRoute(ApiAdminUsage, "workspace", "/api/admin/usage"),
   "/api/admin/workspaces/:workspaceId": apiRoute(ApiAdminWorkspacesByWorkspace, "session", "/api/admin/workspaces/:workspaceId"),
