@@ -59,8 +59,8 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await page.goto("/login")
   await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
 
-  await page.getByRole("button", { name: "Change color theme" }).click()
-  await page.getByRole("menuitemradio", { name: "Dark", exact: true }).click()
+  await page.goto(pagePaths.settings)
+  await page.getByRole("button", { name: "Dark Mode", exact: true }).click()
   await expect(page.locator("html")).toHaveClass(/dark/)
   await page.reload()
   await expect(page.locator("html")).toHaveClass(/dark/)

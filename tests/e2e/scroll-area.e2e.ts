@@ -115,9 +115,9 @@ test("provider dialog and protocol select remain usable in a short viewport", as
 test("dropdown menu interaction survives ScrollArea composition", async ({ page }) => {
   await page.goto(`/dashboard/ai/providers/${firstProviderId}`)
   await expect(page.getByText("Provider details")).toBeVisible()
-  await page.getByRole("button", { name: "Change color theme" }).click()
-  await page.getByRole("menuitemradio", { name: "Dark" }).click()
-  await expect(page.locator("html")).toHaveClass(/dark/)
+  await page.getByRole("button", { name: /RawRoute/ }).first().click()
+  await page.getByRole("menuitemradio", { name: "Tool Gateway", exact: true }).click()
+  await expect(page).toHaveURL(/\/dashboard\/tools\/overview$/)
 })
 
 test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) => {

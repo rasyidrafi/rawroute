@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { ActivityIcon, LayoutGridIcon, ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, PlugIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon, WrenchIcon } from "lucide-react"
+import { ActivityIcon, LayoutGridIcon, ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, ListChecksIcon, LogsIcon, PlugIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon, WrenchIcon } from "lucide-react"
 
 import { dashboardPages, pagePaths, type DashboardPage, type DashboardAppId } from "@/lib/dashboard/routes"
 export type { DashboardAppId } from "@/lib/dashboard/routes"
@@ -41,7 +41,7 @@ export const dashboardApps: DashboardApp[] = [
     icon: RouteIcon,
     href: pagePaths.dashboard,
     navigation: [
-      { label: "Overview", items: [nav("overview", LayoutGridIcon), nav("overviewUsage", ChartNoAxesCombinedIcon)] },
+      { label: "Overview", items: [nav("overview", LayoutGridIcon), nav("overviewUsage", ChartNoAxesCombinedIcon), nav("requestLogs", ListChecksIcon)] },
       {
         label: "Gateway",
         items: [
@@ -94,5 +94,5 @@ export const dashboardApps: DashboardApp[] = [
 ]
 
 export function isDashboardNavigationItemActive(pathname: string, item: DashboardNavigationItem) {
-  return pathname === item.href || (!dashboardApps.some((app) => app.href === item.href) && pathname.startsWith(`${item.href}/`))
+  return pathname === item.href || (item.href !== pagePaths.overview && !dashboardApps.some((app) => app.href === item.href) && pathname.startsWith(`${item.href}/`))
 }

@@ -3,8 +3,11 @@ import { toast } from "sonner"
 
 import { ChangePasswordForm } from "@/components/dashboard/change-password-form"
 import { apiPost } from "@/components/dashboard/api"
+import { useTheme } from "@/components/theme-provider"
+import { AppearanceSettingsCard } from "./settings/appearance-settings-card"
 
 export function SettingsView() {
+  const { theme, setTheme } = useTheme()
   async function updatePassword(currentPassword: string, newPassword: string, confirmPassword: string) {
     try {
       await apiPost("/api/admin/account/password", { currentPassword, newPassword, confirmPassword })
@@ -15,5 +18,5 @@ export function SettingsView() {
       return false
     }
   }
-  return <SettingsLayout password={<PasswordSettingsCard><ChangePasswordForm onSave={updatePassword} /></PasswordSettingsCard>} />
+  return <SettingsLayout password={<PasswordSettingsCard><ChangePasswordForm onSave={updatePassword} /></PasswordSettingsCard>} appearance={<AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />} />
 }

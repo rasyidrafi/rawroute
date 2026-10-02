@@ -6,8 +6,9 @@ import { DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
 import { DashboardFrameSkeleton } from "@/components/dashboard/frame-skeleton"
 import { PublicPageLayout } from "@/components/public-page-layout"
 import { UsageSkeleton } from "@/components/dashboard/ai/usage-skeleton"
-import { Button } from "@/components/ui/button"
+import { SessionBanner } from "@/components/session-banner"
 import { useSession } from "@/hooks/use-session"
+import { useOnlineStatus } from "@/hooks/use-online-status"
 import { dashboardViews } from "@/components/dashboard/route-views"
 import { dashboardPages, type DashboardPage, pagePaths } from "@/lib/dashboard/routes"
 import { LoginPage } from "@/pages/login"
@@ -15,11 +16,18 @@ import { LoginPage } from "@/pages/login"
 const PublicPage = lazy(() => import("@/pages/public").then((module) => ({ default: module.PublicPage })))
 
 function SessionGate({ login = false }: { login?: boolean }) {
-  const { data, error, mutate } = useSession()
-  if (error) return <main className="p-6" role="alert"><p>Unable to check your session.</p><Button onClick={() => void mutate()}>Retry</Button></main>
-  if (!data) return login ? <LoginPage checkingSession /> : <DashboardFrameSkeleton />
-  if (login) return data.authenticated ? <Navigate to={pagePaths.dashboard} replace /> : <LoginPage />
-  return data.authenticated ? <DashboardLayout /> : <Navigate to={pagePaths.login} replace />
+  const { data, error, mutate, isValidating } = useSession()
+  const online = useOnlineStatus()
+  if (data && !data.authenticated && !login) return <Navigate to={pagePaths.login} replace />
+  if (login && data?.authenticated) return <Navigate to={pagePaths.dashboard} replace />
+
+  // Keep a verified dashboard mounted during connection failures so drafts survive.
+  // The server still authorizes each API request; a confirmed expiry redirects above.
+  return <>
+    {login ? <LoginPage checkingSession={!data && isValidating} sessionUnavailable={!data || !!error || !online} /> : data?.authenticated ? <DashboardLayout /> : <DashboardFrameSkeleton />}
+    {/* SWR exposes retry failures through `error`; consume the rejected promise too. */}
+    {(error || !online) && <SessionBanner online={online} retrying={isValidating} onRetry={() => { void mutate().catch(() => undefined) }} />}
+  </>
 }
 
 function DashboardLayout() {

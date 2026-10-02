@@ -1,4 +1,5 @@
 import { OverviewView } from "./ai/overview-view"
+import { RequestLogsView } from "./ai/request-logs-view"
 import { lazy, type ReactElement } from "react"
 import { useParams } from "react-router"
 import type { DashboardPage } from "@/lib/dashboard/routes"
@@ -26,6 +27,7 @@ function ProviderPage() {
 export const dashboardViews: Record<DashboardPage, ReactElement> = {
   overview: <OverviewView />,
   overviewUsage: <OverviewUsageView />,
+  requestLogs: <RequestLogsView />,
   dashboard: <EndpointKeyView />,
   providers: <ProvidersView />,
   codex: <ProviderDetailView providerId="codex" />,

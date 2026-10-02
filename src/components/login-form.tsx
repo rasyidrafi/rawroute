@@ -22,7 +22,7 @@ async function bootstrapFetcher(url: string): Promise<BootstrapStatus> {
   return response.json()
 }
 
-export function LoginForm({ checkingSession = false }: { checkingSession?: boolean }) {
+export function LoginForm({ checkingSession = false, sessionUnavailable = false }: { checkingSession?: boolean; sessionUnavailable?: boolean }) {
   const navigate = useNavigate()
   const local = useSyncExternalStore(subscribe, localHost, serverHost)
   const { data: bootstrap } = useSWR<BootstrapStatus>(local ? "/api/auth/bootstrap" : null, bootstrapFetcher, { revalidateOnMount: true, dedupingInterval: 0 })
@@ -31,7 +31,7 @@ export function LoginForm({ checkingSession = false }: { checkingSession?: boole
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (checkingSession) return
+    if (checkingSession || sessionUnavailable || loading) return
     setLoading(true)
     try {
       const formData = new FormData(event.currentTarget)
@@ -72,10 +72,10 @@ export function LoginForm({ checkingSession = false }: { checkingSession?: boole
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="password">Password</FieldLabel>
-              <Input id="password" name="password" type="password" placeholder="Enter your password" autoComplete="current-password" required disabled={checkingSession} />
+              <Input id="password" name="password" type="password" placeholder="Enter your password" autoComplete="current-password" required disabled={checkingSession || sessionUnavailable} />
             </Field>
-            <Button aria-busy={loading || checkingSession} disabled={loading || checkingSession} type="submit" className="w-full">
-              {loading ? <LoadingSpinner /> : <KeyRoundIcon />} {loading ? "Signing in..." : "Sign in"}
+            <Button aria-busy={loading || checkingSession} disabled={loading || checkingSession || sessionUnavailable} type="submit" className="w-full">
+              {loading || checkingSession ? <LoadingSpinner /> : <KeyRoundIcon />} <span aria-live="polite">{checkingSession ? "Checking session…" : loading ? "Signing in..." : "Sign in"}</span>
             </Button>
             {local && bootstrap?.isDefaultPassword && <p className="text-center text-xs text-muted-foreground">{bootstrap.defaultPasswordHint ? <>Initial password: <code>{bootstrap.defaultPasswordHint}</code></> : <>Use the initial password configured in <code>DEFAULT_ADMIN_PASSWORD</code>.</>} You must change it after signing in.</p>}
           </FieldGroup>

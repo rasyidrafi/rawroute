@@ -24,3 +24,13 @@ test("uses exact app switcher labels without an Executor suffix", () => {
   expect(labels).toEqual(["AI Gateway", "Tool Gateway"])
   expect(labels.join(" ")).not.toContain("(Executor)")
 })
+
+test("Overview navigation places Request Logs after Usage and selects only the current page", () => {
+  const group = dashboardApps.find(app => app.id === "ai-gateway")!.navigation[0]!
+  expect(group.label).toBe("Overview")
+  expect(group.items.map(item => item.title)).toEqual(["Overview", "Usage", "Request Logs"])
+  for (const current of group.items) {
+    expect(group.items.filter(item => isDashboardNavigationItemActive(current.href, item))).toEqual([current])
+  }
+  expect(dashboardPages.requestLogs.scope).toBe("workspace")
+})

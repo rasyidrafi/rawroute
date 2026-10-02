@@ -33,9 +33,9 @@ test("pricing and aliases placeholders use real card and table primitives", () =
   }
 })
 
-test("usage loading retains the real summary footer and metric structure", () => {
+test("usage loading retains the current summary content and metric structure", () => {
   const markup = renderToStaticMarkup(<UsageSummary />)
-  expect(markup.match(/data-slot="card-footer"/g)).toHaveLength(4)
-  expect(markup).toContain("API-equivalent cost")
+  expect(markup.match(/data-slot="card-content"/g)).toHaveLength(4)
+  expect(markup).toContain("Estimated spend")
   expect(markup).toContain('aria-busy="true"')
 })
