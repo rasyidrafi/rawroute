@@ -6,7 +6,7 @@ import { DashboardContentSkeleton, DashboardRouteSkeleton } from "@/components/d
 import { UsageSummary } from "@/components/dashboard/ai/usage-summary"
 
 for (const [path, heading] of [
-  ["/dashboard/ai/usage", "Usage summary"],
+  ["/dashboard/ai/overview/usage", "Usage summary"],
   ["/dashboard/settings", "Admin password"],
   ["/dashboard/system-logs", "System Logs"],
   ["/dashboard/cliproxy", "Connection details"],

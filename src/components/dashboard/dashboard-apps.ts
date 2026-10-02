@@ -54,7 +54,6 @@ export const dashboardApps: DashboardApp[] = [
       {
         label: "Analytics",
         items: [
-          nav("usage", ChartNoAxesCombinedIcon),
           nav("budgets", WalletCardsIcon),
           nav("pricing", DollarSignIcon),
         ],

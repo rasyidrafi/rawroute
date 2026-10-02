@@ -8,7 +8,6 @@ const EndpointKeyView = lazy(() => import("@/components/dashboard/ai/endpoint-ke
 const ProvidersView = lazy(() => import("@/components/dashboard/ai/providers-view").then((module) => ({ default: module.ProvidersView })))
 const ProviderDetailView = lazy(() => import("@/components/dashboard/ai/provider-detail-view").then((module) => ({ default: module.ProviderDetailView })))
 const AliasesView = lazy(() => import("@/components/dashboard/ai/aliases-view").then((module) => ({ default: module.AliasesView })))
-const AdminUsageView = lazy(() => import("@/components/dashboard/ai/admin-usage-view").then((module) => ({ default: module.AdminUsageView })))
 const OverviewUsageView = lazy(() => import("@/components/dashboard/ai/overview-usage-view").then((module) => ({ default: module.OverviewUsageView })))
 const BudgetsView = lazy(() => import("@/components/dashboard/ai/budgets-view").then((module) => ({ default: module.BudgetsView })))
 const ModelPricingView = lazy(() => import("@/components/dashboard/ai/model-pricing-view").then((module) => ({ default: module.ModelPricingView })))
@@ -33,7 +32,6 @@ export const dashboardViews: Record<DashboardPage, ReactElement> = {
   codex: <ProviderDetailView providerId="codex" />,
   provider: <ProviderPage />,
   aliases: <AliasesView />,
-  usage: <AdminUsageView />,
   budgets: <BudgetsView />,
   pricing: <ModelPricingView />,
   logs: <ConsoleLog />,

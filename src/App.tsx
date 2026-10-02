@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react"
-import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router"
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router"
 
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
 import { DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
@@ -11,6 +11,7 @@ import { useSession } from "@/hooks/use-session"
 import { useOnlineStatus } from "@/hooks/use-online-status"
 import { dashboardViews } from "@/components/dashboard/route-views"
 import { dashboardPages, type DashboardPage, pagePaths } from "@/lib/dashboard/routes"
+import { NotFoundPage } from "@/pages/not-found"
 import { LoginPage } from "@/pages/login"
 
 const PublicPage = lazy(() => import("@/pages/public").then((module) => ({ default: module.PublicPage })))
@@ -49,6 +50,6 @@ export function App() {
     <Route element={<SessionGate />}>
       {Object.entries(dashboardViews).map(([page, element]) => <Route key={page} path={dashboardPages[page as DashboardPage].path} element={element} />)}
     </Route>
-    <Route path="*" element={<main className="p-6"><h1>Page not found</h1><Link to="/">Return to RawRoute</Link></main>} />
+    <Route path="*" element={<NotFoundPage />} />
   </Routes></Suspense></BrowserRouter>
 }

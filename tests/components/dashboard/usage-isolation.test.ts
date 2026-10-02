@@ -3,15 +3,15 @@ import { readFileSync } from "node:fs"
 
 test("admin usage does not seed a browser-selected workspace with Default data", () => {
   const page = readFileSync(new URL("../../../src/components/dashboard/route-views.tsx", import.meta.url), "utf8")
-  const wrapper = readFileSync(new URL("../../../src/components/dashboard/ai/admin-usage-view.tsx", import.meta.url), "utf8")
+  const wrapper = readFileSync(new URL("../../../src/components/dashboard/ai/overview-usage-view.tsx", import.meta.url), "utf8")
 
   expect(page).not.toContain("getDashboardPayload")
-  expect(page).toContain("<AdminUsageView />")
-  expect(wrapper).toContain("<UsageView key={workspace.id} workspaceId={workspace.id} />")
+  expect(page).toContain("<OverviewUsageView />")
+  expect(wrapper).toContain("<OverviewUsageContent key={workspace.id} />")
 })
 
 test("public usage starts on the budget window", () => {
-  const usageView = readFileSync(new URL("../../../src/components/dashboard/ai/usage-view.tsx", import.meta.url), "utf8")
+  const usageView = readFileSync(new URL("../../../src/hooks/use-usage-dashboard.ts", import.meta.url), "utf8")
   const overview = readFileSync(new URL("../../../src/components/dashboard/ai/usage-overview.tsx", import.meta.url), "utf8")
 
   expect(usageView).toContain("DEFAULT_DASHBOARD_QUERY.preset")

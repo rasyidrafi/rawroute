@@ -10,7 +10,7 @@ test("production serves every dashboard deep link and keeps unknown APIs out of 
     expect(html).toContain("<title>RawRoute</title>")
     expect(html).not.toContain("/_next/")
   }
-  for (const path of ["/api/admin/settings", "/api/missing", "/dashboard/missing", "/v0/management/config", "/executor/auth", "/index.ts"]) {
+  for (const path of ["/api/admin/settings", "/api/missing", "/v0/management/config", "/executor/auth", "/index.ts"]) {
     const response = await request.get(path)
     expect(response.status(), path).toBe(404)
     expect(response.headers()["content-type"]).toContain("application/json")
@@ -64,7 +64,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page.locator("html")).toHaveClass(/dark/)
   await page.reload()
   await expect(page.locator("html")).toHaveClass(/dark/)
-  await page.goto("/dashboard/ai/usage")
+  await page.goto("/dashboard/ai/overview/usage")
   await expect(page.getByText("Usage summary", { exact: true })).toBeVisible()
   await expect(page.locator('[data-slot="chart"] .recharts-surface').first()).toBeVisible()
   expect(await page.locator("html").evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Plus Jakarta Sans")
@@ -77,9 +77,25 @@ test("browser session guard, login, deep links, theme, and logout work without r
 })
 
 test("retired dashboard URLs are absent rather than redirected", async ({ request }) => {
-  for (const path of ["/dashboard", "/dashboard/providers", "/dashboard/providers/example", "/dashboard/providers/codex", "/dashboard/aliases", "/dashboard/usage", "/dashboard/budgets", "/dashboard/model-pricing", "/dashboard/models", "/dashboard/oauth-providers", "/dashboard/tool-gateway", "/dashboard/tool-gateway/tools", "/dashboard/coding-agents/codex"]) {
+  for (const path of ["/dashboard/ai/usage", "/dashboard", "/dashboard/providers", "/dashboard/providers/example", "/dashboard/providers/codex", "/dashboard/aliases", "/dashboard/usage", "/dashboard/budgets", "/dashboard/model-pricing", "/dashboard/models", "/dashboard/oauth-providers", "/dashboard/tool-gateway", "/dashboard/tool-gateway/tools", "/dashboard/coding-agents/codex"]) {
     const response = await request.get(path, { maxRedirects: 0 })
     expect(response.status(), path).toBe(404)
     expect(response.headers().location).toBeUndefined()
   }
+})
+
+test("missing browser pages serve a styled HTML 404 while APIs stay JSON", async ({ request }) => {
+  for (const path of ["/missing-page", "/dashboard/ai/usage", "/dashboard/missing"]) {
+    const response = await request.get(path, { headers: { accept: "text/html" } })
+    expect(response.status()).toBe(404)
+    expect(response.headers()["content-type"]).toContain("text/html")
+    expect(await response.text()).toContain("Page not found")
+  }
+  const stylesheet = await request.get("/not-found.css")
+  expect(stylesheet.status()).toBe(200)
+  expect(stylesheet.headers()["content-type"]).toContain("text/css")
+  expect(await stylesheet.text()).toContain(".rawroute-not-found")
+  const api = await request.get("/api/missing", { headers: { accept: "text/html" } })
+  expect(api.status()).toBe(404)
+  expect(api.headers()["content-type"]).toContain("application/json")
 })

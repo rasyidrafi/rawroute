@@ -32,7 +32,7 @@ export function RecentRequestsCard() {
     <CardHeader>
       <CardTitle>Recent Requests</CardTitle>
       <CardDescription>Latest API requests</CardDescription>
-      <CardAction><Button variant="link" size="sm" className="h-auto p-0 text-primary" nativeButton={false} render={<Link to={pagePaths.usage} />}>View all</Button></CardAction>
+      <CardAction><Button variant="link" size="sm" className="h-auto p-0 text-primary" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button></CardAction>
     </CardHeader>
     <CardContent>
       <ul className="space-y-3">

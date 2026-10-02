@@ -5,7 +5,7 @@ global pages remain available even when the workspace list cannot load.
 
 | Menu | Scope | Contents |
 | --- | --- | --- |
-| Gateway, Analytics, Coding Agents | Workspace | Existing providers, keys, routing, usage, budgets, pricing and setup |
+| Overview, Gateway, Analytics, Coding Agents | Workspace | Existing providers, keys, routing, usage, budgets, pricing and setup |
 | System → Console Log | Workspace | Gateway requests, workspace administration and dashboard activity |
 | Global → System Logs | Global | Authentication, workspace lifecycle, instance administration and service activity |
 | Global → CLIProxyAPI | Global | Shared service lifecycle and releases |
@@ -102,7 +102,7 @@ remain in place. Verify changes with `bun run lint`, `bun run typecheck`,
 ## Routes and feature ownership
 
 AI Gateway pages live under `/dashboard/ai/`: `endpoint`, `providers`,
-`providers/:providerId`, `codex-providers`, `routing`, `usage`, `budgets`,
+`providers/:providerId`, `codex-providers`, `routing`, `overview/usage`, `budgets`,
 `pricing`, and `coding-agents/{codex,opencode,claude-code}`.
 Tool Gateway uses `/dashboard/tools/{overview,catalog,connections,policies,activity,settings}`.
 Shared workspace logs use `/dashboard/logs`. Global pages remain

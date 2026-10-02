@@ -10,7 +10,6 @@ export const dashboardPages = {
   provider: { path: "/dashboard/ai/providers/:providerId", skeleton: "provider-detail", title: "Provider", scope: "workspace", app: "ai-gateway" },
   codex: { path: "/dashboard/ai/codex-providers", skeleton: "codex-detail", title: "Codex Providers", scope: "workspace", app: "ai-gateway" },
   aliases: { path: "/dashboard/ai/routing", skeleton: "aliases", title: "Model routing", scope: "workspace", app: "ai-gateway" },
-  usage: { path: "/dashboard/ai/usage", skeleton: "usage", title: "Usage", scope: "workspace", app: "ai-gateway" },
   budgets: { path: "/dashboard/ai/budgets", skeleton: "budgets", title: "Budgets", scope: "workspace", app: "ai-gateway" },
   pricing: { path: "/dashboard/ai/pricing", skeleton: "model-pricing", title: "Model Pricing", scope: "workspace", app: "ai-gateway" },
   logs: { path: "/dashboard/logs", skeleton: "console-log", title: "Console Log", scope: "workspace", app: "shared" },

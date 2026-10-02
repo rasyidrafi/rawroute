@@ -4,7 +4,7 @@ import { serve } from "bun"
 import index from "./index.html"
 
 import { drainBackgroundTasks } from "@/lib/background-tasks"
-import { jsonError } from "@/lib/http"
+import { notFoundResponse, notFoundStylesResponse } from "@/server/not-found"
 import { closeLocalDatabase } from "@/lib/local-db"
 import { closeLocalRedis } from "@/lib/local-redis"
 import { isPagePath, pagePaths } from "@/lib/dashboard/routes"
@@ -22,12 +22,13 @@ const server = serve({
   routes: {
     ...Object.fromEntries(Object.values(pagePaths).map((path) => [path, { GET: index, HEAD: index }])),
     ...apiRoutes,
+    "/not-found.css": { GET: notFoundStylesResponse, HEAD: notFoundStylesResponse },
   },
   fetch(request) {
     const url = new URL(request.url)
-    // Only registered pages serve HTML. Unknown API/provider paths stay errors.
+    // Keep method errors separate from missing browser pages and API endpoints.
     if (isPagePath(url.pathname)) return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } })
-    return jsonError("Not found.", 404)
+    return notFoundResponse(request)
   },
 })
 
