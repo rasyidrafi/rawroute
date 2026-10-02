@@ -1,3 +1,4 @@
+import { OverviewView } from "@/components/dashboard/ai/overview-view"
 import { Badge } from "@/components/ui/badge"
 import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -25,6 +26,11 @@ export function DashboardRouteSkeleton() {
 }
 
 export function DashboardContentSkeleton({ variant }: { variant: DashboardSkeletonVariant }) {
+  if (variant === "overview") return <OverviewView />
+  return <StandardDashboardSkeleton variant={variant} />
+}
+
+function StandardDashboardSkeleton({ variant }: { variant: Exclude<DashboardSkeletonVariant, "overview"> }) {
   if (variant === "settings") return <SettingsSkeleton />
   if (variant === "usage") return <UsageSkeleton />
   if (variant === "console-log" || variant === "system-logs") return <ConsoleLogSkeleton global={variant === "system-logs"} />

@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { ActivityIcon, ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, PlugIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon, WrenchIcon } from "lucide-react"
+import { ActivityIcon, LayoutGridIcon, ArrowLeftRightIcon, ChartNoAxesCombinedIcon, DollarSignIcon, KeyRoundIcon, LogsIcon, PlugIcon, RouteIcon, ServerIcon, SettingsIcon, ShieldCheckIcon, WalletCardsIcon, WrenchIcon } from "lucide-react"
 
 import { dashboardPages, pagePaths, type DashboardPage, type DashboardAppId } from "@/lib/dashboard/routes"
 export type { DashboardAppId } from "@/lib/dashboard/routes"
@@ -41,6 +41,7 @@ export const dashboardApps: DashboardApp[] = [
     icon: RouteIcon,
     href: pagePaths.dashboard,
     navigation: [
+      { label: "Overview", items: [nav("overview", LayoutGridIcon), nav("overviewUsage", ChartNoAxesCombinedIcon)] },
       {
         label: "Gateway",
         items: [

@@ -1,3 +1,4 @@
+import { OverviewView } from "./ai/overview-view"
 import { lazy, type ReactElement } from "react"
 import { useParams } from "react-router"
 import type { DashboardPage } from "@/lib/dashboard/routes"
@@ -7,6 +8,7 @@ const ProvidersView = lazy(() => import("@/components/dashboard/ai/providers-vie
 const ProviderDetailView = lazy(() => import("@/components/dashboard/ai/provider-detail-view").then((module) => ({ default: module.ProviderDetailView })))
 const AliasesView = lazy(() => import("@/components/dashboard/ai/aliases-view").then((module) => ({ default: module.AliasesView })))
 const AdminUsageView = lazy(() => import("@/components/dashboard/ai/admin-usage-view").then((module) => ({ default: module.AdminUsageView })))
+const OverviewUsageView = lazy(() => import("@/components/dashboard/ai/overview-usage-view").then((module) => ({ default: module.OverviewUsageView })))
 const BudgetsView = lazy(() => import("@/components/dashboard/ai/budgets-view").then((module) => ({ default: module.BudgetsView })))
 const ModelPricingView = lazy(() => import("@/components/dashboard/ai/model-pricing-view").then((module) => ({ default: module.ModelPricingView })))
 const SystemLogs = lazy(() => import("@/components/console-log").then((module) => ({ default: module.SystemLogs })))
@@ -22,6 +24,8 @@ function ProviderPage() {
 }
 
 export const dashboardViews: Record<DashboardPage, ReactElement> = {
+  overview: <OverviewView />,
+  overviewUsage: <OverviewUsageView />,
   dashboard: <EndpointKeyView />,
   providers: <ProvidersView />,
   codex: <ProviderDetailView providerId="codex" />,
