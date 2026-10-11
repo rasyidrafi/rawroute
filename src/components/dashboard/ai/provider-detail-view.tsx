@@ -9,8 +9,9 @@ import { Link, useNavigate } from "react-router"
 import useSWR, { useSWRConfig, type KeyedMutator } from "swr"
 import { toast } from "sonner"
 
-import { ConfirmAction, DetailValue, EmptyRow, NotFoundState } from "@/components/dashboard/shared"
+import { ConfirmAction, DetailValue, EmptyTableRow, NotFoundState } from "@/components/dashboard/shared"
 import { useDashboardApi } from "@/components/dashboard/api-context"
+import { withPendingAction } from "@/components/dashboard/pending-action"
 import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "@/components/dashboard/ai/codex-quota"
 import { ModelForm } from "@/components/dashboard/ai/model-form"
 import { ModelShareButton } from "@/components/dashboard/ai/model-share-button"
@@ -31,14 +32,79 @@ import type { CodexDiscoveryStatus } from "@/lib/codex/model-discovery"
 
 type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[]; discovery?: CodexDiscoveryStatus }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
+const providerUsageKey = (provider: Provider, apiKeys: ProviderApiKey[]) => provider.prefix === "codex" || apiKeys.some((apiKey) => apiKey.credentialKind === "codex-cli-proxy") ? "/api/admin/oauth-providers/usage" : null
+const usesOAuthCredentials = (provider: Provider, apiKeys: ProviderApiKey[]) => provider.prefix === "codex" || (apiKeys.length > 0 && apiKeys.every((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
+
+type ProviderDetailActionInput = {
+  provider: Provider
+  providerId: string
+  apiKeys: ProviderApiKey[]
+  apiPost: ReturnType<typeof useDashboardApi>["apiPost"]
+  apiDelete: ReturnType<typeof useDashboardApi>["apiDelete"]
+  apiPatch: ReturnType<typeof useDashboardApi>["apiPatch"]
+  mutate: KeyedMutator<ProviderDetailResponse>
+  refreshCachedResource: ReturnType<typeof useSWRConfig>["mutate"]
+  pending: React.Dispatch<React.SetStateAction<Set<string>>>
+  resetConfirmation: string
+  setResetAccount: React.Dispatch<React.SetStateAction<ProviderApiKey | null>>
+  setResetConfirmation: React.Dispatch<React.SetStateAction<string>>
+  editingProviderApiKey: ProviderApiKey | null
+  setProviderKeyOpen: React.Dispatch<React.SetStateAction<boolean>>
+}
+
+function createProviderDetailActions({ provider, providerId, apiKeys, apiPost, apiDelete, apiPatch, mutate, refreshCachedResource, pending, resetConfirmation, setResetAccount, setResetConfirmation, editingProviderApiKey, setProviderKeyOpen }: ProviderDetailActionInput) {
+  return {
+    redeemReset: (account: ProviderApiKey) => withPendingAction(`reset:${account.id}`, pending, async () => {
+      await apiPost(`/api/admin/oauth-providers/${account.id}/reset`, { confirmation: resetConfirmation })
+      await refreshCachedResource("/api/admin/oauth-providers/usage")
+      setResetAccount(null)
+      setResetConfirmation("")
+      toast.success("Codex reset credit redeemed")
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to redeem reset credit")),
+    deleteCodexAccount: (account: ProviderApiKey) => withPendingAction(`delete-codex-account:${account.id}`, pending, async () => {
+      await apiDelete(`/api/admin/oauth-providers/${account.id}`)
+      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers"), refreshCachedResource("/api/admin/oauth-providers/usage")])
+      toast.success("Codex account removed")
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to remove Codex account")).then((result) => result ?? false),
+    setCodexAccountEnabled: (account: ProviderApiKey) => withPendingAction(`toggle-codex-account:${account.id}`, pending, async () => {
+      await apiPatch(`/api/admin/oauth-providers/${account.id}`, { enabled: !account.enabled })
+      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers"), refreshCachedResource("/api/admin/oauth-providers/usage")])
+      toast.success(`Codex account ${account.enabled ? "disabled" : "enabled"}`)
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to update Codex account")).then((result) => result ?? false),
+    saveProviderApiKey: (apiKey: Partial<ProviderApiKey> & { originalId?: string }) => withPendingAction("save-provider-api-key", pending, async () => {
+      await apiPost(`/api/admin/providers/${provider.id}/api-keys`, { providerApiKey: apiKey })
+      toast.success(editingProviderApiKey ? "Provider API key updated" : "Provider API key added")
+      await mutate()
+      await refreshCachedResource("/api/admin/providers")
+      setProviderKeyOpen(false)
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Request failed")).then((result) => result ?? false),
+    deleteProviderApiKey: (apiKey: ProviderApiKey) => withPendingAction(`delete-provider-api-key:${apiKey.id}`, pending, async () => {
+      await apiDelete(`/api/admin/providers/${providerId}/api-keys/${apiKey.id}`)
+      toast.success("Provider API key deleted")
+      await mutate()
+      await refreshCachedResource("/api/admin/providers")
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Request failed")).then((result) => result ?? false),
+    moveProviderApiKey: (index: number, direction: -1 | 1) => {
+      const nextIndex = index + direction
+      if (nextIndex < 0 || nextIndex >= apiKeys.length) return Promise.resolve()
+      const orderedIds = apiKeys.map((apiKey) => apiKey.id)
+      ;[orderedIds[index], orderedIds[nextIndex]] = [orderedIds[nextIndex], orderedIds[index]]
+      return withPendingAction(`move-provider-api-key:${apiKeys[index].id}:${direction}`, pending, async () => {
+        await apiPost(`/api/admin/providers/${provider.id}/api-keys/reorder`, { orderedIds })
+        await mutate()
+      }, (error) => toast.error(error instanceof Error ? error.message : "Request failed")).then(() => undefined)
+    },
+  }
+}
 
 function ProviderDetailContent({ providerId, data, mutate }: { providerId: string; data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse> }) {
   const { fetcher, apiPost, apiDelete, apiPatch } = useDashboardApi()
   const { mutate: refreshCachedResource } = useSWRConfig()
-
-  const usageKey = (data.provider.prefix === "codex" || data.apiKeys.some((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
-    ? "/api/admin/oauth-providers/usage"
-    : null
+  const usageKey = providerUsageKey(data.provider, data.apiKeys)
   const { data: usageData, error: usageError, isLoading: usageLoading } = useSWR<UsageResponse>(usageKey, fetcher, {
     refreshInterval: 300000,
     dedupingInterval: 300000,
@@ -59,144 +125,66 @@ function ProviderDetailContent({ providerId, data, mutate }: { providerId: strin
 
   const isPending = (key: string) => pending.has(key)
 
-  async function redeemReset(account: ProviderApiKey) {
-    const pendingKey = `reset:${account.id}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiPost(`/api/admin/oauth-providers/${account.id}/reset`, { confirmation: resetConfirmation })
-      await refreshCachedResource("/api/admin/oauth-providers/usage")
-      setResetAccount(null)
-      setResetConfirmation("")
-      toast.success("Codex reset credit redeemed")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to redeem reset credit")
-    } finally {
-      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
-    }
-  }
-
-  async function deleteCodexAccount(account: ProviderApiKey) {
-    const pendingKey = `delete-codex-account:${account.id}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiDelete(`/api/admin/oauth-providers/${account.id}`)
-      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers"), refreshCachedResource("/api/admin/oauth-providers/usage")])
-      toast.success("Codex account removed")
-      return true
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to remove Codex account")
-      return false
-    } finally {
-      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
-    }
-  }
-
-  async function setCodexAccountEnabled(account: ProviderApiKey) {
-    const pendingKey = `toggle-codex-account:${account.id}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiPatch(`/api/admin/oauth-providers/${account.id}`, { enabled: !account.enabled })
-      await Promise.all([mutate(), refreshCachedResource("/api/admin/providers"), refreshCachedResource("/api/admin/oauth-providers/usage")])
-      toast.success(`Codex account ${account.enabled ? "disabled" : "enabled"}`)
-      return true
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to update Codex account")
-      return false
-    } finally {
-      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
-    }
-  }
-
-  async function saveProviderApiKey(apiKey: Partial<ProviderApiKey> & { originalId?: string }) {
-    setPending((current) => new Set(current).add("save-provider-api-key"))
-    try {
-      await apiPost(`/api/admin/providers/${provider.id}/api-keys`, { providerApiKey: apiKey })
-      toast.success(editingProviderApiKey ? "Provider API key updated" : "Provider API key added")
-      await mutate()
-      await refreshCachedResource("/api/admin/providers")
-      setProviderKeyOpen(false)
-      return true
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Request failed")
-      return false
-    } finally {
-      setPending((current) => { const next = new Set(current); next.delete("save-provider-api-key"); return next })
-    }
-  }
-
-  async function deleteProviderApiKey(apiKey: ProviderApiKey) {
-    const pendingKey = `delete-provider-api-key:${apiKey.id}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiDelete(`/api/admin/providers/${providerId}/api-keys/${apiKey.id}`)
-      toast.success("Provider API key deleted")
-      await mutate()
-      await refreshCachedResource("/api/admin/providers")
-      return true
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Request failed")
-      return false
-    } finally {
-      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
-    }
-  }
-
-  async function moveProviderApiKey(index: number, direction: -1 | 1) {
-    const nextIndex = index + direction
-    if (nextIndex < 0 || nextIndex >= apiKeys.length) return
-    const orderedIds = apiKeys.map((apiKey) => apiKey.id)
-    ;[orderedIds[index], orderedIds[nextIndex]] = [orderedIds[nextIndex], orderedIds[index]]
-    const pendingKey = `move-provider-api-key:${apiKeys[index].id}:${direction}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiPost(`/api/admin/providers/${provider.id}/api-keys/reorder`, { orderedIds })
-      await mutate()
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Request failed")
-    } finally {
-      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
-    }
-  }
-
   const { provider, apiKeys } = data
-  const isOAuthProvider = provider.prefix === "codex" || (apiKeys.length > 0 && apiKeys.every((apiKey) => apiKey.credentialKind === "codex-cli-proxy"))
+  const actions = createProviderDetailActions({ provider, providerId, apiKeys, apiPost, apiDelete, apiPatch, mutate, refreshCachedResource, pending: setPending, resetConfirmation, setResetAccount, setResetConfirmation, editingProviderApiKey, setProviderKeyOpen })
+  const isOAuthProvider = usesOAuthCredentials(provider, apiKeys)
 
   return <DashboardPage>
       <ProviderHeading provider={provider} credentialCount={apiKeys.length} isOAuthProvider={isOAuthProvider} />
       <ProviderDetailsCard data={data} isOAuthProvider={isOAuthProvider} mutate={mutate} />
-      <Card>
-        <ProviderCredentialsHeader provider={provider} isOAuthProvider={isOAuthProvider} login={login} onAdd={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }} />
-        <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
-          <DialogContent>
-            <ProviderApiKeyForm key={editingProviderApiKey?.id || "new"} providers={[provider]} apiKey={editingProviderApiKey} onSave={saveProviderApiKey} />
-          </DialogContent>
-        </Dialog>
-        {provider.prefix === "codex" && <CodexLoginDialog login={login} />}
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-20" />
-                <TableHead>Name</TableHead>
-                <TableHead>{isOAuthProvider ? "Plan" : "Limits"}</TableHead>
-                <TableHead>Status</TableHead>
-                {isOAuthProvider && <TableHead>Usage Limits</TableHead>}
-                {isOAuthProvider && <TableHead>Unused Resets</TableHead>}
-                <TableHead>Created</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {apiKeys.map((apiKey, index) => <ProviderKeyRow key={apiKey.id} apiKey={apiKey} index={index} provider={provider} isOAuthProvider={isOAuthProvider} usageData={usageData} usageError={usageError} usageLoading={usageLoading} isPending={isPending} moveProviderApiKey={moveProviderApiKey} setToggleAccount={setToggleAccount} deleteCodexAccount={deleteCodexAccount} setResetAccount={setResetAccount} deleteProviderApiKey={deleteProviderApiKey} apiKeyCount={apiKeys.length} editApiKey={(account) => { setEditingProviderApiKey(account); setProviderKeyOpen(true) }} />)}
-              {!apiKeys.length && <EmptyRow label={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "No accounts yet." : "No API keys yet."} colSpan={isOAuthProvider ? 8 : 6} />}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-      <CodexResetDialog resetAccount={resetAccount} setResetAccount={setResetAccount} resetConfirmation={resetConfirmation} setResetConfirmation={setResetConfirmation} isPending={isPending} redeemReset={redeemReset} />
-      <CodexToggleDialog toggleAccount={toggleAccount} setToggleAccount={setToggleAccount} isPending={isPending} setCodexAccountEnabled={setCodexAccountEnabled} />
+      <ProviderCredentialsCard provider={provider} apiKeys={apiKeys} isOAuthProvider={isOAuthProvider} usageData={usageData} usageError={usageError} usageLoading={usageLoading} isPending={isPending} actions={actions} login={login} providerKeyOpen={providerKeyOpen} setProviderKeyOpen={setProviderKeyOpen} editingProviderApiKey={editingProviderApiKey} setEditingProviderApiKey={setEditingProviderApiKey} setToggleAccount={setToggleAccount} setResetAccount={setResetAccount} />
+      <CodexResetDialog resetAccount={resetAccount} setResetAccount={setResetAccount} resetConfirmation={resetConfirmation} setResetConfirmation={setResetConfirmation} isPending={isPending} redeemReset={actions.redeemReset} />
+      <CodexToggleDialog toggleAccount={toggleAccount} setToggleAccount={setToggleAccount} isPending={isPending} setCodexAccountEnabled={actions.setCodexAccountEnabled} />
       <ProviderModelsCard data={data} mutate={mutate} />
     </DashboardPage>
+}
+
+function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData, usageError, usageLoading, isPending, actions, login, providerKeyOpen, setProviderKeyOpen, editingProviderApiKey, setEditingProviderApiKey, setToggleAccount, setResetAccount }: {
+  provider: Provider
+  apiKeys: ProviderApiKey[]
+  isOAuthProvider: boolean
+  usageData: UsageResponse | undefined
+  usageError: Error | undefined
+  usageLoading: boolean
+  isPending: (key: string) => boolean
+  actions: ReturnType<typeof createProviderDetailActions>
+  login: ReturnType<typeof useCodexLogin>
+  providerKeyOpen: boolean
+  setProviderKeyOpen: React.Dispatch<React.SetStateAction<boolean>>
+  editingProviderApiKey: ProviderApiKey | null
+  setEditingProviderApiKey: React.Dispatch<React.SetStateAction<ProviderApiKey | null>>
+  setToggleAccount: (account: ProviderApiKey) => void
+  setResetAccount: (account: ProviderApiKey) => void
+}) {
+  return <Card>
+    <ProviderCredentialsHeader provider={provider} isOAuthProvider={isOAuthProvider} login={login} onAdd={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }} />
+    <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
+      <DialogContent>
+        <ProviderApiKeyForm key={editingProviderApiKey?.id || "new"} providers={[provider]} apiKey={editingProviderApiKey} onSave={actions.saveProviderApiKey} />
+      </DialogContent>
+    </Dialog>
+    {provider.prefix === "codex" && <CodexLoginDialog login={login} />}
+    <CardContent>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-20" />
+            <TableHead>Name</TableHead>
+            <TableHead>{isOAuthProvider ? "Plan" : "Limits"}</TableHead>
+            <TableHead>Status</TableHead>
+            {isOAuthProvider && <TableHead>Usage Limits</TableHead>}
+            {isOAuthProvider && <TableHead>Unused Resets</TableHead>}
+            <TableHead>Created</TableHead>
+            <TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {apiKeys.map((apiKey, index) => <ProviderKeyRow key={apiKey.id} apiKey={apiKey} index={index} provider={provider} isOAuthProvider={isOAuthProvider} usageData={usageData} usageError={usageError} usageLoading={usageLoading} isPending={isPending} moveProviderApiKey={actions.moveProviderApiKey} setToggleAccount={setToggleAccount} deleteCodexAccount={actions.deleteCodexAccount} setResetAccount={setResetAccount} deleteProviderApiKey={actions.deleteProviderApiKey} apiKeyCount={apiKeys.length} editApiKey={(account) => { setEditingProviderApiKey(account); setProviderKeyOpen(true) }} />)}
+          {!apiKeys.length && <EmptyTableRow title={provider.authType === "none" ? "No API keys required" : isOAuthProvider ? "No accounts yet" : "No API keys yet"} description={provider.authType === "none" ? "This provider does not require API keys." : isOAuthProvider ? "Connect an account to make this provider available for routing." : "Add an API key to route requests through this provider."} icon={KeyRoundIcon} colSpan={isOAuthProvider ? 8 : 6} />}
+        </TableBody>
+      </Table>
+    </CardContent>
+  </Card>
 }
 
 function ProviderHeading({ provider, credentialCount, isOAuthProvider }: { provider: Provider; credentialCount: number; isOAuthProvider: boolean }) {
@@ -300,7 +288,7 @@ function ProviderModelsCard({ data, mutate }: { data: ProviderDetailResponse; mu
                   <TableCell><div className="flex justify-end gap-1"><ModelShareButton modelId={model.id} modelName={model.name} disabled={!model.enabled || !provider.enabled} onSaved={mutate} />{discovered ? null : <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
                 </TableRow>
               })}
-              {!models.length && <EmptyRow label="No models yet." colSpan={6} />}
+              {!models.length && <EmptyTableRow title="No models yet" description="Add a model mapping to expose an upstream model through this provider." icon={BoxesIcon} colSpan={6} />}
             </TableBody>
           </Table>
         </CardContent>

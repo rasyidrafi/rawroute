@@ -1,12 +1,22 @@
-import { dashboardPages, dashboardPageForPath } from "@/lib/dashboard/routes"
+import { dashboardPages, dashboardPageForPath, pagePaths } from "@/lib/dashboard/routes"
 import { expect, test } from "bun:test"
 
 import { dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
 
 test("resolves the application from canonical route metadata", () => {
-  expect(dashboardPages[dashboardPageForPath("/dashboard/ai/endpoint")!].app).toBe("ai-gateway")
+  expect(dashboardPageForPath(pagePaths.overview)).toBe("overview")
+  expect(dashboardPages[dashboardPageForPath(pagePaths.endpoint)!].app).toBe("ai-gateway")
+  expect(dashboardPageForPath(pagePaths.endpoint)).toBe("endpoint")
   expect(dashboardPages[dashboardPageForPath("/dashboard/ai/codex-providers")!].app).toBe("ai-gateway")
   expect(dashboardPages[dashboardPageForPath("/dashboard/tools/catalog")!].app).toBe("tool-gateway")
+})
+
+test("AI Gateway opens on Overview while Endpoint & Key remains a distinct destination", () => {
+  const aiGateway = dashboardApps.find(app => app.id === "ai-gateway")!
+  const endpointNavigation = aiGateway.navigation.flatMap(group => group.items).find(item => item.title === "Endpoint & Key")
+
+  expect(aiGateway.href).toBe(pagePaths.overview)
+  expect(endpointNavigation?.href).toBe(pagePaths.endpoint)
 })
 
 test("matches contextual navigation without treating an app overview as every child page", () => {

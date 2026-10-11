@@ -24,7 +24,7 @@ test("first login requires an unclosable password change before administration",
   await inputs.nth(1).fill("private-password")
   await dialog.getByRole("button", { name: "Change password", exact: true }).click()
   await expect(dialog).toBeHidden()
-  await expect(page.getByRole("button", { name: "Create key", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Your gateway at a glance" })).toBeVisible()
   await page.request.post("/api/auth/logout")
   await page.goto("/login")
   await expect(page.getByText(/Initial password:|Use the initial password configured in/)).toHaveCount(0)

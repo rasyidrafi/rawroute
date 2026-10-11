@@ -5,7 +5,7 @@ export const dashboardPages = {
   overview: { path: "/dashboard/ai/overview", skeleton: "overview", title: "Overview", scope: "workspace", app: "ai-gateway" },
   overviewUsage: { path: "/dashboard/ai/overview/usage", skeleton: "usage", title: "Usage", scope: "workspace", app: "ai-gateway" },
   requestLogs: { path: "/dashboard/ai/overview/request-logs", skeleton: "request-logs", title: "Request Logs", scope: "workspace", app: "ai-gateway" },
-  dashboard: { path: "/dashboard/ai/endpoint", skeleton: "endpoint-key", title: "Endpoint & Key", scope: "workspace", app: "ai-gateway" },
+  endpoint: { path: "/dashboard/ai/endpoint", skeleton: "endpoint-key", title: "Endpoint & Key", scope: "workspace", app: "ai-gateway" },
   providers: { path: "/dashboard/ai/providers", skeleton: "providers", title: "Providers", scope: "workspace", app: "ai-gateway" },
   provider: { path: "/dashboard/ai/providers/:providerId", skeleton: "provider-detail", title: "Provider", scope: "workspace", app: "ai-gateway" },
   codex: { path: "/dashboard/ai/codex-providers", skeleton: "codex-detail", title: "Codex Providers", scope: "workspace", app: "ai-gateway" },

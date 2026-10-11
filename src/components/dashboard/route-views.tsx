@@ -27,7 +27,7 @@ export const dashboardViews: Record<DashboardPage, ReactElement> = {
   overview: <OverviewView />,
   overviewUsage: <OverviewUsageView />,
   requestLogs: <RequestLogsView />,
-  dashboard: <EndpointKeyView />,
+  endpoint: <EndpointKeyView />,
   providers: <ProvidersView />,
   codex: <ProviderDetailView providerId="codex" />,
   provider: <ProviderPage />,

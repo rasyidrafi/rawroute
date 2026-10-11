@@ -17,7 +17,7 @@ export function BudgetUsageCard() {
 }
 
 export function QuickAccessCard() {
-  return <Card className="flex-1"><CardHeader><CardTitle>Quick access</CardTitle><CardDescription>Configure how your workspace runs.</CardDescription></CardHeader><CardContent spacing="compact-stack">{[{ label: "Endpoint & API key", to: pagePaths.dashboard }, { label: "Model routing", to: pagePaths.aliases }, { label: "Budgets", to: pagePaths.budgets }].map(item => <Link key={item.to} to={item.to} className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"><div><p className="text-sm font-medium">{item.label}</p></div><ArrowUpRightIcon className="size-4 shrink-0 text-muted-foreground" /></Link>)}</CardContent></Card>
+  return <Card className="flex-1"><CardHeader><CardTitle>Quick access</CardTitle><CardDescription>Configure how your workspace runs.</CardDescription></CardHeader><CardContent spacing="compact-stack">{[{ label: "Endpoint & API key", to: pagePaths.endpoint }, { label: "Model routing", to: pagePaths.aliases }, { label: "Budgets", to: pagePaths.budgets }].map(item => <Link key={item.to} to={item.to} className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"><div><p className="text-sm font-medium">{item.label}</p></div><ArrowUpRightIcon className="size-4 shrink-0 text-muted-foreground" /></Link>)}</CardContent></Card>
 }
 
 const recentRequests = [

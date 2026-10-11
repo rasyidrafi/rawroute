@@ -39,13 +39,13 @@ export const dashboardApps: DashboardApp[] = [
     title: "AI Gateway",
     description: "Route AI requests across your providers",
     icon: RouteIcon,
-    href: pagePaths.dashboard,
+    href: pagePaths.overview,
     navigation: [
       { label: "Overview", items: [nav("overview", LayoutGridIcon), nav("overviewUsage", ChartNoAxesCombinedIcon), nav("requestLogs", ListChecksIcon)] },
       {
         label: "Gateway",
         items: [
-          nav("dashboard", KeyRoundIcon),
+          nav("endpoint", KeyRoundIcon),
           nav("providers", ServerIcon),
           nav("codex", ShieldCheckIcon),
           nav("aliases", ArrowLeftRightIcon),

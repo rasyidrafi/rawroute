@@ -4,7 +4,8 @@ import { DashboardPage } from "@/components/dashboard/page-layout"
 import { BarChart3Icon, DatabaseIcon, KeyRoundIcon, WalletCardsIcon } from "lucide-react"
 
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
-import { EmptyState, ModelMix, TopKeys, UsageTable, DashboardTrend } from "@/components/dashboard/ai/usage-panels"
+import { ModelMix, TopKeys, UsageTable, DashboardTrend } from "@/components/dashboard/ai/usage-panels"
+import { EmptyState } from "@/components/ui/empty-state"
 import { UsageOverview } from "@/components/dashboard/ai/usage-overview"
 
 export function UsageView({ publicView = false, workspaceId }: { publicView?: boolean; workspaceId?: string }) {

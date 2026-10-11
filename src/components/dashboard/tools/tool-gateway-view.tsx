@@ -6,6 +6,8 @@ import { dashboardApps } from "@/components/dashboard/dashboard-apps"
 import { useToolGatewayStatus } from "@/components/dashboard/tools/tool-gateway-status"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { EmptyState } from "@/components/ui/empty-state"
+import { DatabaseIcon } from "lucide-react"
 
 type ToolGatewayPage = "overview" | "tools" | "connections" | "policies" | "activity" | "settings"
 
@@ -79,7 +81,7 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
           <CardTitle>{pageCopy[page].title}</CardTitle>
           <CardDescription>{pageCopy[page].description}</CardDescription>
         </CardHeader>
-        <CardContent><div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No workspace-scoped Executor data is shown in RawRoute.</div></CardContent>
+        <CardContent><EmptyState title="No workspace-scoped data" description="No workspace-scoped Executor data is shown in RawRoute." icon={DatabaseIcon} treatment="embedded" /></CardContent>
       </Card>)}
     </DashboardPage>
 }

@@ -5,7 +5,9 @@ import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 
 import { DashboardPage } from "@/components/dashboard/page-layout"
 import { UsageOverview } from "./usage-overview"
+import { BarChart3Icon, DatabaseIcon, KeyRoundIcon, WalletCardsIcon } from "lucide-react"
 import { DashboardTrend, ModelMix, TopKeys, UsageTable } from "./usage-panels"
+import { EmptyState } from "@/components/ui/empty-state"
 import { UsageSummary } from "./usage-summary"
 
 export function OverviewUsageView() {
@@ -21,13 +23,15 @@ function OverviewUsageContent() {
   return <DashboardPage spacing="compact">
     <UsageOverview dashboard={dashboard} loading={pending} preset={preset} setPreset={setPreset} granularity={activeGranularity} setGranularity={setGranularity} selectedRange={preset === "custom" ? selectedRange : { from: calendarDateFromInstant(dashboard.range.from), to: calendarDateFromInstant(dashboard.range.to) }} onRangeChange={handleRangeChange} onRefresh={refresh} />
     <UsageSummary dashboard={dashboard} refreshing={pending} />
-    <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]">
-      <DashboardTrend dashboard={dashboard} refreshing={pending} />
-      <TopKeys keys={dashboard.keys} refreshing={pending} />
-    </div>
-    <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-      <UsageTable keys={dashboard.keys} refreshing={pending} />
-      <ModelMix models={dashboard.models} refreshing={pending} />
-    </div>
+    {dashboard.trend.length || dashboard.keys.length || dashboard.models.length ? <>
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]">
+        {dashboard.trend.length ? <DashboardTrend dashboard={dashboard} refreshing={pending} /> : <EmptyState title="No trend data" description="No usage buckets were found for this range." icon={BarChart3Icon} />}
+        {dashboard.keys.length ? <TopKeys keys={dashboard.keys} refreshing={pending} /> : <EmptyState title="No key activity" description="No keys handled traffic in this range." icon={KeyRoundIcon} />}
+      </div>
+      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        {dashboard.keys.length ? <UsageTable keys={dashboard.keys} refreshing={pending} /> : <EmptyState title="No table rows" description="There is no per-key usage to show for this filter." icon={DatabaseIcon} />}
+        {dashboard.models.length ? <ModelMix models={dashboard.models} refreshing={pending} /> : <EmptyState title="No model mix" description="No model usage was recorded for this filter." icon={WalletCardsIcon} />}
+      </div>
+    </> : <EmptyState title="No usage yet" description="No gateway activity was recorded for this range." icon={DatabaseIcon} />}
   </DashboardPage>
 }

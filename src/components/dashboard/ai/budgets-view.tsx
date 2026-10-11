@@ -2,12 +2,13 @@ import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useEffect, useMemo, useState } from "react"
 import { addDays, format } from "date-fns"
 import type { DateRange } from "react-day-picker"
-import { CalendarDaysIcon, ChartNoAxesCombinedIcon, Clock3Icon, DollarSignIcon, Link2Icon, RefreshCwIcon, ShieldCheckIcon, SparklesIcon, WalletCardsIcon } from "lucide-react"
+import { CalendarDaysIcon, ChartNoAxesCombinedIcon, Clock3Icon, DatabaseIcon, DollarSignIcon, KeyRoundIcon, Link2Icon, RefreshCwIcon, SearchIcon, ShieldCheckIcon, SparklesIcon, WalletCardsIcon } from "lucide-react"
 import { toast } from "sonner"
-import useSWR from "swr"
+import useSWR, { type KeyedMutator } from "swr"
 
 import { useDashboardApi } from "@/components/dashboard/api-context"
-import { ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
+import { withPendingAction } from "@/components/dashboard/pending-action"
+import { ConfirmAction, EmptyTableRow } from "@/components/dashboard/shared"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { EmptyState } from "@/components/ui/empty-state"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Progress, ProgressLabel } from "@/components/ui/progress"
@@ -47,6 +49,81 @@ function formatSessionDuration(startedAt: string, endedAt: string | null) { cons
 function formatBudgetResetIn(end: string) { const seconds = Math.max(0, Math.ceil((Date.parse(end) - Date.now()) / 1000)); if (seconds <= 0) return "Now"; const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.max(1, Math.ceil(seconds / 60)); if (days) return hours ? `${days}d ${hours}h` : `${days}d`; return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m` }
 function formatWindowTime(value: string) { const parts = getZonedParts(value); return Number.isFinite(parts.hour) ? `${`${parts.hour}`.padStart(2, "0")}:${`${parts.minute}`.padStart(2, "0")}` : "00:00" }
 function dateToAppDateTime(value: Date, time: string) { return zonedDateTimeToDate(value, time).toISOString() }
+function budgetUsagePercent(allocated: number, spent: number) { return allocated > 0 ? spent / allocated * 100 : 0 }
+
+function sortBudgetEntries(budgets: BudgetEntry[], sortBy: BudgetSortKey) {
+  return [...budgets].sort((a, b) => {
+    if (sortBy === "limit") return b.weeklyLimitMicros - a.weeklyLimitMicros
+    if (sortBy === "name") return a.name.localeCompare(b.name)
+    const aUsage = a.weeklyLimitMicros > 0 ? a.spentMicros / a.weeklyLimitMicros : 0
+    const bUsage = b.weeklyLimitMicros > 0 ? b.spentMicros / b.weeklyLimitMicros : 0
+    return bUsage - aUsage
+  })
+}
+
+function useBudgetAutoRefresh(window: BudgetWindowResponse | undefined, mutate: KeyedMutator<BudgetsResponse>) {
+  useEffect(() => {
+    if (!window?.bypassLimits || !window.bypassAutoDeactivateAtWindowEnd) return
+    const delay = Date.parse(window.end) - Date.now()
+    if (!Number.isFinite(delay)) return
+    const timeout = globalThis.setTimeout(() => void mutate(), Math.max(0, delay) + 250)
+    return () => globalThis.clearTimeout(timeout)
+  }, [window?.bypassLimits, window?.bypassAutoDeactivateAtWindowEnd, window?.end, mutate])
+}
+
+function createBudgetActions({ apiPost, apiDelete, apiPatch, mutate, setPending, clearSelectedApiKey }: {
+  apiPost: ReturnType<typeof useDashboardApi>["apiPost"]
+  apiDelete: ReturnType<typeof useDashboardApi>["apiDelete"]
+  apiPatch: ReturnType<typeof useDashboardApi>["apiPatch"]
+  mutate: () => Promise<unknown>
+  setPending: React.Dispatch<React.SetStateAction<Set<string>>>
+  clearSelectedApiKey: () => void
+}) {
+  return {
+    create: (apiKeyId: string, limit: string) => withPendingAction("create-budget", setPending, async () => {
+      await apiPost("/api/admin/budgets", { apiKeyId, weeklyLimitUsd: Number(limit) })
+      clearSelectedApiKey()
+      await mutate()
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to create budget")),
+    remove: (id: string) => withPendingAction(`delete-budget:${id}`, setPending, async () => {
+      await apiDelete(`/api/admin/budgets/${id}`)
+      await mutate()
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to delete budget")).then((result) => result ?? false),
+    toggle: (id: string, enabled: boolean, current: number) => withPendingAction(`toggle-budget:${id}`, setPending, async () => {
+      await apiPatch(`/api/admin/budgets/${id}`, { weeklyLimitUsd: current / 1_000_000, enabled })
+      await mutate()
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to update budget")),
+    updateLimit: (id: string, weeklyLimitUsd: number, enabled: boolean) => withPendingAction(`update-limit:${id}`, setPending, async () => {
+      await apiPatch(`/api/admin/budgets/${id}`, { weeklyLimitUsd, enabled })
+      await mutate()
+      toast.success("Budget limit updated")
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to update budget limit")).then((result) => result ?? false),
+    toggleBypass: (enabled: boolean, autoDeactivateAtWindowEnd = false) => withPendingAction("toggle-bypass", setPending, async () => {
+      await apiPatch("/api/admin/budgets/bypass", { enabled, ...(enabled ? { autoDeactivateAtWindowEnd } : {}) })
+      await mutate()
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to update Unlimited Mode")).then((result) => result ?? false),
+    updateBypassAutoDeactivate: (autoDeactivateAtWindowEnd: boolean) => withPendingAction("update-bypass-auto-deactivate", setPending, async () => {
+      await apiPatch("/api/admin/budgets/bypass", { autoDeactivateAtWindowEnd })
+      await mutate()
+      toast.success(autoDeactivateAtWindowEnd ? "Unlimited Mode will stop at the window end" : "Unlimited Mode will keep running")
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to update Unlimited Mode")),
+    saveUnlimited: (excludedModelIds: string[]) => withPendingAction("save-unlimited", setPending, async () => {
+      await apiPatch("/api/admin/budgets/unlimited", { excludedModelIds })
+      await mutate()
+      toast.success("Unlimited Mode exclusions saved")
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to save Unlimited Mode exclusions")).then((result) => result ?? false),
+    saveBeyondLimits: (settings: Pick<BudgetBeyondLimitsSettings, "enabled" | "modelIds">) => withPendingAction("save-beyond-limits", setPending, async () => {
+      await apiPatch("/api/admin/budgets/beyond-limits", settings)
+      await mutate()
+      toast.success("Beyond Limits settings saved")
+      return true
+    }, (error) => toast.error(error instanceof Error ? error.message : "Unable to save Beyond Limits settings")).then((result) => result ?? false),
+  }
+}
 
 export function BudgetsView() {
   const { fetcher, apiPost, apiDelete, apiPatch } = useDashboardApi()
@@ -66,98 +143,11 @@ export function BudgetsView() {
   const isPending = (key: string) => pending.has(key)
   const totalAllocatedMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + budget.weeklyLimitMicros, 0), [data?.budgets])
   const totalSpentMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + budget.spentMicros, 0), [data?.budgets])
-  const totalUsagePercent = totalAllocatedMicros > 0 ? totalSpentMicros / totalAllocatedMicros * 100 : 0
-  const sortedBudgets = useMemo(() => [...(data?.budgets || [])].sort((a, b) => {
-    if (sortBy === "limit") return b.weeklyLimitMicros - a.weeklyLimitMicros
-    if (sortBy === "name") return a.name.localeCompare(b.name)
-    const aUsage = a.weeklyLimitMicros > 0 ? a.spentMicros / a.weeklyLimitMicros : 0
-    const bUsage = b.weeklyLimitMicros > 0 ? b.spentMicros / b.weeklyLimitMicros : 0
-    return bUsage - aUsage
-  }), [data?.budgets, sortBy])
-
-  async function create() {
-    if (!apiKeyId) return
-    const pendingKey = "create-budget"
-    setPending((current) => new Set(current).add(pendingKey))
-    try { await apiPost("/api/admin/budgets", { apiKeyId, weeklyLimitUsd: Number(limit) }); setApiKeyId(""); await mutate() }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to create budget") }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function remove(id: string) {
-    const pendingKey = `delete-budget:${id}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try { await apiDelete(`/api/admin/budgets/${id}`); await mutate(); return true }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to delete budget"); return false }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function toggle(id: string, enabled: boolean, current: number) {
-    const pendingKey = `toggle-budget:${id}`
-    setPending((currentPending) => new Set(currentPending).add(pendingKey))
-    try { await apiPatch(`/api/admin/budgets/${id}`, { weeklyLimitUsd: current / 1_000_000, enabled }); await mutate() }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget") }
-    finally { setPending((currentPending) => { const next = new Set(currentPending); next.delete(pendingKey); return next }) }
-  }
-
-  async function updateLimit(id: string, weeklyLimitUsd: number, enabled: boolean) {
-    const pendingKey = `update-limit:${id}`
-    setPending((current) => new Set(current).add(pendingKey))
-    try { await apiPatch(`/api/admin/budgets/${id}`, { weeklyLimitUsd, enabled }); await mutate(); toast.success("Budget limit updated"); return true }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update budget limit"); return false }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function toggleBypass(enabled: boolean, autoDeactivateAtWindowEnd = false) {
-    const pendingKey = "toggle-bypass"
-    setPending((current) => new Set(current).add(pendingKey))
-    try { await apiPatch("/api/admin/budgets/bypass", { enabled, ...(enabled ? { autoDeactivateAtWindowEnd } : {}) }); await mutate(); return true }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update Unlimited Mode"); return false }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function updateBypassAutoDeactivate(autoDeactivateAtWindowEnd: boolean) {
-    const pendingKey = "update-bypass-auto-deactivate"
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiPatch("/api/admin/budgets/bypass", { autoDeactivateAtWindowEnd })
-      await mutate()
-      toast.success(autoDeactivateAtWindowEnd ? "Unlimited Mode will stop at the window end" : "Unlimited Mode will keep running")
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to update Unlimited Mode") }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function saveUnlimited(excludedModelIds: string[]) {
-    const pendingKey = "save-unlimited"
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiPatch("/api/admin/budgets/unlimited", { excludedModelIds })
-      await mutate()
-      toast.success("Unlimited Mode exclusions saved")
-      return true
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Unlimited Mode exclusions"); return false }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  async function saveBeyondLimits(settings: Pick<BudgetBeyondLimitsSettings, "enabled" | "modelIds">) {
-    const pendingKey = "save-beyond-limits"
-    setPending((current) => new Set(current).add(pendingKey))
-    try {
-      await apiPatch("/api/admin/budgets/beyond-limits", settings)
-      await mutate()
-      toast.success("Beyond Limits settings saved")
-      return true
-    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save Beyond Limits settings"); return false }
-    finally { setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next }) }
-  }
-
-  useEffect(() => {
-    if (!data?.window.bypassLimits || !data.window.bypassAutoDeactivateAtWindowEnd) return
-    const delay = Date.parse(data.window.end) - Date.now()
-    if (!Number.isFinite(delay)) return
-    const timeout = window.setTimeout(() => void mutate(), Math.max(0, delay) + 250)
-    return () => window.clearTimeout(timeout)
-  }, [data?.window.bypassLimits, data?.window.bypassAutoDeactivateAtWindowEnd, data?.window.end, mutate])
+  const totalUsagePercent = budgetUsagePercent(totalAllocatedMicros, totalSpentMicros)
+  const availableApiKeys = (data?.apiKeys || []).filter((key) => !data?.budgets.some((budget) => budget.apiKeyId === key.id))
+  const actions = createBudgetActions({ apiPost, apiDelete, apiPatch, mutate: () => mutate(), setPending, clearSelectedApiKey: () => setApiKeyId("") })
+  const sortedBudgets = useMemo(() => sortBudgetEntries(data?.budgets || [], sortBy), [data?.budgets, sortBy])
+  useBudgetAutoRefresh(data?.window, mutate)
 
   if (isLoading || !data) return <DashboardContentSkeleton variant="budgets" />
 
@@ -176,8 +166,8 @@ export function BudgetsView() {
             <div className="mt-3 space-y-2"><Progress value={Math.min(totalUsagePercent, 100)} /><div className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><span>{bypass ? "Unlimited Mode active" : totalAllocatedMicros > 0 ? `${Math.round(totalUsagePercent)}% of allocated budget` : "No budget limits configured"}</span><span className="shrink-0">{formatWindowDate(data.window.start)} - {formatWindowDate(data.window.end)}</span></div></div>
           </div>
         </div>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="flex flex-col gap-3 sm:flex-row sm:items-end"><Select value={apiKeyId} onValueChange={(value) => setApiKeyId(value || "")}><SelectTrigger className="md:w-64"><SelectValue placeholder="Select gateway key" /></SelectTrigger><SelectContent>{data.apiKeys.filter((key) => !data.budgets.some((budget) => budget.apiKeyId === key.id)).map((key) => <SelectItem key={key.id} value={key.id}>{key.name}</SelectItem>)}</SelectContent></Select><div className="flex items-center gap-3"><div className="relative md:w-40"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input inset="icon"
-                      className="md:w-40" value={limit} onChange={(event) => setLimit(sanitizeNonNegativeDraft(event.target.value))} type="number" min="0.01" step="0.01" placeholder="Weekly USD" /></div><Button aria-busy={isPending("create-budget")} onClick={() => void create()} disabled={isPending("create-budget") || !apiKeyId}>{isPending("create-budget") && <LoadingSpinner />}Create budget</Button></div></div></div>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="flex flex-col gap-3 sm:flex-row sm:items-end"><div className="flex flex-col gap-2"><Select value={apiKeyId} onValueChange={(value) => setApiKeyId(value || "")}><SelectTrigger className="md:w-64"><SelectValue placeholder="Select gateway key" /></SelectTrigger><SelectContent>{availableApiKeys.map((key) => <SelectItem key={key.id} value={key.id}>{key.name}</SelectItem>)}</SelectContent></Select>{!availableApiKeys.length && <EmptyState title={data.apiKeys.length ? "All gateway keys have budgets" : "No gateway keys available"} description={data.apiKeys.length ? "Create another gateway key to add a separate budget." : "Create a gateway key on the Endpoint & API key page before configuring a budget."} icon={KeyRoundIcon} variant="compact" treatment="embedded" className="max-w-sm items-start text-left" />}</div><div className="flex items-center gap-3"><div className="relative md:w-40"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input inset="icon"
+                      className="md:w-40" value={limit} onChange={(event) => setLimit(sanitizeNonNegativeDraft(event.target.value))} type="number" min="0.01" step="0.01" placeholder="Weekly USD" /></div><Button aria-busy={isPending("create-budget")} onClick={() => { if (apiKeyId) void actions.create(apiKeyId, limit) }} disabled={isPending("create-budget") || !apiKeyId}>{isPending("create-budget") && <LoadingSpinner />}Create budget</Button></div></div></div>
         <Tabs defaultValue="unlimited" spacing="comfortable">
           <TabsList aria-label="Budget limit controls">
             <TabsTrigger value="unlimited">Unlimited Mode</TabsTrigger>
@@ -197,17 +187,17 @@ export function BudgetsView() {
               savePending={isPending("save-unlimited")}
               onDialogOpenChange={(open) => { if (!isPending("toggle-bypass")) { setBypassDialogOpen(open); if (open && !bypass) setActivationAutoDeactivate(false) } }}
               onActivationAutoDeactivateChange={setActivationAutoDeactivate}
-              onToggle={toggleBypass}
-              onUpdateAutoDeactivate={updateBypassAutoDeactivate}
-              onSave={saveUnlimited}
+              onToggle={actions.toggleBypass}
+              onUpdateAutoDeactivate={actions.updateBypassAutoDeactivate}
+              onSave={actions.saveUnlimited}
             />
           </TabsContent>
           <TabsContent value="beyond-limits">
-            <BeyondLimitsSettings key={data.beyondLimits.updatedAt} settings={data.beyondLimits} modelOptions={data.modelOptions} pending={isPending("save-beyond-limits")} onSave={saveBeyondLimits} />
+            <BeyondLimitsSettings key={data.beyondLimits.updatedAt} settings={data.beyondLimits} modelOptions={data.modelOptions} pending={isPending("save-beyond-limits")} onSave={actions.saveBeyondLimits} />
           </TabsContent>
         </Tabs>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex flex-col gap-2 sm:w-auto"><span className="text-sm font-medium">Order rows by</span><Select value={sortBy} onValueChange={(value) => { if (value) setSortBy(value as BudgetSortKey) }}><SelectTrigger className="min-w-44"><span className="truncate">{budgetSortLabel(sortBy)}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Ordering</SelectLabel>{budgetSortOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></div></div>
-        <Table><TableColumns columns={[{ id: "Key", label: "Key" }, { id: "Status", label: "Status" }, { id: "Limit", label: "Limit" }, { id: "Usage", label: "Usage" }, { id: "actions" }]} /><TableBody>{sortedBudgets.map((budget) => <BudgetRow key={budget.apiKeyId} budget={budget} bypass={bypass} windowStart={data.window.start} isPending={isPending} toggle={toggle} remove={remove} updateLimit={updateLimit} />)}{!sortedBudgets.length && <EmptyRow label="No budgets configured yet." colSpan={5} />}</TableBody></Table>
+        <Table><TableColumns columns={[{ id: "Key", label: "Key" }, { id: "Status", label: "Status" }, { id: "Limit", label: "Limit" }, { id: "Usage", label: "Usage" }, { id: "actions" }]} /><TableBody>{sortedBudgets.map((budget) => <BudgetRow key={budget.apiKeyId} budget={budget} bypass={bypass} windowStart={data.window.start} isPending={isPending} toggle={actions.toggle} remove={actions.remove} updateLimit={actions.updateLimit} />)}{!sortedBudgets.length && <EmptyTableRow title="No budgets configured" description="Select a gateway key above and create a budget to track its usage." icon={WalletCardsIcon} colSpan={5} />}</TableBody></Table>
       </CardContent>
     </Card>
   </DashboardPage>
@@ -224,7 +214,7 @@ function BudgetModelSelector({ title, description, modelIds, modelOptions, pendi
   return <div className="space-y-3">
     <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><div className="text-sm font-medium">{title}</div><p className="text-xs text-muted-foreground">{description}</p></div><div className="flex items-center gap-2"><Badge variant="outline">{modelIds.length} selected</Badge>{modelIds.length > 0 && <Button size="sm" variant="ghost" disabled={pending} onClick={() => onChange([])}>Clear all</Button>}</div></div>
     <Input aria-label={`Search ${title.toLowerCase()}`} placeholder="Search model name, ID, or provider" value={search} onChange={(event) => setSearch(event.target.value)} disabled={pending} />
-    <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">{filteredOptions.map((model) => { const selected = selectedIds.has(model.id); return <label key={model.id} className="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-muted/40"><Checkbox checked={selected} onCheckedChange={(checked) => toggleModel(model.id, checked === true)} disabled={pending} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{model.name}</span><span className="block truncate text-xs text-muted-foreground">{model.id} · {model.provider}</span></span></label> })}{!filteredOptions.length && <div className="px-4 py-8 text-center text-sm text-muted-foreground">{uniqueOptions.length ? "No models match your search." : "No enabled models are available."}</div>}</div>
+    <div className="max-h-80 divide-y overflow-y-auto rounded-lg border">{filteredOptions.map((model) => { const selected = selectedIds.has(model.id); return <label key={model.id} className="flex cursor-pointer items-center gap-3 px-3 py-3 hover:bg-muted/40"><Checkbox checked={selected} onCheckedChange={(checked) => toggleModel(model.id, checked === true)} disabled={pending} /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{model.name}</span><span className="block truncate text-xs text-muted-foreground">{model.id} · {model.provider}</span></span></label> })}{!filteredOptions.length && <EmptyState title={uniqueOptions.length ? "No models match your search" : "No enabled models available"} description={uniqueOptions.length ? "Try a different model name, ID, or provider." : "Enable or add a model before selecting it here."} icon={uniqueOptions.length ? SearchIcon : DatabaseIcon} variant="compact" treatment="embedded" />}</div>
   </div>
 }
 
@@ -256,7 +246,7 @@ function UnlimitedSettings({ settings, modelOptions, window, sessions, dialogOpe
       <div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2 font-medium"><SparklesIcon className="size-4 text-warning" />Unlimited Mode <Badge variant={active ? "secondary" : "outline"}>{active ? "Active" : "Inactive"}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{active ? autoDeactivate ? `Budget limits are bypassed until ${endLabel}.` : "Budget limits are bypassed until you deactivate Unlimited Mode." : "Activate a temporary budget bypass while keeping expensive models blocked."}</p>{active && <div className="mt-3 flex items-start gap-3 rounded-lg border bg-background px-3 py-2"><Checkbox id="unlimited-auto-deactivate-active" checked={autoDeactivate} onCheckedChange={(checked) => void onUpdateAutoDeactivate(checked === true)} disabled={autoPending || togglePending} /><label htmlFor="unlimited-auto-deactivate-active" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">{autoDeactivate ? `Scheduled for ${endLabel}.` : "This session will continue into the next budget window."}</span></label></div>}</div><UnlimitedActivation active={active} dialogOpen={dialogOpen} togglePending={togglePending} excludedModelIds={excludedModelIds} activationAutoDeactivate={activationAutoDeactivate} endLabel={endLabel} onDialogOpenChange={onDialogOpenChange} onActivationAutoDeactivateChange={onActivationAutoDeactivateChange} onToggle={onToggle} /></div>
       <div className="space-y-3 p-4"><BudgetModelSelector title="Excluded models" description="These models cannot start new requests while Unlimited Mode is active." modelIds={excludedModelIds} modelOptions={modelOptions} pending={savePending} onChange={setExcludedModelIds} /><div className="flex flex-col gap-3 rounded-lg border border-warning/25 bg-warning/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button aria-busy={savePending} disabled={savePending || !dirty} onClick={async () => { if (await onSave(excludedModelIds)) setExcludedModelIds(null) }}>{savePending && <LoadingSpinner />}Save exclusions</Button></div></div>
     </div>
-    <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div>{sessions.length ? <Table><TableColumns columns={[{ id: "Started", label: "Started" }, { id: "Ended", label: "Ended" }, { id: "Duration", label: "Duration" }, { id: "Result", label: "Result" }]} /><TableBody>{sessions.map((session) => <TableRow key={session.id}><TableCell >{formatSessionDate(session.startedAt)}</TableCell><TableCell tone="muted">{formatSessionDate(session.endedAt)}</TableCell><TableCell text="numeric">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{!session.endedAt ? "Active" : session.endReason === "window_end" ? "Window ended" : session.endReason === "manual" ? "Deactivated" : "Completed"}</Badge></TableCell></TableRow>)}</TableBody></Table> : <div className="px-4 py-8 text-center text-sm text-muted-foreground">No Unlimited Mode sessions yet.</div>}</div>
+    <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div>{sessions.length ? <Table><TableColumns columns={[{ id: "Started", label: "Started" }, { id: "Ended", label: "Ended" }, { id: "Duration", label: "Duration" }, { id: "Result", label: "Result" }]} /><TableBody>{sessions.map((session) => <TableRow key={session.id}><TableCell >{formatSessionDate(session.startedAt)}</TableCell><TableCell tone="muted">{formatSessionDate(session.endedAt)}</TableCell><TableCell text="numeric">{formatSessionDuration(session.startedAt, session.endedAt)}</TableCell><TableCell><Badge variant={session.endedAt ? "outline" : "secondary"}>{!session.endedAt ? "Active" : session.endReason === "window_end" ? "Window ended" : session.endReason === "manual" ? "Deactivated" : "Completed"}</Badge></TableCell></TableRow>)}</TableBody></Table> : <EmptyState title="No Unlimited Mode sessions yet" description="Each activation will be recorded here." icon={Clock3Icon} variant="compact" treatment="embedded" />}</div>
   </>
 }
 
@@ -373,6 +363,7 @@ function BudgetWindowSource({ anchor, accountId, accounts, pending, onAnchorChan
         <SelectTrigger className="min-w-48"><SelectValue placeholder="Select account" /></SelectTrigger>
         <SelectContent>{accounts.map((account) => <SelectItem key={account.id} value={account.id}>{account.name}</SelectItem>)}</SelectContent>
       </Select>
+      {!accounts.length && <EmptyState title="No Codex accounts" description="Connect a Codex account before syncing this budget window." icon={Link2Icon} variant="compact" treatment="embedded" className="max-w-sm items-start text-left" />}
     </div>}
   </>
 }

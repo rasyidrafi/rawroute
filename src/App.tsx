@@ -20,7 +20,7 @@ function SessionGate({ login = false }: { login?: boolean }) {
   const { data, error, mutate, isValidating } = useSession()
   const online = useOnlineStatus()
   if (data && !data.authenticated && !login) return <Navigate to={pagePaths.login} replace />
-  if (login && data?.authenticated) return <Navigate to={pagePaths.dashboard} replace />
+  if (login && data?.authenticated) return <Navigate to={pagePaths.overview} replace />
 
   // Keep a verified dashboard mounted during connection failures so drafts survive.
   // The server still authorizes each API request; a confirmed expiry redirects above.

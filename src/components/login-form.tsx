@@ -48,7 +48,7 @@ export function LoginForm({ checkingSession = false, sessionUnavailable = false 
         return
       }
       await refreshSession()
-      navigate(pagePaths.dashboard, { replace: true })
+      navigate(pagePaths.overview, { replace: true })
     } catch {
       toast.error("Unable to reach the gateway")
     } finally {

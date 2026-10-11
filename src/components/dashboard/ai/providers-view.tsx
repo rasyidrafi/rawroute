@@ -1,13 +1,13 @@
 import { pagePaths, providerPagePath } from "@/lib/dashboard/routes"
 import { DashboardPage } from "@/components/dashboard/page-layout"
 import { useState } from "react"
-import { ChevronRightIcon, LinkIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { ChevronRightIcon, LinkIcon, PlusIcon, ServerIcon, Trash2Icon } from "lucide-react"
 import { Link } from "react-router"
 import { useNavigate } from "react-router"
 import useSWR from "swr"
 import { toast } from "sonner"
 
-import { LoadError, ConfirmAction, EmptyRow } from "@/components/dashboard/shared"
+import { LoadError, ConfirmAction, EmptyTableRow } from "@/components/dashboard/shared"
 import { ProviderForm } from "@/components/dashboard/ai/provider-form"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
@@ -100,7 +100,7 @@ export function ProvidersView() {
                   </TableCell>
                 </TableRow>
               })}
-              {!regularProviders.length && <EmptyRow label="No providers yet." colSpan={7} />}
+              {!regularProviders.length && <EmptyTableRow title="No providers yet" description="Add an upstream provider to configure a connection and the models it serves." icon={ServerIcon} colSpan={7} />}
             </TableBody>
           </Table>
         </CardContent>
@@ -119,10 +119,9 @@ export function ProvidersView() {
                 <TableCell><span className="font-medium tabular-nums">{codexProvider.apiKeyCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell><TableCell><span className="font-medium tabular-nums">{codexProvider.modelCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell>
                 <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="ghost" render={<Link to={pagePaths.codex} />}><ChevronRightIcon /></Button></TableCell>
               </TableRow>}
-              {!codexProvider && <EmptyRow label="Codex Providers are not configured yet." colSpan={6} />}
+              {!codexProvider && <EmptyTableRow title="Codex Providers are not configured yet" description="Open the Codex provider page to connect an account." icon={LinkIcon} colSpan={6} />}
             </TableBody>
           </Table>
-          <p className="mt-4 text-sm text-muted-foreground">Open the Codex provider page to add an account.</p>
         </CardContent>
       </Card>
     </DashboardPage>

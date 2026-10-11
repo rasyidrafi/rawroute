@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react"
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core"
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { BracesIcon, ChevronDownIcon, GripVerticalIcon, PlusIcon, TestTube2Icon, Trash2Icon } from "lucide-react"
+import { BoxesIcon, BracesIcon, ChevronDownIcon, GripVerticalIcon, PlusIcon, SearchIcon, TestTube2Icon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import { useDashboardApi } from "@/components/dashboard/api-context"
@@ -11,6 +11,7 @@ import { LoadingSpinner } from "@/components/loading-spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { EmptyState } from "@/components/ui/empty-state"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
@@ -90,6 +91,7 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
     return [...enabledModels, ...enabledAliases].sort((left, right) => left.label.localeCompare(right.label))
   }, [aliases, models, sharedModels])
   const byId = new Map(targets.map((target) => [target.id, target]))
+  const selectableTargets = targets.filter((target) => !members.some((member) => member.modelId === target.id))
 
   function updateMember(modelId: string, update: (member: ComboMember) => ComboMember) {
     setMembers((current) => current.map((member) => {
@@ -170,10 +172,10 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
     <DialogHeader><DialogTitle>{combo?.id ? "Edit combo" : "Add combo"}</DialogTitle><DialogDescription>Drag models into fallback order. Open a model only when it needs an override.</DialogDescription></DialogHeader>
     <div className="grid max-h-[70vh] gap-4 overflow-y-auto py-4 pr-1">
       <div className="grid gap-4 sm:grid-cols-2"><FormField label="Gateway ID"><Input name="combo" defaultValue={combo?.combo} placeholder="auto" pattern="[a-z0-9._/-]+" required /></FormField><FormField label="Name"><Input name="name" defaultValue={combo?.name} placeholder="Automatic fallback" maxLength={80} required /></FormField></div>
-      <FormField label="Models in fallback order"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => byId.get(String(value))?.label || String(value)}><SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Select a model or alias" /></SelectTrigger><SelectContent>{targets.filter((target) => !members.some((member) => member.modelId === target.id)).map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span></SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div></FormField>
+      <FormField label="Models in fallback order"><div className="grid gap-2"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => byId.get(String(value))?.label || String(value)}><SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Select a model or alias" /></SelectTrigger><SelectContent>{selectableTargets.map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span></SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div>{!selectableTargets.length && <EmptyState title={targets.length ? "All available models are in the fallback order" : "No eligible models or aliases"} description={targets.length ? "Remove a member to make it available for selection again." : "Enable a provider model or alias before adding combo members."} icon={targets.length ? SearchIcon : BoxesIcon} variant="compact" treatment="embedded" />}</div></FormField>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderMembers}>
         <SortableContext items={members.map((member) => member.modelId)} strategy={verticalListSortingStrategy}>
-          <div className="grid gap-2">{members.map((member, index) => <SortableMemberCard key={member.modelId} member={member} index={index} open={openMembers.has(member.modelId)} effortOptions={byId.get(member.modelId)?.efforts || [...standardReasoningEfforts]} payloadDraft={payloadDrafts[member.modelId] ?? JSON.stringify(member.customPayload || {}, null, 2)} payloadError={payloadErrors[member.modelId]} testing={testing.has(member.modelId)} onToggle={() => toggleMember(member.modelId)} onRemove={() => removeMember(member.modelId)} onUpdate={(update) => updateMember(member.modelId, update)} onPayloadChange={(value) => updateCustomPayload(member.modelId, value)} onFormatPayload={() => formatCustomPayload(member.modelId)} onTest={() => void testMember(member.modelId)} />)}{!members.length && <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Add at least two models.</p>}</div>
+          <div className="grid gap-2">{members.map((member, index) => <SortableMemberCard key={member.modelId} member={member} index={index} open={openMembers.has(member.modelId)} effortOptions={byId.get(member.modelId)?.efforts || [...standardReasoningEfforts]} payloadDraft={payloadDrafts[member.modelId] ?? JSON.stringify(member.customPayload || {}, null, 2)} payloadError={payloadErrors[member.modelId]} testing={testing.has(member.modelId)} onToggle={() => toggleMember(member.modelId)} onRemove={() => removeMember(member.modelId)} onUpdate={(update) => updateMember(member.modelId, update)} onPayloadChange={(value) => updateCustomPayload(member.modelId, value)} onFormatPayload={() => formatCustomPayload(member.modelId)} onTest={() => void testMember(member.modelId)} />)}{!members.length && <EmptyState title="No models in fallback order" description="Choose a model or alias above, then add it to the fallback order." icon={BoxesIcon} variant="compact" treatment="embedded" />}</div>
         </SortableContext>
       </DndContext>
     </div>

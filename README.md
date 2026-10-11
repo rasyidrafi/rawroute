@@ -178,9 +178,11 @@ the same pinned Bun version. `node:` imports use Bun's compatibility APIs and do
 not require a separate Node.js installation.
 
 Browser tests run the production build with an in-memory data store and local
-CLIProxy/Executor fixtures. Install Chromium with
-`bunx --bun playwright install --with-deps chromium` and provide a disposable Redis
-database through `E2E_REDIS_URL` (default: `redis://127.0.0.1:6379/15`).
+CLIProxy/Executor fixtures using an installed Google Chrome executable. Chrome is
+discovered on `PATH` or in standard install locations; set
+`PLAYWRIGHT_CHROME_EXECUTABLE_PATH` to select a specific executable. Playwright's
+bundled Chromium is not used. Provide a disposable Redis database through
+`E2E_REDIS_URL` (default: `redis://127.0.0.1:6379/15`).
 `COMBO_TEST_REDIS_URL` enables the Redis integration test in the unit suite; use
 a separate test database for it. CLIProxy lifecycle tests run on isolated ports; the
 optional real-engine test is documented in the managed CLIProxyAPI guide.

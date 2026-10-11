@@ -53,7 +53,7 @@ export function LogPanel({ scope }: { scope: LogScope }) {
       <CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col">
         <LogToolbar level={level} setLevel={setLevel} query={query} setQuery={setQuery} source={activeSource} setSource={setSource} sources={sources} live={live} setLive={toggleLive} />
         {error && <p className="text-sm text-destructive" role="alert">{error} Existing entries may be stale.</p>}
-        <LogResults entries={visible} loading={isInitialLoading} />
+        <LogResults entries={visible} loading={isInitialLoading} hasError={Boolean(error)} />
       </CardContent>
     </Card></div>
     <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clear {global ? "system" : "console"} logs?</AlertDialogTitle><AlertDialogDescription>This clears all retained {global ? "global" : "workspace"} entries for every administrator, including entries hidden by filters. Other scopes are unaffected.</AlertDialogDescription></AlertDialogHeader>{clearError && <p role="alert" className="text-sm text-destructive">{clearError}</p>}<AlertDialogFooter><AlertDialogCancel disabled={isClearing}>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={isClearing} onClick={event => { event.preventDefault(); void clearHistory() }}>{isClearing && <LoadingSpinner />}Clear logs</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>

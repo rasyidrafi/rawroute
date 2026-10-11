@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
+import { pagePaths } from "../../src/lib/dashboard/routes"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
@@ -18,7 +19,7 @@ async function workspaceMenu(page: Page) {
 
 test("switches dashboard apps with contextual navigation", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard/ai/endpoint")
+  await page.goto(pagePaths.overview)
 
   const sidebar = page.locator('[data-slot="sidebar-inner"]')
   await expect(sidebar.getByText("Apps", { exact: true })).toHaveCount(0)
@@ -58,13 +59,13 @@ test("switches dashboard apps with contextual navigation", async ({ page }) => {
 
   await workspaceMenu(page)
   await appMenu.getByRole("menuitemradio", { name: "AI Gateway", exact: true }).click()
-  await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
+  await expect(page).toHaveURL(pagePaths.overview)
   await expect(sidebar.getByRole("link", { name: "Providers", exact: true })).toBeVisible()
 })
 
 test("keeps the simple footer sign-out confirmation", async ({ page }) => {
   await authenticate(page)
-  await page.goto("/dashboard/ai/endpoint")
+  await page.goto(pagePaths.overview)
 
   const sidebar = page.locator('[data-slot="sidebar-inner"]')
   await expect(sidebar.getByRole("button", { name: "Account menu" })).toHaveCount(0)
@@ -88,7 +89,7 @@ test("preserves dashboard app URL state, workspace selection, and mobile navigat
   const workspaceId = ((await createResponse.json()).workspace as { id: string }).id
 
   try {
-    await page.goto("/dashboard/ai/endpoint")
+    await page.goto(pagePaths.overview)
     const workspaceTrigger = await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: workspaceName }).click()
     await expect(workspaceTrigger).toContainText(workspaceName)
@@ -104,11 +105,11 @@ test("preserves dashboard app URL state, workspace selection, and mobile navigat
     await expect(page.getByRole("heading", { name: /Tool Gateway.*Tools/ })).toBeVisible()
     await workspaceMenu(page)
     await page.getByRole("menuitemradio", { name: "AI Gateway", exact: true }).click()
-    await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
+    await expect(page).toHaveURL(pagePaths.overview)
     await page.goBack()
     await expect(page).toHaveURL(/\/dashboard\/tools\/catalog$/)
     await page.goForward()
-    await expect(page).toHaveURL(/\/dashboard\/ai\/endpoint$/)
+    await expect(page).toHaveURL(pagePaths.overview)
 
     await page.setViewportSize({ width: 390, height: 844 })
     const sidebarTrigger = page.getByRole("button", { name: "Toggle Sidebar" })
@@ -199,6 +200,7 @@ test("creates, switches, isolates, renames, publishes, and deletes a workspace",
   await deleteDialog.getByLabel("Type E2E Workspace Renamed").fill("E2E Workspace Renamed")
   await deleteDialog.getByRole("button", { name: "Delete permanently" }).click()
   await expect(page.getByText("Default").first()).toBeVisible()
+  await expect(page).toHaveURL(pagePaths.overview)
   await expect.poll(async () => ((await (await page.request.get("/api/admin/workspaces")).json()).workspaces as Array<{ id: string }>).some((entry) => entry.id === workspaceId)).toBe(false)
   expect((await page.request.get("/api/admin/workspaces", { headers: { "x-rawroute-workspace-id": workspaceId } })).ok()).toBe(true)
 })

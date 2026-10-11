@@ -1,0 +1,120 @@
+import { expect, test, type Page } from "@playwright/test"
+import type { DashboardPayload } from "../../src/lib/types"
+
+async function authenticate(page: Page) {
+  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
+  expect(login.ok()).toBe(true)
+  if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) {
+    expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
+  }
+}
+
+function dashboardPayload(overrides: Partial<Pick<DashboardPayload, "trend" | "keys" | "models">> = {}): DashboardPayload {
+  const trend = overrides.trend ?? []
+  const keys = overrides.keys ?? []
+  const models = overrides.models ?? []
+  const requests = Math.max(trend.reduce((sum, row) => sum + row.requests, 0), keys.reduce((sum, row) => sum + row.requests, 0))
+  const tokens = Math.max(trend.reduce((sum, row) => sum + row.tokens, 0), keys.reduce((sum, row) => sum + row.tokens, 0))
+  const costMicros = Math.max(trend.reduce((sum, row) => sum + row.costMicros, 0), keys.reduce((sum, row) => sum + row.costMicros, 0))
+  return {
+    generatedAt: "2026-10-11T12:00:00.000Z",
+    range: { label: "All time", from: "2026-10-11T00:00:00.000Z", to: "2026-10-11T12:00:00.000Z", granularity: "hourly" },
+    summary: { requests, tokens, costMicros, activeKeys: keys.length, pricedRequests: requests, unpricedRequests: 0 },
+    trend,
+    keys,
+    models,
+    freshness: { source: "memory", lastEventAt: keys[0]?.lastUsed ?? null },
+    pricingConfidence: { pricedRequests: requests, unpricedRequests: 0 },
+  }
+}
+
+const trendRow = { bucketStart: "2026-10-11T10:00:00.000Z", label: "10 AM", requests: 5, tokens: 120, costMicros: 15000 }
+const keyRow: DashboardPayload["keys"][number] = {
+  id: "usage-empty-state-key",
+  label: "E2E Usage Key",
+  maskedKey: "sk-••••-test",
+  requests: 5,
+  tokens: 120,
+  costMicros: 15000,
+  models: ["gpt-5-e2e"],
+  lastUsed: "2026-10-11T10:30:00.000Z",
+}
+const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
+
+test("overview usage keeps loading, empty, sparse, and populated panels in sync", async ({ page }) => {
+  const responses = [
+    dashboardPayload({ trend: [trendRow] }),
+    dashboardPayload({ keys: [keyRow] }),
+    dashboardPayload({ trend: [trendRow], keys: [keyRow], models: [modelRow] }),
+  ]
+  let usageRequestCount = 0
+  const workspaceHeaders: string[] = []
+  let markInitialRequestReached!: () => void
+  let releaseInitialRequest!: () => void
+  let markRefreshReached!: () => void
+  let releaseRefresh!: () => void
+  const initialRequestReached = new Promise<void>(resolve => { markInitialRequestReached = resolve })
+  const initialRequestGate = new Promise<void>(resolve => { releaseInitialRequest = resolve })
+  const refreshReached = new Promise<void>(resolve => { markRefreshReached = resolve })
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve })
+
+  await page.route("**/api/admin/usage?*", async route => {
+    const requestIndex = usageRequestCount++
+    workspaceHeaders.push(route.request().headers()["x-rawroute-workspace-id"] ?? "")
+    if (requestIndex === 0) {
+      markInitialRequestReached()
+      await initialRequestGate
+      await route.fulfill({ json: dashboardPayload() })
+      return
+    }
+    if (requestIndex === 4) {
+      markRefreshReached()
+      await refreshGate
+      await route.fulfill({ json: responses[2] })
+      return
+    }
+    await route.fulfill({ json: responses[Math.min(requestIndex - 1, responses.length - 1)] })
+  })
+
+  await authenticate(page)
+  await page.goto("/dashboard/ai/overview/usage")
+  await initialRequestReached
+  await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toBeVisible()
+  await expect(page.getByText("No usage yet", { exact: true })).toHaveCount(0)
+
+  releaseInitialRequest()
+  await expect(page.getByText("No usage yet", { exact: true })).toBeVisible()
+  await expect(page.locator('[data-slot="empty-state"][data-treatment="card"]').filter({ hasText: "No usage yet" })).toHaveCount(1)
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByText("No key activity", { exact: true })).toBeVisible()
+  await expect(page.getByText("No table rows", { exact: true })).toBeVisible()
+  await expect(page.getByText("No model mix", { exact: true })).toBeVisible()
+  await expect(page.getByText("Requests and spend", { exact: true })).toBeVisible()
+  await expect(page.getByText("No usage yet", { exact: true })).toHaveCount(0)
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByText("No trend data", { exact: true })).toBeVisible()
+  await expect(page.getByText("No model mix", { exact: true })).toBeVisible()
+  await expect(page.getByText("E2E Usage Key", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("No key activity", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("No table rows", { exact: true })).toHaveCount(0)
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByText("gpt-5-e2e", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("Requests and spend", { exact: true })).toBeVisible()
+  await expect(page.getByText("No trend data", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("No model mix", { exact: true })).toHaveCount(0)
+
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await refreshReached
+  await expect(page.getByText("Refreshing data...", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("E2E Usage Key", { exact: true }).first()).toBeVisible()
+  await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
+  releaseRefresh()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+
+  expect(workspaceHeaders).toHaveLength(5)
+  expect(workspaceHeaders).toEqual(["default", "default", "default", "default", "default"])
+})

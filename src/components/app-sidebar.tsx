@@ -92,7 +92,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       await apiDelete(`/api/admin/workspaces/${workspace.id}`, { confirmation })
       selectWorkspace("default")
       await refreshWorkspaces()
-      navigate(pagePaths.dashboard)
+      navigate(pagePaths.overview)
       setDeleteOpen(false)
       setConfirmation("")
       toast.success("Workspace deleted")

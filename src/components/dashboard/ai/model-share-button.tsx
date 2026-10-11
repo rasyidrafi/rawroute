@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Share2Icon } from "lucide-react"
+import { SearchIcon, Share2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
@@ -8,6 +8,7 @@ import { LoadingSpinner } from "@/components/loading-spinner"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { EmptyState } from "@/components/ui/empty-state"
 import { Skeleton } from "@/components/ui/skeleton"
 
 type ShareTarget = { id: string; name: string; shared: boolean }
@@ -18,7 +19,7 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[] | null>(null)
   const [saving, setSaving] = useState(false)
-  const { data, isLoading, mutate } = useSWR<ShareData>(`/api/admin/model-shares?modelId=${encodeURIComponent(modelId)}`, fetcher)
+  const { data, error, isLoading, mutate } = useSWR<ShareData>(`/api/admin/model-shares?modelId=${encodeURIComponent(modelId)}`, fetcher)
   const sharedTargetIds = data?.targets.filter((target) => target.shared).map((target) => target.id) || []
   const selectedIds = selected || sharedTargetIds
   const selectedIdSet = new Set(selectedIds)
@@ -54,11 +55,12 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
           <DialogDescription>Grant another workspace access to this model. Provider credentials, pricing, and billing remain in this workspace.</DialogDescription>
         </DialogHeader>
         <div className="max-h-72 space-y-2 overflow-y-auto py-2">
+          {error && <p role="alert" className="text-sm text-destructive">Unable to load available workspaces. {error.message}</p>}
           {isLoading
             ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex items-center gap-3 rounded-lg border p-3"><Skeleton className="size-4" /><Skeleton className="h-5 w-40" /></div>)
             : data?.targets.length
               ? data.targets.map((target) => <label key={target.id} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 hover:bg-muted"><Checkbox checked={selectedIdSet.has(target.id)} disabled={saving} onCheckedChange={() => setSelected((current) => { const next = current || selectedIds; return next.includes(target.id) ? next.filter((id) => id !== target.id) : [...next, target.id] })} /><span className="text-sm font-medium">{target.name}</span></label>)
-              : <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">No other active workspaces are available.</p>}
+              : data && <EmptyState title="No other active workspaces" description="Model sharing requires at least one other active workspace." icon={SearchIcon} variant="compact" treatment="embedded" />}
         </div>
         <DialogFooter>
           <Button variant="outline" disabled={saving} onClick={() => setOpen(false)}>Cancel</Button>

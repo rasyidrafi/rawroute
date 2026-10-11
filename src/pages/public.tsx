@@ -6,6 +6,8 @@ import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { PublicWorkspaceSelector } from "@/components/public-workspace-selector"
 import { useSession } from "@/hooks/use-session"
 import { PublicPageLayout } from "@/components/public-page-layout"
+import { EmptyState } from "@/components/ui/empty-state"
+import { DatabaseIcon } from "lucide-react"
 
 type PublicWorkspace = { id: string; name: string; isDefault: boolean }
 
@@ -21,7 +23,7 @@ export function PublicPage() {
   if (!data) return <PublicPageLayout loading authenticated={session?.authenticated}><DashboardContentSkeleton variant="usage" /></PublicPageLayout>
   const workspace = data.workspaces.find((entry) => entry.id === searchParams.get("workspace"))
     || data.workspaces.find((entry) => entry.isDefault)
-  if (!workspace) return <main className="p-6">No public workspaces are available.</main>
+  if (!workspace) return <PublicPageLayout authenticated={session?.authenticated}><main className="mx-auto w-full max-w-7xl p-4 md:p-6"><EmptyState title="No public workspaces are available" description="Public gateway analytics will appear here when a workspace is made public." icon={DatabaseIcon} /></main></PublicPageLayout>
 
   return <PublicPageLayout authenticated={session?.authenticated} selector={<PublicWorkspaceSelector workspaces={data.workspaces} workspaceId={workspace.id} />}>
     <UsageView key={workspace.id} publicView workspaceId={workspace.id} />

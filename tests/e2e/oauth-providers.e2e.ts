@@ -13,7 +13,7 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
   await page.goto("/dashboard/ai/codex-providers")
 
   await expect(page.getByRole("link", { name: "Codex Providers" })).toBeVisible()
-  await expect(page.getByText("No accounts yet.")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "No accounts yet", exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Add Codex Account", exact: true }).click()
   await page.getByLabel("Account label").fill("Work Codex")
   const authorizationUrl = await page.getByRole("button", { name: "Open Codex sign-in" }).getAttribute("href")
@@ -29,5 +29,5 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
   await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name: "Work Codex", exact: true }) }).getByRole("cell", { name: "Disabled", exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Remove Work Codex?" }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
-  await expect(page.getByText("No accounts yet.")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "No accounts yet", exact: true })).toBeVisible()
 })

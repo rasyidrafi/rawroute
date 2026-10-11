@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { LoadingSpinner } from "@/components/loading-spinner"
+import { EmptyState, type EmptyStateProps } from "@/components/ui/empty-state"
 import { TableCell, TableRow } from "@/components/ui/table"
 
 export function FormSubmitButton({ pending, disabled, idleLabel, pendingLabel }: { pending: boolean; disabled?: boolean; idleLabel: string; pendingLabel: string }) {
@@ -22,9 +23,12 @@ export function DetailValue({ label, value, mono }: { label: string; value: stri
   return <div className="rounded-lg border bg-muted/20 p-4"><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div><div className={`mt-2 text-sm font-medium ${mono ? "font-mono" : ""}`}>{value}</div></div>
 }
 
-export function EmptyRow({ label, colSpan = 5 }: { label: string; colSpan?: number }) {
-  return <TableRow><TableCell colSpan={colSpan} tone="muted"
-        className="h-28 text-center">{label}</TableCell></TableRow>
+export function EmptyTableRow({ colSpan = 5, ...emptyState }: EmptyStateProps & { colSpan?: number }) {
+  return <TableRow><TableCell colSpan={colSpan} density="flush" className="whitespace-normal"><EmptyState {...emptyState} variant={emptyState.variant ?? "compact"} treatment="table" /></TableCell></TableRow>
+}
+
+export function EmptyRow({ label, colSpan = 5, description = "There are no entries to display in this list yet." }: { label: string; colSpan?: number; description?: string }) {
+  return <EmptyTableRow title={label} description={description} colSpan={colSpan} />
 }
 
 export function maskApiKey(key: string) {
