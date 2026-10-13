@@ -1,47 +1,24 @@
 import { invalidateCodexUsageCache, parseUnusedCodexResetCredits } from "@/lib/codex/usage"
 import { cliProxyCodexApiCall } from "@/lib/codex/cliproxy"
-import { getLocalRedis } from "@/lib/local-redis"
 import { recordLog } from "@/server/logging/recorder"
 import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
 const consumeUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 const locks = new Map<string, string>()
-let redisClient: ReturnType<typeof getLocalRedis> | undefined
-
-type ResetLock = { key: string; token: string; redis: boolean }
-
-const releaseLockScript = `
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-  return redis.call("DEL", KEYS[1])
-end
-return 0
-`
-
-function redis() {
-  return redisClient ||= getLocalRedis()
-}
+type ResetLock = { key: string; token: string }
 
 async function acquire(accountId: string): Promise<ResetLock | undefined> {
   const key = `rawroute:codex-reset-lock:${currentWorkspaceId()}:${accountId}`
   const token = crypto.randomUUID()
-  const client = redis()
-  if (client) {
-    const acquired = (await client.set(key, token, "EX", 60, "NX")) === "OK"
-    return acquired ? { key, token, redis: true } : undefined
-  }
   if (locks.has(key)) return undefined
+  if (locks.size >= 4096) throw new Error("Reset coordination capacity exceeded.")
   locks.set(key, token)
-  return { key, token, redis: false }
+  return { key, token }
 }
 
 async function release(lock: ResetLock) {
-  if (!lock.redis) {
-    if (locks.get(lock.key) === lock.token) locks.delete(lock.key)
-    return
-  }
-  const client = redis()
-  if (client) await client.eval(releaseLockScript, 1, lock.key, lock.token).catch(() => undefined)
+  if (locks.get(lock.key) === lock.token) locks.delete(lock.key)
 }
 
 function numberValue(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0 }

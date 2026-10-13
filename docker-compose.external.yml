@@ -1,51 +1,21 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-rawroute}
-      POSTGRES_USER: ${POSTGRES_USER:-rawroute}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    volumes:
-      - rawroute-postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - rawroute-redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    restart: unless-stopped
-
   rawroute:
     image: ${RAWROUTE_IMAGE:-docker.io/rasyidrafi/rawroute:latest}
     environment:
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-postgres}
+      SQLITE_PATH: /data/rawroute.sqlite
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-sqlite}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-change-me-now}
       AUTH_SHOW_DEFAULT_PASSWORD_HINT: ${AUTH_SHOW_DEFAULT_PASSWORD_HINT:-true}
       DEFAULT_PROXY_API_KEY: ${DEFAULT_PROXY_API_KEY:?Set DEFAULT_PROXY_API_KEY}
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
       TIMEZONE: ${TIMEZONE:-UTC}
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       DATABASE_COLLECTION_PREFIX: ${DATABASE_COLLECTION_PREFIX:-rawroute}
-      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-20}
       DATABASE_CHILD_READ_CONCURRENCY: ${DATABASE_CHILD_READ_CONCURRENCY:-16}
       DATABASE_ANALYTICS_READ_CONCURRENCY: ${DATABASE_ANALYTICS_READ_CONCURRENCY:-8}
-      REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
       ROUTING_CACHE_TTL_MS: ${ROUTING_CACHE_TTL_MS:-60000}
       ROUTING_FULL_REFRESH_INTERVAL_MS: ${ROUTING_FULL_REFRESH_INTERVAL_MS:-900000}
       API_KEY_CACHE_TTL_MS: ${API_KEY_CACHE_TTL_MS:-60000}
       API_KEY_NEGATIVE_CACHE_TTL_MS: ${API_KEY_NEGATIVE_CACHE_TTL_MS:-10000}
-      API_KEY_INDEX_REPAIR_ON_MISS: ${API_KEY_INDEX_REPAIR_ON_MISS:-}
       MAX_WORKSPACE_CACHE_ENTRIES: ${MAX_WORKSPACE_CACHE_ENTRIES:-256}
       MAX_PROVIDER_SCOPED_CACHE_ENTRIES: ${MAX_PROVIDER_SCOPED_CACHE_ENTRIES:-256}
       WORKSPACE_CACHE_TTL_MS: ${WORKSPACE_CACHE_TTL_MS:-60000}
@@ -87,10 +57,6 @@ services:
       EXECUTOR_UPSTREAM_API_KEY: ${EXECUTOR_UPSTREAM_API_KEY:-}
       DEPLOYMENT_VERSION: ${DEPLOYMENT_VERSION:-unknown}
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       cli-proxy-api:
         condition: service_started
       # The Executor service is profile-gated. `required: false` keeps the
@@ -98,6 +64,8 @@ services:
       executor:
         condition: service_started
         required: false
+    volumes:
+      - rawroute-data:/data
     ports:
       - "${RAWROUTE_HOST_PORT:-8080}:8080"
     healthcheck:
@@ -152,6 +120,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  rawroute-postgres-data:
-  rawroute-redis-data:
+  rawroute-data:
   executor-data:

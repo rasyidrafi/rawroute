@@ -1,12 +1,12 @@
 import { DEFAULT_ADMIN_PASSWORD } from "@/lib/auth-defaults"
 import { mapConcurrent } from "@/lib/concurrency"
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
-import { type DocumentSnapshot, FieldValue, getPostgresDatabase, type PostgresDatabase, type Transaction } from "@/lib/local-db"
+import { type DocumentSnapshot, FieldValue, getSqliteDatabase, type SqliteDatabase, type Transaction } from "@/lib/local-db"
 
 import { gatewayModelId, cleanAliasId } from "@/lib/http"
-import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
+import { localCacheDelete, localCacheGet, localCacheSet } from "@/lib/local-cache"
 import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey, WorkspaceStorageMode } from "@/lib/types"
-import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, runInWorkspace, workspaceContext } from "@/lib/workspace/context"
+import { currentWorkspaceId, DEFAULT_WORKSPACE_ID, workspaceContext } from "@/lib/workspace/context"
 
 const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
 const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 60_000
@@ -14,8 +14,6 @@ const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 60
 const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 60_000
 const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 10_000)
 const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 10_000
-const repairApiKeyIndexOnMiss = process.env.API_KEY_INDEX_REPAIR_ON_MISS === "1" || process.env.API_KEY_INDEX_REPAIR_ON_MISS?.toLowerCase() === "true"
-const apiKeyIndexReconciliationTtlMs = 30_000
 const configuredDatabaseReadConcurrency = Number(process.env.DATABASE_CHILD_READ_CONCURRENCY || 16)
 const databaseChildReadConcurrency = Number.isSafeInteger(configuredDatabaseReadConcurrency) && configuredDatabaseReadConcurrency > 0 ? configuredDatabaseReadConcurrency : 16
 const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
@@ -88,23 +86,12 @@ function workspaceCacheState() {
 
 interface IndexedApiKey { workspaceId: string; workspaceStorageMode: WorkspaceStorageMode; apiKey: ApiKey }
 
-interface ApiKeyIndexCandidate {
-  workspaceId: string
-  workspaceStorageMode: WorkspaceStorageMode
-  apiKeyId: string
-  name: string
-  createdAt: string
-}
-
 const apiKeyLookupCache = new Map<string, { value: IndexedApiKey | null; expiresAt: number }>()
 const apiKeyLookupInflight = new Map<string, Promise<IndexedApiKey | undefined>>()
-let apiKeyIndexReconciliationCache: { entries: Map<string, ApiKeyIndexCandidate | null>; expiresAt: number } | undefined
-let apiKeyIndexReconciliationInflight: Promise<Map<string, ApiKeyIndexCandidate | null>> | undefined
-let apiKeyIndexReconciliationGeneration = 0
 let apiKeyNamesCache: { value: Map<string, string>; expiresAt: number; inflight?: Promise<Map<string, string>> } | undefined
 const maximumApiKeyLookupEntries = 512
-const apiKeyRedisPrefix = "rawroute:api-key-lookup:v1:"
-const apiKeyRedisMiss = "__rawroute_missing__"
+const apiKeyCachePrefix = "rawroute:api-key-lookup:v1:"
+const apiKeyCacheMiss = "__rawroute_missing__"
 let apiKeyLookupGeneration = 0
 let metaGeneration = 0
 
@@ -348,22 +335,6 @@ function apiKeyIndexDocument(apiKey: ApiKey): Required<ApiKeyIndexData> {
   return apiKeyIndexDocumentForWorkspace(currentWorkspaceId(), workspaceContext().storageMode, apiKey)
 }
 
-function apiKeyIndexCandidate(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode, apiKey: ApiKey): ApiKeyIndexCandidate {
-  return {
-    workspaceId,
-    workspaceStorageMode,
-    apiKeyId: apiKey.id,
-    name: apiKey.name,
-    createdAt: apiKey.createdAt,
-  }
-}
-
-function indexedWorkspaceStorageMode(workspaceId: string, value: unknown): WorkspaceStorageMode {
-  void workspaceId
-  void value
-  return "scoped"
-}
-
 function storedAlias(alias: ModelAlias) {
   const { id, ...data } = alias
   void id
@@ -443,11 +414,11 @@ function cacheApiKeyLookup(hash: string, value: IndexedApiKey | undefined) {
   apiKeyLookupCache.set(hash, { value: value || null, expiresAt: Date.now() + (value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs) })
 }
 
-function apiKeyRedisKey(hash: string) {
-  return `${apiKeyRedisPrefix}${hash}`
+function apiKeyCacheKey(hash: string) {
+  return `${apiKeyCachePrefix}${hash}`
 }
 
-function cacheApiKeyLookupInRedis(hash: string, value: IndexedApiKey | undefined) {
+function cacheApiKeyLookupInCache(hash: string, value: IndexedApiKey | undefined) {
   const record = value
     ? JSON.stringify({
       workspaceId: value.workspaceId,
@@ -456,20 +427,20 @@ function cacheApiKeyLookupInRedis(hash: string, value: IndexedApiKey | undefined
       name: value.apiKey.name,
       createdAt: value.apiKey.createdAt,
     })
-    : apiKeyRedisMiss
-  void localRedisSet(apiKeyRedisKey(hash), record, value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs)
+    : apiKeyCacheMiss
+  void localCacheSet(apiKeyCacheKey(hash), record, value ? apiKeyCacheTtlMs : apiKeyNegativeCacheTtlMs)
 }
 
-async function readApiKeyLookupFromRedis(hash: string): Promise<IndexedApiKey | null | undefined> {
-  const raw = await localRedisGet(apiKeyRedisKey(hash))
+async function readApiKeyLookupFromCache(hash: string): Promise<IndexedApiKey | null | undefined> {
+  const raw = await localCacheGet(apiKeyCacheKey(hash))
   if (raw === undefined || raw === null) return undefined
-  if (raw === apiKeyRedisMiss) return null
+  if (raw === apiKeyCacheMiss) return null
   try {
     const value = JSON.parse(raw) as { workspaceId?: unknown; workspaceStorageMode?: unknown; apiKeyId?: unknown; name?: unknown; createdAt?: unknown }
     if (typeof value.workspaceId !== "string" || typeof value.apiKeyId !== "string" || typeof value.name !== "string" || typeof value.createdAt !== "string") return undefined
     return {
       workspaceId: value.workspaceId,
-      workspaceStorageMode: indexedWorkspaceStorageMode(value.workspaceId, typeof value.workspaceStorageMode === "string" ? value.workspaceStorageMode as WorkspaceStorageMode : undefined),
+      workspaceStorageMode: "scoped",
       apiKey: { id: value.apiKeyId, name: value.name, key: "", createdAt: value.createdAt },
     }
   } catch {
@@ -481,18 +452,15 @@ function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   // Advance the generation so an already-running lookup cannot repopulate a
   // value that was changed while its database read was in flight.
   apiKeyLookupGeneration += 1
-  apiKeyIndexReconciliationGeneration += 1
-  apiKeyIndexReconciliationCache = undefined
-  apiKeyIndexReconciliationInflight = undefined
   apiKeyNamesCache = undefined
   if (hashes) {
-    const redisKeys: string[] = []
+    const cacheKeys: string[] = []
     for (const hash of hashes) {
       apiKeyLookupCache.delete(hash)
       apiKeyLookupInflight.delete(hash)
-      redisKeys.push(apiKeyRedisKey(hash))
+      cacheKeys.push(apiKeyCacheKey(hash))
     }
-    if (!isMemoryBackend()) void localRedisDelete(...redisKeys)
+    if (!isMemoryBackend()) void localCacheDelete(...cacheKeys)
     return
   }
   apiKeyLookupCache.clear()
@@ -588,7 +556,7 @@ function managedModelInput(existing: Model | undefined, input: Partial<Model>, d
 
 /** Internal catalog writer; ownership is checked again inside the transaction. */
 export async function reconcileDiscoveredModel(providerId: string, input: Pick<Model, "gatewayModelId" | "name" | "upstreamModel" | "discovery">) {
-  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input, true) : await postgresUpsertModel(providerId, input, true)
+  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input, true) : await sqliteUpsertModel(providerId, input, true)
   invalidateRoutingCaches()
   return model
 }
@@ -694,13 +662,13 @@ function memoryApiKeyValueExists(hash: string) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// PostgreSQL document backend
+// SQLite document backend
 // -------------------------------------------------------------------------------------------------
 
-let localDatabase: PostgresDatabase | undefined
+let localDatabase: SqliteDatabase | undefined
 
-export function getLocalDatabase(): PostgresDatabase {
-  return localDatabase ||= getPostgresDatabase()
+export function getLocalDatabase(): SqliteDatabase {
+  return localDatabase ||= getSqliteDatabase()
 }
 
 export function collectionPrefix() {
@@ -790,205 +758,6 @@ function apiKeyIndexRef(hash: string) {
   return apiKeyIndexesRef().doc(hash)
 }
 
-interface PostgresWorkspaceScope {
-  id: string
-  storageMode: WorkspaceStorageMode
-}
-
-async function postgresWorkspaceScopes(): Promise<PostgresWorkspaceScope[]> {
-  const snapshot = await getLocalDatabase().collection(`${collectionPrefix()}_workspaces`).get()
-  const scopes = snapshot.docs.map((document) => ({
-    id: document.id,
-    storageMode: indexedWorkspaceStorageMode(document.id, document.data()?.storageMode),
-  }))
-  if (!scopes.some((scope) => scope.id === DEFAULT_WORKSPACE_ID)) scopes.unshift({ id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" })
-  return scopes
-}
-
-interface ApiKeyIndexCandidatesResult {
-  candidates: Map<string, ApiKeyIndexCandidate | null>
-  scannedApiKeys: number
-}
-
-async function postgresReadApiKeyIndexCandidates(scopes: PostgresWorkspaceScope[] = []): Promise<ApiKeyIndexCandidatesResult> {
-  if (!scopes.length) scopes = await postgresWorkspaceScopes()
-  const snapshots = await parallelMap(scopes, async (scope) => ({
-    scope,
-    snapshot: await apiKeysRefForWorkspace(scope.id).get(),
-  }))
-  const candidates = new Map<string, ApiKeyIndexCandidate | null>()
-  let scannedApiKeys = 0
-  for (const { scope, snapshot } of snapshots) {
-    scannedApiKeys += snapshot.size
-    for (const document of snapshot.docs) {
-      const apiKey = apiKeyFromSnapshot(document)
-      if (typeof apiKey.key !== "string" || typeof apiKey.name !== "string" || typeof apiKey.createdAt !== "string") continue
-      const hash = apiKeyValueHash(apiKey.key)
-      const candidate = apiKeyIndexCandidate(scope.id, scope.storageMode, apiKey)
-      if (candidates.has(hash)) {
-        // A duplicate value violates the global uniqueness invariant. Keep it
-        // unresolved instead of letting a repair choose an arbitrary tenant.
-        candidates.set(hash, null)
-      } else {
-        candidates.set(hash, candidate)
-      }
-    }
-  }
-  return { candidates, scannedApiKeys }
-}
-
-export interface ApiKeyIndexBackfillResult {
-  workspaceCount: number
-  scannedApiKeys: number
-  existingIndexes: number
-  writtenIndexes: number
-  deletedStaleIndexes: number
-  unchangedIndexes: number
-  duplicateValues: number
-  dryRun: boolean
-}
-
-function sameApiKeyIndex(left: ApiKeyIndexData | undefined, right: Required<ApiKeyIndexData>) {
-  return left?.workspaceId === right.workspaceId &&
-    indexedWorkspaceStorageMode(right.workspaceId, left?.workspaceStorageMode) === right.workspaceStorageMode &&
-    left?.apiKeyId === right.apiKeyId &&
-    left?.name === right.name &&
-    left?.createdAt === right.createdAt
-}
-
-/**
- * One-time maintenance helper for deployments created before the global API-key
- * index was complete. It scans every workspace once, refuses ambiguous duplicate
- * values, then writes only missing/stale index rows and removes orphaned rows.
- */
-export async function backfillApiKeyIndexes(options: { dryRun?: boolean; batchSize?: number } = {}): Promise<ApiKeyIndexBackfillResult> {
-  if (isMemoryBackend()) throw new Error("API key index backfill requires the PostgreSQL storage backend.")
-  const batchSize = Math.min(400, Math.max(1, Math.trunc(options.batchSize || 400)))
-  const dryRun = options.dryRun === true
-  const scopes = await postgresWorkspaceScopes()
-  const [{ candidates, scannedApiKeys }, existingSnapshot] = await Promise.all([
-    postgresReadApiKeyIndexCandidates(scopes),
-    apiKeyIndexesRef().get(),
-  ])
-  const duplicateValues = [...candidates.values()].filter((candidate) => candidate === null).length
-  if (duplicateValues) {
-    throw new Error(`API key index backfill found ${duplicateValues} duplicate API key value(s). Resolve them before writing indexes.`)
-  }
-
-  const desired = new Map<string, Required<ApiKeyIndexData>>()
-  for (const [hash, candidate] of candidates) {
-    if (!candidate) continue
-    desired.set(hash, {
-      workspaceId: candidate.workspaceId,
-      workspaceStorageMode: candidate.workspaceStorageMode,
-      apiKeyId: candidate.apiKeyId,
-      name: candidate.name,
-      createdAt: candidate.createdAt,
-    })
-  }
-  const existing = new Map(existingSnapshot.docs.map((document) => [document.id, document.data() as ApiKeyIndexData]))
-  const writes: Array<{ type: "set"; hash: string; data: Required<ApiKeyIndexData> } | { type: "delete"; hash: string }> = []
-  let unchangedIndexes = 0
-  for (const [hash, data] of desired) {
-    if (sameApiKeyIndex(existing.get(hash), data)) unchangedIndexes += 1
-    else writes.push({ type: "set", hash, data })
-  }
-  for (const hash of existing.keys()) if (!desired.has(hash)) writes.push({ type: "delete", hash })
-
-  if (!dryRun) {
-    for (let offset = 0; offset < writes.length; offset += batchSize) {
-      const batch = getLocalDatabase().batch()
-      for (const operation of writes.slice(offset, offset + batchSize)) {
-        const reference = apiKeyIndexRef(operation.hash)
-        if (operation.type === "set") batch.set(reference, operation.data)
-        else batch.delete(reference)
-      }
-      await batch.commit()
-    }
-    invalidateApiKeyLookupCache()
-  }
-
-  return {
-    workspaceCount: scopes.length,
-    scannedApiKeys,
-    existingIndexes: existing.size,
-    writtenIndexes: writes.filter((operation) => operation.type === "set").length,
-    deletedStaleIndexes: writes.filter((operation) => operation.type === "delete").length,
-    unchangedIndexes,
-    duplicateValues,
-    dryRun,
-  }
-}
-
-async function reconciledApiKeyIndexCandidates() {
-  const now = Date.now()
-  if (apiKeyIndexReconciliationCache && apiKeyIndexReconciliationCache.expiresAt > now) return apiKeyIndexReconciliationCache.entries
-  if (apiKeyIndexReconciliationInflight) return apiKeyIndexReconciliationInflight
-
-  const generation = apiKeyIndexReconciliationGeneration
-  const promise = postgresReadApiKeyIndexCandidates().then(({ candidates: entries }) => {
-    if (generation === apiKeyIndexReconciliationGeneration) {
-      apiKeyIndexReconciliationCache = { entries, expiresAt: Date.now() + apiKeyIndexReconciliationTtlMs }
-    }
-    return entries
-  }).finally(() => {
-    if (apiKeyIndexReconciliationInflight === promise) apiKeyIndexReconciliationInflight = undefined
-  })
-  apiKeyIndexReconciliationInflight = promise
-  return promise
-}
-
-function indexedApiKeyFromCandidate(candidate: ApiKeyIndexCandidate, normalized: string): IndexedApiKey {
-  return {
-    workspaceId: candidate.workspaceId,
-    workspaceStorageMode: candidate.workspaceStorageMode,
-    apiKey: {
-      id: candidate.apiKeyId,
-      name: candidate.name,
-      key: normalized,
-      createdAt: candidate.createdAt,
-    },
-  }
-}
-
-async function repairMissingApiKeyIndex(hash: string, normalized: string, candidate: ApiKeyIndexCandidate): Promise<IndexedApiKey | undefined> {
-  const repaired = await getLocalDatabase().runTransaction(async (transaction) => {
-    const indexRef = apiKeyIndexRef(hash)
-    const indexSnapshot = await transaction.get(indexRef)
-    const existing = indexSnapshot.exists ? indexSnapshot.data() as ApiKeyIndexData : undefined
-    if (existing?.apiKeyId && (existing.apiKeyId !== candidate.apiKeyId || (existing.workspaceId && existing.workspaceId !== candidate.workspaceId))) {
-      return { kind: "existing" as const, data: existing }
-    }
-
-    const keyRef = apiKeysRefForWorkspace(candidate.workspaceId).doc(candidate.apiKeyId)
-    const keySnapshot = await transaction.get(keyRef)
-    if (!keySnapshot.exists) return { kind: "missing" as const }
-    const apiKey = apiKeyFromSnapshot(keySnapshot)
-    if (typeof apiKey.key !== "string" || apiKeyValueHash(apiKey.key) !== hash) return { kind: "missing" as const }
-    const indexDocument = apiKeyIndexDocumentForWorkspace(candidate.workspaceId, candidate.workspaceStorageMode, apiKey)
-    if (indexSnapshot.exists) transaction.set(indexRef, indexDocument)
-    else transaction.create(indexRef, indexDocument)
-    return { kind: "repaired" as const, value: indexedApiKeyFromCandidate(apiKeyIndexCandidate(candidate.workspaceId, candidate.workspaceStorageMode, apiKey), normalized) }
-  })
-
-  if (repaired.kind === "repaired") return repaired.value
-  if (repaired.kind !== "existing") return undefined
-  const existing = repaired.data
-  const apiKeyId = existing.apiKeyId
-  if (!apiKeyId) return undefined
-  const workspaceId = existing.workspaceId || DEFAULT_WORKSPACE_ID
-  const workspaceStorageMode = indexedWorkspaceStorageMode(workspaceId, existing.workspaceStorageMode)
-  if (typeof existing.name === "string" && typeof existing.createdAt === "string") {
-    return { workspaceId, workspaceStorageMode, apiKey: { id: apiKeyId, name: existing.name, key: normalized, createdAt: existing.createdAt } }
-  }
-  const snapshot = await apiKeysRefForWorkspace(workspaceId).doc(apiKeyId).get()
-  if (!snapshot.exists) return undefined
-  const apiKey = apiKeyFromSnapshot(snapshot)
-  return typeof apiKey.key === "string" && apiKeyValueHash(apiKey.key) === hash
-    ? { workspaceId, workspaceStorageMode, apiKey: { ...apiKey, key: normalized } }
-    : undefined
-}
-
 // -------------------------------------------------------------------------------------------------
 // Public API
 // -------------------------------------------------------------------------------------------------
@@ -998,7 +767,7 @@ async function readSharedMeta(): Promise<Meta> {
   if (metaCache && metaCache.expiresAt > Date.now()) return metaCache.data
   if (!metaReadPromise) {
     const generation = metaGeneration
-    const promise = postgresReadMeta().then((meta) => {
+    const promise = sqliteReadMeta().then((meta) => {
       const data = structuredClone(meta)
       if (generation === metaGeneration) metaCache = { data, expiresAt: Date.now() + cacheTtlMs }
       return data
@@ -1047,7 +816,7 @@ export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>):
     invalidateRoutingCaches()
     return memoryRoot().meta!
   }
-  const meta = await postgresUpdateMeta(mutator)
+  const meta = await sqliteUpdateMeta(mutator)
   metaGeneration += 1
   metaReadPromise = undefined
   metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
@@ -1060,7 +829,7 @@ export async function listProviders(): Promise<Provider[]> {
     const state = ensureMemorySeeded()
     return [...state.providers.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
-  return cachedRead(workspaceCacheState().providersCache, postgresListProviders)
+  return cachedRead(workspaceCacheState().providersCache, sqliteListProviders)
 }
 
 export async function getProvider(providerId: string): Promise<Provider | undefined> {
@@ -1071,18 +840,18 @@ export async function getProvider(providerId: string): Promise<Provider | undefi
   if (cache.value && cache.expiresAt > Date.now()) {
     return cache.value.find((provider) => provider.id === providerId)
   }
-  return postgresGetProvider(providerId)
+  return sqliteGetProvider(providerId)
 }
 
 export async function upsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
-  const provider = isMemoryBackend() ? memoryUpsertProvider(input, expected) : await postgresUpsertProvider(input, expected)
+  const provider = isMemoryBackend() ? memoryUpsertProvider(input, expected) : await sqliteUpsertProvider(input, expected)
   invalidateRoutingCaches()
   return provider
 }
 
 export async function deleteProvider(providerId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteProvider(providerId)
-  else await postgresDeleteProvider(providerId)
+  else await sqliteDeleteProvider(providerId)
   invalidateRoutingCaches()
 }
 
@@ -1095,7 +864,7 @@ export async function listProviderApiKeys(providerId: string): Promise<ProviderA
   if (state.allProviderApiKeysCache.value && state.allProviderApiKeysCache.expiresAt > Date.now()) {
     return state.allProviderApiKeysCache.value.filter((apiKey) => apiKey.providerId === providerId).sort(compareProviderApiKeys)
   }
-  return cachedRead(providerScopedCache(state.providerApiKeysCache, providerId), () => postgresListProviderApiKeys(providerId))
+  return cachedRead(providerScopedCache(state.providerApiKeysCache, providerId), () => sqliteListProviderApiKeys(providerId))
 }
 
 export async function getProviderApiKey(providerId: string, apiKeyId: string): Promise<ProviderApiKey | undefined> {
@@ -1121,7 +890,7 @@ export async function reorderProviderApiKeys(providerId: string, orderedIds: str
     if (!slot || slot.size !== orderedIds.length || orderedIds.some((id) => !slot.has(id))) throw new Error("API key order is out of date.")
     orderedIds.forEach((id, index) => slot.set(id, { ...slot.get(id)!, priority: orderedIds.length - index - 1 }))
   } else {
-    await postgresReorderProviderApiKeys(providerId, orderedIds)
+    await sqliteReorderProviderApiKeys(providerId, orderedIds)
   }
   invalidateRoutingCaches()
 }
@@ -1133,19 +902,19 @@ export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
     for (const slot of state.providerApiKeys.values()) out.push(...slot.values())
     return out
   }
-  return cachedRead(workspaceCacheState().allProviderApiKeysCache, postgresListAllProviderApiKeys)
+  return cachedRead(workspaceCacheState().allProviderApiKeysCache, sqliteListAllProviderApiKeys)
 }
 
 export async function upsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
   validateProviderApiKeyInput(input)
-  const apiKey = isMemoryBackend() ? memoryUpsertProviderApiKey(providerId, input) : await postgresUpsertProviderApiKey(providerId, input)
+  const apiKey = isMemoryBackend() ? memoryUpsertProviderApiKey(providerId, input) : await sqliteUpsertProviderApiKey(providerId, input)
   invalidateRoutingCaches()
   return apiKey
 }
 
 export async function deleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteProviderApiKey(providerId, apiKeyId)
-  else await postgresDeleteProviderApiKey(providerId, apiKeyId)
+  else await sqliteDeleteProviderApiKey(providerId, apiKeyId)
   invalidateRoutingCaches()
 }
 
@@ -1156,7 +925,7 @@ export async function listModels(): Promise<Model[]> {
     for (const slot of state.models.values()) out.push(...slot.values())
     return out
   }
-  return cachedRead(workspaceCacheState().modelsCache, postgresListModels)
+  return cachedRead(workspaceCacheState().modelsCache, sqliteListModels)
 }
 
 export async function listProviderModels(providerId: string): Promise<Model[]> {
@@ -1168,18 +937,18 @@ export async function listProviderModels(providerId: string): Promise<Model[]> {
   if (state.modelsCache.value && state.modelsCache.expiresAt > Date.now()) {
     return state.modelsCache.value.filter((model) => model.providerId === providerId)
   }
-  return cachedRead(providerScopedCache(state.providerModelsCache, providerId), () => postgresListProviderModels(providerId))
+  return cachedRead(providerScopedCache(state.providerModelsCache, providerId), () => sqliteListProviderModels(providerId))
 }
 
 export async function upsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
-  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input) : await postgresUpsertModel(providerId, input)
+  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input) : await sqliteUpsertModel(providerId, input)
   invalidateRoutingCaches()
   return model
 }
 
 export async function deleteModel(providerId: string, modelId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteModel(providerId, modelId)
-  else await postgresDeleteModel(providerId, modelId)
+  else await sqliteDeleteModel(providerId, modelId)
   invalidateRoutingCaches()
 }
 
@@ -1187,7 +956,7 @@ export async function listAliases(): Promise<ModelAlias[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().aliases.values()].sort(compareAliases)
   }
-  return cachedRead(workspaceCacheState().aliasesCache, postgresListAliases)
+  return cachedRead(workspaceCacheState().aliasesCache, sqliteListAliases)
 }
 
 function compareAliases(left: ModelAlias, right: ModelAlias) {
@@ -1196,20 +965,20 @@ function compareAliases(left: ModelAlias, right: ModelAlias) {
 
 export async function upsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
   validateAliasInput(input)
-  const alias = isMemoryBackend() ? memoryUpsertAlias(input) : await postgresUpsertAlias(input)
+  const alias = isMemoryBackend() ? memoryUpsertAlias(input) : await sqliteUpsertAlias(input)
   invalidateRoutingCaches()
   return alias
 }
 
 export async function deleteAlias(aliasId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteAlias(aliasId)
-  else await postgresDeleteAlias(aliasId)
+  else await sqliteDeleteAlias(aliasId)
   invalidateRoutingCaches()
 }
 
 export async function listCombos(): Promise<ModelCombo[]> {
   if (isMemoryBackend()) return [...ensureMemorySeeded().combos.values()].sort(compareCombos)
-  return cachedRead(workspaceCacheState().combosCache, postgresListCombos)
+  return cachedRead(workspaceCacheState().combosCache, sqliteListCombos)
 }
 
 function compareCombos(left: ModelCombo, right: ModelCombo) {
@@ -1218,14 +987,14 @@ function compareCombos(left: ModelCombo, right: ModelCombo) {
 
 export async function upsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
   validateComboInput(input)
-  const combo = isMemoryBackend() ? memoryUpsertCombo(input) : await postgresUpsertCombo(input)
+  const combo = isMemoryBackend() ? memoryUpsertCombo(input) : await sqliteUpsertCombo(input)
   invalidateRoutingCaches()
   return combo
 }
 
 export async function deleteCombo(comboId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteCombo(comboId)
-  else await postgresDeleteCombo(comboId)
+  else await sqliteDeleteCombo(comboId)
   invalidateRoutingCaches()
 }
 
@@ -1234,7 +1003,7 @@ export async function listApiKeys(): Promise<ApiKey[]> {
     return [...ensureMemorySeeded().apiKeys.values()]
   }
   const state = workspaceCacheState()
-  const apiKeys = await cachedRead(state.apiKeysCache, postgresListApiKeys)
+  const apiKeys = await cachedRead(state.apiKeysCache, sqliteListApiKeys)
   if (!state.apiKeyHashIndex && state.apiKeysCache.value === apiKeys && state.apiKeysCache.expiresAt > Date.now()) {
     state.apiKeyHashIndex = new Map(apiKeys.map((apiKey) => [apiKeyValueHash(apiKey.key), apiKey]))
   }
@@ -1275,7 +1044,7 @@ export async function listIndexedApiKeyNames(): Promise<Map<string, string>> {
 }
 
 export async function createApiKey(name: string, customKey?: string): Promise<ApiKey> {
-  const apiKey = isMemoryBackend() ? memoryCreateApiKey(name, customKey) : await postgresCreateApiKey(name, customKey)
+  const apiKey = isMemoryBackend() ? memoryCreateApiKey(name, customKey) : await sqliteCreateApiKey(name, customKey)
   invalidateGatewayApiKeyCaches([apiKeyValueHash(apiKey.key)])
   return apiKey
 }
@@ -1293,8 +1062,8 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
     invalidateGatewayApiKeyCaches([apiKeyValueHash(updated.key)])
     return updated
   }
-  const postgres = getLocalDatabase()
-  const updated = await postgres.runTransaction(async (transaction) => {
+  const sqlite = getLocalDatabase()
+  const updated = await sqlite.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("API key not found.")
@@ -1307,7 +1076,7 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
   return updated
 }
 export async function deleteApiKey(apiKeyId: string): Promise<void> {
-  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId) : await postgresDeleteApiKey(apiKeyId)
+  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId) : await sqliteDeleteApiKey(apiKeyId)
   invalidateGatewayApiKeyCaches(hash ? [hash] : [])
 }
 
@@ -1466,7 +1235,7 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
   if (isMemoryBackend()) {
     const found = memoryFindApiKeyByHash(apiKeyValueHash(normalized))
     return found
-      ? { workspaceId: found.workspaceId, workspaceStorageMode: indexedWorkspaceStorageMode(found.workspaceId, undefined), apiKey: { ...found.apiKey, key: normalized } }
+      ? { workspaceId: found.workspaceId, workspaceStorageMode: "scoped", apiKey: { ...found.apiKey, key: normalized } }
       : undefined
   }
   const hash = apiKeyValueHash(normalized)
@@ -1477,10 +1246,10 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
   if (existing) return existing
   const generation = apiKeyLookupGeneration
   const promise = (async () => {
-    const redisCached = await readApiKeyLookupFromRedis(hash)
-    if (redisCached !== undefined) {
-      const value = redisCached
-        ? { ...redisCached, apiKey: { ...redisCached.apiKey, key: normalized } }
+    const cacheCached = await readApiKeyLookupFromCache(hash)
+    if (cacheCached !== undefined) {
+      const value = cacheCached
+        ? { ...cacheCached, apiKey: { ...cacheCached.apiKey, key: normalized } }
         : undefined
       if (generation === apiKeyLookupGeneration) cacheApiKeyLookup(hash, value)
       return value
@@ -1489,49 +1258,29 @@ export async function findIndexedApiKeyByValue(value: string): Promise<IndexedAp
     const indexData = index.exists ? index.data() as ApiKeyIndexData : undefined
     const apiKeyId = indexData?.apiKeyId
     if (!apiKeyId) {
-      // A global cross-workspace scan on every unknown credential turns invalid
-      // traffic into a large number of billable reads. Repair remains an
-      // explicit opt-in fallback; normal authentication performs one index read.
-      let value: IndexedApiKey | undefined
-      if (repairApiKeyIndexOnMiss) {
-        const candidates = await reconciledApiKeyIndexCandidates()
-        const candidate = candidates.get(hash)
-        value = candidate ? await repairMissingApiKeyIndex(hash, normalized, candidate) : undefined
-      }
+      const value = undefined
       if (generation === apiKeyLookupGeneration) {
         cacheApiKeyLookup(hash, value)
-        cacheApiKeyLookupInRedis(hash, value)
+        cacheApiKeyLookupInCache(hash, value)
       }
       return value
     }
-    const workspaceId = indexData.workspaceId || DEFAULT_WORKSPACE_ID
-    const workspaceStorageMode = indexedWorkspaceStorageMode(workspaceId, indexData.workspaceStorageMode)
-    if (typeof indexData.name === "string" && typeof indexData.createdAt === "string") {
+    const workspaceId = indexData.workspaceId
+    const workspaceStorageMode = "scoped" as const
+    if (typeof workspaceId === "string" && typeof indexData.name === "string" && typeof indexData.createdAt === "string") {
       const value = { workspaceId, workspaceStorageMode, apiKey: { id: apiKeyId, name: indexData.name, key: normalized, createdAt: indexData.createdAt } }
       if (generation === apiKeyLookupGeneration) {
         cacheApiKeyLookup(hash, value)
-        cacheApiKeyLookupInRedis(hash, value)
+        cacheApiKeyLookupInCache(hash, value)
       }
       return value
     }
 
-    // Older index rows did not contain all authentication metadata. Pay the
-    // second document read once, then self-heal the index for subsequent hits.
-    const snapshot = await apiKeysRefForWorkspace(workspaceId).doc(apiKeyId).get()
-    const apiKey = snapshot.exists ? apiKeyFromSnapshot(snapshot) : undefined
-    const value = apiKey && typeof apiKey.key === "string" && apiKeyValueHash(apiKey.key) === hash
-      ? { workspaceId, workspaceStorageMode, apiKey: { ...apiKey, key: normalized } }
-      : undefined
     if (generation === apiKeyLookupGeneration) {
-      cacheApiKeyLookup(hash, value)
-      cacheApiKeyLookupInRedis(hash, value)
+      cacheApiKeyLookup(hash, undefined)
+      cacheApiKeyLookupInCache(hash, undefined)
     }
-    if (value && generation === apiKeyLookupGeneration) {
-      void runInWorkspace({ id: workspaceId, storageMode: workspaceStorageMode }, () => apiKeyIndexRef(hash).set(apiKeyIndexDocument(value.apiKey), { merge: true })).catch(() => undefined)
-    } else if (!value && generation === apiKeyLookupGeneration) {
-      void apiKeyIndexRef(hash).delete().catch(() => undefined)
-    }
-    return value
+    return undefined
   })().finally(() => {
     if (apiKeyLookupInflight.get(hash) === promise) apiKeyLookupInflight.delete(hash)
   })
@@ -1545,10 +1294,10 @@ export async function findApiKeyByValue(value: string): Promise<ApiKey | undefin
 
 
 // -------------------------------------------------------------------------------------------------
-// PostgreSQL implementations
+// SQLite implementations
 // -------------------------------------------------------------------------------------------------
 
-async function postgresReadMeta(): Promise<Meta> {
+async function sqliteReadMeta(): Promise<Meta> {
   const ref = metaRef()
   const current = await ref.get()
   const currentData = current.exists ? current.data() as Meta : undefined
@@ -1574,7 +1323,7 @@ async function postgresReadMeta(): Promise<Meta> {
   })
 }
 
-async function postgresUpdateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
+async function sqliteUpdateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
   return getLocalDatabase().runTransaction(async (transaction) => {
     const ref = metaRef()
     const snapshot = await transaction.get(ref)
@@ -1588,12 +1337,12 @@ async function postgresUpdateMeta(mutator: (meta: Meta) => void | Promise<void>)
   })
 }
 
-async function postgresListProviders(): Promise<Provider[]> {
+async function sqliteListProviders(): Promise<Provider[]> {
   const snapshot = await providersRef().get()
   return snapshot.docs.map(providerFromSnapshot).sort((a, b) => a.name.localeCompare(b.name))
 }
 
-async function postgresGetProvider(providerId: string): Promise<Provider | undefined> {
+async function sqliteGetProvider(providerId: string): Promise<Provider | undefined> {
   const snapshot = await providerRef(providerId).get()
   return snapshot.exists ? providerFromSnapshot(snapshot) : undefined
 }
@@ -1606,7 +1355,7 @@ function normalizedGatewayId(id: string) {
   return cleanAliasId(id)
 }
 
-async function assertPostgresGatewayIdAvailable(transaction: Transaction, id: string, owner: string) {
+async function assertSqliteGatewayIdAvailable(transaction: Transaction, id: string, owner: string) {
   const normalizedId = normalizedGatewayId(id)
   if (!normalizedId) throw new Error("Gateway model ID is required.")
   const [reservation, aliases, combos, providers] = await Promise.all([
@@ -1635,18 +1384,18 @@ async function assertPostgresGatewayIdAvailable(transaction: Transaction, id: st
   return normalizedId
 }
 
-async function postgresGatewayIdReservation(transaction: Transaction, id: string, owner: string) {
+async function sqliteGatewayIdReservation(transaction: Transaction, id: string, owner: string) {
   const normalizedId = normalizedGatewayId(id)
   if (!normalizedId) return undefined
   const snapshot = await transaction.get(gatewayIdRef(normalizedId))
   return snapshot.exists && snapshot.data()?.owner === owner ? normalizedId : undefined
 }
 
-function reservePostgresGatewayId(transaction: Transaction, id: string, owner: string) {
+function reserveSqliteGatewayId(transaction: Transaction, id: string, owner: string) {
   transaction.set(gatewayIdRef(id), { owner })
 }
 
-function releasePostgresGatewayId(transaction: Transaction, id: string | undefined) {
+function releaseSqliteGatewayId(transaction: Transaction, id: string | undefined) {
   if (id) transaction.delete(gatewayIdRef(id))
 }
 
@@ -1677,9 +1426,9 @@ function releaseMemoryGatewayId(state: MemoryState, id: string, owner: string) {
   if (state.gatewayIds.get(id) === owner) state.gatewayIds.delete(id)
 }
 
-async function postgresUpsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+async function sqliteUpsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const originalId = input.originalId
     const existingSnapshot = originalId ? await transaction.get(providerRef(originalId)) : undefined
     const existing = existingSnapshot?.exists ? providerFromSnapshot(existingSnapshot) : undefined
@@ -1699,10 +1448,10 @@ async function postgresUpsertProvider(input: Partial<Provider> & { originalId?: 
     const migratedReservations = migratedModels
       ? await Promise.all([...migratedModels.values()].map(async (model) => {
           const owner = gatewayIdOwner("model", `${id}:${model.id}`)
-          const normalizedId = await assertPostgresGatewayIdAvailable(transaction, model.gatewayModelId, owner)
+          const normalizedId = await assertSqliteGatewayIdAvailable(transaction, model.gatewayModelId, owner)
           const previous = existingModels!.docs.find((snapshot) => snapshot.id === model.id)!
           const previousId = normalizedGatewayId(modelFromSnapshot(previous, id).gatewayModelId)
-          const previousReservation = previousId !== normalizedId ? await postgresGatewayIdReservation(transaction, previousId, owner) : undefined
+          const previousReservation = previousId !== normalizedId ? await sqliteGatewayIdReservation(transaction, previousId, owner) : undefined
           return { model, owner, normalizedId, previousReservation }
         }))
       : undefined
@@ -1738,8 +1487,8 @@ async function postgresUpsertProvider(input: Partial<Provider> & { originalId?: 
     if (migratedReservations) {
       for (const { model, owner, normalizedId, previousReservation } of migratedReservations) {
         transaction.set(modelRef(id, model.id), storedModel(model))
-        reservePostgresGatewayId(transaction, normalizedId, owner)
-        releasePostgresGatewayId(transaction, previousReservation)
+        reserveSqliteGatewayId(transaction, normalizedId, owner)
+        releaseSqliteGatewayId(transaction, previousReservation)
       }
     }
     bumpRoutingRevision(transaction)
@@ -1747,33 +1496,33 @@ async function postgresUpsertProvider(input: Partial<Provider> & { originalId?: 
   })
 }
 
-async function postgresDeleteProvider(providerId: string): Promise<void> {
-  const postgres = getLocalDatabase()
-  await postgres.runTransaction(async (transaction) => {
+async function sqliteDeleteProvider(providerId: string): Promise<void> {
+  const sqlite = getLocalDatabase()
+  await sqlite.runTransaction(async (transaction) => {
     const [apiKeys, models] = await Promise.all([
       transaction.get(providerApiKeysRef(providerId)),
       transaction.get(modelsRef(providerId)),
     ])
     const modelReservations = await Promise.all(models.docs.map(async (doc) => {
       const model = modelFromSnapshot(doc, providerId)
-      return postgresGatewayIdReservation(transaction, model.gatewayModelId, gatewayIdOwner("model", `${providerId}:${model.id}`))
+      return sqliteGatewayIdReservation(transaction, model.gatewayModelId, gatewayIdOwner("model", `${providerId}:${model.id}`))
     }))
     apiKeys.docs.forEach((doc) => transaction.delete(doc.ref))
     models.docs.forEach((doc) => transaction.delete(doc.ref))
-    modelReservations.forEach((reservation) => releasePostgresGatewayId(transaction, reservation))
+    modelReservations.forEach((reservation) => releaseSqliteGatewayId(transaction, reservation))
     transaction.delete(providerRef(providerId))
     bumpRoutingRevision(transaction)
   })
 }
 
-async function postgresListProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
+async function sqliteListProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
   const snapshot = await providerApiKeysRef(providerId).get()
   return snapshot.docs.map((doc) => providerApiKeyFromSnapshot(doc, providerId)).sort(compareProviderApiKeys)
 }
 
-async function postgresReorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
-  const postgres = getLocalDatabase()
-  await postgres.runTransaction(async (transaction) => {
+async function sqliteReorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
+  const sqlite = getLocalDatabase()
+  await sqlite.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(providerApiKeysRef(providerId))
     const ids = snapshot.docs.map((doc) => doc.id)
     const orderedIdSet = new Set(orderedIds)
@@ -1783,7 +1532,7 @@ async function postgresReorderProviderApiKeys(providerId: string, orderedIds: st
   })
 }
 
-async function postgresListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
+async function sqliteListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   const providers = (await listProviders()).filter((provider) => provider.apiKeyCount !== 0)
   const snapshots = await parallelMap(providers, async (provider) => ({
     providerId: provider.id,
@@ -1792,9 +1541,9 @@ async function postgresListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => providerApiKeyFromSnapshot(document, providerId)))
 }
 
-async function postgresUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+async function sqliteUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
     const existingSnapshot = input.originalId ? await transaction.get(providerApiKeyRef(providerId, input.originalId)) : undefined
@@ -1854,9 +1603,9 @@ async function postgresUpsertProviderApiKey(providerId: string, input: Partial<P
   })
 }
 
-async function postgresDeleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
-  const postgres = getLocalDatabase()
-  await postgres.runTransaction(async (transaction) => {
+async function sqliteDeleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
+  const sqlite = getLocalDatabase()
+  await sqlite.runTransaction(async (transaction) => {
     const ref = providerApiKeyRef(providerId, apiKeyId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
@@ -1870,7 +1619,7 @@ async function postgresDeleteProviderApiKey(providerId: string, apiKeyId: string
   })
 }
 
-async function postgresListModels(): Promise<Model[]> {
+async function sqliteListModels(): Promise<Model[]> {
   const providers = (await listProviders()).filter((provider) => provider.modelCount !== 0)
   const snapshots = await parallelMap(providers, async (provider) => ({
     providerId: provider.id,
@@ -1879,14 +1628,14 @@ async function postgresListModels(): Promise<Model[]> {
   return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => modelFromSnapshot(document, providerId)))
 }
 
-async function postgresListProviderModels(providerId: string): Promise<Model[]> {
+async function sqliteListProviderModels(providerId: string): Promise<Model[]> {
   const snapshot = await modelsRef(providerId).get()
   return snapshot.docs.map((doc) => modelFromSnapshot(doc, providerId))
 }
 
-async function postgresUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }, discover = false): Promise<Model> {
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+async function sqliteUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }, discover = false): Promise<Model> {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
     if (discover) {
@@ -1910,10 +1659,10 @@ async function postgresUpsertModel(providerId: string, input: Partial<Model> & {
 
     const modelId = existing ? input.originalId! : modelsRef(providerId).doc().id
     const owner = gatewayIdOwner("model", `${providerId}:${modelId}`)
-    const normalizedId = await assertPostgresGatewayIdAvailable(transaction, gatewayModelId, owner)
+    const normalizedId = await assertSqliteGatewayIdAvailable(transaction, gatewayModelId, owner)
     const previousId = existing ? normalizedGatewayId(existing.gatewayModelId || existing.id) : undefined
     const previousReservation = previousId && previousId !== normalizedId
-      ? await postgresGatewayIdReservation(transaction, previousId, owner)
+      ? await sqliteGatewayIdReservation(transaction, previousId, owner)
       : undefined
     const inputWithoutIds = stripUndefined({
       name: input.name,
@@ -1936,8 +1685,8 @@ async function postgresUpsertModel(providerId: string, input: Partial<Model> & {
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(modelRef(providerId, modelId), storedModel(model))
-    reservePostgresGatewayId(transaction, normalizedId, owner)
-    releasePostgresGatewayId(transaction, previousReservation)
+    reserveSqliteGatewayId(transaction, normalizedId, owner)
+    releaseSqliteGatewayId(transaction, previousReservation)
     if (!existing) {
       transaction.update(providerRef(providerId), { modelCount: FieldValue.increment(1), enabledModelCount: FieldValue.increment(model.enabled ? 1 : 0) })
     } else if (existing.enabled !== model.enabled) {
@@ -1948,17 +1697,17 @@ async function postgresUpsertModel(providerId: string, input: Partial<Model> & {
   })
 }
 
-async function postgresDeleteModel(providerId: string, modelId: string): Promise<void> {
-  const postgres = getLocalDatabase()
-  await postgres.runTransaction(async (transaction) => {
+async function sqliteDeleteModel(providerId: string, modelId: string): Promise<void> {
+  const sqlite = getLocalDatabase()
+  await sqlite.runTransaction(async (transaction) => {
     const ref = modelRef(providerId, modelId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const model = modelFromSnapshot(snapshot, providerId)
     if (model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
-    const reservation = await postgresGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
+    const reservation = await sqliteGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
     transaction.delete(ref)
-    releasePostgresGatewayId(transaction, reservation)
+    releaseSqliteGatewayId(transaction, reservation)
     transaction.update(providerRef(providerId), {
       modelCount: FieldValue.increment(-1),
       enabledModelCount: FieldValue.increment(model.enabled ? -1 : 0),
@@ -1967,14 +1716,14 @@ async function postgresDeleteModel(providerId: string, modelId: string): Promise
   })
 }
 
-async function postgresListAliases(): Promise<ModelAlias[]> {
+async function sqliteListAliases(): Promise<ModelAlias[]> {
   const snapshot = await aliasesRef().get()
   return snapshot.docs.map(aliasFromSnapshot).sort(compareAliases)
 }
 
-async function postgresUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+async function sqliteUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Alias not found.")
@@ -1986,10 +1735,10 @@ async function postgresUpsertAlias(input: Partial<ModelAlias> & { originalId?: s
 
     const aliasId = existing ? input.originalId! : aliasesRef().doc().id
     const owner = gatewayIdOwner("alias", aliasId)
-    const normalizedId = await assertPostgresGatewayIdAvailable(transaction, normalizedAlias, owner)
+    const normalizedId = await assertSqliteGatewayIdAvailable(transaction, normalizedAlias, owner)
     const previousId = existing ? normalizedGatewayId(existing.alias) : undefined
     const previousReservation = previousId && previousId !== normalizedId
-      ? await postgresGatewayIdReservation(transaction, previousId, owner)
+      ? await sqliteGatewayIdReservation(transaction, previousId, owner)
       : undefined
     const inputWithoutIds = { ...input }
     delete inputWithoutIds.id
@@ -2005,35 +1754,35 @@ async function postgresUpsertAlias(input: Partial<ModelAlias> & { originalId?: s
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(aliasRef(aliasId), storedAlias(alias))
-    reservePostgresGatewayId(transaction, normalizedId, owner)
-    releasePostgresGatewayId(transaction, previousReservation)
+    reserveSqliteGatewayId(transaction, normalizedId, owner)
+    releaseSqliteGatewayId(transaction, previousReservation)
     bumpRoutingRevision(transaction)
     return alias
   })
 }
 
-async function postgresDeleteAlias(aliasId: string): Promise<void> {
-  const postgres = getLocalDatabase()
-  await postgres.runTransaction(async (transaction) => {
+async function sqliteDeleteAlias(aliasId: string): Promise<void> {
+  const sqlite = getLocalDatabase()
+  await sqlite.runTransaction(async (transaction) => {
     const ref = aliasRef(aliasId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const alias = aliasFromSnapshot(snapshot)
-    const reservation = await postgresGatewayIdReservation(transaction, alias.alias, gatewayIdOwner("alias", alias.id))
+    const reservation = await sqliteGatewayIdReservation(transaction, alias.alias, gatewayIdOwner("alias", alias.id))
     transaction.delete(ref)
-    releasePostgresGatewayId(transaction, reservation)
+    releaseSqliteGatewayId(transaction, reservation)
     bumpRoutingRevision(transaction)
   })
 }
 
-async function postgresListCombos(): Promise<ModelCombo[]> {
+async function sqliteListCombos(): Promise<ModelCombo[]> {
   const snapshot = await combosRef().get()
   return snapshot.docs.map(comboFromSnapshot).sort(compareCombos)
 }
 
-async function postgresUpsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+async function sqliteUpsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const existingSnapshot = input.originalId ? await transaction.get(comboRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? comboFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Combo not found.")
@@ -2043,10 +1792,10 @@ async function postgresUpsertCombo(input: Partial<ModelCombo> & { originalId?: s
     if (matches.docs.some((document) => document.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
     const comboId = existing ? input.originalId! : combosRef().doc().id
     const owner = gatewayIdOwner("combo", comboId)
-    const normalizedId = await assertPostgresGatewayIdAvailable(transaction, normalizedCombo, owner)
+    const normalizedId = await assertSqliteGatewayIdAvailable(transaction, normalizedCombo, owner)
     const previousId = existing ? normalizedGatewayId(existing.combo) : undefined
     const previousReservation = previousId && previousId !== normalizedId
-      ? await postgresGatewayIdReservation(transaction, previousId, owner)
+      ? await sqliteGatewayIdReservation(transaction, previousId, owner)
       : undefined
     const members = input.members === undefined ? existing?.members || []
       : input.members.map((member) => ({ ...member, modelId: member.modelId.trim() }))
@@ -2058,40 +1807,40 @@ async function postgresUpsertCombo(input: Partial<ModelCombo> & { originalId?: s
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(comboRef(comboId), storedCombo(combo))
-    reservePostgresGatewayId(transaction, normalizedId, owner)
-    releasePostgresGatewayId(transaction, previousReservation)
+    reserveSqliteGatewayId(transaction, normalizedId, owner)
+    releaseSqliteGatewayId(transaction, previousReservation)
     bumpRoutingRevision(transaction)
     return combo
   })
 }
 
-async function postgresDeleteCombo(comboId: string): Promise<void> {
-  const postgres = getLocalDatabase()
-  await postgres.runTransaction(async (transaction) => {
+async function sqliteDeleteCombo(comboId: string): Promise<void> {
+  const sqlite = getLocalDatabase()
+  await sqlite.runTransaction(async (transaction) => {
     const ref = comboRef(comboId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const combo = comboFromSnapshot(snapshot)
-    const reservation = await postgresGatewayIdReservation(transaction, combo.combo, gatewayIdOwner("combo", combo.id))
+    const reservation = await sqliteGatewayIdReservation(transaction, combo.combo, gatewayIdOwner("combo", combo.id))
     transaction.delete(ref)
-    releasePostgresGatewayId(transaction, reservation)
+    releaseSqliteGatewayId(transaction, reservation)
     bumpRoutingRevision(transaction)
   })
 }
 
-async function postgresListApiKeys(): Promise<ApiKey[]> {
+async function sqliteListApiKeys(): Promise<ApiKey[]> {
   const snapshot = await apiKeysRef().get()
   return snapshot.docs.map(apiKeyFromSnapshot)
 }
 
-function isPostgresAlreadyExistsError(error: unknown) {
+function isSqliteAlreadyExistsError(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code
-  return code === "23505"
+  return code === "DOCUMENT_EXISTS"
 }
 
-async function postgresCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
+async function sqliteCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
   const normalizedCustomKey = customKey === undefined ? undefined : validateGatewayApiKeyValue(customKey)
-  const postgres = getLocalDatabase()
+  const sqlite = getLocalDatabase()
   const apiKey = {
     id: apiKeysRef().doc().id,
     name,
@@ -2099,7 +1848,7 @@ async function postgresCreateApiKey(name: string, customKey?: string): Promise<A
     createdAt: new Date().toISOString(),
   } satisfies ApiKey
   const requestedHash = apiKeyValueHash(apiKey.key)
-  const batch = postgres.batch()
+  const batch = sqlite.batch()
   // Create preconditions enforce global uniqueness atomically without a
   // transaction retry loop, preflight lookup, or all-workspace scan.
   batch.create(apiKeyRef(apiKey.id), storedApiKey(apiKey))
@@ -2108,14 +1857,14 @@ async function postgresCreateApiKey(name: string, customKey?: string): Promise<A
     await batch.commit()
     return apiKey
   } catch (error) {
-    if (isPostgresAlreadyExistsError(error)) throw new ApiKeyConflictError()
+    if (isSqliteAlreadyExistsError(error)) throw new ApiKeyConflictError()
     throw error
   }
 }
 
-async function postgresDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+async function sqliteDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const target = await transaction.get(ref)
     if (!target.exists) return undefined

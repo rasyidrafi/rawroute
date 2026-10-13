@@ -3,11 +3,11 @@ import { beforeEach, expect, test, mock } from "bun:test"
 const mocks = {
   cliproxyManagement: mock(),
   cliproxyManagementJson: mock(),
-  localRedisDelete: mock(),
-  localRedisCompareAndDelete: mock(),
-  localRedisGet: mock(),
-  localRedisSet: mock(),
-  localRedisSetIfAbsent: mock(),
+  localCacheDelete: mock(),
+  localCacheCompareAndDelete: mock(),
+  localCacheGet: mock(),
+  localCacheSet: mock(),
+  localCacheSetIfAbsent: mock(),
   recordLog: mock(),
   getProvider: mock(),
   listProviderApiKeys: mock(),
@@ -19,12 +19,12 @@ mock.module("@/lib/cliproxy/management", () => ({
   cliproxyManagement: mocks.cliproxyManagement,
   cliproxyManagementJson: mocks.cliproxyManagementJson,
 }))
-mock.module("@/lib/local-redis", () => ({
-  localRedisCompareAndDelete: mocks.localRedisCompareAndDelete,
-  localRedisDelete: mocks.localRedisDelete,
-  localRedisGet: mocks.localRedisGet,
-  localRedisSet: mocks.localRedisSet,
-  localRedisSetIfAbsent: mocks.localRedisSetIfAbsent,
+mock.module("@/lib/local-cache", () => ({
+  localCacheCompareAndDelete: mocks.localCacheCompareAndDelete,
+  localCacheDelete: mocks.localCacheDelete,
+  localCacheGet: mocks.localCacheGet,
+  localCacheSet: mocks.localCacheSet,
+  localCacheSetIfAbsent: mocks.localCacheSetIfAbsent,
 }))
 mock.module("@/server/logging/recorder", () => ({ recordLog: mocks.recordLog }))
 mock.module("@/server/store", () => ({
@@ -63,11 +63,11 @@ beforeEach(() => {
   mock.clearAllMocks()
   process.env.CLIPROXY_MANAGEMENT_KEY = "management-secret"
   mocks.currentWorkspaceId.mockReturnValue("workspace-a")
-  mocks.localRedisGet.mockResolvedValue(undefined)
-  mocks.localRedisDelete.mockResolvedValue(true)
-  mocks.localRedisCompareAndDelete.mockResolvedValue(true)
-  mocks.localRedisSet.mockResolvedValue(true)
-  mocks.localRedisSetIfAbsent.mockResolvedValue(undefined)
+  mocks.localCacheGet.mockResolvedValue(undefined)
+  mocks.localCacheDelete.mockResolvedValue(true)
+  mocks.localCacheCompareAndDelete.mockResolvedValue(true)
+  mocks.localCacheSet.mockResolvedValue(true)
+  mocks.localCacheSetIfAbsent.mockResolvedValue(undefined)
   mocks.getProvider.mockResolvedValue({
     id: "provider-a",
     name: "Bynara",
@@ -198,7 +198,7 @@ test("surfaces management failures without logging credentials", async () => {
 
   await expect(syncNonCodexProviderProjection("provider-a")).rejects.toThrow("CLIProxy OpenAI-compatible configuration read failed (503).")
   expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-primary")
-  expect(mocks.localRedisDelete).toHaveBeenCalledWith("rawroute:cliproxy-provider-sync:v1:state:workspace-a:provider-a")
+  expect(mocks.localCacheDelete).toHaveBeenCalledWith("rawroute:cliproxy-provider-sync:v1:state:workspace-a:provider-a")
 })
 
 test("uses local projection state on the hot request path", async () => {
@@ -211,11 +211,11 @@ test("uses local projection state on the hot request path", async () => {
 })
 
 test("releases an acquired distributed projection lock", async () => {
-  mocks.localRedisSetIfAbsent.mockResolvedValue(true)
+  mocks.localCacheSetIfAbsent.mockResolvedValue(true)
 
   await syncNonCodexProviderProjection("provider-a")
 
-  expect(mocks.localRedisCompareAndDelete).toHaveBeenCalledWith(
+  expect(mocks.localCacheCompareAndDelete).toHaveBeenCalledWith(
     "rawroute:cliproxy-provider-sync:v1:lock:workspace-a:provider-a",
     expect.any(String),
   )
@@ -224,13 +224,13 @@ test("releases an acquired distributed projection lock", async () => {
 test("an unknown lock result is cleaned up so the next provider edit can synchronize", async () => {
   let owner: string | undefined
   let first = true
-  mocks.localRedisSetIfAbsent.mockImplementation(async (_key: string, token: string) => {
+  mocks.localCacheSetIfAbsent.mockImplementation(async (_key: string, token: string) => {
     if (owner) return false
     owner = token
     if (first) { first = false; return undefined }
     return true
   })
-  mocks.localRedisCompareAndDelete.mockImplementation(async (_key: string, token: string) => {
+  mocks.localCacheCompareAndDelete.mockImplementation(async (_key: string, token: string) => {
     if (owner !== token) return false
     owner = undefined
     return true
@@ -240,5 +240,5 @@ test("an unknown lock result is cleaned up so the next provider edit can synchro
   expect(owner).toBeUndefined()
   await syncNonCodexProviderProjection("provider-a")
   expect(owner).toBeUndefined()
-  expect(mocks.localRedisSetIfAbsent).toHaveBeenCalledTimes(2)
+  expect(mocks.localCacheSetIfAbsent).toHaveBeenCalledTimes(2)
 })

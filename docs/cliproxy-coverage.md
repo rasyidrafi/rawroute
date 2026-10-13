@@ -14,7 +14,7 @@ Audit date: 2026-08-08. The audit was performed against the checked-out `../CLIP
 | Gateway API-key authentication | RawRoute | Required before inference reaches CLIProxy. The real key name is resolved from the global key index for historical usage rows. |
 | Aliases | RawRoute | Resolved before forwarding and added to model listings. Provider-style IDs containing `/` are preserved, including migrated aliases such as `cx/gpt-5.6-sol`. |
 | Budgets and admission control | RawRoute | Reservations and rejections happen before forwarding; CLIProxy remains responsible for upstream execution. |
-| Usage events, rollups, cost/pricing, and public dashboard | RawRoute | Recorded around the CLIProxy response/stream and persisted in the canonical scoped PostgreSQL layout. CLIProxy request logs are not treated as the RawRoute usage database. |
+| Usage events, rollups, cost/pricing, and public dashboard | RawRoute | Recorded around the CLIProxy response/stream and persisted in the canonical scoped SQLite layout. CLIProxy request logs are not treated as the RawRoute usage database. |
 | RawRoute provider/API-key/model administration | RawRoute | Implemented by the existing admin APIs and dashboard. Codex records are mapping-only and quota views use the mapped CLIProxy auth index. |
 | Workspace Codex OAuth and account controls | RawRoute wrapper over CLIProxy | Exposed only through authenticated RawRoute admin routes. CLIProxy management is not published directly to the host. |
 
@@ -22,11 +22,11 @@ Audit date: 2026-08-08. The audit was performed against the checked-out `../CLIP
 
 CLIProxy creates and owns each Codex auth file, including its access token, refresh token, and ID token. RawRoute stores the assigned auth-file name for the workspace and reads live `auth_index`, status, account metadata, expiry, and refresh timestamp from `/v0/management/auth-files`. Usage and reset requests go through CLIProxy's management `api-call` endpoint with that `auth_index`; RawRoute never refreshes or re-uploads the token.
 
-RawRoute reads Codex provider/account/model records from the canonical scoped PostgreSQL store and overlays CLIProxy's live management state. Account enable/disable, priority, and deletion are applied to the mapped CLIProxy auth file without downloading or rewriting OAuth secrets. Model discovery imports only routes registered under the current workspace prefix for mapped, enabled Codex auth files. Custom mappings are never overwritten.
+RawRoute reads Codex provider/account/model records from the canonical scoped SQLite store and overlays CLIProxy's live management state. Account enable/disable, priority, and deletion are applied to the mapped CLIProxy auth file without downloading or rewriting OAuth secrets. Model discovery imports only routes registered under the current workspace prefix for mapped, enabled Codex auth files. Custom mappings are never overwritten.
 
 Discovery runs after account changes and, when its five-minute cache is stale, after provider and gateway model-list reads. The Codex provider dashboard also offers **Refresh models**. This rereads CLIProxy's registry; CLIProxy itself refreshes its maintained remote catalog every three hours. An idle deployment catches up on its next relevant request. This is CLIProxy route discovery, not a guarantee of account-specific OpenAI rollout access.
 
-Auto-discovered models can be disabled, but their identity is managed automatically. The offline data conversion script converts old built-ins in place so aliases, combos, pricing, and shares retain their references. Missing models and failed/empty catalogs never delete stored models: absent models remain selectable with a **Not recently observed** badge. Refresh failures are shown alongside the last successful sync. Model observations persist with the model records; refresh status and distributed coordination use Redis.
+Auto-discovered models can be disabled, but their identity is managed automatically. Missing models and failed/empty catalogs never delete stored models: absent models remain selectable with a **Not recently observed** badge. Refresh failures are shown alongside the last successful sync. Model observations persist with the model records; refresh status and coordination use bounded process-local state.
 
 ## Deliberate boundary
 

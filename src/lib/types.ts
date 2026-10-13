@@ -371,7 +371,7 @@ export interface DashboardPayload {
   trend: Array<{ bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>
   keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null; budget?: DashboardKeyBudget }>
   models: Array<{ model: string; requests: number; tokens: number; costMicros: number }>
-  freshness: { source: "postgres" | "memory"; lastEventAt: string | null }
+  freshness: { source: "sqlite" | "memory"; lastEventAt: string | null }
   pricingConfidence: { pricedRequests: number; unpricedRequests: number }
 }
 

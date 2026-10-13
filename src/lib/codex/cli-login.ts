@@ -1,4 +1,4 @@
-import { localRedisCompareAndDelete, localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
+import { localCacheCompareAndDelete, localCacheDelete, localCacheGet, localCacheSetIfAbsent } from "@/lib/local-cache"
 
 export type PendingCliProxyCodexLogin = {
   state: string
@@ -15,24 +15,21 @@ function loginKey(id: string) {
 }
 
 export async function reservePendingCliProxyCodexLogin(id: string) {
-  const reserved = await localRedisSetIfAbsent(GLOBAL_LOGIN_LOCK, id, LOGIN_TTL_MS)
-  if (reserved === undefined) {
-    await localRedisCompareAndDelete(GLOBAL_LOGIN_LOCK, id)
-    throw new Error("Redis is required to start a Codex login safely.")
-  }
+  const reserved = await localCacheSetIfAbsent(GLOBAL_LOGIN_LOCK, id, LOGIN_TTL_MS)
   if (!reserved) throw new Error("Another Codex login is already in progress. Finish or cancel it before starting another.")
 }
 
 export async function savePendingCliProxyCodexLogin(id: string, value: Omit<PendingCliProxyCodexLogin, "expiresAt">) {
-  const saved = await localRedisSet(loginKey(id), JSON.stringify({ ...value, expiresAt: Date.now() + LOGIN_TTL_MS }), LOGIN_TTL_MS)
+  // OAuth state must survive ordinary cache pressure until completion/expiry.
+  const saved = await localCacheSetIfAbsent(loginKey(id), JSON.stringify({ ...value, expiresAt: Date.now() + LOGIN_TTL_MS }), LOGIN_TTL_MS)
   if (!saved) {
-    await localRedisCompareAndDelete(GLOBAL_LOGIN_LOCK, id)
-    throw new Error("Unable to persist the Codex login session in Redis.")
+    await localCacheCompareAndDelete(GLOBAL_LOGIN_LOCK, id)
+    throw new Error("Unable to save the pending Codex login session.")
   }
 }
 
 export async function takePendingCliProxyCodexLogin(id: string) {
-  const raw = await localRedisGet(loginKey(id))
+  const raw = await localCacheGet(loginKey(id))
   if (typeof raw !== "string" || !raw) return undefined
   try {
     const value = JSON.parse(raw) as Partial<PendingCliProxyCodexLogin>
@@ -49,9 +46,9 @@ export async function takePendingCliProxyCodexLogin(id: string) {
 
 export async function deletePendingCliProxyCodexLogin(id: string) {
   await Promise.all([
-    localRedisDelete(loginKey(id)),
-    localRedisCompareAndDelete(GLOBAL_LOGIN_LOCK, id),
+    localCacheDelete(loginKey(id)),
+    localCacheCompareAndDelete(GLOBAL_LOGIN_LOCK, id),
   ])
 }
 
-export async function hasPendingCodexLogin() { return Boolean(await localRedisGet(GLOBAL_LOGIN_LOCK)) }
+export async function hasPendingCodexLogin() { return Boolean(await localCacheGet(GLOBAL_LOGIN_LOCK)) }

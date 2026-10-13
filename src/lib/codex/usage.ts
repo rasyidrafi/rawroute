@@ -1,5 +1,5 @@
 import { cliProxyCodexApiCall } from "@/lib/codex/cliproxy"
-import { getLocalRedis } from "@/lib/local-redis"
+import { localCacheGet, localCacheSet, localCacheSetIfAbsent, localCacheDelete } from "@/lib/local-cache"
 import type { ProviderApiKey } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
@@ -63,13 +63,13 @@ interface CachedCodexUsage {
   reauthRequired?: boolean
 }
 
-export interface UsageRedis {
+export interface UsageCache {
   get<T = unknown>(key: string): Promise<T | null>
   set<T = unknown>(key: string, value: T, options?: { ex?: number; nx?: boolean }): Promise<unknown>
   del?(key: string): Promise<unknown>
 }
 
-let redisClient: UsageRedis | undefined
+let cacheClient: UsageCache | undefined
 type CodexApiCall = typeof cliProxyCodexApiCall
 let codexApiCall: CodexApiCall = cliProxyCodexApiCall
 let now = () => Date.now()
@@ -121,25 +121,25 @@ function getUsageUrl() {
   return process.env.CODEX_USAGE_URL || DEFAULT_USAGE_URL
 }
 
-function getRedis(): UsageRedis {
-  if (redisClient) return redisClient
-  const local = getLocalRedis()
-  const client: UsageRedis = {
+function getCache(): UsageCache {
+  if (cacheClient) return cacheClient
+  const client: UsageCache = {
     async get<T = unknown>(key: string) {
-      const value = await local.get(key)
+      const value = await localCacheGet(key)
       if (value === null) return null
       try { return JSON.parse(value) as T } catch { return value as T }
     },
     async set<T = unknown>(key: string, value: T, options: { ex?: number; nx?: boolean } = {}) {
       const serialized = typeof value === "string" ? value : JSON.stringify(value)
-      if (options.ex !== undefined && options.nx) return local.set(key, serialized, "EX", options.ex, "NX")
-      if (options.ex !== undefined) return local.set(key, serialized, "EX", options.ex)
-      if (options.nx) return local.set(key, serialized, "NX")
-      return local.set(key, serialized)
+      const ttl = (options.ex ?? CACHE_RETENTION_SECONDS) * 1000
+      const saved = options.nx
+        ? await localCacheSetIfAbsent(key, serialized, ttl)
+        : await localCacheSet(key, serialized, ttl)
+      return saved ? "OK" : null
     },
-    async del(key: string) { return local.del(key) },
+    async del(key: string) { return Number(await localCacheDelete(key)) },
   }
-  redisClient = client
+  cacheClient = client
   return client
 }
 
@@ -312,8 +312,8 @@ function readCache(value: unknown): CachedCodexUsage | undefined {
   }
 }
 
-async function acquireRefreshLock(redis: UsageRedis, accountId: string) {
-  const result = await redis.set(lockKey(accountId), "1", { ex: REFRESH_LOCK_TTL_SECONDS, nx: true })
+async function acquireRefreshLock(cache: UsageCache, accountId: string) {
+  const result = await cache.set(lockKey(accountId), "1", { ex: REFRESH_LOCK_TTL_SECONDS, nx: true })
   return result === "OK"
 }
 
@@ -324,9 +324,9 @@ function isUnauthorized(error: unknown) {
 async function loadCodexUsageForAccount(
   account: ProviderApiKey,
 ): Promise<CodexUsageResult> {
-  let redis: UsageRedis
+  let cache: UsageCache
   try {
-    redis = getRedis()
+    cache = getCache()
   } catch (error) {
     return emptyResult(error instanceof Error ? error.message : "Usage cache unavailable.")
   }
@@ -334,10 +334,10 @@ async function loadCodexUsageForAccount(
   const key = cacheKey(account.id)
   let cached: CachedCodexUsage | undefined
   try {
-    cached = readCache(await redis.get(key))
+    cached = readCache(await cache.get(key))
     if (cached && now() < cached.retryAt) return resultFromCache(cached, Boolean(cached.error))
-    if (!(await acquireRefreshLock(redis, account.id))) {
-      const concurrent = readCache(await redis.get(key))
+    if (!(await acquireRefreshLock(cache, account.id))) {
+      const concurrent = readCache(await cache.get(key))
       return concurrent ? resultFromCache(concurrent, Boolean(concurrent.error) || now() >= concurrent.retryAt) : emptyResult("Usage refresh in progress.")
     }
   } catch (error) {
@@ -348,7 +348,7 @@ async function loadCodexUsageForAccount(
     const snapshot = await fetchCodexUsage(account)
     const fetchedAt = new Date(now()).toISOString()
     const record: CachedCodexUsage = { snapshot, fetchedAt, retryAt: now() + CODEX_USAGE_CACHE_TTL_SECONDS * 1000 }
-    await redis.set(key, record, { ex: CACHE_RETENTION_SECONDS })
+    await cache.set(key, record, { ex: CACHE_RETENTION_SECONDS })
     return resultFromCache(record, false)
   } catch (error) {
     const reauthRequired = isUnauthorized(error)
@@ -363,7 +363,7 @@ async function loadCodexUsageForAccount(
       ...(reauthRequired ? { reauthRequired: true } : {}),
     }
     try {
-      await redis.set(key, record, { ex: CACHE_RETENTION_SECONDS })
+      await cache.set(key, record, { ex: CACHE_RETENTION_SECONDS })
     } catch {}
     return resultFromCache(record, Boolean(cached?.snapshot))
   }
@@ -392,8 +392,8 @@ export async function getCodexUsageForAccount(
   return promise
 }
 
-export function setCodexUsageRedisForTests(redis?: UsageRedis) {
-  redisClient = redis
+export function setCodexUsageCacheForTests(cache?: UsageCache) {
+  cacheClient = cache
   resetLocalUsageCache()
 }
 
@@ -410,7 +410,7 @@ export function setCodexUsageClockForTests(clock?: () => number) {
 export async function invalidateCodexUsageCache(accountId: string) {
   clearWorkspaceLocalUsageCache(accountId)
   try {
-    const redis = getRedis()
-    if (redis.del) await redis.del(cacheKey(accountId))
+    const cache = getCache()
+    if (cache.del) await cache.del(cacheKey(accountId))
   } catch {}
 }

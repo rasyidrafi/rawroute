@@ -1,6 +1,6 @@
 import { mapConcurrent } from "@/lib/concurrency"
 import { cliproxyManagement, codexWorkspacePrefix, listCliProxyCodexAuthFiles, mappedWorkspaceForFile } from "@/lib/codex/cliproxy"
-import { localRedisCompareAndDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
+import { localCacheCompareAndDelete, localCacheGet, localCacheSet, localCacheSetIfAbsent } from "@/lib/local-cache"
 import { listProviderApiKeys, listProviderModels, listProviders, reconcileDiscoveredModel } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
@@ -10,7 +10,7 @@ const ttl = 300_000
 const statusKey = (workspaceId = currentWorkspaceId()) => `rawroute:codex-models:${workspaceId}:status`
 
 export async function codexDiscoveryStatus(): Promise<CodexDiscoveryStatus | undefined> {
-  const value = await localRedisGet(statusKey())
+  const value = await localCacheGet(statusKey())
   try { return value ? JSON.parse(value) : undefined } catch { return undefined }
 }
 
@@ -55,14 +55,14 @@ function accountSnapshot(accounts: CodexAccount[], files: Awaited<ReturnType<typ
 }
 
 async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscoveryStatus> {
-  const previousValue = await localRedisGet(statusKey(workspaceId))
+  const previousValue = await localCacheGet(statusKey(workspaceId))
   let previous: CodexDiscoveryStatus | undefined
   try { previous = previousValue ? JSON.parse(previousValue) : undefined } catch { previous = undefined }
   if (!force && previous && Date.now() - Date.parse(previous.attemptedAt) < ttl) return previous
   const status: CodexDiscoveryStatus = { attemptedAt: new Date().toISOString(), succeededAt: previous?.succeededAt, added: 0, skipped: 0 }
   const key = `${statusKey(workspaceId)}:lock`
   const token = crypto.randomUUID()
-  const lock = await localRedisSetIfAbsent(key, token, 120_000)
+  const lock = await localCacheSetIfAbsent(key, token, 120_000)
   if (lock === false) return previous || { ...status, error: "Model refresh is already running." }
   try {
     const provider = (await listProviders()).find((entry) => entry.prefix === "codex")
@@ -153,8 +153,8 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
   } catch (error) {
     status.error = error instanceof Error ? error.message : "Model discovery failed."
   } finally {
-    await localRedisSet(statusKey(workspaceId), JSON.stringify(status), 30 * 86400_000)
-    if (lock) await localRedisCompareAndDelete(key, token)
+    await localCacheSet(statusKey(workspaceId), JSON.stringify(status), 30 * 86400_000)
+    if (lock) await localCacheCompareAndDelete(key, token)
   }
   return status
 }

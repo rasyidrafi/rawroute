@@ -6,7 +6,7 @@ import index from "./index.html"
 import { drainBackgroundTasks } from "@/lib/background-tasks"
 import { notFoundResponse, notFoundStylesResponse } from "@/server/not-found"
 import { closeLocalDatabase } from "@/lib/local-db"
-import { closeLocalRedis } from "@/lib/local-redis"
+import { closeLocalCache } from "@/lib/local-cache"
 import { isPagePath, pagePaths } from "@/lib/dashboard/routes"
 import { apiRoutes } from "@/server/routes"
 
@@ -44,10 +44,10 @@ function stop() {
     const force = setTimeout(() => { void server.stop(true) }, 30_000)
     try {
       await server.stop(false)
-      // Stream monitoring must settle budgets before database/Redis close.
+      // Stream monitoring must settle budgets before storage and cache close.
       await drainBackgroundTasks()
       await shutdownInstance()
-      await Promise.all([closeLocalDatabase(), closeLocalRedis()])
+      await Promise.all([closeLocalDatabase(), closeLocalCache()])
     } finally {
       clearTimeout(force)
     }

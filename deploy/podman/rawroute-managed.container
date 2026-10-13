@@ -2,15 +2,11 @@
 Description=RawRoute with managed CLIProxyAPI
 Wants=network-online.target
 After=network-online.target
-Wants=svc-postgres-shared.service svc-redis-cache.service
-After=svc-postgres-shared.service svc-redis-cache.service
 [Container]
 Image=docker.io/rasyidrafi/rawroute:latest
 Pull=missing
 ContainerName=rawroute
 Network=rawroute.network
-Network=svc-postgres-shared.network
-Network=svc-redis-cache.network
 EnvironmentFile=/etc/rawroute/app.env
 Environment=HOSTNAME=::
 Environment=CLIPROXY_MODE=managed

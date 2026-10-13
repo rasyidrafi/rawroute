@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto"
-import { getPostgresDatabase, type PostgresDatabase } from "@/lib/local-db"
+import { getSqliteDatabase, type SqliteDatabase } from "@/lib/local-db"
 
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
 import { listModels, listProviders } from "@/server/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
-let localDatabase: PostgresDatabase | undefined
+let localDatabase: SqliteDatabase | undefined
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>
 type PricingCatalog = {
   groups: ModelPricingGroup[]
@@ -74,7 +74,7 @@ export function getModelPricingGeneration() { return workspaceState().pricingCac
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function db() {
-  return localDatabase ||= getPostgresDatabase()
+  return localDatabase ||= getSqliteDatabase()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
 function groupsRef() { return workspaceRef().collection("modelPricingGroups") }

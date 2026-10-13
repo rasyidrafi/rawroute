@@ -4,16 +4,14 @@ const mocks = {
   compareAndDelete: mock(),
   delete: mock(),
   get: mock(),
-  set: mock(),
   setIfAbsent: mock(),
 }
 
-mock.module("@/lib/local-redis", () => ({
-  localRedisCompareAndDelete: mocks.compareAndDelete,
-  localRedisDelete: mocks.delete,
-  localRedisGet: mocks.get,
-  localRedisSet: mocks.set,
-  localRedisSetIfAbsent: mocks.setIfAbsent,
+mock.module("@/lib/local-cache", () => ({
+  localCacheCompareAndDelete: mocks.compareAndDelete,
+  localCacheDelete: mocks.delete,
+  localCacheGet: mocks.get,
+  localCacheSetIfAbsent: mocks.setIfAbsent,
 }))
 
 const {
@@ -27,18 +25,13 @@ beforeEach(() => {
   mock.clearAllMocks()
   mocks.compareAndDelete.mockResolvedValue(true)
   mocks.delete.mockResolvedValue(true)
-  mocks.set.mockResolvedValue(true)
   mocks.setIfAbsent.mockResolvedValue(true)
 })
 
-test("rejects concurrent or unsafe login reservations", async () => {
+test("rejects concurrent login reservations", async () => {
   mocks.setIfAbsent.mockResolvedValueOnce(false)
   await expect(reservePendingCliProxyCodexLogin("login-b")).rejects.toThrow("already in progress")
   expect(mocks.compareAndDelete).not.toHaveBeenCalled()
-
-  mocks.setIfAbsent.mockResolvedValueOnce(undefined)
-  await expect(reservePendingCliProxyCodexLogin("login-c")).rejects.toThrow("Redis is required")
-  expect(mocks.compareAndDelete).toHaveBeenCalledWith("rawroute:codex-login:v2:active", "login-c")
 })
 
 test("persists and restores a workspace-bound CLIProxy state", async () => {
@@ -47,7 +40,7 @@ test("persists and restores a workspace-bound CLIProxy state", async () => {
     workspaceId: "workspace-a",
     authFiles: { "existing.json": "signature" },
   })
-  const stored = JSON.parse(String(mocks.set.mock.calls[0][1]))
+  const stored = JSON.parse(String(mocks.setIfAbsent.mock.calls[0][1]))
   mocks.get.mockResolvedValue(JSON.stringify(stored))
 
   await expect(takePendingCliProxyCodexLogin("login-a")).resolves.toMatchObject({

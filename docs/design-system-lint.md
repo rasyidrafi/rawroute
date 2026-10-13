@@ -12,7 +12,7 @@ All diagnostics remain enabled. Score uploads and crash reporting are disabled.
 `doctor.config.json` excludes generated `dist/` artifacts, matching the source lint
 boundary. Bun places both server and browser chunks there; the directory is not a
 public web root. Source checks cover the entire project, including `src/server/`,
-without rule overrides or inline suppressions. PostgreSQL storage and workspace
+without rule overrides or inline suppressions. SQLite storage and workspace
 persistence live in `src/server/` and cannot be imported by browser components.
 
 `eslint.config.mjs` registers `@shadcn/lint` alongside React, React Hooks, accessibility, and TypeScript

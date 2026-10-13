@@ -1,11 +1,11 @@
 import { beforeEach, expect, test, mock } from "bun:test"
 const mocks = { files: mock(), management: mock(), otherWorkspace: mock(), cache: new Map<string, string>() }
-mock.module("@/lib/local-redis", () => ({
-  localRedisGet: async (key: string) => mocks.cache.get(key),
-  localRedisSet: async (key: string, value: string) => { mocks.cache.set(key, value); return true },
-  localRedisSetIfAbsent: async () => true,
-  localRedisCompareAndDelete: async () => true,
-  localRedisDelete: async () => true,
+mock.module("@/lib/local-cache", () => ({
+  localCacheGet: async (key: string) => mocks.cache.get(key),
+  localCacheSet: async (key: string, value: string) => { mocks.cache.set(key, value); return true },
+  localCacheSetIfAbsent: async () => true,
+  localCacheCompareAndDelete: async () => true,
+  localCacheDelete: async () => true,
 }))
 mock.module("@/lib/codex/cliproxy", () => ({
   codexWorkspacePrefix: (id: string) => `rr-${id}`,

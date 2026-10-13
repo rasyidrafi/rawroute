@@ -1,8 +1,8 @@
 import { mapConcurrent } from "@/lib/concurrency"
 import { createHash } from "node:crypto"
-import { FieldPath, FieldValue, getPostgresDatabase, listLocalDocuments, type PostgresDatabase, type LocalQuery } from "@/lib/local-db"
+import { FieldPath, FieldValue, getSqliteDatabase, listLocalDocuments, type SqliteDatabase, type LocalQuery } from "@/lib/local-db"
 
-import { localRedisSetIfAbsent } from "@/lib/local-redis"
+import { localCacheSetIfAbsent } from "@/lib/local-cache"
 import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/server/store"
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { getCodexUsageForAccount } from "@/lib/codex/usage"
@@ -16,7 +16,7 @@ import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSe
 import { currentWorkspaceId } from "@/lib/workspace/context"
 import { listWorkspaces } from "@/server/workspace-repository"
 
-let localDatabase: PostgresDatabase | undefined
+let localDatabase: SqliteDatabase | undefined
 interface AnalyticsMemoryState {
   events: Map<string, UsageEvent>
   rollups: Map<string, UsageRollup>
@@ -406,7 +406,7 @@ export function invalidateDashboardPresentation() {
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function db() {
-  return localDatabase ||= getPostgresDatabase()
+  return localDatabase ||= getSqliteDatabase()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
 function eventsRef() { return workspaceRef().collection("usageEvents") }
@@ -586,7 +586,7 @@ function storageGranularityFor(trendGranularity: NonNullable<DashboardQuery["gra
 
 function isAlreadyExistsError(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code
-  return code === "23505"
+  return code === "DOCUMENT_EXISTS"
 }
 
 async function usageBudgetContext(event: UsageEvent) {
@@ -1031,15 +1031,8 @@ async function syncCodexBudgetWindowIfStale(window: BudgetWindow, now = Date.now
   boundedSet(codexBudgetWindowSyncAttempts, syncKey, now, 256)
 
   const promise = (async () => {
-    let redisLock: boolean | undefined
-    try {
-      redisLock = await localRedisSetIfAbsent(`rawroute:codex-budget-window-sync:${syncKey}`, "1", codexBudgetWindowSyncLockTtlMs)
-    } catch {
-      redisLock = undefined
-    }
-    // Redis is coordination only. If it is unavailable, the process-local
-    // single-flight map still prevents duplicate refreshes in this instance.
-    if (redisLock === false) return window
+    const cacheLock = await localCacheSetIfAbsent(`rawroute:codex-budget-window-sync:${syncKey}`, "1", codexBudgetWindowSyncLockTtlMs)
+    if (cacheLock === false) return window
 
     try {
       const resolved = await resolveCodexBudgetWindow(window.codexAccountId)
@@ -2667,7 +2660,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     trend: [...trend.values()].sort((a, b) => a.bucketStart.localeCompare(b.bucketStart)),
     keys: [...keyRows.values()].sort((a, b) => b.requests - a.requests),
     models: [...modelRows.values()].sort((a, b) => b.costMicros - a.costMicros || b.requests - a.requests),
-    freshness: { source: isMemory() ? "memory" : "postgres", lastEventAt },
+    freshness: { source: isMemory() ? "memory" : "sqlite", lastEventAt },
     pricingConfidence: { pricedRequests, unpricedRequests },
   }
 }
@@ -2975,7 +2968,7 @@ export async function repriceUsageForGroup(jobId: string) {
     currentJob = await updatePricingJob(jobId, { processedEvents: Math.min(index + chunk.length, events.length) }, currentJob)
     if (!currentJob) return
   }
-  // Redis budget aggregates are versioned by the budget/window timestamps.
+  // Cache budget aggregates are versioned by the budget/window timestamps.
   // Repricing changes persisted spend, so advance the shared revision once to
   // force the next reservation to initialize from the reconciled counter.
   await bumpBudgetStateRevision(budgetContext)

@@ -95,9 +95,9 @@ Global Settings manages the administrator password. CLIProxy configuration is in
   behind a reverse proxy. The response contains the new `logs.cleared` entry.
 - `POST /api/admin/logs/events` accepts only cataloged browser events and page IDs.
 
-No database migration is needed. PostgreSQL/Redis storage and gateway execution
-remain in place. Verify changes with `bun run lint`, `bun run typecheck`,
-`bun run test`, `bun run build` and the Playwright suite with an isolated test Redis.
+SQLite stores canonical workspace records. Runtime caches and coordination are
+process-local; deploy one application process. Verify changes with `bun run lint`, `bun run typecheck`,
+`bun run test`, `bun run build` and the Playwright suite.
 
 ## Routes and feature ownership
 
@@ -118,22 +118,3 @@ The dashboard root owns the shared shell, API context, workspace selection,
 cache boundaries and navigation. Reusable log rendering remains in `logs`.
 Tool Gateway's runtime is currently global; assigning workspace scope requires
 backend ownership and isolation, not just changing its route metadata.
-
-## Offline data conversion
-
-Before upgrading a persisted installation, back up PostgreSQL and stop RawRoute.
-Run `bun scripts/convert-current-data.ts` with `DATABASE_URL` (and, if customized,
-`DATABASE_COLLECTION_PREFIX`) to preview, then repeat with `--apply`.
-The container includes `bun convert-current-data.js` for the same operation.
-The conversion is transactional and idempotent; it never deletes account records.
-It removes the old admin username and combo mirror, converts built-in model
-records in place, and replaces old Codex token records with existing CLIProxy
-file mappings. Missing Codex mappings abort the transaction and require account
-reconnection/export before the upgrade. Already mapped accounts have obsolete
-token fields and local rate limits removed. Provider/model/account IDs and
-password hashes are preserved. There is no automatic request-time conversion.
-
-If old Codex records exist, export the CLIProxy auth-file metadata before stopping
-its managed process, then pass `--auth-files=/private/auth-files.json` to the
-conversion command. The JSON must be the `files` array from CLIProxy management
-or an array of normalized file metadata; it contains no token contents.

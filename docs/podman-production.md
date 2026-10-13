@@ -1,190 +1,77 @@
-# Deployment mode
+# Production with Podman
 
-This guide describes the retained external CLIProxy deployment. The managed
-alternative, volume migration, and combined resource limits are documented in
-[managed CLIProxyAPI](managed-cliproxy.md). Choose one mode before installing units.
+Use Podman 5+, systemd, and cgroup v2. Run a single RawRoute process with its
+SQLite file in a persistent volume. CLIProxyAPI and optional Executor remain on
+the private container network; only RawRoute publishes port 8080.
 
-# Production on a 1 GB VM
+Choose managed or external CLIProxy ownership before installing units. See
+[managed CLIProxyAPI](managed-cliproxy.md) for managed mode and auth-file import.
+Do not install both `rawroute.container` and `rawroute-managed.container`: both
+claim the same container name and host port.
 
-Use Podman 5 or newer with systemd and cgroup v2. The service files run rootful
-containers and enforce memory limits through systemd. RawRoute is published on all
-IPv4 interfaces at port 8080. An optional systemd socket proxy also serves `[::1]:8080`.
-PostgreSQL, Redis, CLIProxyAPI, and the optional Executor service remain on the
-private container network.
+## Installation
 
-## Build and publish
-
-[Production image](https://github.com/rasyidrafi/rawroute/actions/workflows/production-image.yml)
-runs on changes pushed to `main` and through manual dispatch. It installs Bun 1.4.2,
-runs lint and unit tests, builds the production image with TypeScript checking,
-and publishes to [Docker Hub](https://hub.docker.com/r/rasyidrafi/rawroute).
-Browser tests are not part of this workflow.
-
-The repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` authenticate the
-publisher. Images have `latest` and `sha-<full-commit>` tags. Build on GitHub rather
-than this VM; compilation and typechecking can use more RAM than the running stack.
-
-```bash
-gh workflow run production-image.yml --ref main
-gh run list --workflow production-image.yml --limit 5
-```
-
-## First installation
-
-Clone the repository and install Bun 1.4.2 for the one-time credential generator.
-It needs no package installation. It creates private files and refuses to replace
-existing credentials.
+Generate credentials using Bun, then install the selected units:
 
 ```bash
 bun scripts/init-production.ts
 sudo install -d -m 700 /etc/rawroute
-sudo install -m 600 .rawroute/app.env .rawroute/postgres.env .rawroute/cliproxy.env .rawroute/cliproxy.yaml .rawroute/executor.env /etc/rawroute/
+sudo install -m 600 .rawroute/app.env .rawroute/cliproxy.env .rawroute/cliproxy.yaml .rawroute/executor.env /etc/rawroute/
 sudo install -d /etc/containers/systemd
-sudo install -m 644 deploy/podman/*.container deploy/podman/*.network deploy/podman/*.volume /etc/containers/systemd/
-```
-
-The generated configuration uses `http://localhost:8080`. The login name is `admin`;
-read its password from `.rawroute/app.env` privately. Keep `/etc/rawroute` and
-`.rawroute` out of source control and backups intended for public sharing.
-
-Pull images sequentially before starting services. Replace `latest` with a
-verified `sha-<commit>` tag or digest in `/etc/containers/systemd/rawroute.container`
-to pin the application release. Pin dependency images there too when managing upgrades.
-
-```bash
-sudo podman pull docker.io/library/postgres:16-alpine
-sudo podman pull docker.io/library/redis:7-alpine
-sudo podman pull docker.io/eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266
-sudo podman pull docker.io/rasyidrafi/rawroute:latest
-# Optional, only when enabling the Executor integration:
-# sudo podman pull ghcr.io/usefulsoftwareco/executor-selfhost:latest
+sudo install -m 644 deploy/podman/rawroute.network deploy/podman/*.volume /etc/containers/systemd/
+# External CLIProxy mode:
+sudo install -m 644 deploy/podman/rawroute.container deploy/podman/rawroute-cliproxy.container /etc/containers/systemd/
 sudo systemctl daemon-reload
-sudo systemctl start rawroute-postgres.service
-sudo systemctl start rawroute-redis.service
-sudo systemctl start rawroute-cliproxy.service
-sudo systemctl start rawroute.service
+sudo systemctl start rawroute-cliproxy.service rawroute.service
 ```
 
-The Executor Quadlet is optional and is deliberately not wanted by
-`rawroute.service`. To enable it, first create an Executor API key using the
-bootstrap admin in `/etc/rawroute/executor.env`, put that key in
-`/etc/rawroute/app.env` as `EXECUTOR_UPSTREAM_API_KEY`, restart RawRoute so it
-reloads the server-side credential, then start it:
+For managed mode install `rawroute-managed.container` instead, set
+`CLIPROXY_MODE=managed` in `app.env`, and do not install the external CLIProxy
+unit. SQLite uses `/data/rawroute.sqlite`. The named volume survives container
+replacement. Protect configuration, SQLite data, and CLIProxy auth volumes as
+secrets. Change the initial dashboard password before administering providers.
 
-```bash
-sudo systemctl restart rawroute.service
-sudo systemctl start rawroute-executor.service
-```
+Executor is optional. Install its unit only if needed, configure its private API
+key in `app.env`, and start `rawroute-executor.service` explicitly.
 
-`rawroute-executor.container` publishes no host port. RawRoute reaches it as
-`http://executor:4788` on the private `rawroute` network. Existing Podman
-deployments remain unchanged until this unit is started explicitly.
+## Operations
 
-Quadlet generates boot startup links from the `[Install]` sections on the
-required units; the optional Executor unit intentionally has no such section.
-The required `.container` units do not need `systemctl enable`. PostgreSQL data,
-CLIProxyAPI credentials, and optional Executor data live in named Podman volumes
-and survive container replacement. No provider credentials are seeded; add an
-account or provider through the dashboard.
-
-When upgrading an installation created before RawRoute owned model-combo
-fallback, add these values to `/etc/rawroute/cliproxy.yaml` and restart
-`rawroute-cliproxy.service`. They prevent transient provider failures from being
-reported to coding clients as long-lived quota cooldowns while still allowing
-CLIProxy to try every configured credential during the current request.
-
-```yaml
-request-retry: 0
-max-retry-credentials: 0
-max-retry-interval: 0
-disable-cooling: true
-transient-error-cooldown-seconds: -1
-```
-
-For IPv6 localhost access, install the socket proxy. It avoids depending on
-IPv6 loopback NAT support in the host's container firewall.
-
-```bash
-sudo install -m 644 deploy/podman/rawroute-loopback.socket deploy/podman/rawroute-loopback.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now rawroute-loopback.socket
-```
-
-## Memory budget
-
-| Service | RAM ceiling | Configuration |
-| --- | --- | --- |
-| RawRoute | 320 MiB | Bun `--smol`, page modules loaded on demand, database pool of 4 |
-| PostgreSQL | 160 MiB | 32 MiB shared buffers, 20 connections, 1 MiB work memory |
-| CLIProxyAPI | 128 MiB | Go memory target of 80 MiB, one CPU worker |
-| Redis | 48 MiB | 24 MiB data cap, no persistence, no eviction |
-| Optional Executor | 256 MiB | Only when `rawroute-executor.service` is enabled |
-| Optional IPv6 proxy | 16 MiB | Socket activation |
-
-The main containers can each use up to 64 MiB of swap. These are ceilings, not
-reservations or throughput guarantees. Keep RAM available for the OS and SSH.
-Bounded Redis writes can fail when full; callers fall back to their existing
-best-effort cache behavior. Live coordination keys are not evicted to make room.
-Container logs are capped at 10 MB each. CLIProxyAPI file logging is disabled.
-
-Run maintenance jobs and checks one at a time. Avoid development servers,
-local builds, and browser automation on this VM. Larger datasets and more
-concurrent requests may require a larger VM or external PostgreSQL.
-
-## Verified deployment
-
-On 2026-09-06, image revision `33190c9` ran on this Debian VM with 853 MiB of
-usable RAM. After login, dashboard rendering, and 100 mixed health/workspace
-requests at concurrency four, the services used 160 MiB combined and the VM had
-386 MiB available. Every request succeeded; the slowest took 196 ms.
-
-IPv4 and IPv6 localhost health passed. A created workspace survived PostgreSQL
-and app restarts, and systemd recovered the app after a forced process failure.
-These checks used a fresh database and local administrative endpoints. Provider
-inference requires configured credentials and has not been load-tested. Browser
-testing remains manual.
-
-## Verification and recovery
+The production workflow runs lint, types, unit and browser tests before publishing
+images. Pin a verified image digest or `sha-<commit>` tag in the Quadlet. Reload
+systemd and restart the selected RawRoute unit to deploy it, then check:
 
 ```bash
 curl --max-time 5 -fsS http://127.0.0.1:8080/api/health
-curl --noproxy '*' --max-time 5 -g -fsS 'http://[::1]:8080/api/health'
-sudo podman ps
-sudo systemctl show rawroute.service -p MemoryCurrent -p MemoryMax -p NRestarts
 sudo podman logs --tail 50 rawroute
+sudo systemctl show rawroute.service -p MemoryCurrent -p MemoryMax -p NRestarts
 ```
 
-Health must report all dependencies as true. The app may report 503 briefly on
-startup while its database and cache connect. PostgreSQL and Redis restart after
-repeated failed health checks. Application process failures restart through
-systemd; dependency health failures alone do not repeatedly restart the app.
+The external RawRoute unit caps memory at 320 MiB; managed mode caps the combined
+processes at 448 MiB. These are ceilings, not measured throughput guarantees.
+Runtime cache values are bounded to 4096 entries and 16 MiB. Live coordination
+leases have a separate 4096-entry ceiling and reject new work when full rather
+than evicting an owner. Runtime state, including pending OAuth sessions, resets
+when the application restarts. Do not scale to multiple application processes:
+coordination is process-local.
 
-For upgrades, wait for CI to pass, pull the selected image, update `Image=` in the
-app's Quadlet, reload systemd, restart `rawroute.service`, and verify health.
-This replaces the app with a brief service interruption. Keep the previous image
-until verification finishes; point `Image=` back to it to roll back. Never run
-`podman volume rm` or volume pruning as part of an upgrade.
+## Backups and recovery
 
-Before upgrades, keep an off-VM backup of PostgreSQL, `/etc/rawroute`, and the
-CLIProxyAPI auth volume. Database dumps and auth archives contain private data.
+Stop RawRoute before exporting its data volume, so the SQLite database and WAL
+are consistent. Back up `/etc/rawroute` and the CLIProxy auth volume too. Example
+for external mode:
 
 ```bash
 umask 077
-sudo podman exec rawroute-postgres pg_dump -U rawroute -d rawroute -Fc > rawroute-postgres.dump
-sudo podman volume export rawroute-cliproxy-auth > rawroute-cliproxy-auth.tar
-# If enabled, back up Executor's data volume too:
-# sudo podman volume export rawroute-executor > rawroute-executor.tar
+sudo systemctl stop rawroute.service
+sudo podman volume export rawroute-managed-data > rawroute-data.tar
+sudo podman volume export rawroute-cliproxy-auth > rawroute-auth.tar
+sudo systemctl start rawroute.service
 ```
 
-The service accepts IPv4 traffic on port 8080. Keep host firewall rules restrictive,
-or place it behind a TLS reverse proxy before exposing it to the Internet.
+In managed mode stop `rawroute-managed.service`; its data volume also contains
+CLIProxy state. Keep an off-VM backup. Never remove or prune data volumes as part
+of deployment. Roll back application images only when their SQLite schema is
+compatible. No old-storage conversion or runtime fallback is provided.
 
-To access the IPv6 localhost listener from another computer, use an SSH tunnel:
-
-```bash
-ssh -L 8080:127.0.0.1:8080 your-user@your-vm
-```
-
-Open `http://localhost:8080` on that computer. Public deployment requires a TLS
-reverse proxy and a matching `RAWROUTE_PUBLIC_URL`; do not expose PostgreSQL,
-Redis, or CLIProxyAPI management ports.
+Use restrictive firewall rules and a TLS reverse proxy with a matching
+`RAWROUTE_PUBLIC_URL`. Never expose CLIProxy management ports publicly.

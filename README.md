@@ -44,7 +44,7 @@ It includes memory limits, persistent storage, loopback access, and boot startup
 
 ```bash
 cp .env.example .env.local
-# Set the required RawRoute, PostgreSQL and Redis credentials.
+# Set the required RawRoute credentials.
 docker compose --env-file .env.local pull
 docker compose --env-file .env.local up -d
 ```
@@ -147,9 +147,9 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-The development server listens on `http://localhost:3000`. For local development,
-set database and Redis URLs to services reachable from your host. Compose service
-names in `.env.example` resolve only inside the Compose network.
+The development server listens on `http://localhost:3000`. SQLite defaults to
+`data/rawroute.sqlite`; set `SQLITE_PATH` to choose another local file. No external
+storage services are required.
 
 The application uses native Bun full-stack React: `src/index.ts` serves the HTML
 entry, bundled assets, and HTTP APIs on one port. `src/frontend.tsx` mounts React;
@@ -177,14 +177,12 @@ Bun runs the application, build tools, tests, and maintenance scripts. Docker us
 the same pinned Bun version. `node:` imports use Bun's compatibility APIs and do
 not require a separate Node.js installation.
 
-Browser tests run the production build with an in-memory data store and local
+Browser tests run the production build with an isolated in-memory SQLite database and local
 CLIProxy/Executor fixtures using an installed Google Chrome executable. Chrome is
 discovered on `PATH` or in standard install locations; set
 `PLAYWRIGHT_CHROME_EXECUTABLE_PATH` to select a specific executable. Playwright's
-bundled Chromium is not used. Provide a disposable Redis database through
-`E2E_REDIS_URL` (default: `redis://127.0.0.1:6379/15`).
-`COMBO_TEST_REDIS_URL` enables the Redis integration test in the unit suite; use
-a separate test database for it. CLIProxy lifecycle tests run on isolated ports; the
+bundled Chromium is not used. Runtime caches are isolated inside the test server.
+CLIProxy lifecycle tests run on isolated ports; the
 optional real-engine test is documented in the managed CLIProxyAPI guide.
 
 Unit and integration tests use `bun:test`. Run `bun run test` (or
@@ -208,6 +206,12 @@ bun run test:e2e
 docker compose --env-file .env.local config
 ```
 
-PostgreSQL is the sole durable RawRoute data store. All workspace documents, provider/model catalogs, aliases, budgets, pricing, usage events, and rollups use the scoped canonical layout. Redis is only a disposable runtime cache for lookup, quota, and lock state; it is safe to flush after a deployment.
+SQLite is the durable RawRoute data store, accessed through `bun:sqlite` with WAL
+and serialized transactions. All workspace documents, catalogs, budgets, pricing,
+usage events, and rollups use the scoped canonical layout. Runtime values use a
+bounded in-process LRU; coordination leases are separate and never evicted for
+cache capacity. Run one RawRoute process per database. Runtime cache and pending
+OAuth state reset on restart. Mount `/data` in containers and back up the SQLite
+file with the application stopped (including WAL files when present).
 
 RawRoute does not require an external database migration at runtime. API-key ownership is indexed globally by RawRoute while every workspace resource remains under its workspace scope. Codex OAuth credentials live only in the private CLIProxyAPI backend; RawRoute stores only the workspace-to-auth-file mapping and live management metadata. CLIProxyAPI models never become RawRoute providers or catalog records.

@@ -1,17 +1,15 @@
 import { cliProxyHealth } from "@/lib/cliproxy/gateway"
 import { localDatabaseHealth } from "@/lib/local-db"
-import { localRedisHealth } from "@/lib/local-redis"
 
 export async function GET() {
-  const [cliproxy, database, redis] = await Promise.all([
+  const [cliproxy, database] = await Promise.all([
     cliProxyHealth(),
     process.env.STORAGE_BACKEND === "memory" ? Promise.resolve(true) : localDatabaseHealth(),
-    process.env.STORAGE_BACKEND === "memory" ? Promise.resolve(true) : localRedisHealth(),
   ])
-  const ok = cliproxy && database && redis
+  const ok = cliproxy && database
   return Response.json({
     status: ok ? "ok" : "degraded",
     service: "rawroute",
-    dependencies: { cliproxy, database, redis },
+    dependencies: { cliproxy, database },
   }, { status: ok ? 200 : 503 })
 }

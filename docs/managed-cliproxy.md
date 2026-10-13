@@ -11,7 +11,7 @@ RawRoute retains fill-first routing to preserve workspace credential priority.
 RawRoute owns process lifecycle, gateway authentication, workspace routing,
 aliases/combos, model sharing, budgets, pricing, usage accounting, and logs.
 CLIProxyAPI still owns provider execution, translation, OAuth tokens and refresh.
-PostgreSQL and Redis retain their existing roles. Executor remains optional and
+SQLite stores durable records and process-local caches hold runtime state. Executor remains optional and
 separate. Public gateway paths and workspace IDs do not change.
 
 Managed CLIProxyAPI runs as a child of Bun and binds only to `127.0.0.1:8317`.
@@ -118,9 +118,9 @@ management credential, and adds RawRoute's protected transport key. Check custom
 absolute paths, external certificates and plugin dependencies against the new
 container; those external resources must also be mounted in the new deployment.
 
-Start RawRoute in managed mode with that data volume and the **same PostgreSQL,
-Redis and RawRoute encryption/session configuration**. Workspace mappings remain
-in PostgreSQL; live auth indexes are read again from CLIProxy. Verify accounts,
+Start RawRoute in managed mode with that data volume and the **same SQLite file
+and RawRoute encryption/session configuration**. Workspace mappings remain
+in SQLite; live auth indexes are read again from CLIProxy. Verify accounts,
 models and representative requests before retiring the old container. There is
 no RawRoute database schema migration for this port.
 
@@ -156,7 +156,7 @@ display. CLIProxy file logging must be enabled to read its file log endpoint.
 `/api/live` reports RawRoute process availability and is used by the managed
 container healthcheck, so an intentionally stopped engine does not make the
 management UI unhealthy. `/api/health` retains dependency readiness checks and
-returns 503 when CLIProxy, PostgreSQL, or Redis is unavailable.
+returns 503 when CLIProxy or SQLite is unavailable.
 
 OAuth connections are supported only for Codex inside a workspace. Connect accounts
 from that workspace’s Codex Providers page. Account visibility and management

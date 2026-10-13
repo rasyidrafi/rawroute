@@ -2,7 +2,7 @@ import { logs } from "@/server/logging/store"
 import { createHash } from "node:crypto"
 
 import { _deleteMemoryWorkspace, _invalidateApiKeyLookupCache, apiKeyValueHash, collectionPrefix, getLocalDatabase, isMemoryBackend } from "@/server/store"
-import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
+import { localCacheDelete, localCacheGet, localCacheSet } from "@/lib/local-cache"
 import type { Workspace } from "@/lib/types"
 import { DEFAULT_WORKSPACE_ID, DEFAULT_WORKSPACE_NAME } from "@/lib/workspace/context"
 
@@ -24,7 +24,7 @@ const workspaceCacheTtlMs = configuredDuration(process.env.WORKSPACE_CACHE_TTL_M
 const workspaceNegativeCacheTtlMs = configuredDuration(process.env.WORKSPACE_NEGATIVE_CACHE_TTL_MS, 10_000)
 const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
 const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
-const workspaceRedisPrefix = "rawroute:workspace:v1:"
+const workspaceCachePrefix = "rawroute:workspace:v1:"
 const workspaceCache = new Map<string, WorkspaceCacheEntry>()
 const workspaceReadInflight = new Map<string, Promise<Workspace | undefined>>()
 let workspaceListCache: { value: Workspace[]; expiresAt: number } | undefined
@@ -81,12 +81,12 @@ function cacheWorkspace(workspaceId: string, workspace: Workspace | undefined, e
   workspaceCache.set(workspaceId, { value: workspace || null, expiresAt })
 }
 
-function workspaceRedisKey(workspaceId: string) {
-  return `${workspaceRedisPrefix}${encodeURIComponent(workspaceId)}`
+function workspaceCacheKey(workspaceId: string) {
+  return `${workspaceCachePrefix}${encodeURIComponent(workspaceId)}`
 }
 
-async function readWorkspaceFromRedis(workspaceId: string) {
-  const raw = await localRedisGet(workspaceRedisKey(workspaceId))
+async function readWorkspaceFromCache(workspaceId: string) {
+  const raw = await localCacheGet(workspaceCacheKey(workspaceId))
   if (!raw) return undefined
   try {
     const workspace = JSON.parse(raw) as Workspace
@@ -102,7 +102,7 @@ function publishWorkspace(workspace: Workspace) {
   workspaceListCache = undefined
   workspaceListInflight = undefined
   cacheWorkspace(workspace.id, workspace)
-  if (!isMemoryBackend()) void localRedisSet(workspaceRedisKey(workspace.id), JSON.stringify(workspace), workspaceCacheTtlMs)
+  if (!isMemoryBackend()) void localCacheSet(workspaceCacheKey(workspace.id), JSON.stringify(workspace), workspaceCacheTtlMs)
 }
 
 function evictWorkspace(workspaceId: string) {
@@ -111,7 +111,7 @@ function evictWorkspace(workspaceId: string) {
   workspaceReadInflight.delete(workspaceId)
   workspaceListCache = undefined
   workspaceListInflight = undefined
-  if (!isMemoryBackend()) void localRedisDelete(workspaceRedisKey(workspaceId))
+  if (!isMemoryBackend()) void localCacheDelete(workspaceCacheKey(workspaceId))
 }
 
 async function ensureDefaultWorkspace() {
@@ -119,8 +119,8 @@ async function ensureDefaultWorkspace() {
     if (!memoryWorkspaces().has(DEFAULT_WORKSPACE_ID)) memoryWorkspaces().set(DEFAULT_WORKSPACE_ID, defaultWorkspace())
     return memoryWorkspaces().get(DEFAULT_WORKSPACE_ID)!
   }
-  const postgres = getLocalDatabase()
-  return postgres.runTransaction(async (transaction) => {
+  const sqlite = getLocalDatabase()
+  return sqlite.runTransaction(async (transaction) => {
     const ref = workspaceRef(DEFAULT_WORKSPACE_ID)
     const snapshot = await transaction.get(ref)
     if (snapshot.exists) return { ...snapshot.data(), id: snapshot.id } as Workspace
@@ -209,14 +209,14 @@ export async function getWorkspace(workspaceId: string) {
 
   const generation = workspaceCacheGeneration
   const promise = (async () => {
-    const redisWorkspace = await readWorkspaceFromRedis(workspaceId)
-    if (redisWorkspace) return redisWorkspace
+    const cacheWorkspace = await readWorkspaceFromCache(workspaceId)
+    if (cacheWorkspace) return cacheWorkspace
     return workspaceId === DEFAULT_WORKSPACE_ID
       ? readDefaultWorkspace()
       : workspaceRef(workspaceId).get().then((snapshot) => snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as Workspace : undefined)
   })().then((workspace) => {
     if (generation === workspaceCacheGeneration) cacheWorkspace(workspaceId, workspace)
-    if (workspace && !isMemoryBackend()) void localRedisSet(workspaceRedisKey(workspace.id), JSON.stringify(workspace), workspaceCacheTtlMs)
+    if (workspace && !isMemoryBackend()) void localCacheSet(workspaceCacheKey(workspace.id), JSON.stringify(workspace), workspaceCacheTtlMs)
     return workspace
   }).finally(() => {
     if (workspaceReadInflight.get(workspaceId) === promise) workspaceReadInflight.delete(workspaceId)
@@ -235,8 +235,8 @@ export async function createWorkspace(nameInput: unknown) {
     memoryWorkspaces().set(workspace.id, workspace)
     return workspace
   }
-  const postgres = getLocalDatabase()
-  const workspace = await postgres.runTransaction(async (transaction) => {
+  const sqlite = getLocalDatabase()
+  const workspace = await sqlite.runTransaction(async (transaction) => {
     const indexRef = workspaceNameIndexesRef().doc(nameHash(name))
     if ((await transaction.get(indexRef)).exists) throw new Error("Workspace name is already in use.")
     const ref = workspacesRef().doc()
@@ -263,8 +263,8 @@ export async function renameWorkspace(workspaceId: string, nameInput: unknown) {
     memoryWorkspaces().set(workspaceId, updated)
     return updated
   }
-  const postgres = getLocalDatabase()
-  const updated = await postgres.runTransaction(async (transaction) => {
+  const sqlite = getLocalDatabase()
+  const updated = await sqlite.runTransaction(async (transaction) => {
     const ref = workspaceRef(workspaceId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("Workspace not found.")

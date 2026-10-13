@@ -1,10 +1,12 @@
 import { mapConcurrent } from "@/lib/concurrency"
 import { randomUUID } from "node:crypto"
 
-import { Pool, type PoolClient } from "pg"
+import { Database, type SQLQueryBindings } from "bun:sqlite"
+import { chmodSync, mkdirSync } from "node:fs"
+import { dirname, join } from "node:path"
 
 // Accept arbitrary object-shaped documents so domain interfaces do not need
-// storage-only index signatures; JSONB is the runtime validation boundary.
+// storage-only index signatures; JSON is the runtime validation boundary.
 export type DocumentData = Record<string, unknown>
 
 type FieldPathToken = { readonly kind: "document-id" }
@@ -53,46 +55,53 @@ export type OrderDirection = "asc" | "desc"
 type Filter = { field: string | FieldPathToken; operator: WhereOperator; value: unknown }
 type Ordering = { field: string | FieldPathToken; direction: OrderDirection }
 
-function databaseUrl() {
-  return process.env.DATABASE_URL || "postgresql://rawroute:rawroute@rawroute-postgres:5432/rawroute"
-}
-
-function maxPoolSize() {
-  const parsed = Number(process.env.DATABASE_POOL_MAX || 20)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 20
-}
-
-let pool: Pool | undefined
+let database: Database | undefined
 let schemaReady: Promise<void> | undefined
+function getDatabase() {
+  if (database) return database
+  const path = process.env.SQLITE_PATH || join(process.env.RAWROUTE_DATA_DIR || "data", "rawroute.sqlite")
+  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const connection = new Database(path, { create: true })
+  try {
+    if (path !== ":memory:") chmodSync(path, 0o600)
+    connection.run("PRAGMA journal_mode = WAL")
+    connection.run("PRAGMA synchronous = FULL")
+    connection.run("PRAGMA busy_timeout = 5000")
+    database = connection
+    return connection
+  } catch (error) {
+    connection.close()
+    throw error
+  }
+}
 
-function getPool() {
-  if (pool) return pool
-  pool = new Pool({
-    connectionString: databaseUrl(),
-    max: maxPoolSize(),
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 3_000,
-  })
-  pool.on("error", () => undefined)
-  return pool
+type DatabaseClient = { query: typeof executeQuery }
+function executeQuery(sql: string, parameters: unknown[] = []) {
+  const statement = getDatabase().query(sql.replace(/\$(\d+)/g, "?$1"))
+  const bindings = parameters as SQLQueryBindings[]
+  const rows = /^\s*(SELECT|WITH)/i.test(sql)
+    ? statement.all(...bindings) as Array<{ path: string; collection_path: string; document_id: string; data?: DocumentData }>
+    : (statement.run(...bindings), [])
+  for (const row of rows) if (typeof row.data === "string") row.data = JSON.parse(row.data) as DocumentData
+  return Promise.resolve({ rows })
 }
 
 async function ensureSchema() {
   if (schemaReady) return schemaReady
   schemaReady = (async () => {
-    await getPool().query(`
+    await executeQuery(`
       CREATE TABLE IF NOT EXISTS rawroute_documents (
         path TEXT PRIMARY KEY,
         collection_path TEXT NOT NULL,
         document_id TEXT NOT NULL,
-        data JSONB NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        data TEXT NOT NULL CHECK (json_valid(data)),
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `)
-    await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_idx ON rawroute_documents (collection_path)")
-    await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_document_idx ON rawroute_documents (collection_path, document_id)")
-    await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_completed_idx ON rawroute_documents (collection_path, (data #>> '{completedAt}'))")
-    await getPool().query("CREATE INDEX IF NOT EXISTS rawroute_documents_updated_idx ON rawroute_documents (updated_at)")
+    await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_idx ON rawroute_documents (collection_path)")
+    await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_document_idx ON rawroute_documents (collection_path, document_id)")
+    await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_completed_idx ON rawroute_documents (collection_path, json_extract(data, '$.completedAt'))")
+    await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_updated_idx ON rawroute_documents (updated_at)")
   })().catch((error) => {
     schemaReady = undefined
     throw error
@@ -141,12 +150,15 @@ function fieldExpression(field: string | FieldPathToken) {
   if (field === DOCUMENT_ID || (typeof field === "object" && field.kind === "document-id")) return "document_id"
   const name = fieldName(field)
   if (!name) throw new Error("Invalid document field.")
-  const path = name.split(".").map((part) => part.replaceAll("'", "''")).join(",")
-  return `data #>> '{${path}}'`
+  return `json_extract(data, '$.${name}')`
 }
 
 function jsonValue(value: unknown) {
-  const serialized = JSON.stringify(value)
+  // Canonical object-key order gives extracted objects structural equality.
+  const serialized = JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry).sort(([left], [right]) => left.localeCompare(right)))
+      : entry)
   return serialized === undefined ? "null" : serialized
 }
 
@@ -154,13 +166,21 @@ function jsonFieldExpression(field: string | FieldPathToken) {
   if (field === DOCUMENT_ID || (typeof field === "object" && field.kind === "document-id")) return undefined
   const name = fieldName(field)
   if (!name) throw new Error("Invalid document field.")
-  const path = name.split(".").map((part) => part.replaceAll("'", "''")).join(",")
-  return `data #> '{${path}}'`
+  return `json_extract(data, '$.${name}')`
+}
+
+function jsonComparison(expression: string, typeExpression: string, value: unknown, parameters: unknown[]) {
+  if (value === null || value === undefined) return `${typeExpression} = 'null'`
+  if (typeof value === "boolean") return `${typeExpression} = '${value ? "true" : "false"}'`
+  const type = typeof value === "number" ? "IN ('integer', 'real')"
+    : typeof value === "string" ? "= 'text'"
+    : Array.isArray(value) ? "= 'array'" : "= 'object'"
+  return `(${typeExpression} ${type} AND ${expression} = ${jsonParameter(parameters, value)})`
 }
 
 function jsonParameter(parameters: unknown[], value: unknown) {
-  parameters.push(jsonValue(value))
-  return `$${parameters.length}::jsonb`
+  parameters.push(typeof value === "object" && value !== null ? jsonValue(value) : value === true ? 1 : value === false ? 0 : value ?? null)
+  return `$${parameters.length}`
 }
 
 function textParameter(parameters: unknown[], value: unknown) {
@@ -172,13 +192,14 @@ function applyFilterSql(filters: Filter[], parameters: unknown[], where: string[
   for (const filter of filters) {
     const expression = fieldExpression(filter.field)
     const jsonExpression = jsonFieldExpression(filter.field)
+    const typeExpression = jsonExpression ? `json_type(data, '$.${fieldName(filter.field)}')` : ""
     if (filter.operator === "in" || filter.operator === "not-in" || filter.operator === "array-contains-any") {
       if (!Array.isArray(filter.value)) throw new Error(`${filter.operator} requires an array.`)
       if (filter.operator === "array-contains-any" && !jsonExpression) throw new Error("array-contains-any cannot target the document ID.")
       const comparisons = filter.value.map((value) => {
-        if (filter.operator === "array-contains-any") return `${jsonExpression} @> ${jsonParameter(parameters, [value])}`
+        if (filter.operator === "array-contains-any") return `(${typeExpression} = 'array' AND EXISTS (SELECT 1 FROM json_each(${jsonExpression}) WHERE ${jsonComparison("value", "type", value, parameters)}))`
         if (!jsonExpression) return `document_id = ${textParameter(parameters, value)}`
-        return `${jsonExpression} = ${jsonParameter(parameters, value)}`
+        return jsonComparison(jsonExpression, typeExpression, value, parameters)
       })
       if (!comparisons.length) where.push(filter.operator === "not-in" ? "TRUE" : "FALSE")
       else if (filter.operator === "not-in") where.push(`NOT (${comparisons.join(" OR ")})`)
@@ -187,7 +208,7 @@ function applyFilterSql(filters: Filter[], parameters: unknown[], where: string[
     }
     if (filter.operator === "array-contains") {
       if (!jsonExpression) throw new Error("array-contains cannot target the document ID.")
-      where.push(`${jsonExpression} @> ${jsonParameter(parameters, [filter.value])}`)
+      where.push(`(${typeExpression} = 'array' AND EXISTS (SELECT 1 FROM json_each(${jsonExpression}) WHERE ${jsonComparison("value", "type", filter.value, parameters)}))`)
       continue
     }
     if (filter.operator === "==" || filter.operator === "!=") {
@@ -195,15 +216,15 @@ function applyFilterSql(filters: Filter[], parameters: unknown[], where: string[
         const placeholder = textParameter(parameters, filter.value)
         where.push(`document_id ${filter.operator === "==" ? "=" : "<>"} ${placeholder}`)
       } else {
-        const placeholder = jsonParameter(parameters, filter.value)
-        where.push(`${jsonExpression} ${filter.operator === "==" ? "=" : "<>"} ${placeholder}`)
+        const comparison = jsonComparison(jsonExpression, typeExpression, filter.value, parameters)
+        where.push(filter.operator === "==" ? comparison : `(${typeExpression} IS NOT NULL AND NOT (${comparison}))`)
       }
       continue
     }
     const placeholder = textParameter(parameters, filter.value)
     if (!jsonExpression || typeof filter.value === "string") where.push(`${expression} ${filter.operator} ${placeholder}`)
-    else if (typeof filter.value === "number") where.push(`jsonb_typeof(${jsonExpression}) = 'number' AND (${jsonExpression} #>> '{}')::numeric ${filter.operator} ${placeholder}::numeric`)
-    else if (typeof filter.value === "boolean") where.push(`jsonb_typeof(${jsonExpression}) = 'boolean' AND (${jsonExpression} #>> '{}')::boolean ${filter.operator} ${placeholder}::boolean`)
+    else if (typeof filter.value === "number") where.push(`typeof(${jsonExpression}) IN ('integer', 'real') AND ${jsonExpression} ${filter.operator} CAST(${placeholder} AS REAL)`)
+    else if (typeof filter.value === "boolean") where.push(`${jsonExpression} ${filter.operator} ${jsonParameter(parameters, filter.value)}`)
     else throw new Error(`Unsupported range filter value for ${filter.operator}.`)
   }
 }
@@ -212,10 +233,7 @@ function orderExpressions(field: string | FieldPathToken, direction: OrderDirect
   const normalizedDirection = direction === "desc" ? "DESC" : "ASC"
   if (!jsonFieldExpression(field)) return [`document_id ${normalizedDirection}`]
   const expression = jsonFieldExpression(field)!
-  return [
-    `CASE WHEN jsonb_typeof(${expression}) = 'number' THEN (${expression} #>> '{}')::numeric END ${normalizedDirection} NULLS LAST`,
-    `CASE WHEN jsonb_typeof(${expression}) <> 'number' THEN ${expression} #>> '{}' END ${normalizedDirection} NULLS LAST`,
-  ]
+  return [`${expression} ${normalizedDirection} NULLS LAST`]
 }
 
 function operation(value: unknown): value is FieldOperation {
@@ -225,7 +243,7 @@ function operation(value: unknown): value is FieldOperation {
 }
 
 function sameJson(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return jsonValue(left) === jsonValue(right)
 }
 
 function applyValue(previous: unknown, value: unknown): unknown {
@@ -256,12 +274,8 @@ function applyData(existing: DocumentData | undefined, input: object, merge: boo
   return next
 }
 
-function postgresErrorCode(error: unknown) {
-  return (error as { code?: unknown } | null)?.code
-}
-
 function conflictError(message: string) {
-  return Object.assign(new Error(message), { code: "23505" })
+  return Object.assign(new Error(message), { code: "DOCUMENT_EXISTS" })
 }
 
 class LocalDocumentSnapshot<T extends DocumentData = DocumentData> {
@@ -351,14 +365,14 @@ export class LocalQuery {
     return { parameters, sql: `SELECT path, document_id, data FROM rawroute_documents WHERE ${where.join(" AND ")}${order}${limit}` }
   }
 
-  async get(client?: PoolClient): Promise<LocalQuerySnapshot> {
-    const execute = async (queryClient: PoolClient) => {
+  async get(client?: DatabaseClient): Promise<LocalQuerySnapshot> {
+    const execute = async (queryClient: DatabaseClient) => {
       const parts = this.queryParts(this.collectionPath())
       const result = await queryClient.query(parts.sql, parts.parameters)
       return new LocalQuerySnapshot(result.rows.map((row) => new LocalDocumentSnapshot(new LocalDocumentReference(row.path), row.data as DocumentData)))
     }
     if (client) return execute(client)
-    return withTransaction(execute, "READ COMMITTED")
+    return withTransaction(execute)
   }
 
   protected collectionPath(): string {
@@ -412,7 +426,7 @@ export class LocalDocumentReference {
   }
 
   async get() {
-    return withTransaction(async (client) => readDocument(client, this), "READ COMMITTED")
+    return withTransaction(async (client) => readDocument(client, this))
   }
 
   async set(data: object, options: SetOptions = {}) {
@@ -440,9 +454,9 @@ export class LocalDocumentReference {
 }
 
 export class LocalTransaction {
-  private readonly operations: Array<(client: PoolClient) => Promise<void>> = []
+  private readonly operations: Array<(client: DatabaseClient) => Promise<void>> = []
 
-  constructor(private readonly client: PoolClient) {}
+  constructor(private readonly client: DatabaseClient) {}
 
   async get(reference: LocalDocumentReference): Promise<LocalDocumentSnapshot>
   async get(reference: LocalQuery): Promise<LocalQuerySnapshot>
@@ -481,7 +495,7 @@ export class LocalTransaction {
 }
 
 class LocalWriteBatch {
-  private readonly operations: Array<(client: PoolClient) => Promise<void>> = []
+  private readonly operations: Array<(client: DatabaseClient) => Promise<void>> = []
 
   set(reference: LocalDocumentReference, data: object, options: SetOptions = {}) {
     this.operations.push((client) => writeDocument(client, reference, data, options.merge === true, false))
@@ -509,21 +523,21 @@ class LocalWriteBatch {
   }
 }
 
-async function readDocument(client: PoolClient, reference: LocalDocumentReference): Promise<LocalDocumentSnapshot> {
+async function readDocument(client: DatabaseClient, reference: LocalDocumentReference): Promise<LocalDocumentSnapshot> {
   await ensureSchema()
   const result = await client.query("SELECT data FROM rawroute_documents WHERE path = $1", [reference.path])
   return new LocalDocumentSnapshot(reference, result.rows[0]?.data as DocumentData | undefined)
 }
 
-async function writeDocument(client: PoolClient, reference: LocalDocumentReference, data: object, merge: boolean, createOnly: boolean) {
+async function writeDocument(client: DatabaseClient, reference: LocalDocumentReference, data: object, merge: boolean, createOnly: boolean) {
   const queryClient = client
   await ensureSchema()
   if (!merge && !createOnly) {
     await queryClient.query(`
       INSERT INTO rawroute_documents (path, collection_path, document_id, data, updated_at)
-      VALUES ($1, $2, $3, $4::jsonb, NOW())
-      ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
-    `, [reference.path, collectionPathForDocument(reference.path), reference.id, JSON.stringify(applyData(undefined, data, false))])
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
+    `, [reference.path, collectionPathForDocument(reference.path), reference.id, jsonValue(applyData(undefined, data, false))])
     return
   }
   const existing = await readDocument(queryClient, reference)
@@ -531,37 +545,38 @@ async function writeDocument(client: PoolClient, reference: LocalDocumentReferen
   const next = applyData(existing.data(), data, merge)
   await queryClient.query(`
     INSERT INTO rawroute_documents (path, collection_path, document_id, data, updated_at)
-    VALUES ($1, $2, $3, $4::jsonb, NOW())
-    ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
-  `, [reference.path, collectionPathForDocument(reference.path), reference.id, JSON.stringify(next)])
+    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+    ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
+  `, [reference.path, collectionPathForDocument(reference.path), reference.id, jsonValue(next)])
 }
 
-async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>, isolation: "SERIALIZABLE" | "READ COMMITTED" = "SERIALIZABLE"): Promise<T> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+// Async document callbacks must hold the connection exclusively across awaits.
+// Every public read/write joins this queue, preventing another request from
+// observing or committing an in-progress transaction on the shared connection.
+let transactionTail: Promise<void> = Promise.resolve()
+async function withTransaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
+  const previous = transactionTail
+  let release!: () => void
+  transactionTail = new Promise<void>((resolve) => { release = resolve })
+  await previous
+  try {
     await ensureSchema()
-    const client = await getPool().connect()
+    const connection = getDatabase()
+    connection.run("BEGIN IMMEDIATE")
     try {
-      // SERIALIZABLE detects concurrent read/write conflicts so retries
-      // preserve all-or-nothing behavior instead of allowing lost updates.
-      await client.query(`BEGIN ISOLATION LEVEL ${isolation}`)
-      try {
-        const result = await callback(client)
-        await client.query("COMMIT")
-        return result
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined)
-        const code = postgresErrorCode(error)
-        if ((code === "40001" || code === "40P01") && attempt < 4) continue
-        throw error
-      }
-    } finally {
-      client.release()
+      const result = await callback({ query: executeQuery })
+      connection.run("COMMIT")
+      return result
+    } catch (error) {
+      connection.run("ROLLBACK")
+      throw error
     }
+  } finally {
+    release()
   }
-  throw new Error("Local database transaction retry limit exceeded.")
 }
 
-export class PostgresDatabase {
+export class SqliteDatabase {
   collection(path: string) {
     return new LocalCollectionReference(path)
   }
@@ -571,20 +586,12 @@ export class PostgresDatabase {
   }
 
   async runTransaction<T>(callback: (transaction: LocalTransaction) => Promise<T>) {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        return await withTransaction(async (client) => {
-          const transaction = new LocalTransaction(client)
-          const result = await callback(transaction)
-          await transaction.commit()
-          return result
-        })
-      } catch (error) {
-        const code = postgresErrorCode(error)
-        if ((code !== "40001" && code !== "40P01") || attempt === 4) throw error
-      }
-    }
-    throw new Error("Local database transaction retry limit exceeded.")
+    return withTransaction(async (client) => {
+      const transaction = new LocalTransaction(client)
+      const result = await callback(transaction)
+      await transaction.commit()
+      return result
+    })
   }
 
   async recursiveDelete(reference: LocalCollectionReference | LocalDocumentReference) {
@@ -594,15 +601,15 @@ export class PostgresDatabase {
       // `LIKE` treats `%` and `_` in a document path as wildcards. Use a
       // literal prefix test so deleting one collection/document cannot touch a
       // similarly named sibling path.
-      await client.query("DELETE FROM rawroute_documents WHERE path = $1 OR position($2 in path) = 1", [prefix, `${prefix}/`])
+      await client.query("DELETE FROM rawroute_documents WHERE path = $1 OR substr(path, 1, length($2)) = $2", [prefix, `${prefix}/`])
     })
   }
 }
 
-let postgresDatabase: PostgresDatabase | undefined
+let sqliteDatabase: SqliteDatabase | undefined
 
-export function getPostgresDatabase() {
-  return postgresDatabase ||= new PostgresDatabase()
+export function getSqliteDatabase() {
+  return sqliteDatabase ||= new SqliteDatabase()
 }
 
 export async function ensureLocalDatabase() {
@@ -612,7 +619,7 @@ export async function ensureLocalDatabase() {
 export async function localDatabaseHealth() {
   try {
     await ensureSchema()
-    await getPool().query("SELECT 1")
+    await withTransaction((client) => client.query("SELECT 1"))
     return true
   } catch {
     return false
@@ -620,18 +627,19 @@ export async function localDatabaseHealth() {
 }
 
 export async function closeLocalDatabase() {
-  if (!pool) return
-  await pool.end()
-  pool = undefined
+  await transactionTail
+  if (!database) return
+  database.close()
+  database = undefined
   schemaReady = undefined
-  postgresDatabase = undefined
+  sqliteDatabase = undefined
 }
 
 export async function listLocalDocuments(collectionPath?: string) {
   await ensureSchema()
-  const result = collectionPath
-    ? await getPool().query("SELECT path, collection_path, document_id, data FROM rawroute_documents WHERE collection_path = $1 ORDER BY path", [collectionPath])
-    : await getPool().query("SELECT path, collection_path, document_id, data FROM rawroute_documents ORDER BY path")
+  const result = await withTransaction((client) => collectionPath
+    ? client.query("SELECT path, collection_path, document_id, data FROM rawroute_documents WHERE collection_path = $1 ORDER BY path", [collectionPath])
+    : client.query("SELECT path, collection_path, document_id, data FROM rawroute_documents ORDER BY path"))
   return result.rows as Array<{ path: string; collection_path: string; document_id: string; data: DocumentData }>
 }
 
@@ -651,6 +659,6 @@ export async function deleteLocalDocuments(paths: string[]) {
   if (!paths.length) return
   await withTransaction(async (client) => {
     await ensureSchema()
-    await client.query("DELETE FROM rawroute_documents WHERE path = ANY($1::text[])", [paths])
+    for (const path of paths) await client.query("DELETE FROM rawroute_documents WHERE path = $1", [path])
   })
 }

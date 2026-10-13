@@ -6,12 +6,12 @@ import {
   parseCodexUsagePayload,
   setCodexUsageClockForTests,
   setCodexUsageApiCallForTests,
-  setCodexUsageRedisForTests,
-  type UsageRedis,
+  setCodexUsageCacheForTests,
+  type UsageCache,
 } from "@/lib/codex/usage"
 import type { ProviderApiKey } from "@/lib/types"
 
-class FakeRedis implements UsageRedis {
+class FakeCache implements UsageCache {
   values = new Map<string, unknown>()
 
   async get<T>(key: string) {
@@ -84,17 +84,17 @@ describe("Codex usage", () => {
     expect(parseCodexUsagePayload({ rate_limit: { rate_limit_reset_credits: { remaining_count: "2" } } }).unusedResetCredits).toBe(2)
   })
 
-  test("bypasses old count-only Redis snapshots so reset-credit details refresh immediately", async () => {
-    const redis = new FakeRedis()
+  test("bypasses old count-only Cache snapshots so reset-credit details refresh immediately", async () => {
+    const cache = new FakeCache()
     const current = 2_000_000
     let usageCalls = 0
     let inventoryCalls = 0
-    redis.values.set("rawroute:codex-usage:v1:default:account-1", {
+    cache.values.set("rawroute:codex-usage:v1:default:account-1", {
       snapshot: { fiveHour: null, weekly: null, unusedResetCredits: 4 },
       fetchedAt: new Date(current).toISOString(),
       retryAt: current + CODEX_USAGE_CACHE_TTL_SECONDS * 1000,
     })
-    setCodexUsageRedisForTests(redis)
+    setCodexUsageCacheForTests(cache)
     setCodexUsageClockForTests(() => current)
     setCodexUsageApiCallForTests(async (_account, input) => {
       if (input.url.endsWith("/rate-limit-reset-credits")) {
@@ -113,14 +113,14 @@ describe("Codex usage", () => {
     expect(usageCalls).toBe(1)
     expect(inventoryCalls).toBe(1)
 
-    setCodexUsageRedisForTests()
+    setCodexUsageCacheForTests()
     setCodexUsageClockForTests()
     setCodexUsageApiCallForTests()
   })
 
   test("classifies an unauthorized usage response as requiring reauthorization", async () => {
-    const redis = new FakeRedis()
-    setCodexUsageRedisForTests(redis)
+    const cache = new FakeCache()
+    setCodexUsageCacheForTests(cache)
     setCodexUsageApiCallForTests(async () => ({ status: 401, body: JSON.stringify({ error: "token expired" }) }))
 
     await expect(getCodexUsageForAccount(account)).resolves.toMatchObject({
@@ -129,15 +129,15 @@ describe("Codex usage", () => {
       error: "Authentication token expired. Reauthorize this Codex account.",
     })
 
-    setCodexUsageRedisForTests()
+    setCodexUsageCacheForTests()
     setCodexUsageApiCallForTests()
   })
 
   test("serves a cached result for five minutes and retains stale data on failure", async () => {
-    const redis = new FakeRedis()
+    const cache = new FakeCache()
     let current = 1_000_000
     let calls = 0
-    setCodexUsageRedisForTests(redis)
+    setCodexUsageCacheForTests(cache)
     setCodexUsageClockForTests(() => current)
 
     setCodexUsageApiCallForTests(async (_account, input) => {
@@ -163,7 +163,7 @@ describe("Codex usage", () => {
     expect(calls).toBe(1)
 
     current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
-    redis.values.delete("rawroute:codex-usage:v2:lock:default:account-1")
+    cache.values.delete("rawroute:codex-usage:v2:lock:default:account-1")
     const stale = await getCodexUsageForAccount(account)
     const retained = await getCodexUsageForAccount(account)
     expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 }, unusedResetCredits: 2 })
@@ -171,7 +171,7 @@ describe("Codex usage", () => {
     expect(retained.resetCredits).toEqual(first.resetCredits)
     expect(calls).toBe(2)
 
-    setCodexUsageRedisForTests()
+    setCodexUsageCacheForTests()
     setCodexUsageClockForTests()
     setCodexUsageApiCallForTests()
   })

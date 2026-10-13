@@ -1,17 +1,17 @@
-import { FieldValue, closeLocalDatabase, getPostgresDatabase } from "@/lib/local-db"
+import { FieldValue, closeLocalDatabase, getSqliteDatabase } from "@/lib/local-db"
 import { recordUsageEvent } from "@/lib/analytics"
 import type { UsageEvent } from "@/lib/types"
 import { runInWorkspace } from "@/lib/workspace/context"
 
 const collection = `rawroute_local_smoke_${process.pid}`
-const db = getPostgresDatabase()
+const db = getSqliteDatabase()
 const documents = db.collection(collection)
 const counter = documents.doc("counter")
 const prefix = (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
 const usageWorkspace = db.collection(`${prefix}_workspaces`).doc(collection)
 
 async function verifyDuplicateUsage() {
-  if (process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test") throw new Error("Usage smoke verification requires the PostgreSQL backend.")
+  if (process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test") throw new Error("Usage smoke verification requires the SQLite backend.")
   const event: UsageEvent = {
     id: "duplicate-usage",
     gatewayKeyId: "smoke-key",
@@ -62,7 +62,7 @@ async function main() {
     try {
       await counter.create({ count: 999 })
     } catch (error) {
-      if ((error as { code?: unknown } | null)?.code !== "23505") throw error
+      if ((error as { code?: unknown } | null)?.code !== "DOCUMENT_EXISTS") throw error
       duplicateRejected = true
     }
     if (!duplicateRejected || (await counter.get()).data()?.count !== 0) throw new Error("Duplicate creation did not preserve the original document.")

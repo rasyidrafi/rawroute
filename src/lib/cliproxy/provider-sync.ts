@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/management"
 import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "@/lib/cliproxy/provider-capabilities"
-import { localRedisCompareAndDelete, localRedisDelete, localRedisGet, localRedisSet, localRedisSetIfAbsent } from "@/lib/local-redis"
+import { localCacheCompareAndDelete, localCacheDelete, localCacheGet, localCacheSet, localCacheSetIfAbsent } from "@/lib/local-cache"
 import { recordLog } from "@/server/logging/recorder"
 import { listProviderApiKeys, listProviderModels, getProvider } from "@/server/store"
 import { currentWorkspaceId } from "@/lib/workspace/context"
@@ -110,11 +110,11 @@ function syncKey(workspaceId: string, providerId: string) {
   return `${workspaceId}:${providerId}`
 }
 
-function redisStateKey(workspaceId: string, providerId: string) {
+function cacheStateKey(workspaceId: string, providerId: string) {
   return `rawroute:cliproxy-provider-sync:v1:state:${workspaceId}:${providerId}`
 }
 
-function redisLockKey(workspaceId: string, providerId: string) {
+function cacheLockKey(workspaceId: string, providerId: string) {
   return `rawroute:cliproxy-provider-sync:v1:lock:${workspaceId}:${providerId}`
 }
 
@@ -343,7 +343,7 @@ async function reconcile(providerId: string, force: boolean) {
   const local = projectionState.get(stateKey)
   if (!force) {
     if (local && local.expiresAt > now) return
-    const sharedFingerprint = await localRedisGet(redisStateKey(workspaceId, providerId))
+    const sharedFingerprint = await localCacheGet(cacheStateKey(workspaceId, providerId))
     if (typeof sharedFingerprint === "string" && sharedFingerprint) {
       projectionState.set(stateKey, { fingerprint: sharedFingerprint, expiresAt: now + SYNC_TTL_MS })
       return
@@ -362,17 +362,17 @@ async function reconcile(providerId: string, force: boolean) {
   const projectionStateKey = syncKey(projection.workspaceId, providerId)
 
   const promise = (async () => {
-    const lockKey = redisLockKey(projection.workspaceId, providerId)
+    const lockKey = cacheLockKey(projection.workspaceId, providerId)
     const lockOwner = randomUUID()
     const deadline = Date.now() + LOCK_WAIT_MS
-    let lock = await localRedisSetIfAbsent(lockKey, lockOwner, LOCK_TTL_MS)
+    let lock = await localCacheSetIfAbsent(lockKey, lockOwner, LOCK_TTL_MS)
     while (lock === false && Date.now() < deadline) {
-      if (await localRedisGet(redisStateKey(projection.workspaceId, providerId)) === projection.fingerprint) {
+      if (await localCacheGet(cacheStateKey(projection.workspaceId, providerId)) === projection.fingerprint) {
         projectionState.set(projectionStateKey, { fingerprint: projection.fingerprint, expiresAt: Date.now() + SYNC_TTL_MS })
         return
       }
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
-      lock = await localRedisSetIfAbsent(lockKey, lockOwner, LOCK_TTL_MS)
+      lock = await localCacheSetIfAbsent(lockKey, lockOwner, LOCK_TTL_MS)
     }
     if (lock === false) {
       throw new CliProxyProviderSyncError(`CLIProxy projection sync timed out waiting for provider ${providerId}.`)
@@ -380,7 +380,7 @@ async function reconcile(providerId: string, force: boolean) {
     try {
       await withManagementMutation(() => applyProjection(projection, force))
       projectionState.set(projectionStateKey, { fingerprint: projection.fingerprint, expiresAt: Date.now() + SYNC_TTL_MS })
-      await localRedisSet(redisStateKey(projection.workspaceId, providerId), projection.fingerprint, SYNC_TTL_MS)
+      await localCacheSet(cacheStateKey(projection.workspaceId, providerId), projection.fingerprint, SYNC_TTL_MS)
       recordLog("admin.cliproxy.provider.projection.reconciled", {
         providerId,
         projectedCredentials: projection.openai.length || projection.claude.length,
@@ -389,12 +389,11 @@ async function reconcile(providerId: string, force: boolean) {
       }, { level: "info" })
     } catch (error) {
       projectionState.delete(projectionStateKey)
-      await localRedisDelete(redisStateKey(projection.workspaceId, providerId))
+      await localCacheDelete(cacheStateKey(projection.workspaceId, providerId))
       throw error
     } finally {
-      // A timed-out SET may still have acquired the lock. The owner check
-      // makes cleanup safe even when Redis did not return its result.
-      await localRedisCompareAndDelete(lockKey, lockOwner)
+      // Never release a newer owner's lease after this lease expires.
+      await localCacheCompareAndDelete(lockKey, lockOwner)
     }
   })()
   projectionInflight.set(stateKey, promise)
