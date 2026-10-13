@@ -11,6 +11,7 @@ for (const [path, heading] of [
   ["/dashboard/system-logs", "System Logs"],
   ["/dashboard/cliproxy", "Connection details"],
   ["/dashboard/ai/codex-providers", "Usage Limits"],
+  ["/dashboard/ai/budgets", "Budget window"],
   ["/dashboard/tools/overview", "Executor integration"],
 ]) {
   test(`route loading preserves the content for ${path}`, () => {

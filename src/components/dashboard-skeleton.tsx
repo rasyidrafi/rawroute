@@ -72,7 +72,37 @@ function ProviderDetailSkeleton({ codex }: { codex: boolean }) {
 }
 
 function BudgetsSkeleton() {
-  return <><LoadingCard title={<><Clock3Icon className="size-5" />Budget window</>} description="Choose the shared accounting window used by every gateway key."><div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><Skeleton className="h-16 w-full max-w-sm" /><div className="flex flex-col gap-3 sm:flex-row"><Skeleton className="h-8 w-48 max-w-full" /><Skeleton className="h-8 w-48 max-w-full" /><Skeleton className="h-8 w-28" /></div></div></LoadingCard><LoadingCard title={<><WalletCardsIcon className="size-5" />Budgets</>} description="Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured." action={<Button variant="outline" disabled><RefreshCwIcon />Refresh</Button>}><div className="grid gap-3 sm:grid-cols-2">{["Total budget allocated", "Total budget used"].map(title => <div key={title} className="rounded-xl border bg-muted/20 p-4"><div className="text-sm font-medium">{title}</div><Skeleton className="mt-2 h-8 w-28" /><Skeleton className="mt-3 h-4 w-full" /></div>)}</div><div className="flex flex-col gap-3 sm:flex-row"><Skeleton className="h-8 w-full sm:w-64" /><Skeleton className="h-8 w-full sm:w-40" /><Skeleton className="h-8 w-32" /></div><Skeleton className="h-8 w-64 max-w-full" /><div className="space-y-4"><div className="rounded-xl border"><div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">Unlimited Mode</div><p className="mt-1 text-sm text-muted-foreground">Activate a temporary budget bypass while keeping expensive models blocked.</p></div><Skeleton className="h-8 w-36" /></div><div className="space-y-3 p-4"><div><div className="text-sm font-medium">Excluded models</div><p className="text-xs text-muted-foreground">These models cannot start new requests while Unlimited Mode is active.</p></div><Skeleton className="h-8 w-full" /><div className="max-h-80 divide-y overflow-hidden rounded-lg border">{[0, 1, 2].map(key => <div key={key} className="flex items-center gap-3 px-3 py-3"><Skeleton className="size-4" /><div className="min-w-0 flex-1"><Skeleton className="h-5 w-40 max-w-full" /><Skeleton className="h-4 w-56 max-w-full" /></div></div>)}</div><div className="flex flex-col gap-3 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button disabled>Save exclusions</Button></div></div></div><div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div><LoadingTable columns={["Started", "Ended", "Duration", "Result"]} rows={1} /></div></div><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="space-y-2"><span className="text-sm font-medium">Order rows by</span><Skeleton className="h-8 w-44" /></div></div><LoadingTable columns={["Key", "Status", "Limit", "Usage", ""]} /></LoadingCard></>
+  return <>
+    <LoadingCard title={<><Clock3Icon className="size-5" />Budget window</>} description="Choose the shared accounting window used by every gateway key.">
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-16 w-full" />
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex min-w-0 basis-48 grow flex-col gap-2"><span className="text-sm font-medium">Window anchor</span><Skeleton className="h-8 w-full" /></div>
+          <Skeleton className="h-8 min-w-0 basis-64 grow" />
+          <Button className="w-full sm:w-auto" disabled>Save window</Button>
+        </div>
+      </div>
+    </LoadingCard>
+    <LoadingCard title={<><WalletCardsIcon className="size-5" />Budgets</>} description="Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured." action={<Button variant="outline" disabled><RefreshCwIcon />Refresh</Button>}>
+      <div className="grid gap-3 sm:grid-cols-2">{["Total budget allocated", "Total budget used"].map(title => <div key={title} className="rounded-xl border bg-muted/20 p-4"><div className="text-sm font-medium">{title}</div><Skeleton className="mt-2 h-8 w-28" /><Skeleton className="mt-3 h-4 w-full" /></div>)}</div>
+      <div className="flex flex-wrap items-end gap-3"><Skeleton className="h-8 min-w-0 basis-64 grow" /><Skeleton className="h-8 min-w-0 basis-40 grow" /><Button className="w-full sm:w-auto" disabled>Create budget</Button></div>
+      <Skeleton className="h-8 w-64 max-w-full" />
+      <div className="flex flex-col gap-4">
+        <div className="rounded-xl border">
+          <div className="flex flex-col gap-4 border-b bg-muted/10 p-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">Unlimited Mode</div><p className="mt-1 text-sm text-muted-foreground">Activate a temporary budget bypass while keeping expensive models blocked.</p></div><Skeleton className="h-9 w-40 shrink-0" /></div>
+          <div className="flex flex-col gap-3 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><div className="text-sm font-medium">Excluded models</div><p className="text-xs text-muted-foreground">These models cannot start new requests while Unlimited Mode is active.</p></div><Skeleton className="h-5 w-20 shrink-0" /></div>
+            <Skeleton className="h-8 w-full" />
+            <div className="max-h-80 divide-y overflow-hidden rounded-lg border">{[0, 1, 2].map(key => <div key={key} className="flex items-center gap-3 px-3 py-3"><Skeleton className="size-4 shrink-0" /><div className="min-w-0 flex-1"><Skeleton className="h-5 w-40 max-w-full" /><Skeleton className="h-4 w-56 max-w-full" /></div></div>)}</div>
+            <div className="flex flex-col gap-3 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span className="text-muted-foreground">Saved changes apply to new requests immediately. Running requests are not interrupted.</span><Button disabled>Save exclusions</Button></div>
+          </div>
+        </div>
+        <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div><LoadingTable columns={["Started", "Ended", "Duration", "Result"]} rows={1} /></div>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex flex-col gap-2"><span className="text-sm font-medium">Order rows by</span><Skeleton className="h-8 w-44" /></div></div>
+      <LoadingTable columns={["Key", "Status", "Limit", "Usage", ""]} />
+    </LoadingCard>
+  </>
 }
 
 const noop = () => undefined

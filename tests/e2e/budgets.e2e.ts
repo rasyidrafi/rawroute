@@ -1,5 +1,61 @@
 import { expect, test, type Page } from "@playwright/test"
 
+async function expectNoCardOverflow(page: Page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  const overflowingCards = await page.locator('[data-slot="card-content"]').evaluateAll(elements => elements.filter(element => element.scrollWidth > element.clientWidth + 1).length)
+  expect(overflowingCards).toBe(0)
+}
+
+test("budget controls and loading layout fit mobile, medium, and desktop widths", async ({ page }) => {
+  await authenticate(page)
+  const accountName = "Codex account with a deliberately long name for responsive layout verification"
+  for (const width of [320, 375, 640, 768, 1024, 1248, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    let release = () => {}
+    const loadingGate = new Promise<void>(resolve => { release = resolve })
+    await page.route("**/api/admin/budgets", async route => {
+      const response = await route.fetch()
+      const data = await response.json()
+      await loadingGate
+      await route.fulfill({ response, json: {
+        ...data,
+        codexAccounts: [{ id: "responsive-account", name: accountName }],
+        apiKeys: [{ id: "available-key", name: "Gateway key with a deliberately long name for responsive layout verification" }],
+        budgets: [{ apiKeyId: "configured-key", name: "Configured gateway key", weeklyLimitMicros: 50000000, spentMicros: 10000000, enabled: true }],
+        window: { ...data.window, anchor: "custom" },
+      } })
+    })
+    await page.goto("/dashboard/ai/budgets")
+    await expect(page.locator('[data-variant="budgets"]')).toBeVisible()
+    await expectNoCardOverflow(page)
+    release()
+    await expect(page.getByRole("button", { name: "Save window", exact: true })).toBeEnabled()
+    await expectNoCardOverflow(page)
+    const windowCard = page.locator('[data-slot="card"]').filter({ has: page.getByText("Budget window", { exact: true }) })
+    for (const control of await windowCard.locator("button").all()) {
+      const box = await control.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width)
+    }
+    await windowCard.getByRole("button", { name: /\d{2}:\d{2}/ }).click()
+    await expect(page.getByRole("button", { name: "Apply", exact: true })).toBeVisible()
+    await expectNoCardOverflow(page)
+    await page.getByRole("button", { name: "Apply", exact: true }).click()
+    await page.getByRole("combobox", { name: "Window anchor" }).click()
+    await page.getByRole("option", { name: "Sync Codex account", exact: true }).click()
+    await page.getByRole("combobox", { name: "Codex account" }).click()
+    await page.getByRole("option", { name: accountName, exact: true }).click()
+    await expect(page.getByRole("combobox", { name: "Codex account" })).toContainText(accountName)
+    await expectNoCardOverflow(page)
+    await page.getByRole("combobox", { name: "Gateway key" }).click()
+    await page.getByRole("option", { name: /Gateway key with a deliberately long name/ }).click()
+    await expect(page.getByRole("button", { name: "Create budget", exact: true })).toBeEnabled()
+    await expectNoCardOverflow(page)
+    await page.unroute("**/api/admin/budgets")
+  }
+})
+
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
