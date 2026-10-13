@@ -3,9 +3,8 @@ import { randomUUID } from "node:crypto"
 
 import { Pool, type PoolClient } from "pg"
 
-// Firestore accepted arbitrary object-shaped documents. Keep that boundary
-// permissive so existing domain interfaces do not need storage-only index
-// signatures; JSONB is still the runtime validation boundary.
+// Accept arbitrary object-shaped documents so domain interfaces do not need
+// storage-only index signatures; JSONB is the runtime validation boundary.
 export type DocumentData = Record<string, unknown>
 
 type FieldPathToken = { readonly kind: "document-id" }
@@ -262,7 +261,7 @@ function postgresErrorCode(error: unknown) {
 }
 
 function conflictError(message: string) {
-  return Object.assign(new Error(message), { code: 6 })
+  return Object.assign(new Error(message), { code: "23505" })
 }
 
 class LocalDocumentSnapshot<T extends DocumentData = DocumentData> {
@@ -278,8 +277,8 @@ class LocalDocumentSnapshot<T extends DocumentData = DocumentData> {
     this.exists = value !== undefined
   }
 
-  // Firestore's data() boundary is intentionally untyped; callers validate
-  // each document against its domain shape just as they did before migration.
+  // The document boundary is intentionally untyped; callers validate
+  // each document against its domain shape.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data(): any {
     return this.value === undefined ? undefined : clone(this.value)
@@ -298,7 +297,6 @@ export class LocalQuerySnapshot<T extends DocumentData = DocumentData> {
   }
 }
 
-export type Firestore = LocalFirestore
 export type Transaction = LocalTransaction
 export type DocumentSnapshot = LocalDocumentSnapshot
 export type QuerySnapshot<T extends DocumentData = DocumentData> = LocalQuerySnapshot<T>
@@ -543,9 +541,8 @@ async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>, 
     await ensureSchema()
     const client = await getPool().connect()
     try {
-      // Firestore transactions retry when a document read/write races with a
-      // concurrent transaction. SERIALIZABLE gives the local adapter the same
-      // all-or-nothing conflict behavior instead of allowing lost updates.
+      // SERIALIZABLE detects concurrent read/write conflicts so retries
+      // preserve all-or-nothing behavior instead of allowing lost updates.
       await client.query(`BEGIN ISOLATION LEVEL ${isolation}`)
       try {
         const result = await callback(client)
@@ -564,7 +561,7 @@ async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>, 
   throw new Error("Local database transaction retry limit exceeded.")
 }
 
-export class LocalFirestore {
+export class PostgresDatabase {
   collection(path: string) {
     return new LocalCollectionReference(path)
   }
@@ -602,10 +599,10 @@ export class LocalFirestore {
   }
 }
 
-let localFirestore: LocalFirestore | undefined
+let postgresDatabase: PostgresDatabase | undefined
 
-export function getLocalFirestore() {
-  return localFirestore ||= new LocalFirestore()
+export function getPostgresDatabase() {
+  return postgresDatabase ||= new PostgresDatabase()
 }
 
 export async function ensureLocalDatabase() {
@@ -627,7 +624,7 @@ export async function closeLocalDatabase() {
   await pool.end()
   pool = undefined
   schemaReady = undefined
-  localFirestore = undefined
+  postgresDatabase = undefined
 }
 
 export async function listLocalDocuments(collectionPath?: string) {

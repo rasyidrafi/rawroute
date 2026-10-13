@@ -1,6 +1,6 @@
 import { mapConcurrent } from "@/lib/concurrency"
 import { createHash } from "node:crypto"
-import { FieldPath, FieldValue, getLocalFirestore, listLocalDocuments, type Firestore, type LocalQuery } from "@/lib/local-db"
+import { FieldPath, FieldValue, getPostgresDatabase, listLocalDocuments, type PostgresDatabase, type LocalQuery } from "@/lib/local-db"
 
 import { localRedisSetIfAbsent } from "@/lib/local-redis"
 import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/server/store"
@@ -16,7 +16,7 @@ import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSe
 import { currentWorkspaceId } from "@/lib/workspace/context"
 import { listWorkspaces } from "@/server/workspace-repository"
 
-let localDatabase: Firestore | undefined
+let localDatabase: PostgresDatabase | undefined
 interface AnalyticsMemoryState {
   events: Map<string, UsageEvent>
   rollups: Map<string, UsageRollup>
@@ -406,7 +406,7 @@ export function invalidateDashboardPresentation() {
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function db() {
-  return localDatabase ||= getLocalFirestore()
+  return localDatabase ||= getPostgresDatabase()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
 function eventsRef() { return workspaceRef().collection("usageEvents") }
@@ -586,7 +586,7 @@ function storageGranularityFor(trendGranularity: NonNullable<DashboardQuery["gra
 
 function isAlreadyExistsError(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code
-  return code === 6 || code === "already-exists" || code === "ALREADY_EXISTS"
+  return code === "23505"
 }
 
 async function usageBudgetContext(event: UsageEvent) {
@@ -645,7 +645,7 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
       })
     }
     // Match the in-memory dashboard behavior: a completed local write should
-    // make the next budget read see the new rollup immediately. Firestore
+    // make the next budget read see the new rollup immediately. Database-backed
     // workers rely on the shared dashboard TTL instead of clearing on every
     // request.
     const workspaceId = currentWorkspaceId()
@@ -1797,8 +1797,8 @@ async function persistBudgetCounterBaselines(entries: BudgetBaselineWrite[]) {
     return persisted
   }
 
-  // Leave headroom below Firestore's batch-operation limit and keep failures
-  // isolated so a shared-cache write never breaks the dashboard or admission.
+  // Bound transaction size and isolate failures so a shared-cache write never
+  // breaks the dashboard or admission.
   for (let offset = 0; offset < entries.length; offset += 400) {
     const chunk = entries.slice(offset, offset + 400)
     const batch = db().batch()

@@ -6,7 +6,6 @@ cliproxy
 *.log
 .env*
 !.env.example
-*-firebase-adminsdk-*.json
 service-account*.json
 npm-debug.log*
 coverage

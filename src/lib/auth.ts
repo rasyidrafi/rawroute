@@ -56,7 +56,7 @@ export async function authenticateProxyKey(request: Request) {
   const indexed = await findIndexedApiKeyByValue(supplied)
   if (!indexed) return undefined
   // The index avoids reading the API-key document, while the bounded workspace
-  // cache preserves the active/deleting check without adding a Firestore read
+  // cache preserves the active/deleting check without adding a database read
   // to warm proxy authentications.
   const workspace = await getWorkspace(indexed.workspaceId)
   if (!workspace || workspace.status !== "active") return undefined

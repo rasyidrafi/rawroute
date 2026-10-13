@@ -1,7 +1,7 @@
 import { DEFAULT_ADMIN_PASSWORD } from "@/lib/auth-defaults"
 import { mapConcurrent } from "@/lib/concurrency"
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
-import { type DocumentSnapshot, FieldValue, getLocalFirestore, type Firestore, type Transaction } from "@/lib/local-db"
+import { type DocumentSnapshot, FieldValue, getPostgresDatabase, type PostgresDatabase, type Transaction } from "@/lib/local-db"
 
 import { gatewayModelId, cleanAliasId } from "@/lib/http"
 import { localRedisDelete, localRedisGet, localRedisSet } from "@/lib/local-redis"
@@ -479,7 +479,7 @@ async function readApiKeyLookupFromRedis(hash: string): Promise<IndexedApiKey | 
 
 function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   // Advance the generation so an already-running lookup cannot repopulate a
-  // value that was changed while its Firestore read was in flight.
+  // value that was changed while its database read was in flight.
   apiKeyLookupGeneration += 1
   apiKeyIndexReconciliationGeneration += 1
   apiKeyIndexReconciliationCache = undefined
@@ -588,7 +588,7 @@ function managedModelInput(existing: Model | undefined, input: Partial<Model>, d
 
 /** Internal catalog writer; ownership is checked again inside the transaction. */
 export async function reconcileDiscoveredModel(providerId: string, input: Pick<Model, "gatewayModelId" | "name" | "upstreamModel" | "discovery">) {
-  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input, true) : await firestoreUpsertModel(providerId, input, true)
+  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input, true) : await postgresUpsertModel(providerId, input, true)
   invalidateRoutingCaches()
   return model
 }
@@ -697,10 +697,10 @@ function memoryApiKeyValueExists(hash: string) {
 // PostgreSQL document backend
 // -------------------------------------------------------------------------------------------------
 
-let localDatabase: Firestore | undefined
+let localDatabase: PostgresDatabase | undefined
 
-export function getLocalDatabase(): Firestore {
-  return localDatabase ||= getLocalFirestore()
+export function getLocalDatabase(): PostgresDatabase {
+  return localDatabase ||= getPostgresDatabase()
 }
 
 export function collectionPrefix() {
@@ -790,12 +790,12 @@ function apiKeyIndexRef(hash: string) {
   return apiKeyIndexesRef().doc(hash)
 }
 
-interface FirestoreWorkspaceScope {
+interface PostgresWorkspaceScope {
   id: string
   storageMode: WorkspaceStorageMode
 }
 
-async function firestoreWorkspaceScopes(): Promise<FirestoreWorkspaceScope[]> {
+async function postgresWorkspaceScopes(): Promise<PostgresWorkspaceScope[]> {
   const snapshot = await getLocalDatabase().collection(`${collectionPrefix()}_workspaces`).get()
   const scopes = snapshot.docs.map((document) => ({
     id: document.id,
@@ -810,8 +810,8 @@ interface ApiKeyIndexCandidatesResult {
   scannedApiKeys: number
 }
 
-async function firestoreReadApiKeyIndexCandidates(scopes: FirestoreWorkspaceScope[] = []): Promise<ApiKeyIndexCandidatesResult> {
-  if (!scopes.length) scopes = await firestoreWorkspaceScopes()
+async function postgresReadApiKeyIndexCandidates(scopes: PostgresWorkspaceScope[] = []): Promise<ApiKeyIndexCandidatesResult> {
+  if (!scopes.length) scopes = await postgresWorkspaceScopes()
   const snapshots = await parallelMap(scopes, async (scope) => ({
     scope,
     snapshot: await apiKeysRefForWorkspace(scope.id).get(),
@@ -865,9 +865,9 @@ export async function backfillApiKeyIndexes(options: { dryRun?: boolean; batchSi
   if (isMemoryBackend()) throw new Error("API key index backfill requires the PostgreSQL storage backend.")
   const batchSize = Math.min(400, Math.max(1, Math.trunc(options.batchSize || 400)))
   const dryRun = options.dryRun === true
-  const scopes = await firestoreWorkspaceScopes()
+  const scopes = await postgresWorkspaceScopes()
   const [{ candidates, scannedApiKeys }, existingSnapshot] = await Promise.all([
-    firestoreReadApiKeyIndexCandidates(scopes),
+    postgresReadApiKeyIndexCandidates(scopes),
     apiKeyIndexesRef().get(),
   ])
   const duplicateValues = [...candidates.values()].filter((candidate) => candidate === null).length
@@ -926,7 +926,7 @@ async function reconciledApiKeyIndexCandidates() {
   if (apiKeyIndexReconciliationInflight) return apiKeyIndexReconciliationInflight
 
   const generation = apiKeyIndexReconciliationGeneration
-  const promise = firestoreReadApiKeyIndexCandidates().then(({ candidates: entries }) => {
+  const promise = postgresReadApiKeyIndexCandidates().then(({ candidates: entries }) => {
     if (generation === apiKeyIndexReconciliationGeneration) {
       apiKeyIndexReconciliationCache = { entries, expiresAt: Date.now() + apiKeyIndexReconciliationTtlMs }
     }
@@ -998,7 +998,7 @@ async function readSharedMeta(): Promise<Meta> {
   if (metaCache && metaCache.expiresAt > Date.now()) return metaCache.data
   if (!metaReadPromise) {
     const generation = metaGeneration
-    const promise = firestoreReadMeta().then((meta) => {
+    const promise = postgresReadMeta().then((meta) => {
       const data = structuredClone(meta)
       if (generation === metaGeneration) metaCache = { data, expiresAt: Date.now() + cacheTtlMs }
       return data
@@ -1047,7 +1047,7 @@ export async function updateMeta(mutator: (meta: Meta) => void | Promise<void>):
     invalidateRoutingCaches()
     return memoryRoot().meta!
   }
-  const meta = await firestoreUpdateMeta(mutator)
+  const meta = await postgresUpdateMeta(mutator)
   metaGeneration += 1
   metaReadPromise = undefined
   metaCache = { data: structuredClone(meta), expiresAt: Date.now() + cacheTtlMs }
@@ -1060,7 +1060,7 @@ export async function listProviders(): Promise<Provider[]> {
     const state = ensureMemorySeeded()
     return [...state.providers.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
-  return cachedRead(workspaceCacheState().providersCache, firestoreListProviders)
+  return cachedRead(workspaceCacheState().providersCache, postgresListProviders)
 }
 
 export async function getProvider(providerId: string): Promise<Provider | undefined> {
@@ -1071,18 +1071,18 @@ export async function getProvider(providerId: string): Promise<Provider | undefi
   if (cache.value && cache.expiresAt > Date.now()) {
     return cache.value.find((provider) => provider.id === providerId)
   }
-  return firestoreGetProvider(providerId)
+  return postgresGetProvider(providerId)
 }
 
 export async function upsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
-  const provider = isMemoryBackend() ? memoryUpsertProvider(input, expected) : await firestoreUpsertProvider(input, expected)
+  const provider = isMemoryBackend() ? memoryUpsertProvider(input, expected) : await postgresUpsertProvider(input, expected)
   invalidateRoutingCaches()
   return provider
 }
 
 export async function deleteProvider(providerId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteProvider(providerId)
-  else await firestoreDeleteProvider(providerId)
+  else await postgresDeleteProvider(providerId)
   invalidateRoutingCaches()
 }
 
@@ -1095,7 +1095,7 @@ export async function listProviderApiKeys(providerId: string): Promise<ProviderA
   if (state.allProviderApiKeysCache.value && state.allProviderApiKeysCache.expiresAt > Date.now()) {
     return state.allProviderApiKeysCache.value.filter((apiKey) => apiKey.providerId === providerId).sort(compareProviderApiKeys)
   }
-  return cachedRead(providerScopedCache(state.providerApiKeysCache, providerId), () => firestoreListProviderApiKeys(providerId))
+  return cachedRead(providerScopedCache(state.providerApiKeysCache, providerId), () => postgresListProviderApiKeys(providerId))
 }
 
 export async function getProviderApiKey(providerId: string, apiKeyId: string): Promise<ProviderApiKey | undefined> {
@@ -1121,7 +1121,7 @@ export async function reorderProviderApiKeys(providerId: string, orderedIds: str
     if (!slot || slot.size !== orderedIds.length || orderedIds.some((id) => !slot.has(id))) throw new Error("API key order is out of date.")
     orderedIds.forEach((id, index) => slot.set(id, { ...slot.get(id)!, priority: orderedIds.length - index - 1 }))
   } else {
-    await firestoreReorderProviderApiKeys(providerId, orderedIds)
+    await postgresReorderProviderApiKeys(providerId, orderedIds)
   }
   invalidateRoutingCaches()
 }
@@ -1133,19 +1133,19 @@ export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
     for (const slot of state.providerApiKeys.values()) out.push(...slot.values())
     return out
   }
-  return cachedRead(workspaceCacheState().allProviderApiKeysCache, firestoreListAllProviderApiKeys)
+  return cachedRead(workspaceCacheState().allProviderApiKeysCache, postgresListAllProviderApiKeys)
 }
 
 export async function upsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
   validateProviderApiKeyInput(input)
-  const apiKey = isMemoryBackend() ? memoryUpsertProviderApiKey(providerId, input) : await firestoreUpsertProviderApiKey(providerId, input)
+  const apiKey = isMemoryBackend() ? memoryUpsertProviderApiKey(providerId, input) : await postgresUpsertProviderApiKey(providerId, input)
   invalidateRoutingCaches()
   return apiKey
 }
 
 export async function deleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteProviderApiKey(providerId, apiKeyId)
-  else await firestoreDeleteProviderApiKey(providerId, apiKeyId)
+  else await postgresDeleteProviderApiKey(providerId, apiKeyId)
   invalidateRoutingCaches()
 }
 
@@ -1156,7 +1156,7 @@ export async function listModels(): Promise<Model[]> {
     for (const slot of state.models.values()) out.push(...slot.values())
     return out
   }
-  return cachedRead(workspaceCacheState().modelsCache, firestoreListModels)
+  return cachedRead(workspaceCacheState().modelsCache, postgresListModels)
 }
 
 export async function listProviderModels(providerId: string): Promise<Model[]> {
@@ -1168,18 +1168,18 @@ export async function listProviderModels(providerId: string): Promise<Model[]> {
   if (state.modelsCache.value && state.modelsCache.expiresAt > Date.now()) {
     return state.modelsCache.value.filter((model) => model.providerId === providerId)
   }
-  return cachedRead(providerScopedCache(state.providerModelsCache, providerId), () => firestoreListProviderModels(providerId))
+  return cachedRead(providerScopedCache(state.providerModelsCache, providerId), () => postgresListProviderModels(providerId))
 }
 
 export async function upsertModel(providerId: string, input: Partial<Model> & { originalId?: string }): Promise<Model> {
-  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input) : await firestoreUpsertModel(providerId, input)
+  const model = isMemoryBackend() ? memoryUpsertModel(providerId, input) : await postgresUpsertModel(providerId, input)
   invalidateRoutingCaches()
   return model
 }
 
 export async function deleteModel(providerId: string, modelId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteModel(providerId, modelId)
-  else await firestoreDeleteModel(providerId, modelId)
+  else await postgresDeleteModel(providerId, modelId)
   invalidateRoutingCaches()
 }
 
@@ -1187,7 +1187,7 @@ export async function listAliases(): Promise<ModelAlias[]> {
   if (isMemoryBackend()) {
     return [...ensureMemorySeeded().aliases.values()].sort(compareAliases)
   }
-  return cachedRead(workspaceCacheState().aliasesCache, firestoreListAliases)
+  return cachedRead(workspaceCacheState().aliasesCache, postgresListAliases)
 }
 
 function compareAliases(left: ModelAlias, right: ModelAlias) {
@@ -1196,20 +1196,20 @@ function compareAliases(left: ModelAlias, right: ModelAlias) {
 
 export async function upsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
   validateAliasInput(input)
-  const alias = isMemoryBackend() ? memoryUpsertAlias(input) : await firestoreUpsertAlias(input)
+  const alias = isMemoryBackend() ? memoryUpsertAlias(input) : await postgresUpsertAlias(input)
   invalidateRoutingCaches()
   return alias
 }
 
 export async function deleteAlias(aliasId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteAlias(aliasId)
-  else await firestoreDeleteAlias(aliasId)
+  else await postgresDeleteAlias(aliasId)
   invalidateRoutingCaches()
 }
 
 export async function listCombos(): Promise<ModelCombo[]> {
   if (isMemoryBackend()) return [...ensureMemorySeeded().combos.values()].sort(compareCombos)
-  return cachedRead(workspaceCacheState().combosCache, firestoreListCombos)
+  return cachedRead(workspaceCacheState().combosCache, postgresListCombos)
 }
 
 function compareCombos(left: ModelCombo, right: ModelCombo) {
@@ -1218,14 +1218,14 @@ function compareCombos(left: ModelCombo, right: ModelCombo) {
 
 export async function upsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
   validateComboInput(input)
-  const combo = isMemoryBackend() ? memoryUpsertCombo(input) : await firestoreUpsertCombo(input)
+  const combo = isMemoryBackend() ? memoryUpsertCombo(input) : await postgresUpsertCombo(input)
   invalidateRoutingCaches()
   return combo
 }
 
 export async function deleteCombo(comboId: string): Promise<void> {
   if (isMemoryBackend()) memoryDeleteCombo(comboId)
-  else await firestoreDeleteCombo(comboId)
+  else await postgresDeleteCombo(comboId)
   invalidateRoutingCaches()
 }
 
@@ -1234,7 +1234,7 @@ export async function listApiKeys(): Promise<ApiKey[]> {
     return [...ensureMemorySeeded().apiKeys.values()]
   }
   const state = workspaceCacheState()
-  const apiKeys = await cachedRead(state.apiKeysCache, firestoreListApiKeys)
+  const apiKeys = await cachedRead(state.apiKeysCache, postgresListApiKeys)
   if (!state.apiKeyHashIndex && state.apiKeysCache.value === apiKeys && state.apiKeysCache.expiresAt > Date.now()) {
     state.apiKeyHashIndex = new Map(apiKeys.map((apiKey) => [apiKeyValueHash(apiKey.key), apiKey]))
   }
@@ -1275,7 +1275,7 @@ export async function listIndexedApiKeyNames(): Promise<Map<string, string>> {
 }
 
 export async function createApiKey(name: string, customKey?: string): Promise<ApiKey> {
-  const apiKey = isMemoryBackend() ? memoryCreateApiKey(name, customKey) : await firestoreCreateApiKey(name, customKey)
+  const apiKey = isMemoryBackend() ? memoryCreateApiKey(name, customKey) : await postgresCreateApiKey(name, customKey)
   invalidateGatewayApiKeyCaches([apiKeyValueHash(apiKey.key)])
   return apiKey
 }
@@ -1293,8 +1293,8 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
     invalidateGatewayApiKeyCaches([apiKeyValueHash(updated.key)])
     return updated
   }
-  const firestore = getLocalDatabase()
-  const updated = await firestore.runTransaction(async (transaction) => {
+  const postgres = getLocalDatabase()
+  const updated = await postgres.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("API key not found.")
@@ -1307,7 +1307,7 @@ export async function updateApiKeyName(apiKeyId: string, name: string): Promise<
   return updated
 }
 export async function deleteApiKey(apiKeyId: string): Promise<void> {
-  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId) : await firestoreDeleteApiKey(apiKeyId)
+  const hash = isMemoryBackend() ? memoryDeleteApiKey(apiKeyId) : await postgresDeleteApiKey(apiKeyId)
   invalidateGatewayApiKeyCaches(hash ? [hash] : [])
 }
 
@@ -1545,10 +1545,10 @@ export async function findApiKeyByValue(value: string): Promise<ApiKey | undefin
 
 
 // -------------------------------------------------------------------------------------------------
-// Firestore implementations
+// PostgreSQL implementations
 // -------------------------------------------------------------------------------------------------
 
-async function firestoreReadMeta(): Promise<Meta> {
+async function postgresReadMeta(): Promise<Meta> {
   const ref = metaRef()
   const current = await ref.get()
   const currentData = current.exists ? current.data() as Meta : undefined
@@ -1574,7 +1574,7 @@ async function firestoreReadMeta(): Promise<Meta> {
   })
 }
 
-async function firestoreUpdateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
+async function postgresUpdateMeta(mutator: (meta: Meta) => void | Promise<void>): Promise<Meta> {
   return getLocalDatabase().runTransaction(async (transaction) => {
     const ref = metaRef()
     const snapshot = await transaction.get(ref)
@@ -1588,12 +1588,12 @@ async function firestoreUpdateMeta(mutator: (meta: Meta) => void | Promise<void>
   })
 }
 
-async function firestoreListProviders(): Promise<Provider[]> {
+async function postgresListProviders(): Promise<Provider[]> {
   const snapshot = await providersRef().get()
   return snapshot.docs.map(providerFromSnapshot).sort((a, b) => a.name.localeCompare(b.name))
 }
 
-async function firestoreGetProvider(providerId: string): Promise<Provider | undefined> {
+async function postgresGetProvider(providerId: string): Promise<Provider | undefined> {
   const snapshot = await providerRef(providerId).get()
   return snapshot.exists ? providerFromSnapshot(snapshot) : undefined
 }
@@ -1606,7 +1606,7 @@ function normalizedGatewayId(id: string) {
   return cleanAliasId(id)
 }
 
-async function assertFirestoreGatewayIdAvailable(transaction: Transaction, id: string, owner: string) {
+async function assertPostgresGatewayIdAvailable(transaction: Transaction, id: string, owner: string) {
   const normalizedId = normalizedGatewayId(id)
   if (!normalizedId) throw new Error("Gateway model ID is required.")
   const [reservation, aliases, combos, providers] = await Promise.all([
@@ -1635,18 +1635,18 @@ async function assertFirestoreGatewayIdAvailable(transaction: Transaction, id: s
   return normalizedId
 }
 
-async function firestoreGatewayIdReservation(transaction: Transaction, id: string, owner: string) {
+async function postgresGatewayIdReservation(transaction: Transaction, id: string, owner: string) {
   const normalizedId = normalizedGatewayId(id)
   if (!normalizedId) return undefined
   const snapshot = await transaction.get(gatewayIdRef(normalizedId))
   return snapshot.exists && snapshot.data()?.owner === owner ? normalizedId : undefined
 }
 
-function reserveFirestoreGatewayId(transaction: Transaction, id: string, owner: string) {
+function reservePostgresGatewayId(transaction: Transaction, id: string, owner: string) {
   transaction.set(gatewayIdRef(id), { owner })
 }
 
-function releaseFirestoreGatewayId(transaction: Transaction, id: string | undefined) {
+function releasePostgresGatewayId(transaction: Transaction, id: string | undefined) {
   if (id) transaction.delete(gatewayIdRef(id))
 }
 
@@ -1677,9 +1677,9 @@ function releaseMemoryGatewayId(state: MemoryState, id: string, owner: string) {
   if (state.gatewayIds.get(id) === owner) state.gatewayIds.delete(id)
 }
 
-async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+async function postgresUpsertProvider(input: Partial<Provider> & { originalId?: string }, expected?: Provider): Promise<Provider> {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const originalId = input.originalId
     const existingSnapshot = originalId ? await transaction.get(providerRef(originalId)) : undefined
     const existing = existingSnapshot?.exists ? providerFromSnapshot(existingSnapshot) : undefined
@@ -1699,10 +1699,10 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
     const migratedReservations = migratedModels
       ? await Promise.all([...migratedModels.values()].map(async (model) => {
           const owner = gatewayIdOwner("model", `${id}:${model.id}`)
-          const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, model.gatewayModelId, owner)
+          const normalizedId = await assertPostgresGatewayIdAvailable(transaction, model.gatewayModelId, owner)
           const previous = existingModels!.docs.find((snapshot) => snapshot.id === model.id)!
           const previousId = normalizedGatewayId(modelFromSnapshot(previous, id).gatewayModelId)
-          const previousReservation = previousId !== normalizedId ? await firestoreGatewayIdReservation(transaction, previousId, owner) : undefined
+          const previousReservation = previousId !== normalizedId ? await postgresGatewayIdReservation(transaction, previousId, owner) : undefined
           return { model, owner, normalizedId, previousReservation }
         }))
       : undefined
@@ -1738,8 +1738,8 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
     if (migratedReservations) {
       for (const { model, owner, normalizedId, previousReservation } of migratedReservations) {
         transaction.set(modelRef(id, model.id), storedModel(model))
-        reserveFirestoreGatewayId(transaction, normalizedId, owner)
-        releaseFirestoreGatewayId(transaction, previousReservation)
+        reservePostgresGatewayId(transaction, normalizedId, owner)
+        releasePostgresGatewayId(transaction, previousReservation)
       }
     }
     bumpRoutingRevision(transaction)
@@ -1747,33 +1747,33 @@ async function firestoreUpsertProvider(input: Partial<Provider> & { originalId?:
   })
 }
 
-async function firestoreDeleteProvider(providerId: string): Promise<void> {
-  const firestore = getLocalDatabase()
-  await firestore.runTransaction(async (transaction) => {
+async function postgresDeleteProvider(providerId: string): Promise<void> {
+  const postgres = getLocalDatabase()
+  await postgres.runTransaction(async (transaction) => {
     const [apiKeys, models] = await Promise.all([
       transaction.get(providerApiKeysRef(providerId)),
       transaction.get(modelsRef(providerId)),
     ])
     const modelReservations = await Promise.all(models.docs.map(async (doc) => {
       const model = modelFromSnapshot(doc, providerId)
-      return firestoreGatewayIdReservation(transaction, model.gatewayModelId, gatewayIdOwner("model", `${providerId}:${model.id}`))
+      return postgresGatewayIdReservation(transaction, model.gatewayModelId, gatewayIdOwner("model", `${providerId}:${model.id}`))
     }))
     apiKeys.docs.forEach((doc) => transaction.delete(doc.ref))
     models.docs.forEach((doc) => transaction.delete(doc.ref))
-    modelReservations.forEach((reservation) => releaseFirestoreGatewayId(transaction, reservation))
+    modelReservations.forEach((reservation) => releasePostgresGatewayId(transaction, reservation))
     transaction.delete(providerRef(providerId))
     bumpRoutingRevision(transaction)
   })
 }
 
-async function firestoreListProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
+async function postgresListProviderApiKeys(providerId: string): Promise<ProviderApiKey[]> {
   const snapshot = await providerApiKeysRef(providerId).get()
   return snapshot.docs.map((doc) => providerApiKeyFromSnapshot(doc, providerId)).sort(compareProviderApiKeys)
 }
 
-async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
-  const firestore = getLocalDatabase()
-  await firestore.runTransaction(async (transaction) => {
+async function postgresReorderProviderApiKeys(providerId: string, orderedIds: string[]): Promise<void> {
+  const postgres = getLocalDatabase()
+  await postgres.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(providerApiKeysRef(providerId))
     const ids = snapshot.docs.map((doc) => doc.id)
     const orderedIdSet = new Set(orderedIds)
@@ -1783,7 +1783,7 @@ async function firestoreReorderProviderApiKeys(providerId: string, orderedIds: s
   })
 }
 
-async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
+async function postgresListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   const providers = (await listProviders()).filter((provider) => provider.apiKeyCount !== 0)
   const snapshots = await parallelMap(providers, async (provider) => ({
     providerId: provider.id,
@@ -1792,9 +1792,9 @@ async function firestoreListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => providerApiKeyFromSnapshot(document, providerId)))
 }
 
-async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+async function postgresUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
     const existingSnapshot = input.originalId ? await transaction.get(providerApiKeyRef(providerId, input.originalId)) : undefined
@@ -1854,9 +1854,9 @@ async function firestoreUpsertProviderApiKey(providerId: string, input: Partial<
   })
 }
 
-async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
-  const firestore = getLocalDatabase()
-  await firestore.runTransaction(async (transaction) => {
+async function postgresDeleteProviderApiKey(providerId: string, apiKeyId: string): Promise<void> {
+  const postgres = getLocalDatabase()
+  await postgres.runTransaction(async (transaction) => {
     const ref = providerApiKeyRef(providerId, apiKeyId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
@@ -1870,7 +1870,7 @@ async function firestoreDeleteProviderApiKey(providerId: string, apiKeyId: strin
   })
 }
 
-async function firestoreListModels(): Promise<Model[]> {
+async function postgresListModels(): Promise<Model[]> {
   const providers = (await listProviders()).filter((provider) => provider.modelCount !== 0)
   const snapshots = await parallelMap(providers, async (provider) => ({
     providerId: provider.id,
@@ -1879,14 +1879,14 @@ async function firestoreListModels(): Promise<Model[]> {
   return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => modelFromSnapshot(document, providerId)))
 }
 
-async function firestoreListProviderModels(providerId: string): Promise<Model[]> {
+async function postgresListProviderModels(providerId: string): Promise<Model[]> {
   const snapshot = await modelsRef(providerId).get()
   return snapshot.docs.map((doc) => modelFromSnapshot(doc, providerId))
 }
 
-async function firestoreUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }, discover = false): Promise<Model> {
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+async function postgresUpsertModel(providerId: string, input: Partial<Model> & { originalId?: string }, discover = false): Promise<Model> {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
     if (!providerDocSnapshot.exists) throw new Error("Provider is missing.")
     if (discover) {
@@ -1910,10 +1910,10 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
 
     const modelId = existing ? input.originalId! : modelsRef(providerId).doc().id
     const owner = gatewayIdOwner("model", `${providerId}:${modelId}`)
-    const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, gatewayModelId, owner)
+    const normalizedId = await assertPostgresGatewayIdAvailable(transaction, gatewayModelId, owner)
     const previousId = existing ? normalizedGatewayId(existing.gatewayModelId || existing.id) : undefined
     const previousReservation = previousId && previousId !== normalizedId
-      ? await firestoreGatewayIdReservation(transaction, previousId, owner)
+      ? await postgresGatewayIdReservation(transaction, previousId, owner)
       : undefined
     const inputWithoutIds = stripUndefined({
       name: input.name,
@@ -1936,8 +1936,8 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(modelRef(providerId, modelId), storedModel(model))
-    reserveFirestoreGatewayId(transaction, normalizedId, owner)
-    releaseFirestoreGatewayId(transaction, previousReservation)
+    reservePostgresGatewayId(transaction, normalizedId, owner)
+    releasePostgresGatewayId(transaction, previousReservation)
     if (!existing) {
       transaction.update(providerRef(providerId), { modelCount: FieldValue.increment(1), enabledModelCount: FieldValue.increment(model.enabled ? 1 : 0) })
     } else if (existing.enabled !== model.enabled) {
@@ -1948,17 +1948,17 @@ async function firestoreUpsertModel(providerId: string, input: Partial<Model> & 
   })
 }
 
-async function firestoreDeleteModel(providerId: string, modelId: string): Promise<void> {
-  const firestore = getLocalDatabase()
-  await firestore.runTransaction(async (transaction) => {
+async function postgresDeleteModel(providerId: string, modelId: string): Promise<void> {
+  const postgres = getLocalDatabase()
+  await postgres.runTransaction(async (transaction) => {
     const ref = modelRef(providerId, modelId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const model = modelFromSnapshot(snapshot, providerId)
     if (model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
-    const reservation = await firestoreGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
+    const reservation = await postgresGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
     transaction.delete(ref)
-    releaseFirestoreGatewayId(transaction, reservation)
+    releasePostgresGatewayId(transaction, reservation)
     transaction.update(providerRef(providerId), {
       modelCount: FieldValue.increment(-1),
       enabledModelCount: FieldValue.increment(model.enabled ? -1 : 0),
@@ -1967,14 +1967,14 @@ async function firestoreDeleteModel(providerId: string, modelId: string): Promis
   })
 }
 
-async function firestoreListAliases(): Promise<ModelAlias[]> {
+async function postgresListAliases(): Promise<ModelAlias[]> {
   const snapshot = await aliasesRef().get()
   return snapshot.docs.map(aliasFromSnapshot).sort(compareAliases)
 }
 
-async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+async function postgresUpsertAlias(input: Partial<ModelAlias> & { originalId?: string }): Promise<ModelAlias> {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const existingSnapshot = input.originalId ? await transaction.get(aliasRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? aliasFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Alias not found.")
@@ -1986,10 +1986,10 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
 
     const aliasId = existing ? input.originalId! : aliasesRef().doc().id
     const owner = gatewayIdOwner("alias", aliasId)
-    const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, normalizedAlias, owner)
+    const normalizedId = await assertPostgresGatewayIdAvailable(transaction, normalizedAlias, owner)
     const previousId = existing ? normalizedGatewayId(existing.alias) : undefined
     const previousReservation = previousId && previousId !== normalizedId
-      ? await firestoreGatewayIdReservation(transaction, previousId, owner)
+      ? await postgresGatewayIdReservation(transaction, previousId, owner)
       : undefined
     const inputWithoutIds = { ...input }
     delete inputWithoutIds.id
@@ -2005,35 +2005,35 @@ async function firestoreUpsertAlias(input: Partial<ModelAlias> & { originalId?: 
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(aliasRef(aliasId), storedAlias(alias))
-    reserveFirestoreGatewayId(transaction, normalizedId, owner)
-    releaseFirestoreGatewayId(transaction, previousReservation)
+    reservePostgresGatewayId(transaction, normalizedId, owner)
+    releasePostgresGatewayId(transaction, previousReservation)
     bumpRoutingRevision(transaction)
     return alias
   })
 }
 
-async function firestoreDeleteAlias(aliasId: string): Promise<void> {
-  const firestore = getLocalDatabase()
-  await firestore.runTransaction(async (transaction) => {
+async function postgresDeleteAlias(aliasId: string): Promise<void> {
+  const postgres = getLocalDatabase()
+  await postgres.runTransaction(async (transaction) => {
     const ref = aliasRef(aliasId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const alias = aliasFromSnapshot(snapshot)
-    const reservation = await firestoreGatewayIdReservation(transaction, alias.alias, gatewayIdOwner("alias", alias.id))
+    const reservation = await postgresGatewayIdReservation(transaction, alias.alias, gatewayIdOwner("alias", alias.id))
     transaction.delete(ref)
-    releaseFirestoreGatewayId(transaction, reservation)
+    releasePostgresGatewayId(transaction, reservation)
     bumpRoutingRevision(transaction)
   })
 }
 
-async function firestoreListCombos(): Promise<ModelCombo[]> {
+async function postgresListCombos(): Promise<ModelCombo[]> {
   const snapshot = await combosRef().get()
   return snapshot.docs.map(comboFromSnapshot).sort(compareCombos)
 }
 
-async function firestoreUpsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+async function postgresUpsertCombo(input: Partial<ModelCombo> & { originalId?: string }): Promise<ModelCombo> {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const existingSnapshot = input.originalId ? await transaction.get(comboRef(input.originalId)) : undefined
     const existing = existingSnapshot?.exists ? comboFromSnapshot(existingSnapshot) : undefined
     if (input.originalId && !existing) throw new Error("Combo not found.")
@@ -2043,10 +2043,10 @@ async function firestoreUpsertCombo(input: Partial<ModelCombo> & { originalId?: 
     if (matches.docs.some((document) => document.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
     const comboId = existing ? input.originalId! : combosRef().doc().id
     const owner = gatewayIdOwner("combo", comboId)
-    const normalizedId = await assertFirestoreGatewayIdAvailable(transaction, normalizedCombo, owner)
+    const normalizedId = await assertPostgresGatewayIdAvailable(transaction, normalizedCombo, owner)
     const previousId = existing ? normalizedGatewayId(existing.combo) : undefined
     const previousReservation = previousId && previousId !== normalizedId
-      ? await firestoreGatewayIdReservation(transaction, previousId, owner)
+      ? await postgresGatewayIdReservation(transaction, previousId, owner)
       : undefined
     const members = input.members === undefined ? existing?.members || []
       : input.members.map((member) => ({ ...member, modelId: member.modelId.trim() }))
@@ -2058,40 +2058,40 @@ async function firestoreUpsertCombo(input: Partial<ModelCombo> & { originalId?: 
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
     transaction.set(comboRef(comboId), storedCombo(combo))
-    reserveFirestoreGatewayId(transaction, normalizedId, owner)
-    releaseFirestoreGatewayId(transaction, previousReservation)
+    reservePostgresGatewayId(transaction, normalizedId, owner)
+    releasePostgresGatewayId(transaction, previousReservation)
     bumpRoutingRevision(transaction)
     return combo
   })
 }
 
-async function firestoreDeleteCombo(comboId: string): Promise<void> {
-  const firestore = getLocalDatabase()
-  await firestore.runTransaction(async (transaction) => {
+async function postgresDeleteCombo(comboId: string): Promise<void> {
+  const postgres = getLocalDatabase()
+  await postgres.runTransaction(async (transaction) => {
     const ref = comboRef(comboId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const combo = comboFromSnapshot(snapshot)
-    const reservation = await firestoreGatewayIdReservation(transaction, combo.combo, gatewayIdOwner("combo", combo.id))
+    const reservation = await postgresGatewayIdReservation(transaction, combo.combo, gatewayIdOwner("combo", combo.id))
     transaction.delete(ref)
-    releaseFirestoreGatewayId(transaction, reservation)
+    releasePostgresGatewayId(transaction, reservation)
     bumpRoutingRevision(transaction)
   })
 }
 
-async function firestoreListApiKeys(): Promise<ApiKey[]> {
+async function postgresListApiKeys(): Promise<ApiKey[]> {
   const snapshot = await apiKeysRef().get()
   return snapshot.docs.map(apiKeyFromSnapshot)
 }
 
-function isFirestoreAlreadyExistsError(error: unknown) {
+function isPostgresAlreadyExistsError(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code
-  return code === 6 || code === "already-exists" || code === "ALREADY_EXISTS"
+  return code === "23505"
 }
 
-async function firestoreCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
+async function postgresCreateApiKey(name: string, customKey?: string): Promise<ApiKey> {
   const normalizedCustomKey = customKey === undefined ? undefined : validateGatewayApiKeyValue(customKey)
-  const firestore = getLocalDatabase()
+  const postgres = getLocalDatabase()
   const apiKey = {
     id: apiKeysRef().doc().id,
     name,
@@ -2099,7 +2099,7 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
     createdAt: new Date().toISOString(),
   } satisfies ApiKey
   const requestedHash = apiKeyValueHash(apiKey.key)
-  const batch = firestore.batch()
+  const batch = postgres.batch()
   // Create preconditions enforce global uniqueness atomically without a
   // transaction retry loop, preflight lookup, or all-workspace scan.
   batch.create(apiKeyRef(apiKey.id), storedApiKey(apiKey))
@@ -2108,14 +2108,14 @@ async function firestoreCreateApiKey(name: string, customKey?: string): Promise<
     await batch.commit()
     return apiKey
   } catch (error) {
-    if (isFirestoreAlreadyExistsError(error)) throw new ApiKeyConflictError()
+    if (isPostgresAlreadyExistsError(error)) throw new ApiKeyConflictError()
     throw error
   }
 }
 
-async function firestoreDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+async function postgresDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const ref = apiKeyRef(apiKeyId)
     const target = await transaction.get(ref)
     if (!target.exists) return undefined

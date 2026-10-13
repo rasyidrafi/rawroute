@@ -1,13 +1,71 @@
-import { FieldValue, closeLocalDatabase, getLocalFirestore } from "@/lib/local-db"
+import { FieldValue, closeLocalDatabase, getPostgresDatabase } from "@/lib/local-db"
+import { recordUsageEvent } from "@/lib/analytics"
+import type { UsageEvent } from "@/lib/types"
+import { runInWorkspace } from "@/lib/workspace/context"
 
 const collection = `rawroute_local_smoke_${process.pid}`
-const db = getLocalFirestore()
+const db = getPostgresDatabase()
 const documents = db.collection(collection)
 const counter = documents.doc("counter")
+const prefix = (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
+const usageWorkspace = db.collection(`${prefix}_workspaces`).doc(collection)
+
+async function verifyDuplicateUsage() {
+  if (process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test") throw new Error("Usage smoke verification requires the PostgreSQL backend.")
+  const event: UsageEvent = {
+    id: "duplicate-usage",
+    gatewayKeyId: "smoke-key",
+    gatewayModelId: "smoke/model",
+    protocol: "openai-chat",
+    startedAt: "2026-10-13T12:00:00.000Z",
+    completedAt: "2026-10-13T12:00:01.000Z",
+    status: 200,
+    durationMs: 1000,
+    inputTokens: 3,
+    outputTokens: 2,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens: 5,
+    costMicros: 123,
+    pricingConfidence: "exact",
+    usageAvailable: true,
+  }
+  const context = { usageStartAt: "2026-10-13T00:00:00.000Z", windowEnd: "2026-10-14T00:00:00.000Z" }
+  const readUsage = async () => {
+    const [events, rollups, counters] = await Promise.all([
+      usageWorkspace.collection("usageEvents").get(),
+      usageWorkspace.collection("usageRollups").get(),
+      usageWorkspace.collection("budgetCounters").get(),
+    ])
+    return {
+      events: events.docs.map((doc) => doc.data()),
+      rollups: rollups.docs.map((doc) => doc.data()),
+      counters: counters.docs.map((doc) => doc.data()),
+    }
+  }
+  await runInWorkspace({ id: collection, storageMode: "scoped" }, async () => {
+    await recordUsageEvent(event, context)
+    const original = await readUsage()
+    if (original.events.length !== 1 || original.rollups.length < 2 || original.counters.length !== 1
+      || original.rollups.some((rollup) => rollup.requests !== 1 || rollup.costMicros !== 123 || rollup.totalTokens !== 5)
+      || original.counters[0]?.spentMicros !== 123) throw new Error("Usage event did not persist its rollups and budget counter correctly.")
+    await recordUsageEvent({ ...event, costMicros: 999 }, context)
+    await Promise.all(Array.from({ length: 4 }, () => recordUsageEvent(event, context)))
+    if (JSON.stringify(await readUsage()) !== JSON.stringify(original)) throw new Error("Duplicate usage recording changed persisted events, rollups, or budget counters.")
+  })
+}
 
 async function main() {
   try {
     await counter.set({ count: 0, label: "initial" })
+    let duplicateRejected = false
+    try {
+      await counter.create({ count: 999 })
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code !== "23505") throw error
+      duplicateRejected = true
+    }
+    if (!duplicateRejected || (await counter.get()).data()?.count !== 0) throw new Error("Duplicate creation did not preserve the original document.")
     await db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(counter)
       if (!snapshot.exists) throw new Error("Smoke document was not created.")
@@ -36,8 +94,10 @@ async function main() {
     await db.recursiveDelete(documents)
     if (!(await sibling.get()).exists) throw new Error("Recursive delete matched a wildcard sibling path.")
     await sibling.delete()
+    await verifyDuplicateUsage()
     console.log(JSON.stringify({ ok: true, collection, queried: queried.docs.map((doc) => doc.id), selected: selected.docs.map((doc) => doc.id), tagged: tagged.docs.map((doc) => doc.id), count: current.data()?.count }, null, 2))
   } finally {
+    await db.recursiveDelete(usageWorkspace)
     await db.recursiveDelete(documents)
     await closeLocalDatabase()
   }

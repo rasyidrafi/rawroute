@@ -35,7 +35,6 @@
 .DS_Store
 .commandcode/
 *.pem
-*-firebase-adminsdk-*.json
 service-account*.json
 
 # debug

@@ -119,8 +119,8 @@ async function ensureDefaultWorkspace() {
     if (!memoryWorkspaces().has(DEFAULT_WORKSPACE_ID)) memoryWorkspaces().set(DEFAULT_WORKSPACE_ID, defaultWorkspace())
     return memoryWorkspaces().get(DEFAULT_WORKSPACE_ID)!
   }
-  const firestore = getLocalDatabase()
-  return firestore.runTransaction(async (transaction) => {
+  const postgres = getLocalDatabase()
+  return postgres.runTransaction(async (transaction) => {
     const ref = workspaceRef(DEFAULT_WORKSPACE_ID)
     const snapshot = await transaction.get(ref)
     if (snapshot.exists) return { ...snapshot.data(), id: snapshot.id } as Workspace
@@ -186,7 +186,7 @@ function cachedWorkspace(workspaceId: string) {
 /**
  * Resolve a workspace from the same bounded list exposed by the public UI.
  * Random public IDs therefore share one list refresh instead of causing one
- * Firestore document read per distinct miss.
+ * Database document read per distinct miss.
  */
 export async function getPublicWorkspace(workspaceId: string) {
   if (!publicWorkspaceIdPattern.test(workspaceId)) return undefined
@@ -235,8 +235,8 @@ export async function createWorkspace(nameInput: unknown) {
     memoryWorkspaces().set(workspace.id, workspace)
     return workspace
   }
-  const firestore = getLocalDatabase()
-  const workspace = await firestore.runTransaction(async (transaction) => {
+  const postgres = getLocalDatabase()
+  const workspace = await postgres.runTransaction(async (transaction) => {
     const indexRef = workspaceNameIndexesRef().doc(nameHash(name))
     if ((await transaction.get(indexRef)).exists) throw new Error("Workspace name is already in use.")
     const ref = workspacesRef().doc()
@@ -263,8 +263,8 @@ export async function renameWorkspace(workspaceId: string, nameInput: unknown) {
     memoryWorkspaces().set(workspaceId, updated)
     return updated
   }
-  const firestore = getLocalDatabase()
-  const updated = await firestore.runTransaction(async (transaction) => {
+  const postgres = getLocalDatabase()
+  const updated = await postgres.runTransaction(async (transaction) => {
     const ref = workspaceRef(workspaceId)
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) throw new Error("Workspace not found.")

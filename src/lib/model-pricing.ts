@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto"
-import { getLocalFirestore, type Firestore } from "@/lib/local-db"
+import { getPostgresDatabase, type PostgresDatabase } from "@/lib/local-db"
 
 import { findModelsDevCanonicalModels } from "@/lib/models-dev"
 import { listModels, listProviders } from "@/server/store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "@/lib/types"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 
-let localDatabase: Firestore | undefined
+let localDatabase: PostgresDatabase | undefined
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>
 type PricingCatalog = {
   groups: ModelPricingGroup[]
@@ -74,7 +74,7 @@ export function getModelPricingGeneration() { return workspaceState().pricingCac
 function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
 function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function db() {
-  return localDatabase ||= getLocalFirestore()
+  return localDatabase ||= getPostgresDatabase()
 }
 function workspaceRef() { return db().collection(`${prefix()}_workspaces`).doc(currentWorkspaceId()) }
 function groupsRef() { return workspaceRef().collection("modelPricingGroups") }

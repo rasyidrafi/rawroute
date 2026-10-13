@@ -1,15 +1,15 @@
 import { createHash } from "node:crypto"
 
-import { getLocalFirestore, type Firestore } from "@/lib/local-db"
+import { getPostgresDatabase, type PostgresDatabase } from "@/lib/local-db"
 import { isMemoryBackend, listModels, listProviders } from "@/server/store"
 import type { ModelShare, SharedModelView } from "@/lib/types"
 import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace/context"
 import { getWorkspace, listWorkspaces } from "@/server/workspace-repository"
 
-let localDatabase: Firestore | undefined
+let localDatabase: PostgresDatabase | undefined
 declare global { var __rawrouteModelShares: Map<string, ModelShare> | undefined }
 
-function db() { return localDatabase ||= getLocalFirestore() }
+function db() { return localDatabase ||= getPostgresDatabase() }
 function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
 function sharesRef() { return db().collection(`${prefix()}_model_shares`) }
 function memoryShares() { return globalThis.__rawrouteModelShares ||= new Map<string, ModelShare>() }

@@ -66,7 +66,7 @@ describe("admin passwords", () => {
 })
 
 describe("configuration storage", () => {
-  test("removes undefined optional fields before Firestore writes", () => {
+  test("removes undefined optional fields before database writes", () => {
     const data = stripUndefined({
       providers: [{ id: "openai", secret: undefined }],
       models: [{ id: "oa/test", staleField: undefined }],
