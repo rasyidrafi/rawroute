@@ -7,7 +7,8 @@ export function assertLogOrigin(request: Request) {
   try {
     const origin = request.headers.get("origin")
     const expected = process.env.RAWROUTE_PUBLIC_URL || new URL(request.url).origin
-    if (request.headers.get("sec-fetch-site") === "cross-site" || !origin || origin !== new URL(expected).origin) return jsonError("Invalid request origin.", 403)
+    const allowed = [expected, ...(process.env.RAWROUTE_ALLOWED_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean)]
+    if (!origin || !allowed.some((value) => origin === new URL(value).origin)) return jsonError("Invalid request origin.", 403)
   } catch { return jsonError("Invalid request origin.", 403) }
 }
 

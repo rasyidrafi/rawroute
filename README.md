@@ -86,6 +86,10 @@ Executor auth and MCP endpoints are intentionally not forwarded in this phase.
 
 The dashboard is available at `http://localhost:8080`. Set `RAWROUTE_HOST_PORT`
 and `RAWROUTE_PUBLIC_URL` to use a different host port.
+Configure `RAWROUTE_ALLOWED_ORIGINS` as a comma-separated list of additional
+trusted browser origins when accessing the dashboard through multiple addresses.
+Origins include their scheme and port, for example `http://localhost:8080,http://127.0.0.1:8080,https://rawroute.example.com`.
+`RAWROUTE_PUBLIC_URL` remains the primary URL for generated links and is always trusted.
 
 The RawRoute image bundles tested CLIProxyAPI `v7.3.4` from an upstream image pinned by digest. Manage later release changes from Global → CLIProxyAPI. Existing separate-container deployments remain supported through `docker-compose.external.yml`; migrate their configuration and auth files before switching to managed mode.
 
