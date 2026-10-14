@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { migrateAliasesToCombos } from "../../scripts/migrations/aliases-to-combos"
+
+mkdirSync("/tmp/opencode", { recursive: true })
 
 test("offline alias migration preserves IDs, grants, fallback policies and a restorable backup", () => {
   const root = mkdtempSync("/tmp/opencode/routing-migration-")

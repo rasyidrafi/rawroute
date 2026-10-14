@@ -4,6 +4,12 @@ async function authenticate(request: APIRequestContext) {
   let login = await request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
+  const account = await request.get("/api/admin/account")
+  expect(account.ok()).toBe(true)
+  if ((await account.json()).mustChangePassword) {
+    const changed = await request.post("/api/admin/account/password", { data: { password: "private-password" } })
+    expect(changed.ok()).toBe(true)
+  }
 }
 
 async function codexModels(request: APIRequestContext) {
@@ -84,14 +90,20 @@ test("combo immediately falls back instead of forwarding model cooldown", async 
   })
   expect(saved.ok()).toBe(true)
 
-  const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-e2e-gateway" },
-    data: { model: comboId, input: "hello", stream: true },
-  })
+  const { combo } = await saved.json() as { combo: { id: string } }
+  try {
+    const response = await request.post("/v1/responses", {
+      headers: { authorization: "Bearer sk-e2e-gateway" },
+      data: { model: comboId, input: "hello", stream: true },
+    })
 
-  expect(response.ok()).toBe(true)
-  expect(response.headers()["retry-after"]).toBeUndefined()
-  expect(await response.text()).toContain("response.completed")
-  const debug = await request.get("http://127.0.0.1:3211/debug")
-  expect((await debug.json()).routingAttempts).toBe(2)
+    expect(response.ok()).toBe(true)
+    expect(response.headers()["retry-after"]).toBeUndefined()
+    expect(await response.text()).toContain("response.completed")
+    const debug = await request.get("http://127.0.0.1:3211/debug")
+    expect((await debug.json()).routingAttempts).toBe(2)
+  } finally {
+    const deleted = await request.delete(`/api/admin/combos/${combo.id}`, { headers: { "x-rawroute-workspace-id": "default" } })
+    expect(deleted.ok()).toBe(true)
+  }
 })

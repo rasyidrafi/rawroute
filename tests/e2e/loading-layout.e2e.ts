@@ -124,7 +124,7 @@ for (const route of ["providers", "aliases", "budgets", "model-pricing", "provid
   test(`${route} loading preserves page and card padding on mobile`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 1000 })
     await authenticate(page)
-    const endpoint = route === "cliproxy" ? "cliproxy/status" : route
+    const endpoint = route === "cliproxy" ? "cliproxy/status" : route === "aliases" ? "combos" : route
     const data = await hold(page, `**/api/admin/${endpoint}`)
     await page.goto(({ providers: "/dashboard/ai/providers", aliases: "/dashboard/ai/routing", budgets: "/dashboard/ai/budgets", "model-pricing": "/dashboard/ai/pricing", "providers/codex": "/dashboard/ai/codex-providers", cliproxy: "/dashboard/cliproxy" } as Record<string, string>)[route]!)
     await data.reached

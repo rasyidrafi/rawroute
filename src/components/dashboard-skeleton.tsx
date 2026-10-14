@@ -67,7 +67,7 @@ function ProvidersSkeleton() {
 }
 
 function AliasesSkeleton() {
-  return <><LoadingCard title={<><ListOrderedIcon className="size-5" />Combos</>} description="Select one model to create an alias, or multiple models to try in fallback order." action={<Button disabled><PlusIcon />Add combo</Button>}><LoadingTable columns={["Gateway ID", "Name", "Models / fallback order", "Actions"]} /></LoadingCard><LoadingCard title={<><Share2Icon className="size-5" />Shared Models</>} description="Read-only models shared into this workspace. Add one to a combo to give it a local gateway ID."><LoadingTable columns={["Qualified model", "Source workspace", "Status", "Action"]} /></LoadingCard></>
+  return <><LoadingCard title={<><ListOrderedIcon />Combos</>} description="Select one model to create an alias, or multiple models to try in fallback order." action={<Button disabled><PlusIcon />Add combo</Button>}><LoadingTable columns={["Gateway ID", "Name", "Models / fallback order", "Actions"]} /></LoadingCard><LoadingCard title={<><Share2Icon />Shared Models</>} description="Read-only models shared into this workspace. Add one to a combo to give it a local gateway ID."><LoadingTable columns={["Qualified model", "Source workspace", "Status", "Action"]} /></LoadingCard></>
 }
 
 function ProviderDetailSkeleton({ codex }: { codex: boolean }) {
