@@ -5,7 +5,8 @@ import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, Ke
 import { Button } from "@/components/ui/button"
 import { LogToolbar } from "@/components/dashboard/logs/log-toolbar"
 import { LogResults } from "@/components/dashboard/logs/log-results"
-import { CodingAgentView } from "@/components/dashboard/ai/coding-agent-view"
+import { IntegrationsView } from "@/components/dashboard/ai/integrations-view"
+import { IntegrationDetailView } from "@/components/dashboard/ai/integrations/detail-view"
 import { useLocation } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,16 +29,18 @@ export function DashboardRouteSkeleton() {
 
 export function DashboardContentSkeleton({ variant }: { variant: DashboardSkeletonVariant }) {
   if (variant === "overview") return <OverviewView />
+  if (variant === "integrations") return <IntegrationsView />
+  if (variant === "integration-opencode") return <IntegrationDetailView integration="opencode" />
+  if (variant === "integration-codex") return <IntegrationDetailView integration="codex" />
   return <StandardDashboardSkeleton variant={variant} />
 }
 
-function StandardDashboardSkeleton({ variant }: { variant: Exclude<DashboardSkeletonVariant, "overview"> }) {
+function StandardDashboardSkeleton({ variant }: { variant: Exclude<DashboardSkeletonVariant, "overview" | "integrations" | "integration-opencode" | "integration-codex"> }) {
   if (variant === "request-logs") return <RequestLogsView />
   if (variant === "settings") return <SettingsSkeleton />
   if (variant === "usage") return <UsageSkeleton />
   if (variant === "console-log" || variant === "system-logs") return <ConsoleLogSkeleton global={variant === "system-logs"} />
   if (variant === "cliproxy") return <CliProxySkeleton />
-  if (variant === "coding-agent" || variant === "opencode-agent" || variant === "claude-agent") return <CodingAgentView agent={variant === "coding-agent" ? "Codex" : variant === "opencode-agent" ? "Opencode" : "Claude Code"} />
   const content = {
     "endpoint-key": <EndpointKeySkeleton />,
     "providers": <ProvidersSkeleton />,

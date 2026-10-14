@@ -97,12 +97,8 @@ export function releaseControlsBlocked(
 export function canInstallExactRelease(
   selectedVersion: string | null,
   currentVersion: string | null,
-  pinnedVersion: string | null,
 ): boolean {
-  return Boolean(
-    selectedVersion &&
-      !(selectedVersion === currentVersion && selectedVersion === pinnedVersion),
-  );
+  return Boolean(selectedVersion && selectedVersion !== currentVersion);
 }
 
 export function releaseCatalogPresentation(

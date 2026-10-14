@@ -29,7 +29,6 @@ markup and preserve table headers and actions.
 | Usage (`usage-view.tsx`, `overview-usage-view.tsx`, `usage-panels.tsx`) | The all-empty overview, sparse panels, and empty usage table use the shared primitive rather than a usage-local duplicate. |
 | Request logs (`request-logs-view.tsx`) | The existing “not available yet” placeholder is presented as an embedded state without changing its meaning. |
 | Tool Gateway (`tool-gateway-view.tsx`) | Pages that intentionally show no workspace-scoped Executor data use an embedded state. Disabled, checking, and unavailable service statuses remain status messages. |
-| Coding-agent pages (`coding-agent-view.tsx`) | Non-Codex setup pages retain the “under construction” status in an embedded state; Codex instructions and copy action remain unchanged. |
 | Public analytics (`pages/public.tsx`) | An empty public-workspace list uses the shared card treatment inside the public layout. API errors and loading remain separate. |
 | Console and system logs (`logs/log-results.tsx`) | No matching terminal logs use a compact embedded state with explicit console foreground, muted, and icon-surface tokens. Initial loading remains skeletons, populated logs remain rows, and a load error does not also show a no-results state. Chrome coverage checks computed text/icon contrast in both light and dark dashboard themes. |
 | CLIProxy releases (`global/cliproxy/cliproxy-view.tsx`) | An empty exact-release list is explained while preserving the Install latest action and release error status. |

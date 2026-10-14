@@ -177,7 +177,7 @@ test("public analytics use the shared state when no workspace is public", async 
   await expect(page.locator('[data-slot="empty-state"][data-treatment="card"]')).toBeVisible()
 })
 
-test("routing, budgets, pricing, tools, and agent pages expose specific empty states in Chrome", async ({ page }) => {
+test("routing, budgets, pricing, and tools expose specific empty states in Chrome", async ({ page }) => {
   const noTargets = { aliases: [], combos: [], models: [], providers: [], sharedModels: [] }
   await page.route("**/api/admin/aliases", route => route.fulfill({ json: noTargets }))
   await page.route("**/api/admin/budgets", route => route.fulfill({ json: {
@@ -231,8 +231,6 @@ test("routing, budgets, pricing, tools, and agent pages expose specific empty st
 
   await page.goto("/dashboard/tools/catalog")
   await expect(page.getByRole("heading", { name: "No workspace-scoped data" })).toBeVisible()
-  await page.goto("/dashboard/ai/coding-agents/opencode")
-  await expect(page.getByRole("heading", { name: "Under construction" })).toBeVisible()
 })
 
 test("provider credential, model, and sharing empties preserve their meanings and actions", async ({ page }) => {

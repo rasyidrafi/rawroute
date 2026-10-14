@@ -103,7 +103,7 @@ process-local; deploy one application process. Verify changes with `bun run lint
 
 AI Gateway pages live under `/dashboard/ai/`: `endpoint`, `providers`,
 `providers/:providerId`, `codex-providers`, `routing`, `overview/usage`, `budgets`,
-`pricing`, and `coding-agents/{codex,opencode,claude-code}`.
+`pricing`, `integrations`, and `integrations/{codex,opencode}`.
 Tool Gateway uses `/dashboard/tools/{overview,catalog,connections,policies,activity,settings}`.
 Shared workspace logs use `/dashboard/logs`. Global pages remain
 `/dashboard/{settings,cliproxy,system-logs}`. CLIProxy engine configuration is internal.

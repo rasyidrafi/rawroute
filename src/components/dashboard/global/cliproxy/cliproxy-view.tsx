@@ -7,7 +7,7 @@ import { CliProxyHeader, Detail, ServiceDetailsSkeleton, ServiceHeaderFrame } fr
 import { toast } from "sonner"
 import { apiFetch, fetcher } from "@/components/dashboard/api"
 import type { CliproxyInstanceStatus, CliproxyVersions } from "@/lib/cliproxy/types"
-import { createInstallAction } from "@/lib/cliproxy/page-state"
+import { canInstallExactRelease, createInstallAction } from "@/lib/cliproxy/page-state"
 import { Button } from "@/components/ui/button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { Badge } from "@/components/ui/badge"
@@ -44,7 +44,7 @@ export function CliproxyView() {
   return <DashboardPage spacing="normal">
     <CliProxyHeader refreshing={status.isValidating || pending} refresh={() => void status.mutate()} />
     <ServiceCard service={service} error={status.error} actionError={error} blocked={blocked} refresh={() => void status.mutate()} choose={setAction}>
-      {service?.mode === "managed" && <ReleasesCard data={versions.data} error={versions.error} refreshing={versions.isValidating} blocked={blocked} selected={selected} select={setSelected} refresh={() => void versions.mutate()} install={install} />}
+      {service?.mode === "managed" && <ReleasesCard data={versions.data} currentVersion={service.version} error={versions.error} refreshing={versions.isValidating} blocked={blocked} selected={selected} select={setSelected} refresh={() => void versions.mutate()} install={install} />}
     </ServiceCard>
     <ConnectionDetails service={service} />
     <Confirmation title={action?.title ?? null} pending={pending} onClose={() => setAction(null)} onConfirm={() => void run()} description={action?.action === "stop" ? "Provider requests that use CLIProxyAPI will be unavailable until you start it again. If requests cannot drain, the service remains running." : "This changes the shared service for every workspace. Release changes may briefly interrupt availability; failed startup restores the previous version and configuration."} />
@@ -59,7 +59,7 @@ function ServiceCard({ service, error, actionError, blocked, refresh, choose, ch
   </div></CardContent></Card>
 }
 
-function ReleasesCard({ data, error, refreshing, blocked, selected, select, refresh, install }: { data?: CliproxyVersions; error: unknown; refreshing: boolean; blocked: boolean; selected: string; select: (value: string) => void; refresh: () => void; install: (version: string) => void }) {
+function ReleasesCard({ data, currentVersion, error, refreshing, blocked, selected, select, refresh, install }: { data?: CliproxyVersions; currentVersion: string | null; error: unknown; refreshing: boolean; blocked: boolean; selected: string; select: (value: string) => void; refresh: () => void; install: (version: string) => void }) {
   return <div className="min-w-0 rounded-lg border bg-muted/30 p-3">
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -71,8 +71,8 @@ function ReleasesCard({ data, error, refreshing, blocked, selected, select, refr
         <Button size="sm" variant="outline" disabled={refreshing} onClick={refresh}>Refresh releases</Button>
       </div>
       <div className="grid min-w-0 gap-2 lg:grid-cols-2">
-        <Button disabled={blocked || refreshing || !data} onClick={() => install("latest")}>{data ? `Install latest (${data.latest})` : "Loading releases…"}</Button>
-        <Field><FieldLabel htmlFor="cliproxy-release" className="sr-only">Exact release</FieldLabel><div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]"><Select disabled={blocked || refreshing || !data} value={selected} onValueChange={value => select(value ?? "")}><SelectTrigger id="cliproxy-release" className="w-full min-w-0"><SelectValue placeholder="Pick exact release" /></SelectTrigger><SelectContent>{data?.versions.map(release => <SelectItem key={release.version} value={release.version}>{release.version}</SelectItem>)}</SelectContent></Select><Button variant="outline" disabled={blocked || refreshing || !data?.versions.some(release => release.version === selected)} onClick={() => install(selected)}>Install selected version</Button></div></Field>
+        <Button disabled={blocked || refreshing || !canInstallExactRelease(data?.latest ?? null, currentVersion)} onClick={() => install("latest")}>{data ? `Install latest (${data.latest})` : "Loading releases…"}</Button>
+        <Field><FieldLabel htmlFor="cliproxy-release" className="sr-only">Exact release</FieldLabel><div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]"><Select disabled={blocked || refreshing || !data} value={selected} onValueChange={value => select(value ?? "")}><SelectTrigger id="cliproxy-release" className="w-full min-w-0"><SelectValue placeholder="Pick exact release" /></SelectTrigger><SelectContent>{data?.versions.map(release => <SelectItem key={release.version} value={release.version}>{release.version}</SelectItem>)}</SelectContent></Select><Button variant="outline" disabled={blocked || refreshing || !data?.versions.some(release => release.version === selected) || !canInstallExactRelease(selected, currentVersion)} onClick={() => install(selected)}>Install selected version</Button></div></Field>
       </div>
       {data && !data.versions.length && <EmptyState title="No exact releases listed" description="The catalog has no pinned versions to show; use Install latest above if you want the newest release." icon={BoxesIcon} variant="compact" treatment="embedded" />}
     </div>

@@ -1,5 +1,7 @@
 import { OverviewView } from "./ai/overview-view"
 import { RequestLogsView } from "./ai/request-logs-view"
+import { IntegrationsView } from "./ai/integrations-view"
+import { IntegrationDetailView } from "./ai/integrations/detail-view"
 import { lazy, type ReactElement } from "react"
 import { useParams } from "react-router"
 import type { DashboardPage } from "@/lib/dashboard/routes"
@@ -15,7 +17,6 @@ const SystemLogs = lazy(() => import("@/components/console-log").then((module) =
 const ConsoleLog = lazy(() => import("@/components/console-log").then((module) => ({ default: module.ConsoleLog })))
 const CliproxyView = lazy(() => import("@/components/dashboard/global/cliproxy/cliproxy-view").then((module) => ({ default: module.CliproxyView })))
 const SettingsView = lazy(() => import("@/components/dashboard/global/settings-view").then((module) => ({ default: module.SettingsView })))
-const CodingAgentView = lazy(() => import("@/components/dashboard/ai/coding-agent-view").then((module) => ({ default: module.CodingAgentView })))
 const ToolGatewayView = lazy(() => import("@/components/dashboard/tools/tool-gateway-view").then((module) => ({ default: module.ToolGatewayView })))
 
 function ProviderPage() {
@@ -32,15 +33,15 @@ export const dashboardViews: Record<DashboardPage, ReactElement> = {
   codex: <ProviderDetailView providerId="codex" />,
   provider: <ProviderPage />,
   aliases: <AliasesView />,
+  integrations: <IntegrationsView />,
+  integrationOpencode: <IntegrationDetailView integration="opencode" />,
+  integrationCodex: <IntegrationDetailView integration="codex" />,
   budgets: <BudgetsView />,
   pricing: <ModelPricingView />,
   logs: <ConsoleLog />,
   systemLogs: <SystemLogs />,
   cliproxy: <CliproxyView />,
   settings: <SettingsView />,
-  codexAgent: <CodingAgentView agent="Codex" />,
-  opencodeAgent: <CodingAgentView agent="Opencode" />,
-  claudeAgent: <CodingAgentView agent="Claude Code" />,
   tools: <ToolGatewayView page="overview" />,
   toolCatalog: <ToolGatewayView page="tools" />,
   toolConnections: <ToolGatewayView page="connections" />,

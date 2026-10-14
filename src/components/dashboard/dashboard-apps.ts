@@ -49,6 +49,7 @@ export const dashboardApps: DashboardApp[] = [
           nav("providers", ServerIcon),
           nav("codex", ShieldCheckIcon),
           nav("aliases", ArrowLeftRightIcon),
+          nav("integrations", WrenchIcon),
         ],
       },
       {
@@ -56,14 +57,6 @@ export const dashboardApps: DashboardApp[] = [
         items: [
           nav("budgets", WalletCardsIcon),
           nav("pricing", DollarSignIcon),
-        ],
-      },
-      {
-        label: "Coding Agents",
-        items: [
-          nav("codexAgent", WrenchIcon),
-          nav("opencodeAgent", WrenchIcon),
-          nav("claudeAgent", WrenchIcon),
         ],
       },
       ...sharedNavigation,
