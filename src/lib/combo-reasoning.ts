@@ -75,8 +75,8 @@ export function supportedReasoningEfforts(model: Pick<Model, "reasoningCapabilit
   return configured?.length ? [...new Set(configured)] : [...standardReasoningEfforts]
 }
 
-export function memberPolicyConfigHash(member: Pick<ComboMember, "modelId" | "reasoning" | "customPayload">) {
-  return JSON.stringify([member.modelId, member.reasoning?.mode || "inherit", member.reasoning?.effort || "", sortedJsonValue(member.customPayload || {})])
+export function memberPolicyConfigHash(member: Pick<ComboMember, "modelId" | "sharedModelId" | "reasoning" | "customPayload">) {
+  return JSON.stringify([member.modelId, member.reasoning?.mode || "inherit", member.reasoning?.effort || "", sortedJsonValue(member.customPayload || {}), ...(member.sharedModelId ? [member.sharedModelId] : [])])
 }
 
 export function stripReasoningFields(payload: Record<string, unknown>) {

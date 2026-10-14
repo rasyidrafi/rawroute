@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { comboMembers, memberPolicyConfigHash, normalizeComboCustomPayload, protectedComboPayloadFields, standardReasoningEfforts, supportedReasoningEfforts } from "@/lib/combo-reasoning"
 import { cn } from "@/lib/utils"
-import type { ComboMember, Model, ModelAlias, ModelCombo, SharedModelView } from "@/lib/types"
+import type { ComboMember, Model, ModelCombo, SharedModelView } from "@/lib/types"
 
 type TestResult = { status: "verified" | "unverified" | "invalid"; message: string; latencyMs: number }
 
@@ -67,7 +67,7 @@ function SortableMemberCard({ member, index, open, effortOptions, payloadDraft, 
   </div>
 }
 
-export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { combo: ModelCombo | null; models: Model[]; aliases: ModelAlias[]; sharedModels: SharedModelView[]; onSave: (combo: Partial<ModelCombo> & { originalId?: string }) => Promise<boolean> }) {
+export function ComboForm({ combo, models, sharedModels, onSave }: { combo: ModelCombo | null; models: Model[]; sharedModels: SharedModelView[]; onSave: (combo: Partial<ModelCombo> & { originalId?: string }) => Promise<boolean> }) {
   const { apiPost } = useDashboardApi()
   const initialMembers = combo ? comboMembers(combo) : []
   const [pending, setPending] = useState(false)
@@ -84,12 +84,9 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
   )
   const targets = useMemo(() => {
     const enabledModels = models.filter((model) => model.enabled).map((model) => ({ id: model.gatewayModelId || model.id, label: model.gatewayModelId || model.id, detail: model.name, efforts: supportedReasoningEfforts(model) }))
-    const activeSharedIds = new Set(sharedModels.filter((model) => model.status === "active").map((model) => model.id))
-    const enabledModelIds = new Set(enabledModels.map((model) => model.id))
-    const modelById = new Map(enabledModels.map((model) => [model.id, model]))
-    const enabledAliases = aliases.filter((alias) => !alias.sharedModelId ? enabledModelIds.has(alias.targetModelId) : activeSharedIds.has(alias.sharedModelId)).map((alias) => ({ id: alias.alias, label: alias.alias, detail: alias.name, efforts: modelById.get(alias.targetModelId)?.efforts || [...standardReasoningEfforts] }))
-    return [...enabledModels, ...enabledAliases].sort((left, right) => left.label.localeCompare(right.label))
-  }, [aliases, models, sharedModels])
+    const shared = sharedModels.filter((model) => model.status === "active").map((model) => ({ id: model.qualifiedModelId, label: model.qualifiedModelId, detail: model.sourceModelName, efforts: [...standardReasoningEfforts] }))
+    return [...enabledModels, ...shared].sort((left, right) => left.label.localeCompare(right.label))
+  }, [models, sharedModels])
   const byId = new Map(targets.map((target) => [target.id, target]))
   const selectableTargets = targets.filter((target) => !members.some((member) => member.modelId === target.id))
 
@@ -103,7 +100,8 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
 
   function addMember() {
     if (!selectedModel || members.some((member) => member.modelId === selectedModel) || members.length >= 8) return
-    setMembers((current) => [...current, { modelId: selectedModel, reasoning: { mode: "inherit" } }])
+    const sharedModelId = sharedModels.find((model) => model.qualifiedModelId === selectedModel && model.status === "active")?.id
+    setMembers((current) => [...current, { modelId: selectedModel, ...(sharedModelId ? { sharedModelId } : {}), reasoning: { mode: "inherit" } }])
     setPayloadDrafts((current) => ({ ...current, [selectedModel]: "{}" }))
     setOpenMembers((current) => new Set(current).add(selectedModel))
     setSelectedModel(null)
@@ -161,6 +159,7 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!members.length) { toast.error("Select at least one model."); return }
     if (members.some((member) => payloadErrors[member.modelId])) { toast.error("Fix the custom payload JSON before saving."); return }
     const formData = new FormData(event.currentTarget)
     setPending(true)
@@ -169,17 +168,17 @@ export function ComboForm({ combo, models, aliases, sharedModels, onSave }: { co
   }
 
   return <form onSubmit={submit}>
-    <DialogHeader><DialogTitle>{combo?.id ? "Edit combo" : "Add combo"}</DialogTitle><DialogDescription>Drag models into fallback order. Open a model only when it needs an override.</DialogDescription></DialogHeader>
+    <DialogHeader><DialogTitle>{combo?.id ? "Edit combo" : "Add combo"}</DialogTitle><DialogDescription>Select one model for an alias, or up to eight models for fallback. Drag to reorder; open a model to configure overrides.</DialogDescription></DialogHeader>
     <div className="grid max-h-[70vh] gap-4 overflow-y-auto py-4 pr-1">
       <div className="grid gap-4 sm:grid-cols-2"><FormField label="Gateway ID"><Input name="combo" defaultValue={combo?.combo} placeholder="auto" pattern="[a-z0-9._/-]+" required /></FormField><FormField label="Name"><Input name="name" defaultValue={combo?.name} placeholder="Automatic fallback" maxLength={80} required /></FormField></div>
-      <FormField label="Models in fallback order"><div className="grid gap-2"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => byId.get(String(value))?.label || String(value)}><SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Select a model or alias" /></SelectTrigger><SelectContent>{selectableTargets.map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span></SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div>{!selectableTargets.length && <EmptyState title={targets.length ? "All available models are in the fallback order" : "No eligible models or aliases"} description={targets.length ? "Remove a member to make it available for selection again." : "Enable a provider model or alias before adding combo members."} icon={targets.length ? SearchIcon : BoxesIcon} variant="compact" treatment="embedded" />}</div></FormField>
+      <FormField label="Models / fallback order"><div className="grid gap-2"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => byId.get(String(value))?.label || String(value)}><SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Select a local or shared model" /></SelectTrigger><SelectContent>{selectableTargets.map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span></SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div>{!selectableTargets.length && <EmptyState title={targets.length ? "All available models are selected" : "No eligible models"} description={targets.length ? "Remove a member to make it available for selection again." : "Enable a provider model or use a model shared into this workspace."} icon={targets.length ? SearchIcon : BoxesIcon} variant="compact" treatment="embedded" />}</div></FormField>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderMembers}>
         <SortableContext items={members.map((member) => member.modelId)} strategy={verticalListSortingStrategy}>
-          <div className="grid gap-2">{members.map((member, index) => <SortableMemberCard key={member.modelId} member={member} index={index} open={openMembers.has(member.modelId)} effortOptions={byId.get(member.modelId)?.efforts || [...standardReasoningEfforts]} payloadDraft={payloadDrafts[member.modelId] ?? JSON.stringify(member.customPayload || {}, null, 2)} payloadError={payloadErrors[member.modelId]} testing={testing.has(member.modelId)} onToggle={() => toggleMember(member.modelId)} onRemove={() => removeMember(member.modelId)} onUpdate={(update) => updateMember(member.modelId, update)} onPayloadChange={(value) => updateCustomPayload(member.modelId, value)} onFormatPayload={() => formatCustomPayload(member.modelId)} onTest={() => void testMember(member.modelId)} />)}{!members.length && <EmptyState title="No models in fallback order" description="Choose a model or alias above, then add it to the fallback order." icon={BoxesIcon} variant="compact" treatment="embedded" />}</div>
+          <div className="grid gap-2">{members.map((member, index) => <SortableMemberCard key={member.modelId} member={member} index={index} open={openMembers.has(member.modelId)} effortOptions={byId.get(member.modelId)?.efforts || [...standardReasoningEfforts]} payloadDraft={payloadDrafts[member.modelId] ?? JSON.stringify(member.customPayload || {}, null, 2)} payloadError={payloadErrors[member.modelId]} testing={testing.has(member.modelId)} onToggle={() => toggleMember(member.modelId)} onRemove={() => removeMember(member.modelId)} onUpdate={(update) => updateMember(member.modelId, update)} onPayloadChange={(value) => updateCustomPayload(member.modelId, value)} onFormatPayload={() => formatCustomPayload(member.modelId)} onTest={() => void testMember(member.modelId)} />)}{!members.length && <EmptyState title="No models selected" description="Choose a model above, then add it. One model creates an alias; additional models provide fallback." icon={BoxesIcon} variant="compact" treatment="embedded" />}</div>
         </SortableContext>
       </DndContext>
     </div>
-    <DialogFooter><FormSubmitButton pending={pending} disabled={members.some((member) => Boolean(payloadErrors[member.modelId]))} idleLabel={combo?.id ? "Save changes" : "Add combo"} pendingLabel="Testing and saving..." /></DialogFooter>
+    <DialogFooter><FormSubmitButton pending={pending} disabled={!members.length || members.some((member) => Boolean(payloadErrors[member.modelId]))} idleLabel={combo?.id ? "Save changes" : "Add combo"} pendingLabel="Testing and saving..." /></DialogFooter>
   </form>
 }
 

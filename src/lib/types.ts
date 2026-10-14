@@ -113,6 +113,7 @@ export interface ComboMemberValidation {
 
 export interface ComboMember {
   modelId: string
+  sharedModelId?: string
   reasoning?: { mode: ComboReasoningMode; effort?: string }
   customPayload?: Record<string, unknown>
   validation?: ComboMemberValidation

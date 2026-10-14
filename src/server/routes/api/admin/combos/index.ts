@@ -5,9 +5,15 @@ import { cleanReasoningEffort, memberPolicyConfigHash, normalizeComboCustomPaylo
 import { testComboMemberPolicy, type ComboMemberTestResult } from "@/lib/cliproxy/gateway"
 import { cleanAliasId, jsonError } from "@/lib/http"
 import { recordLog } from "@/server/logging/recorder"
-import { getSharedModelForRecipient } from "@/lib/workspace/model-shares"
-import { listAliases, listCombos, listModels, listProviders, readSessionSecret, upsertCombo } from "@/server/store"
+import { getSharedModelForRecipient, listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
+import { listCombos, listModels, listProviders, readSessionSecret, upsertCombo } from "@/server/store"
 import type { ComboMember, ModelCombo } from "@/lib/types"
+
+export async function GET() {
+  const [combos, models, providers, sharedModels] = await Promise.all([listCombos(), listModels(), listProviders(), listSharedModelsForRecipient()])
+  const enabledProviders = new Set(providers.filter((provider) => provider.enabled !== false).map((provider) => provider.id))
+  return Response.json({ combos, models: models.filter((model) => model.enabled && enabledProviders.has(model.providerId)), sharedModels })
+}
 
 function normalizedMembers(input: Partial<ModelCombo>) {
   const raw: ComboMember[] = Array.isArray(input.members) ? input.members : []
@@ -18,7 +24,8 @@ function normalizedMembers(input: Partial<ModelCombo>) {
     if (!["inherit", "provider-default", "override"].includes(mode)) throw new Error("Combo reasoning mode is invalid.")
     if (mode === "override" && !effort) throw new Error("Reasoning effort is required when override is enabled.")
     const customPayload = normalizeComboCustomPayload(member.customPayload)
-    return { modelId, reasoning: { mode, ...(effort ? { effort } : {}) }, ...(customPayload ? { customPayload } : {}), validation: member.validation }
+    const sharedModelId = typeof member.sharedModelId === "string" ? member.sharedModelId.trim() : undefined
+    return { modelId, ...(sharedModelId ? { sharedModelId } : {}), reasoning: { mode, ...(effort ? { effort } : {}) }, ...(customPayload ? { customPayload } : {}), validation: member.validation }
   })
 }
 
@@ -53,19 +60,19 @@ async function validateCombo(input: Partial<ModelCombo> & { originalId?: string 
   const members = normalizedMembers(input)
   const memberModelIds = members.map((member) => member.modelId)
   if (!combo || !name) throw new Error("Combo fields are incomplete.")
-  if (memberModelIds.length < 2 || memberModelIds.length > 8) throw new Error("A combo needs between 2 and 8 models.")
+  if (memberModelIds.length < 1 || memberModelIds.length > 8) throw new Error("A combo needs between 1 and 8 models.")
   if (new Set(memberModelIds).size !== memberModelIds.length || memberModelIds.some((member) => !member)) throw new Error("Combo models must be unique.")
 
-  const [models, providers, aliases, combos] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos()])
+  const [models, providers, combos] = await Promise.all([listModels(), listProviders(), listCombos()])
   const enabledProviderIds = new Set(providers.filter((provider) => provider.enabled !== false).map((provider) => provider.id))
   const availableModelIds = new Set(models.filter((model) => model.enabled && enabledProviderIds.has(model.providerId)).map((model) => model.gatewayModelId || model.id))
-  const availableAliasIds = new Set<string>()
-  await Promise.all(aliases.map(async (alias) => {
-    if (!alias.sharedModelId && availableModelIds.has(alias.targetModelId)) availableAliasIds.add(alias.alias)
-    if (alias.sharedModelId && (await getSharedModelForRecipient(alias.sharedModelId))?.status === "active") availableAliasIds.add(alias.alias)
+  await Promise.all(members.map(async (member) => {
+    if (member.sharedModelId) {
+      const shared = await getSharedModelForRecipient(member.sharedModelId)
+      if (!shared || shared.status !== "active" || shared.qualifiedModelId !== member.modelId) throw new Error("Shared model is no longer available.")
+    } else if (!availableModelIds.has(member.modelId)) throw new Error("One or more combo models are unavailable.")
   }))
-  if (memberModelIds.some((member) => !availableModelIds.has(member) && !availableAliasIds.has(member))) throw new Error("One or more combo models are unavailable.")
-  if (availableModelIds.has(combo) || aliases.some((alias) => cleanAliasId(alias.alias) === combo) || combos.some((entry) => cleanAliasId(entry.combo) === combo && entry.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
+  if (availableModelIds.has(combo) || combos.some((entry) => cleanAliasId(entry.combo) === combo && entry.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")
   return { combo, name, members, existing: input.originalId ? combos.find((entry) => entry.id === input.originalId) : undefined }
 }
 

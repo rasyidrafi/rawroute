@@ -1,4 +1,4 @@
-import type { Model, ModelAlias, ModelCombo, Provider } from "@/lib/types"
+import type { Model, ModelAlias, ModelCombo, Provider, SharedModelView } from "@/lib/types"
 
 function enabledProviderIndex(providers: Provider[]) {
   const index = new Map<string, Provider>()
@@ -10,7 +10,7 @@ function modelGatewayId(model: Model) {
   return model.gatewayModelId || model.id
 }
 
-export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = [], combos: ModelCombo[] = []) {
+export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = [], combos: ModelCombo[] = [], sharedModels: SharedModelView[] = []) {
   const enabledProviders = enabledProviderIndex(providers)
   const enabledModels = new Map<string, { model: Model; provider: Provider }>()
   const entries: Array<{ id: string; object: "model"; created: number; owned_by: string; protocol: string }> = []
@@ -42,8 +42,9 @@ export function catalogModels(providers: Provider[], models: Model[], aliases: M
     })
   }
   const availableAliases = new Set(aliases.filter((alias) => enabledModels.has(alias.targetModelId) || Boolean(alias.sharedModelId)).map((alias) => alias.alias))
+  const availableShares = new Set(sharedModels.filter((model) => model.status === "active").map((model) => model.id))
   for (const combo of combos) {
-    if (!combo.members.some(({ modelId: member }) => enabledModels.has(member) || availableAliases.has(member))) continue
+    if (!combo.members.some((member) => member.sharedModelId ? availableShares.has(member.sharedModelId) : enabledModels.has(member.modelId) || availableAliases.has(member.modelId))) continue
     entries.push({
       id: combo.combo,
       object: "model",

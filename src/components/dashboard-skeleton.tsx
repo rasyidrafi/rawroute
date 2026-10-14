@@ -1,7 +1,7 @@
 import { OverviewView } from "@/components/dashboard/ai/overview-view"
 import { RequestLogsView } from "@/components/dashboard/ai/request-logs-view"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeftRightIcon, PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
+import { PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { LogToolbar } from "@/components/dashboard/logs/log-toolbar"
 import { LogResults } from "@/components/dashboard/logs/log-results"
@@ -67,7 +67,7 @@ function ProvidersSkeleton() {
 }
 
 function AliasesSkeleton() {
-  return <><LoadingCard title={<><ArrowLeftRightIcon className="size-5" />Aliases</>} description="Create local gateway IDs that forward to enabled local or shared models." action={<Button disabled><PlusIcon />Add alias</Button>}><LoadingTable columns={["Gateway ID", "Name", "Target model", "Status", "Actions"]} /></LoadingCard><LoadingCard title={<><ListOrderedIcon className="size-5" />Combos</>} description="Try models in order until one accepts the request." action={<Button disabled><PlusIcon />Add combo</Button>}><LoadingTable columns={["Gateway ID", "Name", "Fallback order", "Actions"]} /></LoadingCard><LoadingCard title={<><Share2Icon className="size-5" />Shared Models</>} description="Read-only models shared into this workspace. Create a local alias before gateway keys can use one."><LoadingTable columns={["Qualified model", "Source workspace", "Status", "Action"]} /></LoadingCard></>
+  return <><LoadingCard title={<><ListOrderedIcon className="size-5" />Combos</>} description="Select one model to create an alias, or multiple models to try in fallback order." action={<Button disabled><PlusIcon />Add combo</Button>}><LoadingTable columns={["Gateway ID", "Name", "Models / fallback order", "Actions"]} /></LoadingCard><LoadingCard title={<><Share2Icon className="size-5" />Shared Models</>} description="Read-only models shared into this workspace. Add one to a combo to give it a local gateway ID."><LoadingTable columns={["Qualified model", "Source workspace", "Status", "Action"]} /></LoadingCard></>
 }
 
 function ProviderDetailSkeleton({ codex }: { codex: boolean }) {

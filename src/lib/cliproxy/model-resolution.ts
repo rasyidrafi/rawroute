@@ -55,14 +55,15 @@ function providerModelSuffix(provider: Awaited<ReturnType<typeof listProviders>>
   return suffix
 }
 
-export async function resolveGatewayModel(model: string): Promise<ResolvedGatewayModel> {
+export async function resolveGatewayModel(model: string, sharedModelId?: string): Promise<ResolvedGatewayModel> {
   const [aliases, models, providers] = await Promise.all([listAliases(), listModels(), listProviders()])
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const availableModels = models.filter((candidate) => activeModel(candidate, providerIndex.get(candidate.providerId)))
   const alias = aliases.find((entry) => entry.alias === model)
-  if (alias?.sharedModelId) {
+  const shareId = sharedModelId || alias?.sharedModelId
+  if (shareId) {
     const consumerWorkspaceId = currentWorkspaceId()
-    const [shared, consumerWorkspace] = await Promise.all([resolveSharedModelForRecipient(alias.sharedModelId, consumerWorkspaceId), getWorkspace(consumerWorkspaceId)])
+    const [shared, consumerWorkspace] = await Promise.all([resolveSharedModelForRecipient(shareId, consumerWorkspaceId), getWorkspace(consumerWorkspaceId)])
     if (!shared || !consumerWorkspace) throw new GatewayModelResolutionError("Shared model is no longer available.", 400, "model_not_found")
     return runInWorkspace(shared.owner, async () => {
       const target = shared.model

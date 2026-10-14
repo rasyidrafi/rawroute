@@ -178,8 +178,8 @@ test("public analytics use the shared state when no workspace is public", async 
 })
 
 test("routing, budgets, pricing, and tools expose specific empty states in Chrome", async ({ page }) => {
-  const noTargets = { aliases: [], combos: [], models: [], providers: [], sharedModels: [] }
-  await page.route("**/api/admin/aliases", route => route.fulfill({ json: noTargets }))
+  const noTargets = { combos: [], models: [], sharedModels: [] }
+  await page.route("**/api/admin/combos", route => route.fulfill({ json: noTargets }))
   await page.route("**/api/admin/budgets", route => route.fulfill({ json: {
     budgets: [],
     bypassSessions: [],
@@ -198,17 +198,13 @@ test("routing, budgets, pricing, and tools expose specific empty states in Chrom
 
   await authenticate(page)
   await page.goto("/dashboard/ai/routing")
-  await expect(page.getByRole("heading", { name: "No aliases yet." })).toBeVisible()
-  await expect(page.getByRole("heading", { name: "No combos yet." })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "No combos yet. Add one model for an alias, or multiple models for fallback." })).toBeVisible()
   await expect(page.getByRole("heading", { name: "No models have been shared with this workspace." })).toBeVisible()
-  await expect(page.locator('[data-slot="empty-state"][data-treatment="table"]')).toHaveCount(3)
+  await expect(page.locator('[data-slot="empty-state"][data-treatment="table"]')).toHaveCount(2)
 
-  await page.getByRole("button", { name: "Add alias" }).click()
-  await expect(page.getByRole("heading", { name: "No model targets available" })).toBeVisible()
-  await page.keyboard.press("Escape")
   await page.getByRole("button", { name: "Add combo" }).click()
-  await expect(page.getByRole("heading", { name: "No eligible models or aliases" })).toBeVisible()
-  await expect(page.getByRole("heading", { name: "No models in fallback order" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "No eligible models" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "No models selected" })).toBeVisible()
   await page.keyboard.press("Escape")
 
   await page.goto("/dashboard/ai/budgets")

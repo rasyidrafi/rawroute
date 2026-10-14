@@ -7,8 +7,6 @@ import * as AnthropicCallback from "./routes/anthropic/callback"
 import * as AntigravityCallback from "./routes/antigravity/callback"
 import * as ApiAdminAccountPassword from "./routes/api/admin/account/password"
 import * as ApiAdminAccount from "./routes/api/admin/account"
-import * as ApiAdminAliasesByAlias from "./routes/api/admin/aliases/by-alias"
-import * as ApiAdminAliases from "./routes/api/admin/aliases"
 import * as ApiAdminApiKeysByApikey from "./routes/api/admin/api-keys/by-apikey"
 import * as ApiAdminApiKeys from "./routes/api/admin/api-keys"
 import * as ApiAdminBudgetsByApikey from "./routes/api/admin/budgets/by-apikey"
@@ -75,8 +73,6 @@ export const apiRoutes = {
   "/antigravity/callback": apiRoute(AntigravityCallback, "public", "/antigravity/callback"),
   "/api/admin/account/password": apiRoute(ApiAdminAccountPassword, "session", "/api/admin/account/password"),
   "/api/admin/account": apiRoute(ApiAdminAccount, "session", "/api/admin/account"),
-  "/api/admin/aliases/:aliasId": apiRoute(ApiAdminAliasesByAlias, "workspace", "/api/admin/aliases/:aliasId"),
-  "/api/admin/aliases": apiRoute(ApiAdminAliases, "workspace", "/api/admin/aliases"),
   "/api/admin/api-keys/:apiKeyId": apiRoute(ApiAdminApiKeysByApikey, "workspace", "/api/admin/api-keys/:apiKeyId"),
   "/api/admin/api-keys": apiRoute(ApiAdminApiKeys, "workspace", "/api/admin/api-keys"),
   "/api/admin/budgets/:apiKeyId": apiRoute(ApiAdminBudgetsByApikey, "workspace", "/api/admin/budgets/:apiKeyId"),

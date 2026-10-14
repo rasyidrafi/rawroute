@@ -11,6 +11,7 @@ import { extractUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { listAliases, listCombos, listModels, listProviders } from "@/server/store"
 import type { ComboMember, Protocol, UsageEvent } from "@/lib/types"
 import { runInWorkspace } from "@/lib/workspace/context"
+import { listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
 import { getWorkspace } from "@/server/workspace-repository"
 import { upstreamFailure } from "@/lib/upstream-failure"
 import { GatewayModelResolutionError, resolveGatewayModel } from "@/lib/cliproxy/model-resolution"
@@ -135,7 +136,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
   catch (error) { return { modelId: member.modelId, status: "invalid", message: error instanceof Error ? error.message : "Custom payload is invalid.", latencyMs: 0 } }
   if (!effort && !customPayload) return { modelId: member.modelId, status: "verified", message: "No member policy to test.", latencyMs: 0 }
   try {
-    const resolved = await resolveGatewayModel(member.modelId)
+    const resolved = await resolveGatewayModel(member.modelId, member.sharedModelId)
     const supported = resolved.reasoningCapability?.supportedEfforts?.map((value) => value.trim().toLowerCase()).filter(Boolean)
     if (effort && resolved.reasoningCapability?.mode === "disabled") return { modelId: member.modelId, status: "invalid", message: "Reasoning overrides are disabled for this model.", latencyMs: Date.now() - started }
     if (effort && supported?.length && !supported.includes(effort)) return { modelId: member.modelId, status: "invalid", message: `This model does not allow reasoning effort ${effort}.`, latencyMs: Date.now() - started }
@@ -171,8 +172,8 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
 
 async function canonicalModelsResponse() {
   scheduleCodexModelRefresh()
-  const [models, providers, aliases, combos] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos()])
-  return Response.json({ object: "list", data: catalogModels(providers, models, aliases, combos) }, { headers: { "cache-control": "no-store" } })
+  const [models, providers, aliases, combos, sharedModels] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos(), listSharedModelsForRecipient()])
+  return Response.json({ object: "list", data: catalogModels(providers, models, aliases, combos, sharedModels) }, { headers: { "cache-control": "no-store" } })
 }
 
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
@@ -275,7 +276,8 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   for (const member of comboMembers(combo)) {
     const memberModelId = member.modelId
     if (request.signal.aborted) throw request.signal.reason
-    const resolved = await resolveGatewayModel(memberModelId).catch(() => undefined)
+    const resolved = await resolveGatewayModel(memberModelId, member.sharedModelId).catch(() => undefined)
+    if (member.sharedModelId && !resolved) continue
     let memberPayload = payload
     let reasoningEffort: string | undefined
     let customPayload: Record<string, unknown> | undefined
