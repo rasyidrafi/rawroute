@@ -16,7 +16,7 @@ test("production serves every dashboard deep link and keeps unknown APIs out of 
     expect(response.headers()["content-type"]).toContain("application/json")
   }
   const config = await (await request.get("/api/config")).json()
-  expect(Object.keys(config).sort()).toEqual(["timeZone", "version"])
+  expect(Object.keys(config)).toEqual(["version"])
   const head = await request.head("/login")
   expect(head.status()).toBe(200)
   expect(await head.body()).toHaveLength(0)

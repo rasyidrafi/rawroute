@@ -4,11 +4,6 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const formatterCache = new Map<string, Intl.DateTimeFormat>()
 let cachedTimeZoneSource: string | undefined
 let cachedTimeZone = DEFAULT_TIME_ZONE
-let browserTimeZone = DEFAULT_TIME_ZONE
-
-export function configureBrowserTimeZone(timeZone: string) {
-  browserTimeZone = timeZone
-}
 
 type ZonedParts = {
   year: number
@@ -21,7 +16,9 @@ type ZonedParts = {
 }
 
 function configuredTimeZone() {
-  const value = (typeof window === "undefined" ? process.env.TIMEZONE : browserTimeZone) || DEFAULT_TIME_ZONE
+  // Browser displays and calendar inputs follow the user's native zone, not server configuration.
+  if (typeof window !== "undefined") return Intl.DateTimeFormat().resolvedOptions().timeZone
+  const value = process.env.TIMEZONE || DEFAULT_TIME_ZONE
   if (value === cachedTimeZoneSource) return cachedTimeZone
   try {
     dateFormatter("validation", DISPLAY_LOCALE, value, {}).format()

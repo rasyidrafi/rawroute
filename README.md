@@ -168,8 +168,9 @@ database credentials or a live backend. `bun run typecheck` checks types separat
 with the fast Rust-based `tsc-rs` compiler.
 
 Bun loads local environment files for development and maintenance commands.
-`TIMEZONE` configures both server and browser display; `/api/config` exposes only
-the validated time zone and deployment version at runtime. Server environment
+`TIMEZONE` configures server accounting and calendar buckets. Browser displays and
+calendar inputs use the browser's local time zone; `/api/config` exposes only
+the deployment version at runtime. Server environment
 variables are never inlined into the browser bundle. `HOSTNAME` and `PORT` control
 the listener; the container uses `0.0.0.0:8080`.
 
@@ -184,9 +185,11 @@ not require a separate Node.js installation.
 
 Browser tests run the production build with an isolated in-memory SQLite database and local
 CLIProxy/Executor fixtures using an installed Google Chrome executable. Chrome is
-discovered on `PATH` or in standard install locations; set
-`PLAYWRIGHT_CHROME_EXECUTABLE_PATH` to select a specific executable. Playwright's
-bundled Chromium is not used. Runtime caches are isolated inside the test server.
+discovered on `PATH` (including mise shims) or in standard install locations.
+Run `bun run test:e2e` with your existing Chrome installation; no browser download
+or executable override is needed. For a nonstandard location, optionally set
+`PLAYWRIGHT_CHROME_EXECUTABLE_PATH` to its executable. Playwright's bundled
+Chromium is not used. Runtime caches are isolated inside the test server.
 CLIProxy lifecycle tests run on isolated ports; the
 optional real-engine test is documented in the managed CLIProxyAPI guide.
 
