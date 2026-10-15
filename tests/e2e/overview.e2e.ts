@@ -40,7 +40,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
       generatedAt: range.to, range: { from: query.get("from"), to: query.get("to"), granularity: "hourly" },
       summary: { requests: 4000, tokens: held ? 9999 : 4800, costMicros: 2500000, activeKeys: 1, pricedRequests: 2800, unpricedRequests: 1200 },
       overview: { inputTokens: sparse ? 0 : 4000, cacheReadTokens: sparse ? 0 : 1000, failedRequests: 400, statusCoveredRequests: sparse ? 0 : 4000, durationCount: sparse ? 0 : 3800, durationSumMs: sparse ? 0 : 7600000, budgets: [{ id: "quiet", name: "Quiet key", enabled: true, limitMicros: 10000000, spentMicros: 1000000 }], budgetWindow: { ...range, bypassLimits: false } },
-      models: [{ model: "Expensive model", requests: 400, tokens: 4800, costMicros: 2500000 }, { model: "Popular model", requests: 2000, tokens: 43542, costMicros: 10 }, { model: "Other model", requests: 1000, tokens: 200, costMicros: 0 }, { model: "Hidden model", requests: 600, tokens: 100, costMicros: 0 }], keys: [], trend: [{ bucketStart: query.get("from"), tokens: 1200, requests: 1000, costMicros: 500000 }, { bucketStart: query.get("to"), tokens: 3600, requests: 3000, costMicros: 2000000 }],
+      models: [{ model: "Expensive model", requests: 400, tokens: 4800, costMicros: 2500000 }, { model: "Popular model", requests: 2000, tokens: 43542, costMicros: 10 }, { model: "Other model", requests: 1000, tokens: 200, costMicros: 0 }, { model: "Hidden model", requests: 600, tokens: 100, costMicros: 0 }], keys: [], trend: [{ bucketStart: "2026-10-15T18:00:00.000Z", tokens: 11200000, requests: 1000, costMicros: 500000 }, { bucketStart: "2026-10-15T19:00:00.000Z", tokens: 0, requests: 3000, costMicros: 2000000 }],
     } })
   })
   await page.route("**/api/admin/request-logs?*", async route => {
@@ -63,6 +63,30 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(page.getByText("6.42M", { exact: true })).toHaveCount(0)
   release!()
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
+  const trend = page.getByRole("img", { name: "Token usage trend" })
+  const chart = trend.getByRole("application")
+  await expect(trend.locator(".recharts-responsive-container")).toHaveCount(1)
+  expect((await chart.boundingBox())!.height).toBeGreaterThanOrEqual(320)
+  await chart.focus()
+  await page.keyboard.press("ArrowLeft")
+  const tooltip = trend.locator(".recharts-tooltip-wrapper")
+  const sharedTooltip = tooltip.locator(".rounded-lg.border-border\\/50.bg-background")
+  await expect(sharedTooltip).toBeVisible()
+  await expect(tooltip.getByText("15 Oct 2026, 14:00", { exact: true })).toBeVisible()
+  await expect(tooltip.getByText("11.2M", { exact: true })).toBeVisible()
+  const tokenRow = tooltip.locator(".flex.w-full.items-center.justify-between.gap-4")
+  await expect(tokenRow).toHaveText("Tokens11.2M")
+  await expect(tokenRow.locator(".font-mono")).toHaveText("11.2M")
+  await expect(tooltip).not.toContainText(/Tokens:|NaN|Invalid Date/)
+  await page.keyboard.press("ArrowRight")
+  await expect(tooltip.getByText("15 Oct 2026, 15:00", { exact: true })).toBeVisible()
+  await expect(tokenRow).toHaveText("Tokens0")
+  // Pointer interaction must use the same compact content as keyboard navigation.
+  const grid = (await trend.locator(".recharts-cartesian-grid").boundingBox())!
+  await page.mouse.move(grid.x + 2, grid.y + grid.height / 2)
+  await expect(tokenRow).toHaveText("Tokens11.2M")
+  await expect(sharedTooltip).toBeVisible()
+  await page.mouse.move(0, 0)
   await expect(page.getByText("90.0%", { exact: true })).toBeVisible()
   await expect(page.getByText("25.0%", { exact: true })).toBeVisible()
   await expect(page.getByText("2 s", { exact: true })).toBeVisible()
@@ -124,6 +148,8 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await page.getByRole("button", { name: "Retry overview" }).click()
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
   await page.setViewportSize({ width: 390, height: 844 })
+  await expect.poll(async () => (await chart.boundingBox())!.height).toBeGreaterThanOrEqual(288)
+  expect((await chart.boundingBox())!.width).toBeLessThanOrEqual(390)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   expect(await recent.getByRole("table").evaluate(table => table.getBoundingClientRect().width > table.closest('[data-slot="table-container"]')!.getBoundingClientRect().width)).toBe(true)
 })
