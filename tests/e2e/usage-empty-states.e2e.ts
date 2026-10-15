@@ -53,33 +53,54 @@ for (const publicView of [false, true]) {
     }) }))
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 })
-      let previousChartHeight = 0
-      let previousListHeight = Infinity
-      for (count of [1, 2, 5]) {
+      let previousListHeight: number | undefined
+      for (count of [1, 2, 4, 5, 7]) {
         await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
         const card = page.locator('[data-slot="card"]').filter({ has: page.getByText("Top keys by cost", { exact: true }) })
         const chart = card.locator('[data-slot="chart"]')
         const bars = chart.locator('.recharts-bar-rectangle path')
-        await expect(bars).toHaveCount(count)
-        await expect.poll(() => chart.evaluate(element => element.getBoundingClientRect().height)).toBe(Math.min(220, count * 44 + 16))
+        const visibleCount = Math.min(count, 5)
+        await expect(bars).toHaveCount(visibleCount)
+        await expect.poll(() => chart.evaluate(element => element.getBoundingClientRect().height)).toBe(220)
         await expect.poll(() => bars.evaluateAll(elements => elements.every(element => {
           const height = element.getBoundingClientRect().height
           return height > 0 && height <= 28.5
         }))).toBe(true)
         const chartBounds = (await chart.boundingBox())!
         const listBounds = (await card.locator('[data-slot="scroll-area"]').boundingBox())!
-        expect(chartBounds.height).toBeGreaterThan(previousChartHeight)
-        expect(listBounds.height).toBeLessThan(previousListHeight)
+        if (previousListHeight !== undefined) expect(listBounds.height).toBe(previousListHeight)
         expect(listBounds.y).toBeGreaterThanOrEqual(chartBounds.y + chartBounds.height)
-        previousChartHeight = chartBounds.height
         previousListHeight = listBounds.height
-        await expect(card.locator('.recharts-yAxis .recharts-cartesian-axis-tick')).toHaveCount(count)
+        const barBounds = await bars.evaluateAll(elements => elements.map(element => {
+          const bounds = element.getBoundingClientRect()
+          return { y: bounds.y, height: bounds.height }
+        }))
+        for (const [index, bounds] of barBounds.entries()) {
+          expect(bounds.height).toBeCloseTo(28, 0)
+          expect(bounds.y - chartBounds.y).toBeCloseTo(12 + index * 42, 0)
+        }
+        await expect(card.locator('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-label')).toHaveCount(visibleCount)
+        await expect(card.locator('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-label').first()).toHaveText(new RegExp(`Usage key\\s*${count - 1}`))
+        await expect(card.locator('[data-slot="scroll-area"] .text-sm.font-medium')).toHaveCount(visibleCount * 2)
         await expect(card.locator('[data-slot="scroll-area"]').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
         const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Requests and spend", { exact: true }) })
         expect((await card.boundingBox())!.height).toBe((await trend.boundingBox())!.height)
-        await chart.getByRole("application").focus()
-        await page.keyboard.press("ArrowRight")
+        await bars.first().hover({ force: true })
         await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).toBeVisible()
+        for (let slot = visibleCount; slot < 5; slot++) {
+          await page.mouse.move(chartBounds.x + chartBounds.width / 2, chartBounds.y + 5 + slot * 42 + 21)
+          await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).not.toBeVisible()
+        }
+        await page.mouse.move(0, 0)
+        await chart.getByRole("application").focus()
+        await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).toBeVisible()
+        await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
+        for (let index = 1; index < visibleCount; index++) {
+          await page.keyboard.press("ArrowLeft")
+          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1 - index}`, { exact: true })).toBeVisible()
+        }
+        await page.keyboard.press("ArrowLeft")
+        await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
       }
     }
