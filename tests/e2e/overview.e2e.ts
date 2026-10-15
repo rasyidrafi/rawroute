@@ -126,6 +126,12 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await page.getByRole("button", { name: "7 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(7 * 86_400_000)
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
+  await chart.focus()
+  await page.keyboard.press("ArrowLeft")
+  await expect(tooltip.getByText("15 Oct 2026", { exact: true })).toBeVisible()
+  await expect(tooltip).not.toContainText(/\d{2}:\d{2}/)
+  await expect(tokenRow).toHaveText("Tokens11.2M")
+  await expect(costRow).toHaveText("Cost$0.50")
   // A late old-period response cannot replace the currently selected range.
   holdNext = true
   await page.getByRole("button", { name: "Past 24h", exact: true }).click()
@@ -138,6 +144,12 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   releaseOld!()
   await (await oldResponse).finished()
   await expect(page.getByText("10.00K", { exact: true })).toHaveCount(0)
+  await chart.focus()
+  await page.keyboard.press("ArrowLeft")
+  await expect(tooltip.getByText("15 Oct 2026", { exact: true })).toBeVisible()
+  await expect(tooltip).not.toContainText(/\d{2}:\d{2}/)
+  await expect(tokenRow).toHaveText("Tokens11.2M")
+  await expect(costRow).toHaveText("Cost$0.50")
   failRecent = true
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByRole("button", { name: "Retry recent requests" })).toBeVisible()
