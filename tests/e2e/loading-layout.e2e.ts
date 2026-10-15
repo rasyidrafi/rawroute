@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 import { readFileSync, readdirSync } from "node:fs"
+import { dashboardPages } from "../../src/lib/dashboard/routes"
 
 function barrier() {
   let release!: () => void
@@ -45,6 +46,56 @@ async function authenticate(page: Page) {
   }
 }
 
+/** Check rendered spacing, including stacks below the fold and inside scroll areas. */
+async function expectSeparatedSkeletons(page: Page) {
+  const stacks = await page.locator('[data-slot="skeleton"]').evaluateAll(skeletons => {
+    const parents = new Set(skeletons.map(skeleton => skeleton.parentElement!))
+    return [...parents].flatMap(parent => {
+      const bars = [...parent.children].filter(child => child.matches('[data-slot="skeleton"]'))
+      return bars.slice(1).flatMap((bar, index) => {
+        const first = bars[index]!.getBoundingClientRect()
+        const second = bar.getBoundingClientRect()
+        if (!first.width || !first.height || !second.width || !second.height) return []
+        // Horizontal icon/text and chart controls are not vertical text stacks.
+        if (Math.min(first.right, second.right) <= Math.max(first.left, second.left)) return []
+        return [{ gap: second.top - first.bottom, parent: parent.outerHTML.slice(0, 300) }]
+      })
+    })
+  })
+  for (const stack of stacks) expect(stack.gap, stack.parent).toBeGreaterThanOrEqual(4)
+  return stacks.length
+}
+
+for (const width of [390, 1280]) {
+  test(`all route skeleton stacks have separated bars at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 })
+    await authenticate(page)
+    const variants = new Set<string>()
+    let checkedStacks = 0
+    for (const route of Object.values(dashboardPages)) {
+      if (variants.has(route.skeleton)) continue
+      variants.add(route.skeleton)
+      await test.step(route.skeleton, async () => {
+        const session = await hold(page, "**/api/auth/session")
+        await page.goto(route.path.replace(":providerId", "example"), { waitUntil: "domcontentloaded" })
+        await session.reached
+        await expect(page.locator('main').last()).toBeVisible()
+        await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible()
+        checkedStacks += await expectSeparatedSkeletons(page)
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+        if (route.skeleton === "overview" || route.skeleton === "usage") {
+          await page.screenshot({ path: testInfo.outputPath(`${route.skeleton}-loading-${width}.png`), fullPage: true })
+        }
+        const response = page.waitForResponse("**/api/auth/session")
+        session.release()
+        await (await response).finished()
+        await page.unroute("**/api/auth/session")
+      })
+    }
+    expect(checkedStacks).toBeGreaterThan(20)
+  })
+}
+
 for (const width of [390, 1280, 1600]) {
   test(`public loading matches the loaded header and summary at ${width}px across all loading boundaries`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 })
@@ -56,6 +107,7 @@ for (const width of [390, 1280, 1600]) {
     await page.goto("/", { waitUntil: "domcontentloaded" })
     await script.reached
     await expect(page.getByRole("heading", { name: "Usage dashboard" })).toBeVisible()
+    await expectSeparatedSkeletons(page)
     await expect(page.getByText("API Endpoint", { exact: true })).toHaveCount(0)
     const selector = '[data-slot="public-header"], [data-slot="usage-summary"], [data-slot="usage-summary"] [data-slot="card"], [data-slot="usage-summary"] [data-slot="card-header"], [data-slot="usage-summary"] [data-slot="card-footer"]'
     const initial = await geometry(page, selector)
@@ -120,16 +172,17 @@ test("system logs retain console geometry through account and log loading", asyn
   sameGeometry(initial, await geometry(page, selector))
 })
 
-for (const route of ["providers", "aliases", "budgets", "model-pricing", "providers/codex", "cliproxy"]) {
+for (const route of ["endpoint", "providers", "aliases", "budgets", "model-pricing", "providers/codex", "cliproxy"]) {
   test(`${route} loading preserves page and card padding on mobile`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 1000 })
     await authenticate(page)
-    const endpoint = route === "cliproxy" ? "cliproxy/status" : route === "aliases" ? "combos" : route
+    const endpoint = route === "cliproxy" ? "cliproxy/status" : route === "aliases" ? "combos" : route === "endpoint" ? "endpoint-key" : route
     const data = await hold(page, `**/api/admin/${endpoint}`)
-    await page.goto(({ providers: "/dashboard/ai/providers", aliases: "/dashboard/ai/routing", budgets: "/dashboard/ai/budgets", "model-pricing": "/dashboard/ai/pricing", "providers/codex": "/dashboard/ai/codex-providers", cliproxy: "/dashboard/cliproxy" } as Record<string, string>)[route]!)
+    await page.goto(({ endpoint: "/dashboard/ai/endpoint", providers: "/dashboard/ai/providers", aliases: "/dashboard/ai/routing", budgets: "/dashboard/ai/budgets", "model-pricing": "/dashboard/ai/pricing", "providers/codex": "/dashboard/ai/codex-providers", cliproxy: "/dashboard/cliproxy" } as Record<string, string>)[route]!)
     await data.reached
     const selector = 'main [data-slot="card-header"]'
     await expect(page.locator(selector).first()).toBeVisible()
+    await expectSeparatedSkeletons(page)
     const initial = (await geometry(page, selector))[0]!
     data.release()
     await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)

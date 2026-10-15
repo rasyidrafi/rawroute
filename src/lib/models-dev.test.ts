@@ -23,8 +23,30 @@ describe("models.dev canonical catalog", () => {
       family: "gpt",
       pricing: { inputMicrosPerMillion: 1_250_000, outputMicrosPerMillion: 10_000_000, cacheReadMicrosPerMillion: 125_000, cacheCreationMicrosPerMillion: 2_500_000 },
       contextLimit: 400000,
+      contextTiers: [],
       source: "models.dev",
     }])
+  })
+
+  test("imports context tiers, inherits omitted rates, and prefers explicit tiers over the 200k fallback", () => {
+    const [model] = buildModelsDevCanonicalModels({ provider: { models: { model: {
+      cost: { input: 2, output: 10, cache_read: 0.2, cache_write: 3,
+        context_over_200k: { input: 4, output: 15 },
+        tiers: [
+          { input: 5, tier: { type: "context", size: 272000 } },
+          { output: 12, tier: { type: "context", size: 32000 } },
+          { input: 99, tier: { type: "other", size: 1000 } },
+          { input: 99, tier: { type: "context", size: -1 } },
+        ],
+      },
+    } } } })
+    expect(model!.contextTiers.map((tier) => [tier.thresholdTokens, tier.inputMicrosPerMillion, tier.outputMicrosPerMillion, tier.cacheCreationMicrosPerMillion])).toEqual([
+      [32000, 2_000_000, 12_000_000, 3_000_000],
+      [272000, 5_000_000, 10_000_000, 3_000_000],
+    ])
+    const [fallback] = buildModelsDevCanonicalModels({ provider: { models: { model: { cost: { input: 2, output: 10, context_over_200k: { input: 4 } } } } } })
+    expect(fallback!.contextTiers[0]?.inputMicrosPerMillion).toBe(4_000_000)
+    expect(fallback!.contextTiers[0]?.outputMicrosPerMillion).toBe(10_000_000)
   })
 
   test("ranks multi-token searches by canonical ID and name", () => {

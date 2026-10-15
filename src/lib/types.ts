@@ -252,6 +252,7 @@ export interface CanonicalModelSummary {
   provider: string
   family: string | null
   pricing: PricingRates
+  contextTiers: PricingContextTier[]
   contextLimit: number | null
   source: PricingCanonicalSource
 }

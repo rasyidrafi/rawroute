@@ -38,6 +38,12 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(placeholderRows).toHaveCount(9)
   await expect(placeholderRows.first().getByRole("cell")).toHaveCount(6)
   await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(8)
+  for (const column of [0, 2]) {
+    const bars = placeholderRows.first().getByRole("cell").nth(column).locator('[data-slot="skeleton"]')
+    const first = (await bars.nth(0).boundingBox())!
+    const second = (await bars.nth(1).boundingBox())!
+    expect(second.y - first.y - first.height).toBe(8)
+  }
   const loadingRowHeight = (await placeholderRows.first().boundingBox())!.height
   const loadingColumns = await loading.getByRole("columnheader").evaluateAll(headers => headers.map(header => header.getBoundingClientRect().width))
   await expect(page.getByRole("button", { name: "Older", exact: true })).toBeDisabled()

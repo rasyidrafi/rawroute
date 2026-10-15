@@ -466,7 +466,7 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
   }
   const version: ModelPricingVersion = { id: crypto.randomUUID(), groupId: group.id, version: (versions.reduce((max, entry) => Math.max(max, entry.version), 0) || 0) + 1, effectiveAt: now, createdAt: now, updatedAt: now, ...input.rates, contextTiers }
   await writeVersion(version)
-  return { version, job: null }
+  return { version, job: input.mode === "replace" ? await createPricingJob(group.id, version.id) : null }
 }
 
 export async function getPricingForModelAt(model: { gatewayModelId: string; providerModelId?: string }, at = new Date()) {

@@ -21,5 +21,5 @@ export function FormSkeleton({ labels }: { labels: string[] }) {
 }
 
 export function LogLinesSkeleton() {
-  return <div aria-busy="true" aria-label="Loading log entries" className="space-y-2">{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className={index % 3 === 0 ? "h-4 w-2/3" : "h-4 w-full"} />)}</div>
+  return <div aria-busy="true" aria-label="Loading log entries" className="flex flex-col gap-2">{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className={index % 3 === 0 ? "h-4 w-2/3" : "h-4 w-full"} />)}</div>
 }

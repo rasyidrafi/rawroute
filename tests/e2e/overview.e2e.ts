@@ -51,6 +51,10 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(page.locator('[data-slot="overview-request-skeleton-row"]')).toHaveCount(4)
   await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
   const skeletonHeight = (await page.locator('[data-slot="overview-request-skeleton-row"]').first().boundingBox())!.height
+  const bars = page.locator('[data-slot="overview-request-skeleton-row"]').first().getByRole("cell").first().locator('[data-slot="skeleton"]')
+  const firstBar = (await bars.nth(0).boundingBox())!
+  const secondBar = (await bars.nth(1).boundingBox())!
+  expect(secondBar.y - firstBar.y - firstBar.height).toBe(8)
   await expect(page.getByText("6.42M", { exact: true })).toHaveCount(0)
   release!()
   await expect(page.getByText("4,800", { exact: true })).toBeVisible()

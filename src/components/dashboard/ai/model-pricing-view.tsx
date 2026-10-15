@@ -49,10 +49,22 @@ function parseDollarInput(value: string) {
 }
 function formatCanonicalRate(value: number) { return formatCost(value) }
 function canonicalSourceLabel(value: PricingCanonicalSource) { return value === "models.dev" ? "models.dev" : "Custom ID" }
+function comparableTiers(tiers: PricingContextTier[]) {
+  return JSON.stringify([...tiers].sort((a, b) => a.thresholdTokens - b.thresholdTokens).map((tier) => [tier.thresholdTokens, ...rateFields.map(([field]) => tier[field])]))
+}
+
+function groupPricingPayload(groupId: string, canonical: CanonicalModelSummary | null, current: ModelPricingVersion | null | undefined, reprice: boolean) {
+  const catalogRates = canonical?.pricing
+  const tiers = canonical?.contextTiers || []
+  const changed = catalogRates && (!current || rateFields.some(([field]) => current[field] !== catalogRates[field]) || comparableTiers(current.contextTiers) !== comparableTiers(tiers))
+  const rates = catalogRates || current
+  if (!rates || (!reprice && !changed)) return null
+  return { action: "save-version", ...rates, groupId, mode: reprice ? "replace" : "new", contextTiers: catalogRates ? tiers : current?.contextTiers || [] }
+}
 
 export function ModelPricingView() {
   const { fetcher, apiPost } = useDashboardApi()
-  const { data, mutate, isValidating } = useSWR<PricingAdminData>("/api/admin/model-pricing", fetcher, {
+  const { data, mutate } = useSWR<PricingAdminData>("/api/admin/model-pricing", fetcher, {
     refreshInterval: (latest) => latest?.jobs.some((job) => job.status === "queued" || job.status === "running") ? 3000 : 0,
     refreshWhenHidden: false,
     dedupingInterval: 2000,
@@ -64,6 +76,7 @@ export function ModelPricingView() {
   const [pricingDialog, setPricingDialog] = useState<string>()
   const [canonicalModelId, setCanonicalModelId] = useState("")
   const [canonicalModel, setCanonicalModel] = useState<CanonicalModelSummary | null>(null)
+  const [repriceGroupOpen, setRepriceGroupOpen] = useState(false)
 
   function groupById(id: string) { return data?.groups.find((group) => group.id === id) }
   const editingGroup = groupDialog && groupDialog !== "new" ? groupById(groupDialog) : undefined
@@ -76,13 +89,14 @@ export function ModelPricingView() {
     setCanonicalModel(group?.canonicalModel || null)
   }
 
-  async function refreshGroups() {
-    setPending(true)
-    try { await apiPost("/api/admin/model-pricing", { action: "sync" }); await mutate() }
-    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to refresh model groups") }
-    finally { setPending(false) }
-  }
-  async function saveGroup() {
+  useEffect(() => {
+    let active = true
+    void apiPost("/api/admin/model-pricing", { action: "sync" })
+      .then(() => { if (active) return mutate() })
+      .catch((error: unknown) => { if (active) toast.error(error instanceof Error ? error.message : "Unable to refresh model groups") })
+    return () => { active = false }
+  }, [apiPost, mutate])
+  async function saveGroup(reprice = false) {
     if (!groupDialog) return
     setPending(true)
     try {
@@ -90,11 +104,11 @@ export function ModelPricingView() {
       const result = groupDialog === "new"
         ? await apiPost<{ group: ModelPricingGroup }>("/api/admin/model-pricing", { action: "create-group", name: groupName, modelIds: selectedModels, ...canonical })
         : await apiPost<{ group: ModelPricingGroup }>("/api/admin/model-pricing", { action: "update-group", groupId: groupDialog, name: groupName, modelIds: selectedModels, ...canonical })
-      const catalogPricing = canonicalModel?.pricing
-      const currentPricing = editingGroup?.currentVersion
-      const pricingChanged = catalogPricing && (!currentPricing || rateFields.some(([field]) => currentPricing[field] !== catalogPricing[field]) || (currentPricing.contextTiers?.length || 0) > 0)
-      if (catalogPricing && pricingChanged) await apiPost("/api/admin/model-pricing", { action: "save-version", groupId: result.group.id, mode: "new", ...catalogPricing, contextTiers: [] })
-      await mutate(); setGroupDialog(undefined)
+      setGroupDialog(result.group.id)
+      const pricing = groupPricingPayload(result.group.id, canonicalModel, editingGroup?.currentVersion, reprice)
+      if (pricing) await apiPost("/api/admin/model-pricing", pricing)
+      await mutate(); setRepriceGroupOpen(false); setGroupDialog(undefined)
+      toast.success(reprice ? "Group saved; historical usage is being repriced." : "Group saved. Pricing applies to future requests only.")
     } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save model group") }
     finally { setPending(false) }
   }
@@ -126,7 +140,7 @@ export function ModelPricingView() {
   if (!data) return <DashboardContentSkeleton variant="model-pricing" />
   const pricingGroup = groupById(pricingDialog || "")
 
-  return <Panel title="Model pricing" description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage." icon={<DollarSignIcon />} refresh={() => void refreshGroups()} loading={isValidating || pending}>
+  return <Panel title="Model pricing" description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage." icon={<DollarSignIcon />}>
     <UngroupedModelsNotice count={data.ungroupedModels.length} />
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-medium">Model groups</div><div className="text-sm text-muted-foreground">Fixed groups are refreshed from configured models; custom groups collect models you choose.</div></div><Button size="sm" onClick={() => startGroupEdit("new")}><PlusIcon />New custom group</Button></div>
     <Table><TableColumns columns={[{ id: "Group", label: "Group" }, { id: "Type", label: "Type" }, { id: "Models", label: "Models" }, { id: "Current pricing", label: "Current pricing" }, { id: "actions" }]} /><TableBody>{data.groups.map((group) => <PricingGroupTableRow key={group.id} group={group} members={modelsForGroup(group)} pending={pending} startGroupEdit={startGroupEdit} startPricingEdit={setPricingDialog} deleteGroup={deleteGroup} />)}{!data.groups.length && <EmptyTableRow title="No model groups found" description="Refresh to scan configured models or create a custom group." icon={DollarSignIcon} colSpan={5} />}</TableBody></Table>
@@ -146,11 +160,26 @@ export function ModelPricingView() {
           </div>
           <CanonicalModelPicker key={groupDialog} pending={pending} groupName={groupName} setGroupName={setGroupName} canonicalModel={canonicalModel} canonicalModelId={canonicalModelId} setCanonicalModel={setCanonicalModel} setCanonicalModelId={setCanonicalModelId} />
         </div>
-        <DialogFooter><Button variant="outline" onClick={() => setGroupDialog(undefined)} disabled={pending}>Cancel</Button><Button onClick={() => void saveGroup()} disabled={pending || (groupDialog === "new" && !groupName.trim())}>{pending && <LoadingSpinner />}Save group</Button></DialogFooter>
+        <p className="text-sm text-muted-foreground">Save applies canonical rates and context tiers to future requests only. Save and reprice also recalculates historical usage.</p>
+        <GroupSaveActions pending={pending} isNew={groupDialog === "new"} name={groupName} pricing={canonicalModel || editingGroup?.currentVersion} onCancel={() => setGroupDialog(undefined)} onSave={() => void saveGroup()} onReprice={() => setRepriceGroupOpen(true)} />
       </DialogContent>
     </Dialog>
+    <Dialog open={repriceGroupOpen} onOpenChange={(open) => { if (!pending) setRepriceGroupOpen(open) }}><DialogContent><DialogHeader><DialogTitle>Reprice historical usage?</DialogTitle><DialogDescription>This saves the group, replaces its active pricing with the selected canonical rates and context tiers, and applies those rates to every stored request in this group. Without a canonical model, the current rates are used. Requests without recorded token usage remain unpriced.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRepriceGroupOpen(false)} disabled={pending}>Cancel</Button><Button variant="destructive" onClick={() => void saveGroup(true)} disabled={pending}>{pending && <LoadingSpinner />}Save and reprice</Button></DialogFooter></DialogContent></Dialog>
     {pricingGroup && <PricingVersionDialog key={pricingGroup.id} group={pricingGroup} onClose={() => setPricingDialog(undefined)} onSaved={mutate} />}
   </Panel>
+}
+
+function GroupSaveActions({ pending, isNew, name, pricing, onCancel, onSave, onReprice }: {
+  pending: boolean
+  isNew: boolean
+  name: string
+  pricing: CanonicalModelSummary | ModelPricingVersion | null | undefined
+  onCancel: () => void
+  onSave: () => void
+  onReprice: () => void
+}) {
+  const disabled = pending || (isNew && !name.trim())
+  return <DialogFooter><Button variant="outline" onClick={onCancel} disabled={pending}>Cancel</Button><Button variant="outline" onClick={onSave} disabled={disabled}>{pending && <LoadingSpinner />}Save</Button><Button onClick={onReprice} disabled={disabled || !pricing}>Save and reprice</Button></DialogFooter>
 }
 
 function UngroupedModelsNotice({ count }: { count: number }) {
@@ -219,6 +248,7 @@ function CanonicalModelPicker({ pending, groupName, setGroupName, canonicalModel
       </Popover>
     </div>
     {canonicalModel && <CanonicalModelPreview model={canonicalModel} />}
+    {canonicalModel && canonicalModel.contextTiers.length > 0 && <div className="flex flex-col gap-3 rounded-lg border p-3"><div className="text-sm font-medium">Context pricing · imported on save</div>{canonicalModel.contextTiers.map((tier) => <div key={tier.id} className="flex flex-col gap-2"><div className="text-xs font-medium">From {tier.thresholdTokens.toLocaleString()} input tokens</div><div className="grid grid-cols-2 gap-2 text-xs">{rateFields.map(([field, label]) => <div key={field}><span className="text-muted-foreground">{label} </span>{formatCanonicalRate(tier[field])}</div>)}</div></div>)}</div>}
   </div>
 }
 

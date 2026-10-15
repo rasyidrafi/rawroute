@@ -16,6 +16,13 @@ function provider(id: string): Partial<Provider> {
 }
 
 describe("model pricing catalog", () => {
+  test("repricing a group without a current version still queues historical repricing", async () => {
+    const entry = await upsertProvider(provider("cx"))
+    await upsertModel(entry.id, { id: "first", name: "First", gatewayModelId: "cx/first", upstreamModel: "first" })
+    const group = (await syncModelPricingGroups())[0]!
+    const result = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 0, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
+    expect(result.job).toMatchObject({ groupId: group.id, versionId: result.version.id, status: "queued" })
+  })
   test("groups matching model names across provider prefixes", async () => {
     const firstProvider = await upsertProvider(provider("cx"))
     const secondProvider = await upsertProvider(provider("cxb"))
