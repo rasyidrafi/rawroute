@@ -183,11 +183,11 @@ for (const publicView of [false, true]) {
         await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
         await expect(page.getByText("E2E Usage Key", { exact: true }).first()).toBeVisible()
       }
-      for (const width of [1440, 1280, 1024, 768, 390]) {
+      for (const width of [1600, 1280, 1024, 768, 390]) {
         await page.setViewportSize({ width, height: 900 })
         if (!publicView && width >= 768) await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible()
         const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
-        if (!loading) expect(await card("Most used models").evaluate(element => getComputedStyle(element).alignSelf)).toBe("flex-start")
+        expect(await card("Most used models").evaluate(element => getComputedStyle(element).alignSelf)).toBe(width >= 1280 ? "stretch" : "flex-start")
         for (const [title, description] of [["Usage Trend", "Token usage over time"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
           const header = card(title).locator('[data-slot="card-header"]')
           await expect(header.locator('[data-slot="card-title"]')).toHaveText(title)
@@ -202,11 +202,13 @@ for (const publicView of [false, true]) {
           const right = (await card(rightTitle).boundingBox())!
           if (width >= 1280) {
             expect(Math.abs(left.y - right.y)).toBeLessThan(1)
+            expect(Math.abs(left.height - right.height)).toBeLessThan(1)
             expect(right.x).toBeGreaterThanOrEqual(left.x + left.width)
             expect(right.width).toBeGreaterThanOrEqual(360)
           } else {
             expect(right.y).toBeGreaterThanOrEqual(left.y + left.height)
             expect(Math.abs(left.x - right.x)).toBeLessThan(1)
+            if (rightTitle === "Most used models") expect(right.height).toBeLessThan(left.height)
           }
         }
         const summary = page.locator('[data-slot="usage-summary"] > .grid')
@@ -232,6 +234,41 @@ for (const publicView of [false, true]) {
 }
 
 for (const publicView of [false, true]) {
+  test(`${publicView ? "public" : "workspace"} usage pairs retain natural empty and stacked heights`, async ({ page }) => {
+    let payload = dashboardPayload()
+    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
+    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+    else await authenticate(page)
+    for (const data of [{ keys: [keyRow] }, { models: [modelRow] }, { trend: [trendRow] }, {}]) {
+      payload = dashboardPayload(data)
+      await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+      if (!payload.keys.length && !payload.models.length && !payload.trend.length) {
+        await expect(page.getByText("No usage yet", { exact: true })).toBeVisible()
+        await expect(page.getByText("Usage table", { exact: true })).toHaveCount(0)
+        continue
+      }
+      const panel = (title: string) => page.locator('[data-slot="card"], [data-slot="empty-state"]').filter({ has: page.getByText(title, { exact: true }) })
+      const left = panel(payload.keys.length ? "Usage table" : "No table rows")
+      const right = panel(payload.models.length ? "Most used models" : "No model usage")
+      await expect(left).toBeVisible()
+      await expect(right).toBeVisible()
+      for (const width of [1280, 1600, 390]) {
+        await page.setViewportSize({ width, height: 900 })
+        const a = (await left.boundingBox())!
+        const b = (await right.boundingBox())!
+        if (width >= 1280) {
+          expect(Math.abs(a.y - b.y)).toBeLessThan(1)
+          expect(Math.abs(a.height - b.height)).toBeLessThan(1)
+        } else {
+          expect(b.y).toBeGreaterThanOrEqual(a.y + a.height)
+          expect(b.height).toBeLessThan(640)
+          if (payload.keys.length) expect(a.height).toBe(640)
+          else expect(a.height).toBeLessThan(640)
+        }
+      }
+    }
+  })
+
   test(`${publicView ? "public" : "workspace"} usage ranks all models by requests, not spend`, async ({ page }) => {
     const payload = dashboardPayload({
       trend: [{ ...trendRow, requests: 100_000 }],
