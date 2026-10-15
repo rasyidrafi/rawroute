@@ -58,6 +58,12 @@ function canonicalHistoricalMeasures(history: UsageHistory, source: Record<strin
   measures.requests = requests
   for (const key of [...baseMeasures, ...confidenceMeasures]) measures[key] = validUsageInteger(source[key]) ? source[key] : 0
   measures.tokenCoveredRequests = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "totalTokens"].every(key => validUsageInteger(source[key])) ? requests : 0
+  // Numeric rollup zeros alone do not establish provider field presence.
+  if (source.usageAvailable === true && source.usageCompleteness === "complete" && source.cacheUsageKnown !== false && measures.tokenCoveredRequests === requests) {
+    measures.cacheUsageCoveredRequests = requests
+    measures.cacheUsageInputTokens = measures.inputTokens
+    measures.cacheUsageReadTokens = measures.cacheReadTokens
+  }
   measures.costCoveredRequests = validUsageInteger(source.costMicros) ? requests : 0
   const failuresKnown = validUsageInteger(source.failedRequests) && source.failedRequests <= requests
   measures.statusCoveredRequests = failuresKnown ? measures.failedRequests : 0
@@ -223,6 +229,10 @@ function projectionDigest(buckets: UsageBucket[], histories: UsageHistory[]) {
 
 function applyProjectionPlan(db: Database, plan: ReturnType<typeof planProjection>, rows: Source[]) {
   if (!db.inTransaction) throw new Error("Projection replacement requires an existing exclusive transaction")
+  const columns = db.query<{ name: string }, []>("PRAGMA table_info(usage_buckets)").all()
+  if (columns.length) for (const key of ["cacheUsageInputTokens", "cacheUsageReadTokens", "cacheUsageCoveredRequests"] as const) {
+    if (!columns.some(column => column.name === key)) db.run(`ALTER TABLE usage_buckets ADD COLUMN ${key} INTEGER NOT NULL DEFAULT 0 CHECK(typeof(${key}) = 'integer' AND ${key} >= 0 AND ${key} <= ${key.endsWith("CoveredRequests") ? "requests" : "9007199254740991"})`)
+  }
   createUsageProjectionSchema(db)
   db.run("DELETE FROM usage_buckets")
   db.run("DELETE FROM usage_projection_history")
@@ -266,8 +276,17 @@ export function migrateUsageProjection(file: string, options: Options) {
     const rows = db.query<Source, []>("SELECT * FROM rawroute_documents ORDER BY path").all()
     const table = db.query("SELECT 1 FROM sqlite_master WHERE name = 'usage_projection_meta'").get()
     const meta = table ? db.query<{ version: number; timeZone: string; documentPrefix: string }, []>("SELECT * FROM usage_projection_meta WHERE id = 1").get() : null
-    if (table && (!meta || meta.version !== usageProjectionVersion || meta.documentPrefix !== usagePrefix())) throw new Error("Unsupported projection version/prefix; use an explicit versioned conversion")
+    if (table && (!meta || ![1, usageProjectionVersion].includes(meta.version) || meta.documentPrefix !== usagePrefix())) throw new Error("Unsupported projection version/prefix; use an explicit versioned conversion")
     const previousHistory = table ? db.query<UsageHistory, []>("SELECT * FROM usage_projection_history ORDER BY sourcePath").all() : undefined
+    if (meta?.version === 1) for (const entry of previousHistory || []) {
+      if (!entry.measuresJson) continue
+      const measures = JSON.parse(entry.measuresJson) as Record<string, unknown>
+      // V1 canonical token coverage was inferred from normalized numeric sums,
+      // not per-field presence. Recover only explicit source provenance.
+      const recovered = JSON.parse(canonicalHistoricalMeasures(entry, JSON.parse(entry.sourceJson) as Record<string, unknown>)) as Record<string, unknown>
+      for (const key of ["cacheUsageInputTokens", "cacheUsageReadTokens", "cacheUsageCoveredRequests"] as const) measures[key] = recovered[key]
+      entry.measuresJson = JSON.stringify(measures)
+    }
     const plan = planProjection(rows, previousHistory)
     const sourceDigest = digest(JSON.stringify(rows))
     const plannedDigest = projectionDigest(plan.buckets, plan.histories)

@@ -10,6 +10,7 @@ import { _resetMemoryBackend, upsertModel, upsertProvider } from "@/server/store
 import { savePricingVersion, syncModelPricingGroups } from "./model-pricing"
 import { readMemoryUsageRange, usageRangeSegments } from "./usage-range"
 import { usageCalendarBucket } from "./usage-projection"
+import { normalizeUsageMetrics } from "./usage-metrics"
 import { migrateUsageProjection } from "../../scripts/migrations/usage-projection-store"
 import type { UsageEvent } from "./types"
 
@@ -53,6 +54,39 @@ test("range partition has disjoint daily interiors, hourly edges and at most two
       if (segment.granularity === "raw") expect(segment.to <= usageCalendarBucket(segment.from,"hourly").bucketEnd).toBe(true)
     }
   }
+})
+
+test("recorded cache coverage pairs known input/read values across raw edges, rollups, models and workspaces", async () => {
+  const from = "2026-10-01T00:15:00.000Z"
+  const to = "2026-10-03T01:45:00.000Z"
+  const attempts = [
+    event("complete", from, normalizeUsageMetrics({ input: 100, cached: 80, output: 10 })),
+    event("output-missing", "2026-10-02T10:00:00.000Z", { ...normalizeUsageMetrics({ input: 900, cached: 90 }), gatewayModelId: "second" }),
+    event("cache-missing", "2026-10-02T11:00:00.000Z", normalizeUsageMetrics({ input: 9000, output: 10 })),
+    event("input-missing", "2026-10-03T01:30:00.000Z", normalizeUsageMetrics({ cached: 50, output: 10 })),
+    event("missing", "2026-10-02T12:00:00.000Z", { ...normalizeUsageMetrics(undefined), status: 500 }),
+    event("zero", "2026-10-03T01:31:00.000Z", normalizeUsageMetrics({ input: 0, cached: 0 })),
+    event("no-hit", "2026-10-03T01:32:00.000Z", normalizeUsageMetrics({ input: 1000, cached: 0 })),
+    event("old-partial", "2026-10-02T13:00:00.000Z", { inputTokens: 8000, usageCompleteness: "partial" }),
+  ]
+  const results: Array<Awaited<ReturnType<typeof queryLocalUsageRange>>> = []
+  for (const backend of ["memory", "sqlite"] as const) {
+    process.env.STORAGE_BACKEND = backend
+    await scoped("cache-other", () => recordUsageEvent(event("other", from), null))
+    await scoped("cache-pairs", async () => {
+      for (const attempt of attempts) await recordUsageEvent(attempt, null)
+      if (backend === "sqlite") results.push(await queryLocalUsageRange("cache-pairs", from, to))
+      else {
+        const state = globalThis.__rawrouteAnalyticsMemory!.get("cache-pairs")!
+        results.push(readMemoryUsageRange("cache-pairs", state.projection, state.events, state.eventsByHour, from, to))
+      }
+    })
+  }
+  expect(results[0]!.totals).toEqual(results[1]!.totals)
+  expect(results[1]!.totals).toMatchObject({ requests: 8, cacheUsageInputTokens: 2000, cacheUsageReadTokens: 170, cacheUsageCoveredRequests: 4, tokenCoveredRequests: 2 })
+  expect(results[1]!.totals.cacheUsageReadTokens / results[1]!.totals.cacheUsageInputTokens).toBe(0.085)
+  expect(results[1]!.stages.rawRows).toBe(4)
+  expect(results[1]!.stages.bucketRows).toBeGreaterThan(0)
 })
 
 test("SQLite and memory agree on exact partial-hour, daily interior, status, token coverage and weighted duration measures", async () => {
@@ -99,7 +133,7 @@ for (const [zone,from,to,hours] of [
     await recordUsageEvent(event("first",new Date(Date.parse(from)+30*60_000).toISOString()),null)
     await recordUsageEvent(event("last",new Date(Date.parse(to)-1).toISOString()),null)
     const range=await queryLocalUsageRange("calendar",from,to)
-    expect(range.totals.requests).toBe(2)
+    expect(range.totals).toMatchObject({ requests: 2, cacheUsageInputTokens: 20, cacheUsageReadTokens: 6, cacheUsageCoveredRequests: 2 })
     expect(range.stages.rawRows).toBe(0)
     const date=zone==="Asia/Kathmandu"?"2026-10-13":hours===23?"2026-03-08":"2026-11-01"
     const payload=await getDashboardPayload({preset:"custom",from:date,to:date,granularity:"hourly"})

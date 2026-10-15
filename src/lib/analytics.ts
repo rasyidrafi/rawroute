@@ -590,6 +590,7 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     costMicros: assumedCostMicros ?? calculated.costMicros,
     pricingConfidence: assumedCostMicros !== undefined ? "assumed" : calculated.pricingConfidence,
     usageCompleteness: normalized.usageCompleteness,
+    cacheUsageKnown: normalized.cacheUsageKnown,
     ...(assumedCostMicros !== undefined
       ? {
         costSource: input.assumedCostSource || "reservation",
@@ -1667,6 +1668,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
   const payload: DashboardPayload & { overview?: OverviewDetails } = {
     ...(exactRange ? { overview: {
       inputTokens: totals.inputTokens, cacheReadTokens: totals.cacheReadTokens, failedRequests: totals.failedRequests, statusCoveredRequests: totals.statusCoveredRequests,
+      cacheUsageInputTokens: totals.cacheUsageInputTokens, cacheUsageReadTokens: totals.cacheUsageReadTokens, cacheUsageCoveredRequests: totals.cacheUsageCoveredRequests,
       durationCount: totals.durationCount, durationSumMs: totals.durationSumMs,
       budgets: budgetData.rows.map(budget => ({ id: budget.apiKeyId, name: keyMap.get(budget.apiKeyId)?.name || budget.apiKeyId, enabled: budget.enabled, limitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros, ...(budget.usageAvailable === false ? { usageAvailable: false } : {}) })),
       budgetWindow: budgetData.window ? { from: budgetData.window.start, to: budgetData.window.end, bypassLimits: budgetData.window.bypassLimits } : null,
@@ -1758,6 +1760,8 @@ function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingV
   const after: UsageEvent = {
     ...event,
     ...normalized,
+    // Repricing normalized zeros must not manufacture cache-field provenance.
+    cacheUsageKnown: event.cacheUsageKnown,
     costMicros: calculated.costMicros,
     pricingConfidence,
     costSource: calculated.pricingConfidence === "unpriced" ? event.costSource : "configured-pricing",

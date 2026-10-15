@@ -7,7 +7,7 @@ sources. No live database has been converted as part of implementation/testing.
 
 ## Storage and writes
 
-`usage_projection_meta` records schema version 1, the configured IANA timezone
+`usage_projection_meta` records schema version 2, the configured IANA timezone
 and document prefix. Startup and subsequent transactions reject mismatches with
 an offline-migration instruction; changing timezone requires an explicit rebuild.
 
@@ -43,6 +43,24 @@ zero placeholders. Recorded numbers and money are unchanged. Older records
 without completeness metadata retain the numeric-field fallback: all five token
 measures must be nonnegative safe integers, and availability must be absent/true.
 Complete zero-token responses are covered; unknown explicit metadata is not.
+
+The Overview's **Recorded cache hit rate** uses separate additive paired measures:
+`cacheUsageReadTokens / cacheUsageInputTokens`, plus `cacheUsageCoveredRequests`.
+New events persist `cacheUsageKnown` from provider input/cache-read field presence
+before normalization; missing output does not disqualify a known pair. Explicit
+false excludes a pair even when overall token usage is complete. Older raw
+events without this flag qualify only under the existing complete-token rule;
+older partial events are excluded. Missing input/cache measurements never become
+zero-percent hits. A known positive input with zero reads is 0%; no known positive
+input is unavailable. This metric does not change token totals, costs or budgets.
+
+The offline CLI also upgrades version 1, adding the paired columns and rebuilding
+raw contributions and canonical history snapshots in one transaction. Historical
+numeric totals alone do not prove cache coverage: only preserved source metadata
+with explicit available/complete usage qualifies. The conversion preserves source
+documents, history source JSON and financial coverage, backs up before applying,
+and is an idempotent no-op on a second run. Use the existing stopped-writer
+deployment conversion; do not start version 2 against an unconverted database.
 
 Duration subtraction resets the sum to exactly zero when its valid-duration count
 reaches zero. Other negative subtraction residues are clamped only within

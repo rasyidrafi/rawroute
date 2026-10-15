@@ -57,6 +57,9 @@ const duration = "(json_type(data,'$.durationMs') IN ('integer','real') AND json
 const tokenFields = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "totalTokens"] as const
 const tokensKnown = `(${tokenFields.map(integer).join(" AND ")} AND (json_type(data,'$.usageAvailable') IS NULL OR json_type(data,'$.usageAvailable') = 'true') AND (json_type(data,'$.usageCompleteness') IS NULL OR json_extract(data,'$.usageCompleteness') = 'complete'))`
 const rawExpressions: Record<typeof usageMeasures[number], string> = {
+  cacheUsageCoveredRequests: `CASE WHEN ${cachePairKnown()} THEN 1 ELSE 0 END`,
+  cacheUsageInputTokens: `CASE WHEN ${cachePairKnown()} THEN json_extract(data,'$.inputTokens') ELSE 0 END`,
+  cacheUsageReadTokens: `CASE WHEN ${cachePairKnown()} THEN json_extract(data,'$.cacheReadTokens') ELSE 0 END`,
   requests: "1",
   ...Object.fromEntries(tokenFields.map(key => [key, `CASE WHEN ${integer(key)} THEN json_extract(data,'$.${key}') ELSE 0 END`])) as Record<typeof tokenFields[number], string>,
   costMicros: `CASE WHEN ${integer("costMicros")} THEN json_extract(data,'$.costMicros') ELSE 0 END`,
@@ -72,6 +75,10 @@ const rawExpressions: Record<typeof usageMeasures[number], string> = {
   financialCoveredRequests: `CASE WHEN ${status} AND (NOT ${successful} OR (${integer("costMicros")} AND (json_extract(data,'$.costMicros') = 0 OR (json_type(data,'$.gatewayKeyId') = 'text' AND length(json_extract(data,'$.gatewayKeyId')) > 0)))) THEN 1 ELSE 0 END`,
   modelCoveredRequests: "CASE WHEN json_type(data,'$.gatewayModelId') = 'text' AND length(json_extract(data,'$.gatewayModelId')) > 0 THEN 1 ELSE 0 END",
   pricingCoveredRequests: `CASE WHEN ${status} THEN 1 ELSE 0 END`,
+}
+
+function cachePairKnown() {
+  return `(${integer("inputTokens")} AND ${integer("cacheReadTokens")} AND (json_type(data,'$.usageAvailable') IS NULL OR json_type(data,'$.usageAvailable') = 'true') AND (json_type(data,'$.cacheUsageKnown') = 'true' OR (json_type(data,'$.cacheUsageKnown') IS NULL AND ${tokensKnown})))`
 }
 
 function finish(selected: Selected[], histories: UsageBucket[], unavailable: Set<string>, gaps: UsageRangeResult["gaps"], stages: UsageRangeResult["stages"]): UsageRangeResult {

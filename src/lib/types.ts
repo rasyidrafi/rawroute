@@ -192,6 +192,7 @@ export interface UsageEvent {
   usageAvailable: boolean
   /** Whether both billable token sides were returned by the provider. */
   usageCompleteness?: UsageCompleteness
+  cacheUsageKnown?: boolean
   /** Provenance for migrated or estimated costs; absent on old records. */
   costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical" | "payload-calibrated"
   predictionMethod?: "same-key-model-day-median" | "same-key-model-median" | "same-model-day-median" | "same-model-median" | "same-key-model-p25" | "pooled-model-p25" | "default-model-shrunk-p25" | "openai-codex-payload-calibrated-p50" | "openai-codex-payload-calibrated-p75-reservation"

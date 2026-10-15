@@ -48,6 +48,53 @@ function source(db: Database, collection: string, id: string, data: object) {
 }
 const root = "rawroute_workspaces/example"
 const checksum = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex")
+
+test("cache field provenance survives JSON normalization without changing financial or token coverage", () => {
+  for (const [metrics, known] of [
+    [{ input: 10, cached: 0 }, true],
+    [{ input: 0, cached: 0 }, true],
+    [{ input: 10, output: 2 }, false],
+    [{ cached: 2, output: 2 }, false],
+    [undefined, false],
+  ] as const) {
+    const normalized = normalizeUsageMetrics(metrics)
+    const serialized = JSON.stringify(event("presence", normalized))
+    const stored = JSON.parse(serialized) as Record<string, unknown>
+    expect(stored.cacheUsageKnown).toBe(known)
+    expect(usageEventMeasures(stored).cacheUsageCoveredRequests).toBe(known ? 1 : 0)
+  }
+  expect(usageEventMeasures({ ...event("old-complete") }).cacheUsageCoveredRequests).toBe(1)
+  expect(usageEventMeasures({ ...event("old-partial", { usageCompleteness: "partial" }) }).cacheUsageCoveredRequests).toBe(0)
+})
+
+test("offline v1 conversion preserves raw/history sources, excludes unproven historical cache zeros and is idempotent", () => {
+  const db = legacyDatabase()
+  source(db, `${root}/usageEvents`, "partial", event("partial", normalizeUsageMetrics({ input: 100, cached: 25 })))
+  source(db, `${root}/usageRollups`, "history", { ...aggregate(), granularity: "daily", bucketStart: "2026-10-01T00:00:00.000Z", requests: 1, inputTokens: 500, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 501, costMicros: 20, pricedRequests: 1 })
+  source(db, `${root}/usageRollups`, "known-history", { ...aggregate(), granularity: "daily", bucketStart: "2026-10-02T00:00:00.000Z", requests: 1, inputTokens: 500, outputTokens: 1, cacheReadTokens: 100, cacheCreationTokens: 0, totalTokens: 501, costMicros: 20, pricedRequests: 1, usageAvailable: true, usageCompleteness: "complete" })
+  db.close()
+  migrateUsageProjection(file, { timeZone: "UTC", apply: true, writersStopped: true })
+  const old = new Database(file)
+  const originalSources = old.query("SELECT * FROM rawroute_documents ORDER BY path").all()
+  const originalHistory = old.query<{ sourceJson: string }, []>("SELECT sourceJson FROM usage_projection_history ORDER BY sourcePath").all()
+  old.run("UPDATE usage_projection_meta SET version = 1")
+  const oldColumns = old.query<{ name: string }, []>("PRAGMA table_info(usage_buckets)").all().map(column => column.name).filter(name => !name.startsWith("cacheUsage"))
+  old.run(`CREATE TABLE v1_buckets AS SELECT ${oldColumns.join(",")} FROM usage_buckets`)
+  old.run("DROP TABLE usage_buckets")
+  old.run("ALTER TABLE v1_buckets RENAME TO usage_buckets")
+  old.run("CREATE UNIQUE INDEX v1_bucket_identity ON usage_buckets(workspaceId,granularity,bucketStart,gatewayKeyId,gatewayModelId)")
+  old.run("UPDATE usage_projection_history SET measuresJson = json_remove(measuresJson, '$.cacheUsageInputTokens', '$.cacheUsageReadTokens', '$.cacheUsageCoveredRequests') WHERE measuresJson IS NOT NULL")
+  old.close()
+  const options = { timeZone: "UTC", apply: true, writersStopped: true, backup: `${file}.v1-backup` }
+  const converted = migrateUsageProjection(file, options)
+  expect(converted.applied).toBe(true)
+  expect(converted.workspaceTotals.example).toMatchObject({ cacheUsageInputTokens: 600, cacheUsageReadTokens: 125, cacheUsageCoveredRequests: 2 })
+  expect(migrateUsageProjection(file, options).unchanged).toBe(true)
+  const check = new Database(file)
+  expect(check.query("SELECT * FROM rawroute_documents ORDER BY path").all()).toEqual(originalSources)
+  expect(check.query("SELECT sourceJson FROM usage_projection_history ORDER BY sourcePath").all()).toEqual(originalHistory)
+  check.close()
+})
 function aggregate(extra: Record<string, unknown> = {}) {
   return { granularity: "hourly", bucketStart: "2026-10-01T12:00:00.000Z", gatewayKeyId: "key", gatewayModelId: "model", requests: 2, inputTokens: 20, outputTokens: 4, cacheReadTokens: 6, cacheCreationTokens: 2, totalTokens: 24, costMicros: 40, pricedRequests: 2, unpricedRequests: 0, backfillSource: "ccs-usage-v2", ...extra }
 }
@@ -95,12 +142,12 @@ for (const backend of ["memory", "sqlite"] as const) test(`${backend}: actual re
     const model = await upsertModel(provider.id, { id: "model", name: "Model", gatewayModelId: "synthetic/model", upstreamModel: "model" })
     const group = (await syncModelPricingGroups()).find(entry => entry.memberModelIds.includes(model.id))!
     await savePricingVersion({ groupId: group.id, mode: "new", rates: { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
-    for (const status of [200, 500]) await recordUsageEvent(event(`event-${status}`, { gatewayModelId: model.gatewayModelId, providerModelId: model.id, status, costMicros: 0, pricingConfidence: "unpriced", usageCompleteness: "complete" }), null)
+    for (const status of [200, 500]) await recordUsageEvent(event(`event-${status}`, { gatewayModelId: model.gatewayModelId, providerModelId: model.id, status, costMicros: 0, pricingConfidence: "unpriced", usageCompleteness: "complete", cacheUsageKnown: status === 500 }), null)
     const replacement = await savePricingVersion({ groupId: group.id, mode: "replace", rates: { inputMicrosPerMillion: 2_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }, contextTiers: [] })
     await repriceUsageForGroup(replacement.job!.id)
     await repriceUsageForGroup(replacement.job!.id)
     const buckets = backend === "sqlite" ? readBuckets() : [...globalThis.__rawrouteAnalyticsMemory!.get("reprice")!.projection.values()]
-    for (const bucket of buckets) expect(bucket).toMatchObject({ requests: 2, successfulCostMicros: 14, costMicros: 28, failedRequests: 1, pricedRequests: 1, unpricedRequests: 0, durationCount: 2, durationSumMs: 200, cacheReadTokens: 6, cacheCreationTokens: 2 })
+    for (const bucket of buckets) expect(bucket).toMatchObject({ requests: 2, successfulCostMicros: 14, costMicros: 28, failedRequests: 1, pricedRequests: 1, unpricedRequests: 0, durationCount: 2, durationSumMs: 200, cacheReadTokens: 6, cacheCreationTokens: 2, cacheUsageInputTokens: 10, cacheUsageReadTokens: 3, cacheUsageCoveredRequests: 1 })
   })
 })
 
@@ -152,8 +199,8 @@ test("offline conversion is readonly by default, backed up, source-preserving an
   expect(() => migrateUsageProjection(file, { timeZone: "UTC", apply: true })).toThrow("Stop all writers")
   const applied = migrateUsageProjection(file, { timeZone: "UTC", apply: true, writersStopped: true })
   expect(applied.applied).toBe(true)
-  expect(existsSync(`${file}.before-usage-projection-v1`)).toBe(true)
-  expect(statSync(`${file}.before-usage-projection-v1`).mode & 0o777).toBe(0o600)
+  expect(existsSync(`${file}.before-usage-projection-v2`)).toBe(true)
+  expect(statSync(`${file}.before-usage-projection-v2`).mode & 0o777).toBe(0o600)
   const converted = new Database(file)
   for (const row of originals) expect(converted.query("SELECT * FROM rawroute_documents WHERE path = ?").get((row as { path: string }).path)).toEqual(row)
   expect(converted.query<{ count: number }, []>("SELECT count(*) AS count FROM rawroute_documents").get()?.count).toBe(3)
@@ -223,7 +270,7 @@ test("converter fails closed on active SQLite ownership and rolls back all proje
   db.close()
   expect(() => migrateUsageProjection(file, { timeZone: "UTC", apply: true, writersStopped: true })).toThrow("projection failure")
   expect(readBuckets()).toEqual([sentinel])
-  expect(existsSync(`${file}.before-usage-projection-v1`)).toBe(true)
+  expect(existsSync(`${file}.before-usage-projection-v2`)).toBe(true)
 })
 
 test("maintenance rollup batches cannot silently stale canonical history, and workspace deletion removes projection data", async () => {
@@ -296,9 +343,9 @@ test("imported raw repricing does not resurrect legacy values on rebuild; backup
   const converted = new Database(file)
   converted.run("UPDATE usage_buckets SET costMicros = 1, successfulCostMicros = 1")
   converted.close()
-  const originalBackup = checksum(`${file}.before-usage-projection-v1`)
+  const originalBackup = checksum(`${file}.before-usage-projection-v2`)
   expect(() => migrateUsageProjection(file, { timeZone: "UTC", apply: true, writersStopped: true })).toThrow("Refusing to overwrite")
-  expect(checksum(`${file}.before-usage-projection-v1`)).toBe(originalBackup)
+  expect(checksum(`${file}.before-usage-projection-v2`)).toBe(originalBackup)
   migrateUsageProjection(file, { timeZone: "UTC", apply: true, writersStopped: true, backup: join(directory, "repair-backup.sqlite") })
   const corrupt = new Database(file)
   corrupt.run("UPDATE usage_projection_history SET sourceJson = json_set(sourceJson, '$.costMicros', 999)")

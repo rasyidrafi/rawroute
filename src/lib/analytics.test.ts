@@ -155,7 +155,7 @@ describe.serial("usage analytics", () => {
     })
 
     expect(explicitZero).toMatchObject({ costMicros: 46_438, pricingConfidence: "exact", costSource: "configured-pricing", usageCompleteness: "complete" })
-    expect(missingRead).toMatchObject({ costMicros: 283_750, pricingConfidence: "assumed", costSource: "configured-pricing", usageCompleteness: "complete" })
+    expect(missingRead).toMatchObject({ costMicros: 283_750, pricingConfidence: "assumed", costSource: "configured-pricing", usageCompleteness: "complete", cacheUsageKnown: false })
   })
 
   test("uses the supplied estimate only for missing or partial successful usage", async () => {
@@ -183,7 +183,7 @@ describe.serial("usage analytics", () => {
     const partial = await recordGatewayUsage({ ...common, id: "partial-fallback", metrics: { input: 100 } })
     const missing = await recordGatewayUsage({ ...common, id: "missing-fallback", metrics: undefined })
 
-    expect(partial).toMatchObject({ costMicros: 1_000, pricingConfidence: "assumed", costSource: "reservation", usageCompleteness: "partial" })
+    expect(partial).toMatchObject({ costMicros: 1_000, pricingConfidence: "assumed", costSource: "reservation", usageCompleteness: "partial", cacheUsageKnown: false })
     expect(missing).toMatchObject({ costMicros: 1_000, pricingConfidence: "assumed", costSource: "reservation", usageCompleteness: "missing" })
   })
 

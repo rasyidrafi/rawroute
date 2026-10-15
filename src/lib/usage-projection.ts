@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite"
 import { addZonedDays, getAppTimeZone, getZonedParts, startOfZonedDay, startOfZonedMonth } from "./timezone"
 
-export const usageProjectionVersion = 1
+export const usageProjectionVersion = 2
 export type UsageGranularity = "hourly" | "daily" | "monthly"
-export const usageMeasures = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "totalTokens", "costMicros", "successfulCostMicros", "pricedRequests", "unpricedRequests", "failedRequests", "statusCoveredRequests", "durationSumMs", "durationCount", "tokenCoveredRequests", "costCoveredRequests", "financialCoveredRequests", "modelCoveredRequests", "pricingCoveredRequests"] as const
+export const usageMeasures = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "totalTokens", "costMicros", "successfulCostMicros", "pricedRequests", "unpricedRequests", "failedRequests", "statusCoveredRequests", "durationSumMs", "durationCount", "tokenCoveredRequests", "costCoveredRequests", "financialCoveredRequests", "modelCoveredRequests", "pricingCoveredRequests", "cacheUsageInputTokens", "cacheUsageReadTokens", "cacheUsageCoveredRequests"] as const
 export type UsageMeasures = Record<typeof usageMeasures[number], number>
 export type HistoricalUsageMeasures = UsageMeasures & { latestEventAt: string | null; latestSuccessAt: string | null }
 export type UsageBucket = UsageMeasures & {
@@ -124,6 +124,12 @@ export function usageEventMeasures(event: Record<string, unknown>): UsageMeasure
   const available = event.usageAvailable === undefined || event.usageAvailable === true
   const complete = event.usageCompleteness === undefined || event.usageCompleteness === "complete"
   result.tokenCoveredRequests = available && complete && tokens.every(key => validUsageInteger(event[key])) ? 1 : 0
+  // Explicit field presence survives normalization. Legacy partial records cannot
+  // distinguish measured zero from placeholders; only complete records qualify.
+  const cacheKnown = available && (event.cacheUsageKnown === true || (event.cacheUsageKnown === undefined && result.tokenCoveredRequests === 1)) && validUsageInteger(event.inputTokens) && validUsageInteger(event.cacheReadTokens)
+  result.cacheUsageCoveredRequests = cacheKnown ? 1 : 0
+  result.cacheUsageInputTokens = cacheKnown ? result.inputTokens : 0
+  result.cacheUsageReadTokens = cacheKnown ? result.cacheReadTokens : 0
   const statusKnown = typeof event.status === "number" && Number.isInteger(event.status) && event.status >= 100 && event.status <= 599
   const successful = statusKnown && Number(event.status) >= 200 && Number(event.status) < 300
   result.statusCoveredRequests = statusKnown ? 1 : 0

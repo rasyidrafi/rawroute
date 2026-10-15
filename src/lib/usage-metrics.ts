@@ -112,6 +112,7 @@ export function normalizeUsageMetrics(metrics: UsageMetrics | undefined) {
     cacheCreationTokens,
     totalTokens: Math.min(Number.MAX_SAFE_INTEGER, inputTokens + outputTokens),
     usageAvailable,
+    cacheUsageKnown: inputProvided && cacheReadProvided,
     usageCompleteness: !usageAvailable ? "missing" as const : inputProvided && outputProvided ? "complete" as const : "partial" as const,
   }
   // Keep field presence available to the pricing calculation without writing

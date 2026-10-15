@@ -88,7 +88,7 @@ for (const backend of ["memory", "sqlite"] as const) {
       expect(payload.trend.reduce((sum, point) => sum + point.tokens, 0)).toBe(payload.summary.tokens)
       expect(payload.models.map(model => model.model)).toEqual(["frequent", "expensive"])
       expect(payload.models.map(model => model.requests)).toEqual([41, 1])
-      expect(payload.overview).toMatchObject({ inputTokens: 4200, cacheReadTokens: 1680, failedRequests: 10, statusCoveredRequests: 42, durationCount: 42, durationSumMs: 24000 })
+      expect(payload.overview).toMatchObject({ inputTokens: 4200, cacheReadTokens: 1680, cacheUsageInputTokens: 4200, cacheUsageReadTokens: 1680, cacheUsageCoveredRequests: 42, failedRequests: 10, statusCoveredRequests: 42, durationCount: 42, durationSumMs: 24000 })
       const ordinary = await getDashboardPayload({ preset: "all" })
       expect(ordinary).not.toHaveProperty("overview")
     })

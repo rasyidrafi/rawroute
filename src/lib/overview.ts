@@ -19,6 +19,9 @@ export function overviewRange(period: OverviewPeriod, now = Date.now()) {
 }
 
 export interface OverviewDetails {
+  cacheUsageInputTokens: number
+  cacheUsageReadTokens: number
+  cacheUsageCoveredRequests: number
   inputTokens: number
   cacheReadTokens: number
   failedRequests: number
