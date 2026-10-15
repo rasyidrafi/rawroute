@@ -13,7 +13,7 @@ import { pagePaths } from "@/lib/dashboard/routes"
 import { useOverview } from "@/hooks/use-overview"
 import type { OverviewPayload, OverviewPeriod } from "@/lib/overview"
 import type { RequestLogsPage } from "@/lib/request-logs"
-import { formatCost, formatTokenCount } from "@/lib/usage-display"
+import { formatCost, formatDuration, formatTokenCount } from "@/lib/usage-display"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 
 export function OverviewView() {
@@ -40,7 +40,7 @@ function overviewMetrics(data?: OverviewPayload) {
     { label: "Requests", value: summary?.requests.toLocaleString(), note: "Recorded model attempts in this period", icon: ActivityIcon },
     { label: "Success rate", value: overview && summary && summary.requests > 0 && overview.statusCoveredRequests === summary.requests ? `${((summary.requests - overview.failedRequests) / summary.requests * 100).toFixed(1)}%` : unavailable, note: overview && summary && overview.statusCoveredRequests < summary.requests ? "Historical status coverage is incomplete" : "Successful attempts / all recorded attempts", icon: CheckCircle2Icon },
     { label: "Estimated spend", value: summary && formatCost(summary.costMicros), note: summary ? `${summary.unpricedRequests.toLocaleString()} attempts without exact pricing` : "Based on configured model rates", icon: CoinsIcon },
-    { label: "Recorded-attempt latency", value: overview?.durationCount ? `${(overview.durationSumMs / overview.durationCount / 1000).toFixed(2)}s` : unavailable, note: overview ? `Mean completion duration · ${overview.durationCount.toLocaleString()} recorded durations` : "Mean completion duration, not time to first token", icon: Clock3Icon },
+    { label: "Recorded-attempt latency", value: overview?.durationCount ? formatDuration(overview.durationSumMs / overview.durationCount) : unavailable, note: overview ? `Mean completion duration · ${overview.durationCount.toLocaleString()} recorded durations` : "Mean completion duration, not time to first token", icon: Clock3Icon },
     { label: "Cache hit rate", value: overview?.inputTokens ? `${(overview.cacheReadTokens / overview.inputTokens * 100).toFixed(1)}%` : unavailable, note: "Cache-read tokens / input tokens", icon: DatabaseZapIcon },
   ]
 }

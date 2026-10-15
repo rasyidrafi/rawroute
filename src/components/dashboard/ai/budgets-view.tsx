@@ -25,6 +25,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { TableColumns, Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+import { formatDuration } from "@/lib/usage-display"
 import { calendarDateFromInstant, formatAppDateTime, formatAppWindowDate, getZonedParts, zonedDateTimeToDate } from "@/lib/timezone"
 import type { BudgetBeyondLimitsSettings, BudgetUnlimitedSettings, BudgetWindowAnchor } from "@/lib/types"
 
@@ -45,7 +46,9 @@ const TIME_MINUTES = Array.from({ length: 60 }, (_, index) => `${index}`.padStar
 const budgetSortLabel = (value: BudgetSortKey) => budgetSortOptions.find((option) => option.value === value)?.label || budgetSortOptions[0].label
 const formatWindowDate = (value: string) => formatAppWindowDate(value)
 const formatSessionDate = (value: string | null) => value ? formatAppDateTime(value) : "Active"
-function formatSessionDuration(startedAt: string, endedAt: string | null) { const seconds = Math.max(0, Math.floor(((endedAt ? Date.parse(endedAt) : Date.now()) - Date.parse(startedAt)) / 1000)); const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60); if (days) return `${days}d ${hours}h`; if (hours) return `${hours}h ${minutes}m`; return `${Math.max(1, minutes)}m` }
+function formatSessionDuration(startedAt: string, endedAt: string | null) {
+  return formatDuration(Math.max(0, (endedAt ? Date.parse(endedAt) : Date.now()) - Date.parse(startedAt)))
+}
 function formatBudgetResetIn(end: string) { const seconds = Math.max(0, Math.ceil((Date.parse(end) - Date.now()) / 1000)); if (seconds <= 0) return "Now"; const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.max(1, Math.ceil(seconds / 60)); if (days) return hours ? `${days}d ${hours}h` : `${days}d`; return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m` }
 function formatWindowTime(value: string) { const parts = getZonedParts(value); return Number.isFinite(parts.hour) ? `${`${parts.hour}`.padStart(2, "0")}:${`${parts.minute}`.padStart(2, "0")}` : "00:00" }
 function dateToAppDateTime(value: Date, time: string) { return zonedDateTimeToDate(value, time).toISOString() }

@@ -1,5 +1,19 @@
 import { expect, test } from "bun:test"
-import { formatCost, formatTokenCount } from "./usage-display"
+import { formatCost, formatDuration, formatTokenCount } from "./usage-display"
+
+test.each([
+  [NaN, "Unavailable"], [Infinity, "Unavailable"], [-Infinity, "Unavailable"], [-1, "Unavailable"],
+  [0, "0 ms"], [0.1, "<1 ms"], [1, "1 ms"], [1.5, "2 ms"],
+  [999.4, "999 ms"], [999.5, "1 s"], [1000, "1 s"], [1005, "1.01 s"],
+  [5285, "5.29 s"], [9300, "9.3 s"], [59_994, "59.99 s"], [59_995, "1 min"],
+  [60_000, "1 min"], [65_000, "1 min 5 s"], [119_500, "2 min"],
+  [3_599_499, "59 min 59 s"], [3_599_500, "1 h"], [3_600_000, "1 h"],
+  [3_720_000, "1 h 2 min"], [7_170_000, "2 h"],
+  [86_369_999, "23 h 59 min"], [86_370_000, "1 d"], [86_400_000, "1 d"],
+  [93_600_000, "1 d 2 h"], [171_000_000, "2 d"],
+])("formats %s milliseconds as %s", (value, expected) => {
+  expect(formatDuration(value)).toBe(expected)
+})
 
 test.each([
   [0, "0"], [999, "999"], [1000, "1.00K"], [43_542, "43.5K"],

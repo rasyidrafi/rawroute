@@ -13,7 +13,7 @@ import { TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { formatAppDateTime } from "@/lib/timezone"
 import { RequestLogsTable } from "./request-logs-table"
 import type { RequestLogsPage } from "@/lib/request-logs"
-import { formatCost, formatTokenCount } from "@/lib/usage-display"
+import { formatCost, formatDuration, formatTokenCount } from "@/lib/usage-display"
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: { id: string; name: string }[]; onChange: (value: string) => void }) {
   return <Select value={value} onValueChange={value => { if (value !== null) onChange(value) }}>
@@ -60,7 +60,7 @@ function RequestLogsWorkspace() {
             <TableCell><Badge variant={event.status >= 200 && event.status < 300 ? "secondary" : "destructive"}>{event.status >= 200 && event.status < 300 ? "Success" : "Failed"} · {event.status}</Badge></TableCell>
             <TableCell>{event.usageAvailable ? formatTokenCount(event.totalTokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${formatTokenCount(event.inputTokens)} in · ${formatTokenCount(event.cacheReadTokens + event.cacheCreationTokens)} cache · ${formatTokenCount(event.outputTokens)} out` : "Provider usage not recorded"}</div></TableCell>
             <TableCell>{event.pricingConfidence === "unpriced" ? "Unpriced" : formatCost(event.costMicros)}{event.pricingConfidence === "assumed" && <div className="text-xs text-muted-foreground">Estimated</div>}</TableCell>
-            <TableCell>{event.durationMs.toLocaleString()} ms</TableCell>
+            <TableCell>{formatDuration(event.durationMs)}</TableCell>
             <TableCell>{formatAppDateTime(event.completedAt)}</TableCell>
           </TableRow>)}</TableBody>
         </RequestLogsTable>}

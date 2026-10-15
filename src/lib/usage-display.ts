@@ -3,6 +3,29 @@ const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", cu
 const subDollarCurrencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 })
 const TOKEN_UNITS = ["", "K", "M", "B", "T"] as const
 
+/** Human-readable elapsed time, promoting units when rounding crosses a boundary. */
+export function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) return "Unavailable"
+  if (ms === 0) return "0 ms"
+  if (ms < 1) return "<1 ms"
+  if (ms < 999.5) return `${Math.round(ms)} ms`
+  const seconds = Math.round(ms / 10) / 100
+  if (seconds < 60) return `${seconds} s`
+  const wholeSeconds = Math.round(ms / 1000)
+  if (wholeSeconds < 3600) {
+    const remainder = wholeSeconds % 60
+    return `${Math.floor(wholeSeconds / 60)} min${remainder ? ` ${remainder} s` : ""}`
+  }
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 1440) {
+    const remainder = minutes % 60
+    return `${Math.floor(minutes / 60)} h${remainder ? ` ${remainder} min` : ""}`
+  }
+  const hours = Math.round(ms / 3_600_000)
+  const remainder = hours % 24
+  return `${Math.floor(hours / 24)} d${remainder ? ` ${remainder} h` : ""}`
+}
+
 /** Compact token counts, promoting rounded values into the next unit. */
 export function formatTokenCount(value: number) {
   if (Math.abs(value) < 1000) return integerFormatter.format(Math.round(value))

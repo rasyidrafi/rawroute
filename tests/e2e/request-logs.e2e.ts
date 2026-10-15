@@ -25,7 +25,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
     const older = params.has("cursor")
     const empty = params.get("status") === "failed"
     const events = empty ? [] : Array.from({ length: older ? 1 : 25 }, (_, i) => ({
-      id: `${older ? "older" : "newest"}-${i}`, gatewayKeyId: "old-key", keyName: older ? null : "Demo key", gatewayModelId: "old-model", modelName: older ? null : "Demo model", protocol: "openai-chat", startedAt: to, completedAt: to, status: 200, durationMs: 250, inputTokens: 28_500, outputTokens: 5_042, cacheReadTokens: 8_000, cacheCreationTokens: 2_000, totalTokens: 43_542, costMicros: 10, pricingConfidence: older ? "unpriced" : "assumed", usageAvailable: true,
+      id: `${older ? "older" : "newest"}-${i}`, gatewayKeyId: "old-key", keyName: older ? null : "Demo key", gatewayModelId: "old-model", modelName: older ? null : "Demo model", protocol: "openai-chat", startedAt: to, completedAt: to, status: 200, durationMs: [5285, 9300, 999.5, 59_995, 65_000, 3_599_500, 3_720_000, 86_370_000][i] ?? 250, inputTokens: 28_500, outputTokens: 5_042, cacheReadTokens: 8_000, cacheCreationTokens: 2_000, totalTokens: 43_542, costMicros: 10, pricingConfidence: older ? "unpriced" : "assumed", usageAvailable: true,
     }))
     await route.fulfill({ json: { events, models: [{ id: "old-model", name: older ? "old-model" : "Demo model" }], from: params.get("from"), to: params.get("to"), nextCursor: older || empty ? null : "test-cursor" } })
   })
@@ -64,6 +64,9 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   const loadedColumns = await page.getByRole("columnheader").evaluateAll(headers => headers.map(header => header.getBoundingClientRect().width))
   for (const [index, width] of loadingColumns.entries()) expect(Math.abs(loadedColumns[index]! - width)).toBeLessThanOrEqual(1)
   await expect(page.getByText("Estimated", { exact: true })).toHaveCount(25)
+  for (const duration of ["5.29 s", "9.3 s", "1 s", "1 min", "1 min 5 s", "1 h", "1 h 2 min", "1 d"]) {
+    await expect(page.getByRole("cell", { name: duration, exact: true })).toHaveCount(1)
+  }
   await expect(page.getByRole("cell", { name: "$0.00001 Estimated", exact: true })).toHaveCount(25)
   await expect(page.getByRole("cell", { name: "43.5K 28.5K in · 10.0K cache · 5.04K out", exact: true })).toHaveCount(25)
   const frozenTo = requests.at(-1)!.get("to")
