@@ -38,11 +38,11 @@ for (const publicView of [false, true]) test(`${publicView ? "public" : "workspa
   if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
   else await authenticate(page)
   await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
-  await expect(page.getByText("Partial analytics coverage", { exact: true })).toBeVisible()
+  await expect(page.getByText("Partial analytics coverage", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Unavailable", { exact: true })).toHaveCount(4)
   await expect(page.getByText("Usage unavailable", { exact: true })).toBeVisible()
   await expect(page.getByText("No usage yet", { exact: true })).toHaveCount(0)
-  await expect(page.getByText(/unavailable data is not zero usage/)).toBeVisible()
+  await expect(page.getByText(/unavailable data is not zero usage/)).toHaveCount(0)
 })
 const keyRow: DashboardPayload["keys"][number] = {
   id: "usage-empty-state-key",

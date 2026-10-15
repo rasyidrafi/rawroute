@@ -15,7 +15,6 @@ import type { OverviewPayload, OverviewPeriod } from "@/lib/overview"
 import type { RequestLogsPage } from "@/lib/request-logs"
 import { formatCost, formatDuration, formatRequestCount, formatTokenCount } from "@/lib/usage-display"
 import { useDashboardApi } from "@/components/dashboard/api-context"
-import { UsageCoverageNotice } from "./usage-coverage-notice"
 
 export function OverviewView() {
   const { workspaceId } = useDashboardApi()
@@ -59,7 +58,6 @@ function OverviewLayout({ data, period, onPeriod, refresh, busy, error, recent, 
       <div className="flex flex-wrap items-center gap-2"><ToggleGroup aria-label="Overview time range" value={[period]} onValueChange={values => { const value = values[0]; if (value === "24h" || value === "7d" || value === "30d") onPeriod?.(value) }} size="sm" variant="outline">{(["24h", "7d", "30d"] as const).map(value => <ToggleGroupItem disabled={!onPeriod} key={value} value={value}>{value === "24h" ? "Past 24h" : value === "7d" ? "7 days" : "30 days"}</ToggleGroupItem>)}</ToggleGroup><Button variant="outline" size="sm" disabled={busy || !refresh} onClick={refresh}><RefreshCwIcon data-icon="inline-start" />{busy && refresh ? "Refreshing…" : "Refresh"}</Button></div>
     </div>
     {error && <Alert variant="destructive"><AlertDescription>Unable to load overview. <Button variant="link" size="sm" onClick={refresh} disabled={busy}>Retry overview</Button></AlertDescription></Alert>}
-    <UsageCoverageNotice coverage={data?.coverage} requests={data?.summary.requests || 0} />
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {metrics.map(metric => <Card key={metric.label}><CardHeader><div className="flex items-center justify-between gap-2"><CardDescription>{metric.label}</CardDescription><metric.icon className="size-4 text-muted-foreground" /></div><CardTitle variant="metric">{data ? metric.value : error ? "Unavailable" : <Skeleton className="h-9 w-32" />}</CardTitle></CardHeader><CardContent><p className="text-xs text-muted-foreground">{metric.note}</p></CardContent></Card>)}
     </div>
