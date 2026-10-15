@@ -36,10 +36,10 @@ function overviewMetrics(data?: OverviewPayload) {
   const summary = data?.summary
   const unavailable = "Unavailable"
   return [
-    { label: "Tokens processed", value: summary && formatTokenCount(summary.tokens), note: "Input (including cache) + output tokens", icon: LayersIcon },
+    { label: "Tokens processed", value: summary && formatTokenCount(summary.tokens), note: "Input + cached input + output tokens", icon: LayersIcon },
     { label: "Requests", value: summary && formatRequestCount(summary.requests), note: "Recorded model attempts in this period", icon: ActivityIcon },
     { label: "Success rate", value: overview && summary && summary.requests > 0 && overview.statusCoveredRequests === summary.requests ? `${((summary.requests - overview.failedRequests) / summary.requests * 100).toFixed(1)}%` : unavailable, note: overview && summary && overview.statusCoveredRequests < summary.requests ? "Historical status coverage is incomplete" : "Successful attempts / all recorded attempts", icon: CheckCircle2Icon },
-    { label: "Estimated spend", value: summary && formatCost(summary.costMicros), note: summary ? `${formatRequestCount(summary.unpricedRequests)} attempts without exact pricing` : "Based on configured model rates", icon: CoinsIcon },
+    { label: "Estimated spend", value: summary && formatCost(summary.costMicros), note: "Based on configured model rates", icon: CoinsIcon },
     { label: "Recorded-attempt latency", value: overview?.durationCount ? formatDuration(overview.durationSumMs / overview.durationCount) : unavailable, note: overview ? `Mean completion duration · ${formatRequestCount(overview.durationCount)} recorded durations` : "Mean completion duration, not time to first token", icon: Clock3Icon },
     { label: "Cache hit rate", value: overview?.inputTokens ? `${(overview.cacheReadTokens / overview.inputTokens * 100).toFixed(1)}%` : unavailable, note: "Cache-read tokens / input tokens", icon: DatabaseZapIcon },
   ]

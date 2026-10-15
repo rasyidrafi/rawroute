@@ -62,7 +62,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(page.getByText("25.0%", { exact: true })).toBeVisible()
   await expect(page.getByText("2 s", { exact: true })).toBeVisible()
   await expect(page.getByText("4k", { exact: true })).toBeVisible()
-  await expect(page.getByText("1.2k attempts without exact pricing", { exact: true })).toBeVisible()
+  await expect(page.getByText("Based on configured model rates", { exact: true })).toBeVisible()
   await expect(page.getByText("Mean completion duration · 3.8k recorded durations", { exact: true })).toBeVisible()
   await expect(page.getByText("Quiet key", { exact: true })).toBeVisible()
   const models = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })

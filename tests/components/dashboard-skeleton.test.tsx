@@ -38,6 +38,7 @@ test("usage loading retains the current summary content and metric structure", (
   const markup = renderToStaticMarkup(<UsageSummary />)
   expect(markup.match(/data-slot="card-content"/g)).toHaveLength(4)
   expect(markup).toContain("Estimated spend")
+  expect(markup).toContain("Recorded model attempts in this period")
   expect(markup).toContain('aria-busy="true"')
 })
 
@@ -45,6 +46,8 @@ test("overview fallback has real-layout metric and four-row table skeletons, not
   const markup = renderToStaticMarkup(<MemoryRouter><DashboardContentSkeleton variant="overview" /></MemoryRouter>)
   expect(markup).toContain("Your gateway at a glance")
   expect(markup).toContain("Tokens processed")
+  expect(markup).toContain("Input + cached input + output tokens")
+  expect(markup).toContain("Based on configured model rates")
   expect(markup).toContain("Usage Trend")
   expect(markup).toContain("Recent Requests")
   expect(markup.match(/data-slot="overview-request-skeleton-row"/g)).toHaveLength(4)
