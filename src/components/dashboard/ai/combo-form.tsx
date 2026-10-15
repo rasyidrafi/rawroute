@@ -71,6 +71,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
   const { apiPost } = useDashboardApi()
   const initialMembers = combo ? comboMembers(combo) : []
   const [pending, setPending] = useState(false)
+  const [name, setName] = useState(combo?.name ?? "")
   const [testing, setTesting] = useState<Set<string>>(() => new Set())
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [members, setMembers] = useState<ComboMember[]>(initialMembers)
@@ -101,6 +102,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
   function addMember() {
     if (!selectedModel || members.some((member) => member.modelId === selectedModel) || members.length >= 8) return
     const sharedModelId = sharedModels.find((model) => model.qualifiedModelId === selectedModel && model.status === "active")?.id
+    if (!members.length) setName((current) => current || byId.get(selectedModel)?.detail || "")
     setMembers((current) => [...current, { modelId: selectedModel, ...(sharedModelId ? { sharedModelId } : {}), reasoning: { mode: "inherit" } }])
     setPayloadDrafts((current) => ({ ...current, [selectedModel]: "{}" }))
     setOpenMembers((current) => new Set(current).add(selectedModel))
@@ -170,7 +172,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
   return <form onSubmit={submit}>
     <DialogHeader><DialogTitle>{combo?.id ? "Edit combo" : "Add combo"}</DialogTitle><DialogDescription>Select one model for an alias, or up to eight models for fallback. Drag to reorder; open a model to configure overrides.</DialogDescription></DialogHeader>
     <div className="grid max-h-[70vh] gap-4 overflow-y-auto py-4 pr-1">
-      <div className="grid gap-4 sm:grid-cols-2"><FormField label="Gateway ID"><Input name="combo" defaultValue={combo?.combo} placeholder="auto" pattern="[a-z0-9._/-]+" required /></FormField><FormField label="Name"><Input name="name" defaultValue={combo?.name} placeholder="Automatic fallback" maxLength={80} required /></FormField></div>
+      <div className="grid gap-4 sm:grid-cols-2"><FormField label="Gateway ID"><Input name="combo" defaultValue={combo?.combo} placeholder="auto" pattern="[a-z0-9._/-]+" required /></FormField><FormField label="Name"><Input name="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Automatic fallback" maxLength={80} required /></FormField></div>
       <FormField label="Models / fallback order"><div className="grid gap-2"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => byId.get(String(value))?.label || String(value)}><SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Select a local or shared model" /></SelectTrigger><SelectContent>{selectableTargets.map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span></SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div>{!selectableTargets.length && <EmptyState title={targets.length ? "All available models are selected" : "No eligible models"} description={targets.length ? "Remove a member to make it available for selection again." : "Enable a provider model or use a model shared into this workspace."} icon={targets.length ? SearchIcon : BoxesIcon} variant="compact" treatment="embedded" />}</div></FormField>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderMembers}>
         <SortableContext items={members.map((member) => member.modelId)} strategy={verticalListSortingStrategy}>
