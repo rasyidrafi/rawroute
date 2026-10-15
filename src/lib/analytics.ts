@@ -1,4 +1,6 @@
 import { mapConcurrent } from "@/lib/concurrency"
+import { queryLocalRequestLogs } from "@/lib/local-db"
+import { matchesRequestLog, requestLogCursor, type RequestLogQuery } from "@/lib/request-logs"
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getSqliteDatabase, listLocalDocuments, type SqliteDatabase, type LocalQuery } from "@/lib/local-db"
 
@@ -835,6 +837,14 @@ export async function listUsageEvents(from?: string, to?: string): Promise<Usage
     .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
   const snapshot = await eventsRef().where("completedAt", ">=", from || "2000-01-01T00:00:00.000Z").where("completedAt", "<", to || new Date().toISOString()).withoutDefaultOrder().get()
   return snapshot.docs.map((document) => document.data() as UsageEvent).sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+}
+
+export async function listRequestLogs(query: RequestLogQuery) {
+  const rows = isMemory()
+    ? [...memoryState().events.values()].filter(event => matchesRequestLog(event, query)).sort((a, b) => a.completedAt === b.completedAt ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.completedAt > b.completedAt ? -1 : 1).slice(0, 26)
+    : await queryLocalRequestLogs(`${prefix()}_workspaces/${currentWorkspaceId()}/usageEvents`, query)
+  const events = rows.slice(0, 25)
+  return { events, nextCursor: rows.length > 25 ? requestLogCursor(query, currentWorkspaceId(), events[24]!) : null, from: query.from, to: query.to }
 }
 
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {

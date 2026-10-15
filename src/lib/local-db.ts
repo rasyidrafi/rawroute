@@ -101,6 +101,7 @@ async function ensureSchema() {
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_idx ON rawroute_documents (collection_path)")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_document_idx ON rawroute_documents (collection_path, document_id)")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_completed_idx ON rawroute_documents (collection_path, json_extract(data, '$.completedAt'))")
+    await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_request_logs_idx ON rawroute_documents (collection_path, json_extract(data, '$.completedAt') DESC, document_id ASC)")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_updated_idx ON rawroute_documents (updated_at)")
   })().catch((error) => {
     schemaReady = undefined
@@ -641,6 +642,22 @@ export async function listLocalDocuments(collectionPath?: string) {
     ? client.query("SELECT path, collection_path, document_id, data FROM rawroute_documents WHERE collection_path = $1 ORDER BY path", [collectionPath])
     : client.query("SELECT path, collection_path, document_id, data FROM rawroute_documents ORDER BY path"))
   return result.rows as Array<{ path: string; collection_path: string; document_id: string; data: DocumentData }>
+}
+
+/** Bounded usage history with SQL filters applied before the lookahead limit. */
+export async function queryLocalRequestLogs(collectionPath: string, query: import("./request-logs").RequestLogQuery) {
+  await ensureSchema()
+  const parameters: unknown[] = [collectionPath, query.from, query.to]
+  const clauses = ["collection_path = $1", "json_extract(data, '$.completedAt') >= $2", "json_extract(data, '$.completedAt') < $3"]
+  if (query.model) { parameters.push(query.model); clauses.push(`json_extract(data, '$.gatewayModelId') = $${parameters.length}`) }
+  if (query.status !== "all") clauses.push(query.status === "success" ? "(json_extract(data, '$.status') >= 200 AND json_extract(data, '$.status') < 300)" : "(json_extract(data, '$.status') < 200 OR json_extract(data, '$.status') >= 300)")
+  if (query.after) {
+    parameters.push(query.after.at, query.after.id)
+    const at = `$${parameters.length - 1}`
+    clauses.push(`(json_extract(data, '$.completedAt') < ${at} OR (json_extract(data, '$.completedAt') = ${at} AND document_id > $${parameters.length}))`)
+  }
+  const result = await executeQuery(`SELECT document_id, data FROM rawroute_documents WHERE ${clauses.join(" AND ")} ORDER BY json_extract(data, '$.completedAt') DESC, document_id ASC LIMIT 26`, parameters)
+  return result.rows.map(row => ({ ...row.data, id: row.document_id }) as unknown as import("./types").UsageEvent)
 }
 
 export async function upsertLocalDocument(path: string, data: DocumentData) {

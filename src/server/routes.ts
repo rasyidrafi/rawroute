@@ -43,6 +43,7 @@ import * as ApiAdminProvidersByProvider from "./routes/api/admin/providers/by-pr
 import * as ApiAdminProviders from "./routes/api/admin/providers"
 import * as ApiAdminToolGatewayStatus from "./routes/api/admin/tool-gateway/status"
 import * as ApiAdminUsage from "./routes/api/admin/usage"
+import * as ApiAdminRequestLogs from "./routes/api/admin/request-logs"
 import * as ApiAdminWorkspacesByWorkspace from "./routes/api/admin/workspaces/by-workspace"
 import * as ApiAdminWorkspaces from "./routes/api/admin/workspaces"
 import * as ApiAuthLogin from "./routes/api/auth/login"
@@ -64,6 +65,7 @@ import * as V1 from "./routes/v1"
 import * as V1betaProxy from "./routes/v1beta/proxy"
 
 export const apiRoutes = {
+  "/api/admin/request-logs": apiRoute(ApiAdminRequestLogs, "workspace", "/api/admin/request-logs"),
   "/api/auth/bootstrap": apiRoute(AuthBootstrap, "public", "/api/auth/bootstrap"),
   "/api/live": apiRoute({ GET: async () => Response.json({ status: "ok", service: "rawroute" }) }, "public", "/api/live"),
   "/api/admin/cliproxy/status": apiRoute({ GET: CliproxyInstance.status }, "session", "/api/admin/cliproxy/status"),
