@@ -206,13 +206,35 @@ warnings; React Doctor scans the full source tree. See
 
 ```bash
 bun install --frozen-lockfile
-bun run lint
-bun run test
-bun run typecheck
-bun run build
-bun run test:e2e
+bun run verify
 docker compose --env-file .env.local config
 ```
+
+`bun run verify` runs the full unit/integration suite, ESLint and React Doctor,
+TypeScript checks, one production build, and the full installed-Chrome suite.
+On machines with at least two available CPUs, the unchanged `bun run test`
+suite overlaps a second branch: lint → typecheck → build → browser tests.
+One-CPU machines run sequentially. This saves time by overlapping independent
+checks, not by omitting coverage or changing unit-test isolation.
+The runner itself disables automatic environment-file loading so development
+`.env.local` values do not leak into unit tests; each child command keeps its
+normal environment-file behavior.
+
+Browser tests remain at one worker with `fullyParallel: false`: they share the
+administrator password/bootstrap state and mutable OAuth, routing, and counter
+fixtures. Browser startup waits for lint to finish (React Doctor must not scan
+concurrently changing trace/cache paths) and for a successful build; `dist/`
+is never rebuilt while browser tests run. A failed build reports browser tests
+as blocked. Other independent checks still finish after a failure, and any
+failure or interruption makes verification exit nonzero. Ctrl-C/SIGTERM stops
+active subprocess trees and prevents pending checks from starting.
+
+Each check's complete output, including warnings, is printed together when it
+finishes and retained in the temporary log directory printed at startup. The
+final summary includes each result and elapsed time. All standalone commands
+remain available: `bun run lint`, `bun run test`, `bun run typecheck`,
+`bun run build`, and `bun run test:e2e`. The last command still builds for itself;
+verification invokes Playwright directly only after its own single build.
 
 SQLite is the durable RawRoute data store, accessed through `bun:sqlite` with WAL
 and serialized transactions. All workspace documents, catalogs, budgets, pricing,

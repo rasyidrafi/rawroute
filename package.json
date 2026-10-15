@@ -13,6 +13,7 @@
     "lint": "bun --bun eslint --max-warnings=0 && CI=1 REACT_DOCTOR_DISABLE_OXLINT_WORKER_POOL=1 bun --bun react-doctor --lint --scope full --yes --no-score --blocking warning",
     "test": "bun test --isolate",
     "test:e2e": "bun run build && bunx --bun playwright test",
+    "verify": "bun --no-env-file scripts/verify.ts",
     "reconcile:usage": "bun scripts/reconcile-usage.ts",
     "predict:usage": "bun scripts/predict-missing-usage-cost.ts",
     "sanitize:usage": "bun scripts/sanitize-usage-integrity.ts",
