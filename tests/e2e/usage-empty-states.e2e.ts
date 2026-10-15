@@ -69,6 +69,15 @@ for (const publicView of [false, true]) {
         await page.setViewportSize({ width, height: 900 })
         if (!publicView && width >= 768) await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible()
         const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
+        for (const [title, description] of [["Requests and spend", "Trend"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
+          const header = card(title).locator('[data-slot="card-header"]')
+          await expect(header.locator('[data-slot="card-title"]')).toHaveText(title)
+          await expect(header.locator('[data-slot="card-description"]')).toHaveText(description)
+          await expect(header.locator('[data-slot="card-title"] + [data-slot="card-description"]')).toHaveCount(1)
+          const titleBounds = (await header.locator('[data-slot="card-title"]').boundingBox())!
+          const descriptionBounds = (await header.locator('[data-slot="card-description"]').boundingBox())!
+          expect(descriptionBounds.y).toBeGreaterThanOrEqual(titleBounds.y + titleBounds.height)
+        }
         for (const [leftTitle, rightTitle] of [["Requests and spend", "Top keys by cost"], ["Usage table", "Most used models"]] as const) {
           const left = (await card(leftTitle).boundingBox())!
           const right = (await card(rightTitle).boundingBox())!
