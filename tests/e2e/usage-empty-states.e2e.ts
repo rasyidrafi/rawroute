@@ -85,7 +85,7 @@ for (const publicView of [false, true]) {
         await expect(card.locator('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-label').first()).toHaveText(new RegExp(`Usage key\\s*${count - 1}`))
         await expect(card.locator('[data-slot="scroll-area"] .text-sm.font-medium')).toHaveCount(visibleCount * 2)
         await expect(card.locator('[data-slot="scroll-area"]').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
-        const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Requests and spend", { exact: true }) })
+        const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Usage Trend", { exact: true }) })
         expect((await card.boundingBox())!.height).toBe((await trend.boundingBox())!.height)
         await bars.first().hover({ force: true })
         await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).toBeVisible()
@@ -146,7 +146,7 @@ for (const publicView of [false, true]) {
         await page.setViewportSize({ width, height: 900 })
         if (!publicView && width >= 768) await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible()
         const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
-        for (const [title, description] of [["Requests and spend", "Trend"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
+        for (const [title, description] of [["Usage Trend", "Token usage over time"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
           const header = card(title).locator('[data-slot="card-header"]')
           await expect(header.locator('[data-slot="card-title"]')).toHaveText(title)
           await expect(header.locator('[data-slot="card-description"]')).toHaveText(description)
@@ -155,7 +155,7 @@ for (const publicView of [false, true]) {
           const descriptionBounds = (await header.locator('[data-slot="card-description"]').boundingBox())!
           expect(descriptionBounds.y).toBeGreaterThanOrEqual(titleBounds.y + titleBounds.height)
         }
-        for (const [leftTitle, rightTitle] of [["Requests and spend", "Top keys by cost"], ["Usage table", "Most used models"]] as const) {
+        for (const [leftTitle, rightTitle] of [["Usage Trend", "Top keys by cost"], ["Usage table", "Most used models"]] as const) {
           const left = (await card(leftTitle).boundingBox())!
           const right = (await card(rightTitle).boundingBox())!
           if (width >= 1280) {
@@ -202,7 +202,7 @@ for (const publicView of [false, true]) {
     await expect(page.locator('[data-slot="usage-summary"]').getByText("100k", { exact: true })).toBeVisible()
     await expect(page.getByText("1.2k requests", { exact: true })).toBeVisible()
     await expect(page.getByRole("cell", { name: "1.2k", exact: true })).toBeVisible()
-    const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Requests and spend", { exact: true }) })
+    const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Usage Trend", { exact: true }) })
     await expect(trend.getByRole("application").getByText("25k", { exact: true })).toBeVisible()
     await trend.getByRole("application").focus()
     await page.keyboard.press("ArrowRight")
@@ -281,7 +281,7 @@ test("overview usage keeps loading, empty, sparse, and populated panels in sync"
   await expect(page.getByText("No key activity", { exact: true })).toBeVisible()
   await expect(page.getByText("No table rows", { exact: true })).toBeVisible()
   await expect(page.getByText("No model usage", { exact: true })).toBeVisible()
-  await expect(page.getByText("Requests and spend", { exact: true })).toBeVisible()
+  await expect(page.getByText("Usage Trend", { exact: true })).toBeVisible()
   await expect(page.getByText("No usage yet", { exact: true })).toHaveCount(0)
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
@@ -293,7 +293,7 @@ test("overview usage keeps loading, empty, sparse, and populated panels in sync"
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByText("gpt-5-e2e", { exact: true }).first()).toBeVisible()
-  await expect(page.getByText("Requests and spend", { exact: true })).toBeVisible()
+  await expect(page.getByText("Usage Trend", { exact: true })).toBeVisible()
   await expect(page.getByText("No trend data", { exact: true })).toHaveCount(0)
   await expect(page.getByText("No model usage", { exact: true })).toHaveCount(0)
 

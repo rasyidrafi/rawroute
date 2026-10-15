@@ -17,6 +17,10 @@ for (const [path, heading] of [
   test(`route loading preserves the content for ${path}`, () => {
     const markup = renderToStaticMarkup(<MemoryRouter initialEntries={[path!]}><DashboardRouteSkeleton /></MemoryRouter>)
     expect(markup).toContain(heading!)
+    if (path === "/dashboard/ai/overview/usage") {
+      expect(markup).toContain("Usage Trend")
+      expect(markup).toContain("Token usage over time")
+    }
     expect(markup).not.toContain("min-h-svh")
     expect(markup).not.toContain("API Endpoint")
     expect(markup).toContain('data-slot="card-header"')
