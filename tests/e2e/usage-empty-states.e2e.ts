@@ -43,6 +43,50 @@ const keyRow: DashboardPayload["keys"][number] = {
 const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
 
 for (const publicView of [false, true]) {
+  test(`${publicView ? "public" : "workspace"} top keys chart fits sparse and full rankings`, async ({ page }) => {
+    if (!publicView) await authenticate(page)
+    else await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+    let count = 1
+    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: dashboardPayload({
+      trend: [trendRow],
+      keys: Array.from({ length: count }, (_, index) => ({ ...keyRow, id: `key-${index}`, label: `Usage key ${index}`, costMicros: (index + 1) * 15000 })),
+    }) }))
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 })
+      let previousChartHeight = 0
+      let previousListHeight = Infinity
+      for (count of [1, 2, 5]) {
+        await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+        const card = page.locator('[data-slot="card"]').filter({ has: page.getByText("Top keys by cost", { exact: true }) })
+        const chart = card.locator('[data-slot="chart"]')
+        const bars = chart.locator('.recharts-bar-rectangle path')
+        await expect(bars).toHaveCount(count)
+        await expect.poll(() => chart.evaluate(element => element.getBoundingClientRect().height)).toBe(Math.min(220, count * 44 + 16))
+        await expect.poll(() => bars.evaluateAll(elements => elements.every(element => {
+          const height = element.getBoundingClientRect().height
+          return height > 0 && height <= 28.5
+        }))).toBe(true)
+        const chartBounds = (await chart.boundingBox())!
+        const listBounds = (await card.locator('[data-slot="scroll-area"]').boundingBox())!
+        expect(chartBounds.height).toBeGreaterThan(previousChartHeight)
+        expect(listBounds.height).toBeLessThan(previousListHeight)
+        expect(listBounds.y).toBeGreaterThanOrEqual(chartBounds.y + chartBounds.height)
+        previousChartHeight = chartBounds.height
+        previousListHeight = listBounds.height
+        await expect(card.locator('.recharts-yAxis .recharts-cartesian-axis-tick')).toHaveCount(count)
+        await expect(card.locator('[data-slot="scroll-area"]').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
+        const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Requests and spend", { exact: true }) })
+        expect((await card.boundingBox())!.height).toBe((await trend.boundingBox())!.height)
+        await chart.getByRole("application").focus()
+        await page.keyboard.press("ArrowRight")
+        await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).toBeVisible()
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+      }
+    }
+  })
+}
+
+for (const publicView of [false, true]) {
   test(`${publicView ? "public" : "workspace"} usage responsive panels match their loading layout`, async ({ page }) => {
     let release!: () => void
     let markReached!: () => void
