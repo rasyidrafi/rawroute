@@ -34,6 +34,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await page.goto("/dashboard/ai/overview/request-logs")
   const loading = page.getByRole("status", { name: "Loading request logs" })
   await expect(loading).toBeVisible()
+  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
   await expect(loading).toHaveAttribute("aria-busy", "true")
   await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
@@ -63,6 +64,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   await expect(page.getByText("Newest first · 25 per page", { exact: true })).toBeVisible()
   await expect(loading).toHaveCount(0)
+  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
   await expect(page.locator('[data-slot="request-log-skeleton-row"]')).toHaveCount(0)
   const loadedRowHeight = (await page.getByRole("row").nth(1).boundingBox())!.height
   expect(Math.abs(loadedRowHeight - loadingRowHeight)).toBeLessThanOrEqual(2)

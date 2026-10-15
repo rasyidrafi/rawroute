@@ -46,7 +46,7 @@ function RequestLogsWorkspace() {
   }
   return <DashboardPage spacing="normal">
     <Card>
-      <CardHeader><CardTitle variant="icon"><ListChecksIcon aria-hidden="true" />Request Logs</CardTitle><CardDescription>Workspace history of recorded model attempts, not all incoming requests.</CardDescription></CardHeader>
+      <CardHeader><CardTitle variant="icon"><ListChecksIcon aria-hidden="true" />Request Logs</CardTitle><CardDescription>Workspace history of recorded model attempts.</CardDescription></CardHeader>
       <CardContent spacing="flow" className="flex flex-col">
         <div className="flex flex-wrap items-center gap-2">
           <Filter label="Date range" value={days} options={[{ id: "1", name: "Last 24 hours" }, { id: "7", name: "Last 7 days" }]} onChange={value => { setDays(value); setRange(makeRange(value)); reset() }} />
