@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test"
 
+test.use({ timezoneId: "Asia/Tokyo" })
+
 test("request log filters, pagination, refresh and feedback states", async ({ page }) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
@@ -33,7 +35,8 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   const loading = page.getByRole("status", { name: "Loading request logs" })
   await expect(loading).toBeVisible()
   await expect(loading).toHaveAttribute("aria-busy", "true")
-  await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", /^Time \(.+\)$/])
+  await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   const placeholderRows = loading.locator('[data-slot="request-log-skeleton-row"]')
   await expect(placeholderRows).toHaveCount(9)
   await expect(placeholderRows.first().getByRole("cell")).toHaveCount(6)
@@ -56,6 +59,8 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(placeholderRows.first().locator('[data-slot="skeleton"]').first()).toHaveCSS("animation-name", "none")
   release!()
   await expect(page.getByRole("row")).toHaveCount(26)
+  await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   await expect(page.getByText("Newest first · 25 per page", { exact: true })).toBeVisible()
   await expect(loading).toHaveCount(0)
   await expect(page.locator('[data-slot="request-log-skeleton-row"]')).toHaveCount(0)

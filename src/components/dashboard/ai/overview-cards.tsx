@@ -11,7 +11,7 @@ import { pagePaths } from "@/lib/dashboard/routes"
 import type { OverviewDetails } from "@/lib/overview"
 import type { RequestLogsPage } from "@/lib/request-logs"
 import { formatCost, formatDuration } from "@/lib/usage-display"
-import { formatAppDateTime, getAppTimeZone } from "@/lib/timezone"
+import { formatAppDateTime } from "@/lib/timezone"
 
 export function BudgetUsageCard({ data, error }: { data?: OverviewDetails; error?: boolean }) {
   return <Card>
@@ -37,7 +37,7 @@ export function RecentRequestsCard({ data, loading, error, retry }: { data?: Req
   return <Card>
     <CardHeader><CardTitle>Recent Requests</CardTitle><CardDescription>Latest saved model attempts, not all incoming requests</CardDescription><CardAction><Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.requestLogs} />}>View all</Button></CardAction></CardHeader>
     <CardContent>
-      {error ? <Alert variant="destructive"><AlertDescription>Unable to load recent requests. <Button variant="link" size="sm" onClick={retry}>Retry recent requests</Button></AlertDescription></Alert> : <div role={loading ? "status" : undefined} aria-label={loading ? "Loading recent requests" : undefined} aria-busy={loading || undefined}><Table><TableHeader><TableRow><TableHead className="min-w-40">Request / model</TableHead><TableHead className="min-w-28">Status</TableHead><TableHead className="min-w-24">Duration</TableHead><TableHead className="min-w-48">Time ({getAppTimeZone()})</TableHead></TableRow></TableHeader><TableBody>
+      {error ? <Alert variant="destructive"><AlertDescription>Unable to load recent requests. <Button variant="link" size="sm" onClick={retry}>Retry recent requests</Button></AlertDescription></Alert> : <div role={loading ? "status" : undefined} aria-label={loading ? "Loading recent requests" : undefined} aria-busy={loading || undefined}><Table><TableHeader><TableRow><TableHead className="min-w-40">Request / model</TableHead><TableHead className="min-w-28">Status</TableHead><TableHead className="min-w-24">Duration</TableHead><TableHead className="min-w-48">Time</TableHead></TableRow></TableHeader><TableBody>
         {loading ? [0, 1, 2, 3].map(index => <TableRow key={index} variant="static" data-slot="overview-request-skeleton-row"><TableCell><div className="flex flex-col gap-2"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-36" /></div></TableCell><TableCell><Skeleton shape="pill" className="h-5 w-24" /></TableCell><TableCell><Skeleton className="h-5 w-16" /></TableCell><TableCell><Skeleton className="h-5 w-40" /></TableCell></TableRow>) : !data?.events.length ? <TableRow variant="static"><TableCell colSpan={4}>No recorded attempts in this period.</TableCell></TableRow> : data.events.slice(0, 4).map(event => <TableRow key={event.id}>
           <TableCell><div className="max-w-48 truncate font-semibold" title={event.modelName || event.gatewayModelId}>{event.modelName || event.gatewayModelId}</div><div className="max-w-48 truncate text-xs text-muted-foreground" title={`${event.id} · ${event.keyName || event.gatewayKeyId}`}>{event.id.slice(0, 8)} · {event.keyName || `Unknown key (${event.gatewayKeyId.slice(0, 8)})`}</div></TableCell>
           <TableCell><Badge variant={event.status >= 200 && event.status < 300 ? "secondary" : "destructive"}>{event.status >= 200 && event.status < 300 ? "Success" : "Failed"} · {event.status}</Badge></TableCell>

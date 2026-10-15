@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test"
 
+test.use({ timezoneId: "America/New_York" })
+
 test("Overview loads scoped aggregates and four compact recent attempts with retry and rolling controls", async ({ page }) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
@@ -49,6 +51,9 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   })
   await page.goto("/dashboard/ai/overview")
   await expect(page.locator('[data-slot="overview-request-skeleton-row"]')).toHaveCount(4)
+  await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Duration", "Time"])
+  await expect(page.locator('[data-slot="card-description"]').filter({ hasText: "Token usage over time" })).toHaveText("Token usage over time")
+  await expect(page.locator("body")).not.toContainText(/Asia\/Jakarta|America\/New_York|\b(?:UTC|GMT)\b/)
   await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
   const skeletonHeight = (await page.locator('[data-slot="overview-request-skeleton-row"]').first().boundingBox())!.height
   const bars = page.locator('[data-slot="overview-request-skeleton-row"]').first().getByRole("cell").first().locator('[data-slot="skeleton"]')
@@ -75,7 +80,9 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(models.getByText("$0.00001", { exact: true })).toBeVisible()
   await expect(models.locator("a", { hasText: "View all" })).toHaveAttribute("href", "/dashboard/ai/overview/usage")
   const recent = page.locator('[data-slot="card"]').filter({ has: page.getByText("Recent Requests", { exact: true }) })
-  await expect(recent.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Duration", /^Time \(.+\)$/])
+  await expect(recent.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Duration", "Time"])
+  await expect(page.locator('[data-slot="card-description"]').filter({ hasText: "Token usage over time" })).toHaveText("Token usage over time")
+  await expect(page.locator("body")).not.toContainText(/Asia\/Jakarta|America\/New_York|\b(?:UTC|GMT)\b/)
   await expect(recent.getByRole("row")).toHaveCount(5)
   await expect(recent.getByRole("cell", { name: "250 ms", exact: true })).toHaveCount(4)
   expect(Math.abs((await recent.getByRole("row").nth(1).boundingBox())!.height - skeletonHeight)).toBeLessThanOrEqual(2)
