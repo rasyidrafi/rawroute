@@ -33,7 +33,7 @@ import { sanitizeNonNegativeDraft } from "@/components/dashboard/ai/management-p
 
 const money = (micros: number) => `$${(micros / 1_000_000).toFixed(2)}`
 type BudgetWindowResponse = { start: string; end: string; anchor?: BudgetWindowAnchor; codexAccountId?: string | null; bypassLimits: boolean; bypassAutoDeactivateAtWindowEnd?: boolean }
-type BudgetEntry = { apiKeyId: string; name: string; weeklyLimitMicros: number; spentMicros: number; enabled: boolean; usageStartAt?: string; lastUsedAt?: string | null }
+type BudgetEntry = { apiKeyId: string; name: string; weeklyLimitMicros: number; spentMicros: number | null; enabled: boolean; usageStartAt?: string; lastUsedAt?: string | null; usageAvailable?: boolean }
 type BudgetBypassSession = { id: string; startedAt: string; endedAt: string | null; endReason?: "manual" | "window_end" | null }
 type BudgetModelOption = { id: string; name: string; provider: string }
 type BudgetsResponse = { budgets: BudgetEntry[]; bypassSessions: BudgetBypassSession[]; window: BudgetWindowResponse; beyondLimits: BudgetBeyondLimitsSettings; unlimited: BudgetUnlimitedSettings; modelOptions: BudgetModelOption[]; apiKeys: Array<{ id: string; name: string }>; codexAccounts: CodexAccountOption[] }
@@ -58,8 +58,8 @@ function sortBudgetEntries(budgets: BudgetEntry[], sortBy: BudgetSortKey) {
   return [...budgets].sort((a, b) => {
     if (sortBy === "limit") return b.weeklyLimitMicros - a.weeklyLimitMicros
     if (sortBy === "name") return a.name.localeCompare(b.name)
-    const aUsage = a.weeklyLimitMicros > 0 ? a.spentMicros / a.weeklyLimitMicros : 0
-    const bUsage = b.weeklyLimitMicros > 0 ? b.spentMicros / b.weeklyLimitMicros : 0
+    const aUsage = a.weeklyLimitMicros > 0 ? (a.spentMicros ?? -1) / a.weeklyLimitMicros : 0
+    const bUsage = b.weeklyLimitMicros > 0 ? (b.spentMicros ?? -1) / b.weeklyLimitMicros : 0
     return bUsage - aUsage
   })
 }
@@ -145,8 +145,9 @@ export function BudgetsView() {
   const bypass = data?.window.bypassLimits ?? false
   const isPending = (key: string) => pending.has(key)
   const totalAllocatedMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + budget.weeklyLimitMicros, 0), [data?.budgets])
-  const totalSpentMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + budget.spentMicros, 0), [data?.budgets])
+  const totalSpentMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + (budget.spentMicros ?? 0), 0), [data?.budgets])
   const totalUsagePercent = budgetUsagePercent(totalAllocatedMicros, totalSpentMicros)
+  const usageUnavailable = data?.budgets.some(budget => budget.usageAvailable === false || budget.spentMicros === null)
   const availableApiKeys = (data?.apiKeys || []).filter((key) => !data?.budgets.some((budget) => budget.apiKeyId === key.id))
   const actions = createBudgetActions({ apiPost, apiDelete, apiPatch, mutate: () => mutate(), setPending, clearSelectedApiKey: () => setApiKeyId("") })
   const sortedBudgets = useMemo(() => sortBudgetEntries(data?.budgets || [], sortBy), [data?.budgets, sortBy])
@@ -164,10 +165,7 @@ export function BudgetsView() {
             <div className="flex items-start justify-between gap-3"><div><div className="text-sm font-medium">Total budget allocated</div><div className="mt-2 text-2xl font-semibold tracking-tight tabular-nums">{money(totalAllocatedMicros)}</div></div><div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"><WalletCardsIcon className="size-4" /></div></div>
             <div className="mt-2 text-xs text-muted-foreground">Across {data.budgets.length} configured {data.budgets.length === 1 ? "budget" : "budgets"} in this window</div>
           </div>
-          <div className="rounded-xl border bg-muted/20 p-4">
-            <div className="flex items-start justify-between gap-3"><div><div className="text-sm font-medium">Total budget used</div><div className="mt-2 text-2xl font-semibold tracking-tight tabular-nums">{money(totalSpentMicros)}</div></div><div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"><ChartNoAxesCombinedIcon className="size-4" /></div></div>
-            <div className="mt-3 flex flex-col gap-2"><Progress value={Math.min(totalUsagePercent, 100)} /><div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{bypass ? "Unlimited Mode active" : totalAllocatedMicros > 0 ? `${Math.round(totalUsagePercent)}% of allocated budget` : "No budget limits configured"}</span><span>{formatWindowDate(data.window.start)} - {formatWindowDate(data.window.end)}</span></div></div>
-          </div>
+          <BudgetSpentSummary spent={totalSpentMicros} allocated={totalAllocatedMicros} percent={totalUsagePercent} unavailable={!!usageUnavailable} bypass={bypass} window={data.window} />
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex min-w-0 basis-64 grow flex-col gap-2">
@@ -282,7 +280,8 @@ function BudgetRow({ budget, bypass, windowStart, isPending, toggle, remove, upd
 }) {
   const [editing, setEditing] = useState(false)
   const [editLimitValue, setEditLimitValue] = useState("")
-  const toggleKey = `toggle-budget:${budget.apiKeyId}`; const deleteKey = `delete-budget:${budget.apiKeyId}`; const updateKey = `update-limit:${budget.apiKeyId}`; const busy = isPending(toggleKey) || isPending(deleteKey) || isPending(updateKey); return <TableRow className="align-top"><TableCell text="label">{budget.name}</TableCell><TableCell className="align-middle"><Badge variant={!budget.enabled ? "outline" : !bypass && budget.spentMicros >= budget.weeklyLimitMicros ? "destructive" : "secondary"}>{!budget.enabled ? "Disabled" : !bypass && budget.spentMicros >= budget.weeklyLimitMicros ? "Over limit" : "Active"}</Badge></TableCell><TableCell text="numeric" className="align-middle">{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-sm font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : money(budget.weeklyLimitMicros)}</TableCell><BudgetUsageCell budget={budget} bypass={bypass} windowStart={windowStart} /><TableCell className="align-middle text-right"><div className="flex flex-wrap justify-end gap-2"><Button aria-busy={isPending(toggleKey)} size="sm" variant="outline" disabled={busy} onClick={() => void toggle(budget.apiKeyId, !budget.enabled, budget.weeklyLimitMicros)}>{isPending(toggleKey) && <LoadingSpinner />}{budget.enabled ? "Disable" : "Enable"}</Button><Popover open={editing} onOpenChange={(open) => { if (open) { setEditing(true); setEditLimitValue((budget.weeklyLimitMicros / 1_000_000).toFixed(2)) } else if (!isPending(updateKey)) setEditing(false) }}><PopoverTrigger render={<Button size="sm" variant="outline" disabled={busy}>Limit</Button>} /><PopoverContent padding="comfortable" className="w-auto" align="end"><div className="flex flex-col gap-2"><label htmlFor={`budget-limit-${budget.apiKeyId}`} className="text-sm font-medium">Edit Limit ($)</label><div className="flex items-center gap-2"><div className="relative"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input id={`budget-limit-${budget.apiKeyId}`} type="number" value={editLimitValue} onChange={(event) => setEditLimitValue(sanitizeNonNegativeDraft(event.target.value))} min="0.01" step="0.01" inset="prefix"
+  const overLimit = !bypass && budget.spentMicros !== null && budget.spentMicros >= budget.weeklyLimitMicros
+  const toggleKey = `toggle-budget:${budget.apiKeyId}`; const deleteKey = `delete-budget:${budget.apiKeyId}`; const updateKey = `update-limit:${budget.apiKeyId}`; const busy = isPending(toggleKey) || isPending(deleteKey) || isPending(updateKey); return <TableRow className="align-top"><TableCell text="label">{budget.name}</TableCell><TableCell className="align-middle"><Badge variant={!budget.enabled ? "outline" : overLimit ? "destructive" : "secondary"}>{!budget.enabled ? "Disabled" : overLimit ? "Over limit" : "Active"}</Badge></TableCell><TableCell text="numeric" className="align-middle">{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-sm font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : money(budget.weeklyLimitMicros)}</TableCell><BudgetUsageCell budget={budget} bypass={bypass} windowStart={windowStart} /><TableCell className="align-middle text-right"><div className="flex flex-wrap justify-end gap-2"><Button aria-busy={isPending(toggleKey)} size="sm" variant="outline" disabled={busy} onClick={() => void toggle(budget.apiKeyId, !budget.enabled, budget.weeklyLimitMicros)}>{isPending(toggleKey) && <LoadingSpinner />}{budget.enabled ? "Disable" : "Enable"}</Button><Popover open={editing} onOpenChange={(open) => { if (open) { setEditing(true); setEditLimitValue((budget.weeklyLimitMicros / 1_000_000).toFixed(2)) } else if (!isPending(updateKey)) setEditing(false) }}><PopoverTrigger render={<Button size="sm" variant="outline" disabled={busy}>Limit</Button>} /><PopoverContent padding="comfortable" className="w-auto" align="end"><div className="flex flex-col gap-2"><label htmlFor={`budget-limit-${budget.apiKeyId}`} className="text-sm font-medium">Edit Limit ($)</label><div className="flex items-center gap-2"><div className="relative"><DollarSignIcon aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input id={`budget-limit-${budget.apiKeyId}`} type="number" value={editLimitValue} onChange={(event) => setEditLimitValue(sanitizeNonNegativeDraft(event.target.value))} min="0.01" step="0.01" inset="prefix"
                                       className="h-8 w-28" /></div><Button aria-busy={isPending(updateKey)} size="sm" disabled={isPending(updateKey) || Number(editLimitValue) <= 0} onClick={async () => { if (await updateLimit(budget.apiKeyId, Number(editLimitValue), budget.enabled)) setEditing(false) }}>{isPending(updateKey) && <LoadingSpinner />}Save</Button></div></div></PopoverContent></Popover><ConfirmAction buttonLabel="Delete" title={`Delete ${budget.name}?`} description="This permanently deletes the budget configuration for this gateway key." pending={isPending(deleteKey)} disabled={busy} onConfirm={() => remove(budget.apiKeyId)} /></div></TableCell></TableRow>
 }
 
@@ -383,8 +382,16 @@ function BudgetWindowSummary({ window }: { window: BudgetsResponse["window"] }) 
 }
 
 function BudgetUsageCell({ budget, bypass, windowStart }: { budget: BudgetEntry; bypass: boolean; windowStart: string }) {
+  if (budget.usageAvailable === false || budget.spentMicros === null) return <TableCell>Usage unavailable; no remaining credit can be determined.</TableCell>
   const percentUsed = budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0; const remainingMicros = Math.max(0, budget.weeklyLimitMicros - budget.spentMicros); const overLimitMicros = Math.max(0, budget.spentMicros - budget.weeklyLimitMicros);
   return <TableCell className="min-w-52"><div className="space-y-2"><div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{bypass ? `${money(budget.spentMicros)} since ${formatWindowDate(budget.usageStartAt || windowStart)}` : `${money(budget.spentMicros)} / ${money(budget.weeklyLimitMicros)}`}</span>{bypass ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-caption font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : <span className={cn("text-xs tabular-nums", overLimitMicros > 0 ? "font-medium text-destructive" : "text-muted-foreground")}>{Math.round(percentUsed)}%</span>}</div><Progress value={bypass ? 100 : Math.min(percentUsed, 100)} variant={bypass ? "unlimited" : "default"}><ProgressLabel className="sr-only">Budget usage</ProgressLabel></Progress><div className={cn("text-xs", overLimitMicros > 0 ? "font-medium text-destructive" : "text-muted-foreground")}>{bypass ? "Unlimited Usage" : overLimitMicros > 0 ? `${money(overLimitMicros)} over limit` : `${money(remainingMicros)} remaining`}</div></div></TableCell>
+}
+
+function BudgetSpentSummary({ spent, allocated, percent, unavailable, bypass, window }: { spent: number; allocated: number; percent: number; unavailable: boolean; bypass: boolean; window: BudgetsResponse["window"] }) {
+  return <div className="rounded-xl border bg-muted/20 p-4">
+    <div className="flex items-start justify-between gap-3"><div><div className="text-sm font-medium">Total budget used</div><div className="mt-2 text-2xl font-semibold tracking-tight tabular-nums">{unavailable ? "Unavailable" : money(spent)}</div></div><div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary"><ChartNoAxesCombinedIcon className="size-4" /></div></div>
+    <div className="mt-3 flex flex-col gap-2">{!unavailable && <Progress value={Math.min(percent, 100)} />}<div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{unavailable ? "Some historical financial coverage is unavailable" : bypass ? "Unlimited Mode active" : allocated > 0 ? `${Math.round(percent)}% of allocated budget` : "No budget limits configured"}</span><span>{formatWindowDate(window.start)} - {formatWindowDate(window.end)}</span></div></div>
+  </div>
 }
 
 function CustomBudgetRange({ customRange, customTime, customRangeValid, setCustomRangeOverride, setCustomTimeOverride, data, pending, windowOpen, setWindowOpen }: {

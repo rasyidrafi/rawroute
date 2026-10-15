@@ -14,9 +14,8 @@
     "test": "bun test --isolate",
     "test:e2e": "bun run build && bunx --bun playwright test",
     "verify": "bun --no-env-file scripts/verify.ts",
-    "reconcile:usage": "bun scripts/reconcile-usage.ts",
-    "predict:usage": "bun scripts/predict-missing-usage-cost.ts",
-    "sanitize:usage": "bun scripts/sanitize-usage-integrity.ts",
+    "migrate:usage": "bun --no-env-file scripts/migrations/usage-projection.ts",
+    "predict:usage": "bun --no-env-file scripts/predict-missing-usage-cost.ts",
     "test:local-db": "bun scripts/local-db-smoke.ts",
     "typecheck": "tsc-rs --fast --noEmit"
   },

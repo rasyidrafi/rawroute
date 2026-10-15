@@ -21,8 +21,8 @@ export function BudgetUsageCard({ data, error }: { data?: OverviewDetails; error
         {data.budgetWindow && <p className="text-xs text-muted-foreground">{formatAppDateTime(data.budgetWindow.from)} – {formatAppDateTime(data.budgetWindow.to)}{data.budgetWindow.bypassLimits ? " · Unlimited mode" : ""}</p>}
         {!data.budgets.length ? <p className="text-sm text-muted-foreground">No configured budgets.</p> : <div className="flex max-h-56 flex-col gap-3 overflow-y-auto">{data.budgets.map(budget => {
           const limited = budget.enabled && !data.budgetWindow?.bypassLimits && budget.limitMicros > 0
-          const percent = limited ? budget.spentMicros / budget.limitMicros * 100 : 0
-          return <div key={budget.id} className="flex flex-col gap-2"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{budget.name}</span><span>{formatCost(budget.spentMicros)}{limited ? ` / ${formatCost(budget.limitMicros)}` : !budget.enabled ? " · Disabled" : " · Unlimited"}</span></div>{limited && <Progress value={Math.min(100, percent)} aria-label={`${budget.name}: ${percent.toFixed(1)} percent used`} />}</div>
+          const percent = limited && budget.spentMicros !== null ? budget.spentMicros / budget.limitMicros * 100 : 0
+          return <div key={budget.id} className="flex flex-col gap-2"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{budget.name}</span><span>{budget.usageAvailable === false || budget.spentMicros === null ? "Unavailable" : formatCost(budget.spentMicros)}{limited ? ` / ${formatCost(budget.limitMicros)}` : !budget.enabled ? " · Disabled" : " · Unlimited"}</span></div>{limited && budget.usageAvailable !== false && budget.spentMicros !== null && <Progress value={Math.min(100, percent)} aria-label={`${budget.name}: ${percent.toFixed(1)} percent used`} />}</div>
         })}</div>}
       </>}
     </CardContent>

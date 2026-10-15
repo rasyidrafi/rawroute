@@ -1,4 +1,4 @@
-import { FieldValue, closeLocalDatabase, getSqliteDatabase } from "@/lib/local-db"
+import { FieldValue, closeLocalDatabase, getSqliteDatabase, queryLocalUsageRange } from "@/lib/local-db"
 import { recordUsageEvent } from "@/lib/analytics"
 import type { UsageEvent } from "@/lib/types"
 import { runInWorkspace } from "@/lib/workspace/context"
@@ -32,26 +32,22 @@ async function verifyDuplicateUsage() {
   }
   const context = { usageStartAt: "2026-10-13T00:00:00.000Z", windowEnd: "2026-10-14T00:00:00.000Z" }
   const readUsage = async () => {
-    const [events, rollups, counters] = await Promise.all([
+    const [events, usage] = await Promise.all([
       usageWorkspace.collection("usageEvents").get(),
-      usageWorkspace.collection("usageRollups").get(),
-      usageWorkspace.collection("budgetCounters").get(),
+      queryLocalUsageRange(collection, context.usageStartAt, context.windowEnd),
     ])
     return {
       events: events.docs.map((doc) => doc.data()),
-      rollups: rollups.docs.map((doc) => doc.data()),
-      counters: counters.docs.map((doc) => doc.data()),
+      totals: usage.totals,
     }
   }
   await runInWorkspace({ id: collection, storageMode: "scoped" }, async () => {
     await recordUsageEvent(event, context)
     const original = await readUsage()
-    if (original.events.length !== 1 || original.rollups.length < 2 || original.counters.length !== 1
-      || original.rollups.some((rollup) => rollup.requests !== 1 || rollup.costMicros !== 123 || rollup.totalTokens !== 5)
-      || original.counters[0]?.spentMicros !== 123) throw new Error("Usage event did not persist its rollups and budget counter correctly.")
+    if (original.events.length !== 1 || original.totals.requests !== 1 || original.totals.costMicros !== 123 || original.totals.totalTokens !== 5 || original.totals.successfulCostMicros !== 123) throw new Error("Usage event did not persist its canonical projection correctly.")
     await recordUsageEvent({ ...event, costMicros: 999 }, context)
     await Promise.all(Array.from({ length: 4 }, () => recordUsageEvent(event, context)))
-    if (JSON.stringify(await readUsage()) !== JSON.stringify(original)) throw new Error("Duplicate usage recording changed persisted events, rollups, or budget counters.")
+    if (JSON.stringify(await readUsage()) !== JSON.stringify(original)) throw new Error("Duplicate usage recording changed persisted events or canonical projection.")
   })
 }
 

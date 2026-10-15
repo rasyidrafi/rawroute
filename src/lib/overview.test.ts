@@ -3,9 +3,10 @@ import { getDashboardPayload, getOverviewPayload, recordUsageEvent, resetAnalyti
 import { overviewRange, parseOverviewRange } from "./overview"
 import { _resetMemoryBackend, createApiKey } from "@/server/store"
 import { runInWorkspace } from "./workspace/context"
-import { closeLocalDatabase, getSqliteDatabase, queryLocalUsageDurations } from "./local-db"
+import { closeLocalDatabase, getSqliteDatabase, queryLocalUsageRange } from "./local-db"
 import type { UsageEvent } from "./types"
 import { startOfZonedDay, startOfZonedHour } from "./timezone"
+import { usageCalendarBucket } from "./usage-projection"
 import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
@@ -99,9 +100,10 @@ for (const backend of ["memory", "sqlite"] as const) {
   })
 }
 
-test("legacy rollups without failure counts do not claim complete success coverage", async () => {
-  await recordUsageEvent(event("old", "2026-10-14T03:00:00.000Z"), null)
-  for (const row of globalThis.__rawrouteAnalyticsMemory!.get("default")!.rollups.values()) delete row.failedRequests
+test("records without known status do not claim complete success coverage", async () => {
+  const old = event("old", "2026-10-14T03:00:00.000Z")
+  Reflect.deleteProperty(old, "status")
+  await recordUsageEvent(old, null)
   const payload = await getOverviewPayload(range)
   expect(payload.summary.requests).toBe(1)
   expect(payload.overview.statusCoveredRequests).toBe(0)
@@ -123,31 +125,31 @@ test("budgets use their own window and include configured keys with no selected 
 })
 
 test("SQLite duration aggregate ignores missing, string and negative durations and includes failed attempts", async () => {
-  const path = "duration-test/usageEvents"
+  const path = "rawroute_workspaces/duration-test/usageEvents"
   const collection = getSqliteDatabase().collection(path)
   for (const [index, durationMs] of [100, 500, null, "100", -1, 0].entries()) await collection.doc(String(index)).set({ completedAt: range.from, status: 500, ...(durationMs === null ? {} : { durationMs }) })
   await collection.doc("end").set({ completedAt: range.to, durationMs: 999 })
-  expect(await queryLocalUsageDurations(path, range.from, range.to)).toEqual({ durationCount: 3, durationSumMs: 600 })
+  expect((await queryLocalUsageRange("duration-test", range.from, range.to)).totals).toMatchObject({ durationCount: 3, durationSumMs: 600 })
 })
 
-test("SQLite duration scan uses the collection/time index; required read failures reject Overview", async () => {
+test("SQLite range totals use the typed bucket index; required read failures reject Overview", async () => {
   await closeLocalDatabase()
   const directory = mkdtempSync("/tmp/opencode/overview-sql-")
   process.env.SQLITE_PATH = join(directory, "test.sqlite")
   process.env.STORAGE_BACKEND = "sqlite"
   process.env.NODE_ENV = "development"
   try {
-    const collection = getSqliteDatabase().collection("plan/usageEvents")
+    const collection = getSqliteDatabase().collection("rawroute_workspaces/plan/usageEvents")
     for (let index = 0; index < 100; index++) await collection.doc(String(index)).set({ completedAt: range.from, durationMs: index })
     const connection = new Database(process.env.SQLITE_PATH)
     try {
-      const statement = connection.query<{ detail: string }, [string, string, string]>(`EXPLAIN QUERY PLAN SELECT COUNT(*), SUM(json_extract(data, '$.durationMs')) FROM rawroute_documents
-        WHERE collection_path = ?1 AND json_extract(data, '$.completedAt') >= ?2 AND json_extract(data, '$.completedAt') < ?3
-        AND json_type(data, '$.durationMs') IN ('integer', 'real') AND json_extract(data, '$.durationMs') >= 0`)
-      const plan = statement.all("plan/usageEvents", range.from, range.to)
+      const day = usageCalendarBucket(range.from, "daily")
+      const statement = connection.query<{ detail: string }, [string, string, string]>(`EXPLAIN QUERY PLAN SELECT SUM(durationCount), SUM(durationSumMs) FROM usage_buckets
+        WHERE workspaceId = ?1 AND granularity = 'daily' AND bucketStart >= ?2 AND bucketStart < ?3`)
+      const plan = statement.all("plan", day.bucketStart, day.bucketEnd)
       statement.finalize()
-      expect(plan.map(row => row.detail).join(" ")).toMatch(/SEARCH rawroute_documents USING INDEX rawroute_documents_(collection_completed|request_logs)_idx/)
-      expect(await queryLocalUsageDurations("plan/usageEvents", range.from, range.to)).toEqual({ durationCount: 100, durationSumMs: 4950 })
+      expect(plan.map(row => row.detail).join(" ")).toMatch(/SEARCH usage_buckets USING PRIMARY KEY/)
+      expect((await queryLocalUsageRange("plan", day.bucketStart, day.bucketEnd)).totals).toMatchObject({ durationCount: 100, durationSumMs: 4950 })
       connection.run("DROP TABLE rawroute_documents")
       await expect(runInWorkspace({ id: "read-failure", storageMode: "scoped" }, () => getOverviewPayload(range))).rejects.toThrow("Overview data unavailable")
     } finally { connection.close() }

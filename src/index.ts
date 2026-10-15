@@ -5,13 +5,14 @@ import index from "./index.html"
 
 import { drainBackgroundTasks } from "@/lib/background-tasks"
 import { notFoundResponse, notFoundStylesResponse } from "@/server/not-found"
-import { closeLocalDatabase } from "@/lib/local-db"
+import { closeLocalDatabase, ensureLocalDatabase } from "@/lib/local-db"
 import { closeLocalCache } from "@/lib/local-cache"
 import { isPagePath, pagePaths } from "@/lib/dashboard/routes"
 import { apiRoutes } from "@/server/routes"
 
 const port = Number(process.env.PORT || 3000)
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT must be an integer between 0 and 65535.")
+if (process.env.STORAGE_BACKEND !== "memory" && process.env.NODE_ENV !== "test") await ensureLocalDatabase()
 
 const server = serve({
   port,

@@ -5,6 +5,10 @@ import { safeDetails } from "./recorder"
 const input = { source: "gateway", event: "gateway.request.completed", message: "Gateway request completed", level: "info" as const, origin: "server" as const, requestId: null, details: { status: 200 } }
 const global = { kind: "global" as const }
 
+test("dashboard performance metadata admits finite counts but not payloads or credentials", () => {
+  expect(safeDetails({ action: "budget.rows", durationMs: 1.25, count: 100, hourlyRows: 20, dailyRows: 3, boundaryRows: 0, rollupRows: Infinity, payload: { keys: ["private"] }, authorization: "Bearer private" })).toEqual({ action: "budget.rows", durationMs: 1.25, count: 100, hourlyRows: 20, dailyRows: 3, boundaryRows: 0 })
+})
+
 test("scopes retain and clear independently, with per-scope and total memory bounds", () => {
   const store = createLogStore(2, 4)
   const a = store.admitWorkspace("a"), b = store.admitWorkspace("b")

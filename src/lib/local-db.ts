@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto"
 import { Database, type SQLQueryBindings } from "bun:sqlite"
 import { chmodSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { assertUsageProjection, projectSqliteUsage, usagePrefix, usageWorkspace } from "./usage-projection"
+import { readSqliteUsageRange } from "./usage-range"
 
 // Accept arbitrary object-shaped documents so domain interfaces do not need
 // storage-only index signatures; JSON is the runtime validation boundary.
@@ -103,6 +105,7 @@ async function ensureSchema() {
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_completed_idx ON rawroute_documents (collection_path, json_extract(data, '$.completedAt'))")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_request_logs_idx ON rawroute_documents (collection_path, json_extract(data, '$.completedAt') DESC, document_id ASC)")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_updated_idx ON rawroute_documents (updated_at)")
+    assertUsageProjection(getDatabase(), true)
   })().catch((error) => {
     schemaReady = undefined
     throw error
@@ -447,10 +450,7 @@ export class LocalDocumentReference {
   }
 
   async delete() {
-    return withTransaction(async (client) => {
-      await ensureSchema()
-      await client.query("DELETE FROM rawroute_documents WHERE path = $1", [this.path])
-    })
+    return withTransaction(client => deleteDocument(client, this))
   }
 }
 
@@ -483,10 +483,7 @@ export class LocalTransaction {
   }
 
   delete(reference: LocalDocumentReference) {
-    this.operations.push(async (client) => {
-      await ensureSchema()
-      await client.query("DELETE FROM rawroute_documents WHERE path = $1", [reference.path])
-    })
+    this.operations.push(client => deleteDocument(client, reference))
   }
 
   async commit() {
@@ -509,10 +506,7 @@ class LocalWriteBatch {
   }
 
   delete(reference: LocalDocumentReference) {
-    this.operations.push(async (client) => {
-      await ensureSchema()
-      await client.query("DELETE FROM rawroute_documents WHERE path = $1", [reference.path])
-    })
+    this.operations.push(client => deleteDocument(client, reference))
     return this
   }
 
@@ -533,22 +527,35 @@ async function readDocument(client: DatabaseClient, reference: LocalDocumentRefe
 async function writeDocument(client: DatabaseClient, reference: LocalDocumentReference, data: object, merge: boolean, createOnly: boolean) {
   const queryClient = client
   await ensureSchema()
-  if (!merge && !createOnly) {
-    await queryClient.query(`
-      INSERT INTO rawroute_documents (path, collection_path, document_id, data, updated_at)
-      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
-    `, [reference.path, collectionPathForDocument(reference.path), reference.id, jsonValue(applyData(undefined, data, false))])
-    return
-  }
-  const existing = await readDocument(queryClient, reference)
-  if (createOnly && existing.exists) throw conflictError(`Document ${reference.path} already exists.`)
-  const next = applyData(existing.data(), data, merge)
+  const collection = collectionPathForDocument(reference.path)
+  assertCanonicalUsageCollection(collection)
+  const workspaceId = usageWorkspace(collection, "usageEvents")
+  const existing = merge || createOnly || workspaceId !== undefined ? await readDocument(queryClient, reference) : undefined
+  if (createOnly && existing?.exists) throw conflictError(`Document ${reference.path} already exists.`)
+  const before = existing?.data()
+  const next = applyData(before, data, merge)
   await queryClient.query(`
     INSERT INTO rawroute_documents (path, collection_path, document_id, data, updated_at)
     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
     ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
   `, [reference.path, collectionPathForDocument(reference.path), reference.id, jsonValue(next)])
+  if (workspaceId !== undefined) projectSqliteUsage(getDatabase(), collection, workspaceId, before, next)
+}
+
+async function deleteDocument(client: DatabaseClient, reference: LocalDocumentReference) {
+  const collection = collectionPathForDocument(reference.path)
+  assertCanonicalUsageCollection(collection)
+  const workspaceId = usageWorkspace(collection, "usageEvents")
+  const before = workspaceId !== undefined ? (await readDocument(client, reference)).data() : undefined
+  await client.query("DELETE FROM rawroute_documents WHERE path = $1", [reference.path])
+  if (workspaceId !== undefined && before) {
+    projectSqliteUsage(getDatabase(), collection, workspaceId, before, undefined)
+    getDatabase().run("UPDATE usage_projection_history SET reason = ? WHERE disposition = 'duplicate' AND reason = ?", [`canonical-copy-deleted:${reference.path}`, `canonical-copy:${reference.path}`])
+  }
+}
+
+function assertCanonicalUsageCollection(collection: string) {
+  if (usageWorkspace(collection, "usageRollups") !== undefined || collection === `${usagePrefix()}_usage_events` || collection === `${usagePrefix()}_usage_rollups`) throw new Error("Usage archives are immutable; use an offline projection rebuild")
 }
 
 // Async document callbacks must hold the connection exclusively across awaits.
@@ -563,6 +570,7 @@ async function withTransaction<T>(callback: (client: DatabaseClient) => Promise<
   try {
     await ensureSchema()
     const connection = getDatabase()
+    assertUsageProjection(connection)
     connection.run("BEGIN IMMEDIATE")
     try {
       const result = await callback({ query: executeQuery })
@@ -599,6 +607,17 @@ export class SqliteDatabase {
     await withTransaction(async (client) => {
       await ensureSchema()
       const prefix = reference instanceof LocalCollectionReference ? reference.path : reference.path
+      const workspaceRoot = prefix.split("/")
+      if (prefix === `${usagePrefix()}_workspaces`) {
+        getDatabase().run("DELETE FROM usage_buckets")
+        getDatabase().run("DELETE FROM usage_projection_history")
+      } else if (workspaceRoot.length === 2 && workspaceRoot[0] === `${usagePrefix()}_workspaces`) {
+        getDatabase().run("DELETE FROM usage_buckets WHERE workspaceId = ?", [workspaceRoot[1]!])
+        getDatabase().run("DELETE FROM usage_projection_history WHERE workspaceId = ?", [workspaceRoot[1]!])
+      } else {
+        const rows = await client.query("SELECT path, collection_path, data FROM rawroute_documents WHERE (path = $1 OR substr(path, 1, length($2)) = $2) AND substr(collection_path, 1, length($3)) = $3 AND substr(collection_path, -12) = '/usageEvents'", [prefix, `${prefix}/`, `${usagePrefix()}_workspaces/`])
+        for (const row of rows.rows) if (usageWorkspace(row.collection_path, "usageEvents") !== undefined) await deleteDocument(client, new LocalDocumentReference(row.path))
+      }
       // `LIKE` treats `%` and `_` in a document path as wildcards. Use a
       // literal prefix test so deleting one collection/document cannot touch a
       // similarly named sibling path.
@@ -615,6 +634,11 @@ export function getSqliteDatabase() {
 
 export async function ensureLocalDatabase() {
   await ensureSchema()
+  assertUsageProjection(getDatabase())
+}
+
+export async function queryLocalUsageRange(workspaceId: string, from: string, to: string, hourly = false) {
+  return withTransaction(async () => readSqliteUsageRange(getDatabase(), workspaceId, `${usagePrefix()}_workspaces/${workspaceId}/usageEvents`, from, to, hourly))
 }
 
 export async function localDatabaseHealth() {
@@ -644,17 +668,6 @@ export async function listLocalDocuments(collectionPath?: string) {
   return result.rows as Array<{ path: string; collection_path: string; document_id: string; data: DocumentData }>
 }
 
-/** One aggregate row, scanning only this workspace's indexed time range. */
-export async function queryLocalUsageDurations(collectionPath: string, from: string, to: string) {
-  await ensureSchema()
-  const result = await executeQuery(`SELECT COUNT(*) AS count, COALESCE(SUM(json_extract(data, '$.durationMs')), 0) AS total
-    FROM rawroute_documents WHERE collection_path = $1
-    AND json_extract(data, '$.completedAt') >= $2 AND json_extract(data, '$.completedAt') < $3
-    AND json_type(data, '$.durationMs') IN ('integer', 'real') AND json_extract(data, '$.durationMs') >= 0`, [collectionPath, from, to])
-  const rows = result.rows as unknown as { count: number; total: number }[]
-  return { durationCount: Number(rows[0]?.count || 0), durationSumMs: Number(rows[0]?.total || 0) }
-}
-
 /** Bounded usage history with SQL filters applied before the lookahead limit. */
 export async function queryLocalRequestLogs(collectionPath: string, query: import("./request-logs").RequestLogQuery) {
   await ensureSchema()
@@ -669,24 +682,4 @@ export async function queryLocalRequestLogs(collectionPath: string, query: impor
   }
   const result = await executeQuery(`SELECT document_id, data FROM rawroute_documents WHERE ${clauses.join(" AND ")} ORDER BY json_extract(data, '$.completedAt') DESC, document_id ASC LIMIT 26`, parameters)
   return result.rows.map(row => ({ ...row.data, id: row.document_id }) as unknown as import("./types").UsageEvent)
-}
-
-export async function upsertLocalDocument(path: string, data: DocumentData) {
-  const reference = new LocalDocumentReference(path)
-  await reference.set(data)
-}
-
-export async function upsertLocalDocuments(documents: Array<{ path: string; data: object }>) {
-  if (!documents.length) return
-  await withTransaction(async (client) => {
-    for (const document of documents) await writeDocument(client, new LocalDocumentReference(document.path), document.data, false, false)
-  })
-}
-
-export async function deleteLocalDocuments(paths: string[]) {
-  if (!paths.length) return
-  await withTransaction(async (client) => {
-    await ensureSchema()
-    for (const path of paths) await client.query("DELETE FROM rawroute_documents WHERE path = $1", [path])
-  })
 }

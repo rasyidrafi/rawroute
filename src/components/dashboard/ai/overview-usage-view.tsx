@@ -10,6 +10,7 @@ import { DashboardTrend, TopKeys, UsageTable } from "./usage-panels"
 import { MostUsedModels } from "./most-used-models"
 import { EmptyState } from "@/components/ui/empty-state"
 import { UsageSummary } from "./usage-summary"
+import { UsageCoverageNotice, UsageEmptyState } from "./usage-coverage-notice"
 
 export function OverviewUsageView() {
   const { workspace } = useWorkspace()
@@ -24,6 +25,7 @@ function OverviewUsageContent() {
   return <DashboardPage spacing="compact">
     <UsageOverview dashboard={dashboard} loading={pending} preset={preset} setPreset={setPreset} granularity={activeGranularity} setGranularity={setGranularity} selectedRange={preset === "custom" ? selectedRange : { from: calendarDateFromInstant(dashboard.range.from), to: calendarDateFromInstant(dashboard.range.to) }} onRangeChange={handleRangeChange} onRefresh={refresh} />
     <UsageSummary dashboard={dashboard} refreshing={pending} />
+    <UsageCoverageNotice coverage={dashboard.coverage} requests={dashboard.summary.requests} />
     {dashboard.trend.length || dashboard.keys.length || dashboard.models.length ? <>
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]">
         {dashboard.trend.length ? <DashboardTrend dashboard={dashboard} refreshing={pending} /> : <EmptyState title="No trend data" description="No usage buckets were found for this range." icon={BarChart3Icon} />}
@@ -33,6 +35,6 @@ function OverviewUsageContent() {
         {dashboard.keys.length ? <UsageTable keys={dashboard.keys} refreshing={pending} /> : <EmptyState title="No table rows" description="There is no per-key usage to show for this filter." icon={DatabaseIcon} />}
         {dashboard.models.length ? <MostUsedModels className="xl:self-stretch" models={dashboard.models} totalRequests={dashboard.summary.requests} refreshing={pending} /> : <EmptyState title="No model usage" description="No model usage was recorded for this filter." icon={WalletCardsIcon} />}
       </div>
-    </> : <EmptyState title="No usage yet" description="No gateway activity was recorded for this range." icon={DatabaseIcon} />}
+    </> : <UsageEmptyState partial={dashboard.coverage?.partial} />}
   </DashboardPage>
 }

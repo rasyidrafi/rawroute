@@ -208,30 +208,6 @@ export interface UsageEvent {
   }
 }
 
-export interface UsageRollup {
-  id: string
-  granularity: "hourly" | "daily" | "monthly"
-  bucketStart: string
-  gatewayKeyId?: string
-  gatewayModelId?: string
-  requests: number
-  inputTokens: number
-  outputTokens: number
-  cacheReadTokens: number
-  cacheCreationTokens: number
-  totalTokens: number
-  costMicros: number
-  pricedRequests?: number
-  unpricedRequests?: number
-  failedRequests?: number
-  lastEventAt?: string
-  updatedAt: string
-  backfillSource?: string
-  reconciledFrom?: string
-  excludedEventIds?: string[]
-  costSource?: "configured-pricing" | "provider-recorded" | "reservation" | "empirical" | "payload-calibrated"
-}
-
 export interface PricingRates {
   inputMicrosPerMillion: number
   outputMicrosPerMillion: number
@@ -304,17 +280,7 @@ export interface GatewayKeyBudget {
   apiKeyId: string
   weeklyLimitMicros: number
   enabled: boolean
-  spentMicros: number
-  windowStart: string
-  windowEnd: string
   updatedAt: string
-  // Persisted reconciliation metadata lets new instances combine the live
-  // counter with pre-counter history without rescanning usage rollups.
-  baselineUsageStartAt?: string
-  baselineWindowEnd?: string
-  baselineRevision?: string
-  baselineOffsetMicros?: number
-  baselineLastUsedAt?: string | null
 }
 
 export type BudgetWindowAnchor = "codex" | "custom"
@@ -356,17 +322,32 @@ export interface DashboardQuery {
 }
 
 export interface DashboardKeyBudget {
+  usageAvailable?: boolean
   weeklyLimitMicros: number
-  spentMicros: number
-  remainingMicros: number
-  percentUsed: number
+  spentMicros: number | null
+  remainingMicros: number | null
+  percentUsed: number | null
   bypassLimits: boolean
   usageStartAt: string
   windowStart: string
   windowEnd: string
 }
 
+export interface AnalyticsCoverage {
+  partial: boolean
+  excludedSources: number
+  tokenCoveredRequests: number
+  statusCoveredRequests: number
+  costCoveredRequests: number
+  modelCoveredRequests: number
+  keyCoveredRequests: number
+  durationCount: number
+  financialUnavailable: boolean
+  unsupportedTrendSources: number
+}
+
 export interface DashboardPayload {
+  coverage?: AnalyticsCoverage
   generatedAt: string
   range: { label: string; from: string; to: string; granularity: string }
   summary: { requests: number; tokens: number; costMicros: number; activeKeys: number; pricedRequests: number; unpricedRequests: number }

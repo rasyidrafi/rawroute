@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
-import { closeLocalDatabase, FieldValue, getSqliteDatabase } from "./local-db"
+import { closeLocalDatabase, FieldValue, getSqliteDatabase, queryLocalUsageRange } from "./local-db"
 import { recordUsageEvent } from "./analytics"
 import type { UsageEvent } from "./types"
 import { runInWorkspace } from "./workspace/context"
@@ -82,12 +82,8 @@ test("concurrent usage writes atomically account spend and deduplicate events", 
     const root = db.collection("rawroute_workspaces").doc("atomic-usage")
     expect((await root.collection("usageEvents").get()).size).toBe(10)
     const counters = await root.collection("budgetCounters").get()
-    expect(counters.size).toBe(1)
-    expect(counters.docs[0]?.data().spentMicros).toBe(1230)
-    for (const row of (await root.collection("usageRollups").get()).docs) {
-      expect(row.data().requests).toBe(10)
-      expect(row.data().costMicros).toBe(1230)
-    }
+    expect(counters.size).toBe(0)
+    expect((await queryLocalUsageRange("atomic-usage", context.usageStartAt, context.windowEnd)).totals).toMatchObject({ requests: 10, costMicros: 1230, successfulCostMicros: 1230 })
   })
 })
 

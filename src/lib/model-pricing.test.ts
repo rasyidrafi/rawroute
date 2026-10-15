@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, jest } from "bun:test"
 
 import { deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPricingGroups, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "@/lib/model-pricing"
-import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, listUsageRollups, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
+import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "@/lib/analytics"
 import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/server/store"
 import type { Provider, UsageEvent } from "@/lib/types"
 
@@ -174,7 +174,7 @@ describe("model pricing catalog", () => {
 
     const event = (await listUsageEvents()).find((entry) => entry.id === historical.id)
     expect(event).toMatchObject({ costMicros: 200, pricingConfidence: "exact", pricingGroupId: group.id, pricingVersionId: replacement.version.id })
-    expect((await listUsageRollups("hourly")).reduce((total, rollup) => total + rollup.costMicros, 0)).toBe(200)
+    expect([...globalThis.__rawrouteAnalyticsMemory!.get("default")!.projection.values()].filter(row => row.granularity === "hourly").reduce((total, row) => total + row.costMicros, 0)).toBe(200)
     expect((await getDashboardPayload({ preset: "all" })).summary.costMicros).toBe(200)
     expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(200)
     const admissionAfterRepricing = await getBudgetAdmission(key.id, model.gatewayModelId, model.id)
@@ -216,7 +216,7 @@ describe("model pricing catalog", () => {
 
     const event = (await listUsageEvents()).find((entry) => entry.id === "inflated-astra")
     expect(event).toMatchObject({ costMicros: 46_438, pricingConfidence: "assumed", costSource: "configured-pricing", usageCompleteness: "complete" })
-    expect((await listUsageRollups("hourly")).reduce((total, rollup) => total + rollup.costMicros, 0)).toBe(46_438)
+    expect([...globalThis.__rawrouteAnalyticsMemory!.get("default")!.projection.values()].filter(row => row.granularity === "hourly").reduce((total, row) => total + row.costMicros, 0)).toBe(46_438)
     expect((await getDashboardPayload({ preset: "all" })).summary).toMatchObject({ costMicros: 46_438, pricedRequests: 0, unpricedRequests: 1 })
     expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(46_438)
   })

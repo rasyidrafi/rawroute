@@ -34,6 +34,7 @@ function RefreshScrim({ label = "Refreshing data..." }: { label?: string }) { re
 
 function BudgetUsage({ budget }: { budget?: DashboardKeyBudget }) {
   if (!budget) return <span className="text-muted-foreground">—</span>
+  if (budget.usageAvailable === false || budget.spentMicros === null || budget.percentUsed === null || budget.remainingMicros === null) return <span>Budget usage unavailable</span>
   return <div className="min-w-[220px] space-y-2"><div className="flex items-center justify-between gap-3"><span className="text-xs font-medium text-muted-foreground">{budget.bypassLimits ? `${formatCost(budget.spentMicros)} since ${formatDateTime(budget.usageStartAt)}` : `${formatCost(budget.spentMicros)} / ${formatCost(budget.weeklyLimitMicros)}`}</span>{budget.bypassLimits ? <span className="unlimited-shine inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-caption font-semibold tabular-nums"><span className="font-mono">∞</span><span>Unlimited</span></span> : <span className="text-xs text-muted-foreground tabular-nums">{Math.round(budget.percentUsed)}%</span>}</div><Progress value={budget.bypassLimits ? 100 : Math.min(budget.percentUsed, 100)} variant={budget.bypassLimits ? "unlimited" : "default"}><ProgressLabel className="sr-only">Budget usage</ProgressLabel></Progress><div className="text-xs text-muted-foreground">{budget.bypassLimits ? "Unlimited Usage" : `${formatCost(budget.remainingMicros)} remaining`}</div></div>
 }
 

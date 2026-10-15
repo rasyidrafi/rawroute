@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, jest } from "bun:test"
 
-import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, listUsageRollups, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
+import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
 import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/server/store"
 import type { UsageEvent } from "@/lib/types"
@@ -61,7 +61,7 @@ describe.serial("usage analytics", () => {
     expect(payload.summary.tokens).toBe(105)
     expect(payload.summary.costMicros).toBe(84)
     expect(payload.summary.pricedRequests).toBe(1)
-    expect((await listUsageRollups()).map((rollup) => rollup.granularity).sort()).toEqual(["daily", "hourly"])
+    expect([...globalThis.__rawrouteAnalyticsMemory!.get("default")!.projection.values()].map(row => row.granularity).sort()).toEqual(["daily", "hourly"])
   })
 
   test("settles complete Astra usage from tokens instead of the oversized request estimate", async () => {
@@ -566,7 +566,7 @@ describe.serial("usage analytics", () => {
     }
   })
 
-  test("uses the runtime event ledger when a reset-window rollup briefly lags", async () => {
+  test("uses atomic completion-time usage when a duplicate arrives after a reset", async () => {
     jest.useFakeTimers()
     jest.setSystemTime(new Date("2026-08-08T08:00:00.000Z"))
     try {
@@ -597,13 +597,8 @@ describe.serial("usage analytics", () => {
       await recordUsageEvent(event("inside-complete-hour", "2026-08-08T10:15:00.000Z", 200), null)
       await recordUsageEvent(event("inside-later-hour", "2026-08-08T11:15:00.000Z", 400), null)
 
-      // Simulate a daily rollup that was advanced before its hourly rows.
-      // The historical event ledger is complete, so budget usage must remain
-      // the exact $0.000700 rather than retaining only the first partial hour.
-      const memory = globalThis.__rawrouteAnalyticsMemory?.get("default")
-      const daily = [...(memory?.rollups.values() || [])].find((rollup) => rollup.granularity === "daily" && rollup.gatewayKeyId === key.id)
-      if (!daily) throw new Error("Missing daily test rollup")
-      daily.requests += 1
+      // A late duplicate cannot alter either projection or the reset-window total.
+      await recordUsageEvent(event("inside-later-hour", "2026-08-08T11:15:00.000Z", 999), null)
 
       expect((await getBudgetRows()).find((budget) => budget.apiKeyId === key.id)?.spentMicros).toBe(700)
     } finally {
@@ -646,7 +641,7 @@ describe.serial("usage analytics", () => {
     await expect(getBudgetAdmission(key.id, "test/threshold", "threshold-model")).rejects.toThrow("budget")
   })
 
-  test("uses reconciled usage when an existing budget baseline lags the event ledger", async () => {
+  test("uses canonical usage even when no request-time budget context was captured", async () => {
     const key = await createApiKey("Ledger admission")
     await configureTestPricing({ modelId: "ledger-model", gatewayModelId: "ledger/model", upstreamModel: "ledger", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
     await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 10_000, enabled: true })
@@ -671,8 +666,7 @@ describe.serial("usage analytics", () => {
       usageAvailable: true,
       usageCompleteness: "complete",
     })
-    // Passing an explicit null context simulates imported usage that reached
-    // the event ledger without updating the old budget counter.
+    // Imported completions are charged by their actual completion interval.
     await recordUsageEvent(event("ledger-1", 100), null)
     await getBudgetRows()
     await recordUsageEvent(event("ledger-2", 200), null)

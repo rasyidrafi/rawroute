@@ -25,7 +25,7 @@ export interface OverviewDetails {
   statusCoveredRequests: number
   durationCount: number
   durationSumMs: number
-  budgets: { id: string; name: string; enabled: boolean; limitMicros: number; spentMicros: number }[]
+  budgets: { id: string; name: string; enabled: boolean; limitMicros: number; spentMicros: number | null; usageAvailable?: boolean }[]
   budgetWindow: { from: string; to: string; bypassLimits: boolean } | null
 }
 export type OverviewPayload = DashboardPayload & { overview: OverviewDetails }

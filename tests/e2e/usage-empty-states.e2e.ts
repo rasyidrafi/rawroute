@@ -30,6 +30,20 @@ function dashboardPayload(overrides: Partial<Pick<DashboardPayload, "trend" | "k
 }
 
 const trendRow = { bucketStart: "2026-10-11T10:00:00.000Z", label: "10 AM", requests: 5, tokens: 120, costMicros: 15000 }
+
+for (const publicView of [false, true]) test(`${publicView ? "public" : "workspace"} incomplete historical coverage does not claim quiet zero usage`, async ({ page }) => {
+  const payload = dashboardPayload()
+  payload.coverage = { partial: true, excludedSources: 1, tokenCoveredRequests: 0, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 }
+  await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
+  if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+  else await authenticate(page)
+  await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+  await expect(page.getByText("Partial analytics coverage", { exact: true })).toBeVisible()
+  await expect(page.getByText("Unavailable", { exact: true })).toHaveCount(4)
+  await expect(page.getByText("Usage unavailable", { exact: true })).toBeVisible()
+  await expect(page.getByText("No usage yet", { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/unavailable data is not zero usage/)).toBeVisible()
+})
 const keyRow: DashboardPayload["keys"][number] = {
   id: "usage-empty-state-key",
   label: "E2E Usage Key",

@@ -12,6 +12,13 @@ Settings are shared across workspaces and available from both gateway apps.
 See [dashboard scopes and logging](docs/scopes-and-logging.md) for architecture,
 retention limits, extension guidance and workspace API compatibility changes.
 
+**Existing usage data requires a stopped-writer migration before starting this
+version.** Raw events and historical sources are preserved; unsupported financial
+coverage blocks affected budgets rather than becoming zero spend. See
+[canonical usage analytics](docs/usage-projection.md) for dry-run, backup,
+validation, maintenance and matched data/image rollback instructions. No automatic
+request-time conversion runs at startup.
+
 ## Network boundary
 
 Only RawRoute binds a host port. CLIProxyAPI runs as a managed subprocess inside
