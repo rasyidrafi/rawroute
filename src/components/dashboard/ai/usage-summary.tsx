@@ -15,7 +15,7 @@ export function UsageSummary({ dashboard, refreshing = false }: { dashboard?: Da
   ]
   return <section className="space-y-4" aria-busy={!dashboard || refreshing} data-slot="usage-summary">
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-lg font-semibold tracking-tight">Usage summary</h2><p className="text-sm text-muted-foreground">High-level totals for the currently selected range.</p></div></div>
-    <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">{metrics.map(({ title, value, detail, icon: Icon }) => <Card key={title}>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(({ title, value, detail, icon: Icon }) => <Card key={title}>
       <CardHeader><div className="flex items-center justify-between gap-2"><CardDescription>{title}</CardDescription><Icon className="size-4 text-muted-foreground" /></div><CardTitle variant="metric">{value ?? <Skeleton className="h-lh w-28" />}</CardTitle></CardHeader>
       <CardContent><p className="text-xs text-muted-foreground">{detail}</p></CardContent>
     </Card>)}</div>

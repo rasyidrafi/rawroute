@@ -43,6 +43,55 @@ const keyRow: DashboardPayload["keys"][number] = {
 const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
 
 for (const publicView of [false, true]) {
+  test(`${publicView ? "public" : "workspace"} usage responsive panels match their loading layout`, async ({ page }) => {
+    let release!: () => void
+    let markReached!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const reached = new Promise<void>(resolve => { markReached = resolve })
+    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", async route => {
+      markReached()
+      await gate
+      await route.fulfill({ json: dashboardPayload({ trend: [trendRow], keys: [keyRow], models: [modelRow] }) })
+    })
+    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+    else await authenticate(page)
+    await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+    await reached
+    await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toBeVisible()
+
+    for (const loading of [true, false]) {
+      if (!loading) {
+        release()
+        await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
+        await expect(page.getByText("E2E Usage Key", { exact: true }).first()).toBeVisible()
+      }
+      for (const width of [1440, 1280, 1024, 768, 390]) {
+        await page.setViewportSize({ width, height: 900 })
+        if (!publicView && width >= 768) await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible()
+        const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
+        for (const [leftTitle, rightTitle] of [["Requests and spend", "Top keys by cost"], ["Usage table", "Most used models"]] as const) {
+          const left = (await card(leftTitle).boundingBox())!
+          const right = (await card(rightTitle).boundingBox())!
+          if (width >= 1280) {
+            expect(Math.abs(left.y - right.y)).toBeLessThan(1)
+            expect(right.x).toBeGreaterThanOrEqual(left.x + left.width)
+            expect(right.width).toBeGreaterThanOrEqual(360)
+          } else {
+            expect(right.y).toBeGreaterThanOrEqual(left.y + left.height)
+            expect(Math.abs(left.x - right.x)).toBeLessThan(1)
+          }
+        }
+        const summary = page.locator('[data-slot="usage-summary"] > .grid')
+        expect(await summary.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(width >= 1280 ? 4 : width >= 640 ? 2 : 1)
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+        const tableViewport = card("Usage table").locator('[data-slot="scroll-area-viewport"]').first()
+        expect(await tableViewport.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+      }
+    }
+  })
+}
+
+for (const publicView of [false, true]) {
   test(`${publicView ? "public" : "workspace"} usage ranks all models by requests, not spend`, async ({ page }) => {
     const payload = dashboardPayload({
       trend: [{ ...trendRow, requests: 100 }],
