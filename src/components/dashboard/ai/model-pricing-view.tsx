@@ -268,7 +268,21 @@ function useCanonicalModelCatalog(apiFetch: ReturnType<typeof useDashboardApi>["
 }
 
 function CanonicalModelResults({ catalog, selectedModelId, onSelect }: { catalog: CanonicalModelCatalog; selectedModelId: string; onSelect: (model: CanonicalModelSummary) => void }) {
-  if (catalog.loading) return <CommandGroup heading="Canonical models" variant="flush">{Array.from({ length: 2 }, (_, index) => <div key={index} className="rounded-md px-3 py-2" aria-hidden="true"><Skeleton className="h-5 w-40 max-w-full" /><Skeleton className="h-4 w-56 max-w-full" /><Skeleton className="mt-1 h-4 w-64 max-w-full" /></div>)}</CommandGroup>
+  if (catalog.loading) return (
+    <CommandGroup heading="Canonical models" variant="flush" aria-busy="true" aria-label="Loading canonical models">
+      {Array.from({ length: 2 }, (_, index) => (
+        <div key={index} className="flex flex-col gap-2 rounded-md px-3 py-3" aria-hidden="true">
+          <Skeleton className="h-4 w-40 max-w-full" />
+          <Skeleton className="h-3 w-56 max-w-full" />
+          <div className="mt-1 flex flex-wrap gap-3">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-24" />
+          </div>
+        </div>
+      ))}
+    </CommandGroup>
+  )
   if (catalog.error) return <div role="alert" className="px-3 py-2 text-sm text-destructive">{catalog.error}</div>
   if (!catalog.models.length) return <EmptyState title={catalog.search.trim() ? "No canonical models match your search" : "No canonical models available"} description={catalog.search.trim() ? `Try another search for "${catalog.search.trim()}".` : "The canonical model catalog has no results to show."} icon={SearchIcon} variant="compact" treatment="embedded" />
   return <CommandGroup heading={`Canonical models (${catalog.models.length})`} variant="flush">{catalog.models.map((model) => <CommandItem key={model.id} value={`${model.name} ${model.id} ${model.provider}`} variant="detail" onSelect={() => onSelect(model)}><div className="min-w-0 flex-1"><div className="truncate font-medium">{model.name}</div><div className="truncate text-xs text-muted-foreground">{model.id} · {model.provider}</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground"><span>Input {formatCanonicalRate(model.pricing.inputMicrosPerMillion)}</span><span>Output {formatCanonicalRate(model.pricing.outputMicrosPerMillion)}</span><span>Cache read {formatCanonicalRate(model.pricing.cacheReadMicrosPerMillion)}</span></div></div>{selectedModelId === model.id && <CheckIcon className="mt-1 size-4 text-primary" />}</CommandItem>)}</CommandGroup>
