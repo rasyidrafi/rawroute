@@ -1,13 +1,14 @@
-import { expect, test } from "@playwright/test"
+import { expect } from "@playwright/test"
+import { test } from "./empty-workspace.fixture"
 
 test.use({ timezoneId: "Asia/Tokyo" })
 
-test("request log filters, pagination, refresh and feedback states", async ({ page }) => {
+test("request log filters, pagination, refresh and feedback states", async ({ page, emptyWorkspaceId }) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
-  const headers = { "x-rawroute-workspace-id": "default" }
+  const headers = { "x-rawroute-workspace-id": emptyWorkspaceId }
   expect((await page.request.get("/api/admin/request-logs?from=invalid", { headers })).status()).toBe(400)
   const from = new Date(Date.now() - 86_400_000).toISOString()
   const to = new Date().toISOString()

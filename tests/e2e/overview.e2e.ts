@@ -1,8 +1,9 @@
-import { expect, test } from "@playwright/test"
+import { expect } from "@playwright/test"
+import { test } from "./empty-workspace.fixture"
 
 test.use({ timezoneId: "America/New_York" })
 
-test("Overview loads scoped aggregates and four compact recent attempts with retry and rolling controls", async ({ page }, testInfo) => {
+test("Overview loads scoped aggregates and four compact recent attempts with retry and rolling controls", async ({ page, emptyWorkspaceId }, testInfo) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
@@ -11,7 +12,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   // Exercise the real registered endpoint before using deterministic UI fixtures.
   const to = Date.now()
   const params = new URLSearchParams({ from: new Date(to - 86_400_000).toISOString(), to: new Date(to).toISOString() })
-  const response = await page.request.get(`/api/admin/overview?${params}`, { headers: { "x-rawroute-workspace-id": "default" } })
+  const response = await page.request.get(`/api/admin/overview?${params}`, { headers: { "x-rawroute-workspace-id": emptyWorkspaceId } })
   expect(response.ok()).toBe(true)
   expect((await response.json()).summary.requests).toBe(0)
   expect((await page.request.get(`/api/admin/overview?${params}`)).status()).toBe(400)
