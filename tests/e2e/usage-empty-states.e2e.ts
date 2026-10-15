@@ -62,6 +62,7 @@ for (const publicView of [false, true]) {
         const visibleCount = Math.min(count, 5)
         await expect(bars).toHaveCount(visibleCount)
         await expect.poll(() => chart.evaluate(element => element.getBoundingClientRect().height)).toBe(220)
+        await expect.poll(() => chart.locator('.recharts-cartesian-grid-vertical line').evaluateAll(lines => lines.length > 0 && lines.every(line => Math.abs(Number(line.getAttribute('y2')) - Number(line.getAttribute('y1'))) === 210))).toBe(true)
         await expect.poll(() => bars.evaluateAll(elements => elements.every(element => {
           const height = element.getBoundingClientRect().height
           return height > 0 && height <= 28.5
@@ -79,7 +80,8 @@ for (const publicView of [false, true]) {
           expect(bounds.height).toBeCloseTo(28, 0)
           expect(bounds.y - chartBounds.y).toBeCloseTo(12 + index * 42, 0)
         }
-        await expect(card.locator('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-label')).toHaveCount(visibleCount)
+        await expect(card.locator('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-label').filter({ hasText: /Usage key/ })).toHaveCount(visibleCount)
+        await expect(card.getByText("TBD", { exact: true })).toHaveCount(0)
         await expect(card.locator('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-label').first()).toHaveText(new RegExp(`Usage key\\s*${count - 1}`))
         await expect(card.locator('[data-slot="scroll-area"] .text-sm.font-medium')).toHaveCount(visibleCount * 2)
         await expect(card.locator('[data-slot="scroll-area"]').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
@@ -100,7 +102,17 @@ for (const publicView of [false, true]) {
           await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1 - index}`, { exact: true })).toBeVisible()
         }
         await page.keyboard.press("ArrowLeft")
-        await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
+        if (visibleCount === 5) {
+          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
+        } else {
+          for (let slot = visibleCount; slot < 5; slot++) {
+            await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).not.toBeVisible()
+            await expect(chart.locator('.recharts-tooltip-wrapper')).not.toContainText("TBD")
+            if (slot < 4) await page.keyboard.press("ArrowLeft")
+          }
+          for (let slot = 4; slot >= visibleCount; slot--) await page.keyboard.press("ArrowRight")
+          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
+        }
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
       }
     }

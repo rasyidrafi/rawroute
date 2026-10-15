@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import { ActivityIcon, DatabaseIcon } from "lucide-react"
+import type { BarShapeProps, TooltipContentProps, TooltipValueType } from "recharts"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -16,9 +17,18 @@ import { KEY_COLORS, formatDateTime, getOptionLabel } from "@/components/dashboa
 import { formatCost, formatRequestCount, formatTokenCount } from "@/lib/usage-display"
 
 // This module is reached through the lazy Usage/Public routes. Keep the chart engine in its own async chunk.
-const { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, XAxis, YAxis } = await import("recharts")
+const { Area, AreaChart, Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } = await import("recharts")
 
 type KeyRow = DashboardPayload["keys"][number]
+
+type TopKeyChartRow = {
+  id: string
+  name: string
+  cost: number
+  requests: number
+  fill: string
+  placeholder: boolean
+}
 
 function RefreshScrim({ label = "Refreshing data..." }: { label?: string }) { return <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-end rounded-inherit bg-background/40 p-3 backdrop-blur-scrim"><Badge variant="refreshing"><ActivityIcon className="size-3.5 animate-spin" />{label}</Badge></div> }
 
@@ -37,21 +47,21 @@ function ModelList({ models }: { models: string[] }) {
 export function DashboardTrend({ dashboard, refreshing }: { dashboard: DashboardPayload; refreshing: boolean }) { const data = dashboard.trend.map((point) => ({ label: formatAppTrendBucket(point.bucketStart, dashboard.range.granularity), requests: point.requests, cost: point.costMicros / 1_000_000 })); const config = { requests: { label: "Requests" }, cost: { label: "Cost" } } satisfies ChartConfig; return <Card variant="dashboard" className="relative h-140 overflow-hidden">{refreshing && <RefreshScrim />}<CardHeader><CardTitle>Requests and spend</CardTitle><CardDescription>Trend</CardDescription><CardAction><Badge variant="outline">{dashboard.range.label}</Badge></CardAction></CardHeader><CardContent className="min-h-0 flex-1"><ChartContainer config={config} className="h-full w-full"><AreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}><defs><linearGradient id="usage-fill-requests" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.06} /></linearGradient><linearGradient id="usage-fill-cost" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-2)" stopOpacity={0.28} /><stop offset="100%" stopColor="var(--chart-2)" stopOpacity={0.05} /></linearGradient></defs><CartesianGrid vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis yAxisId="left" tickFormatter={formatRequestCount} tickLine={false} axisLine={false} /><YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} /><ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <div className="flex w-full items-center justify-between gap-4"><span>{name === "cost" ? "Cost" : "Requests"}</span><span className="font-mono">{name === "cost" ? formatCost(Number(value ?? 0) * 1_000_000) : formatRequestCount(Number(value ?? 0))}</span></div>} />} /><Area yAxisId="left" type="monotone" dataKey="requests" stroke="var(--chart-1)" fill="url(#usage-fill-requests)" strokeWidth={2} /><Area yAxisId="right" type="monotone" dataKey="cost" stroke="var(--chart-2)" fill="url(#usage-fill-cost)" strokeWidth={2} /><ChartLegend content={<ChartLegendContent />} /></AreaChart></ChartContainer></CardContent></Card> }
 
 export function TopKeys({ keys, refreshing }: { keys: KeyRow[]; refreshing: boolean }) {
-  const rows = keys.slice().sort((a, b) => b.costMicros - a.costMicros).slice(0, 5).map((row, index) => ({ id: row.id, name: row.label, cost: row.costMicros / 1_000_000, requests: row.requests, fill: KEY_COLORS[index % KEY_COLORS.length] }))
+  const rows: TopKeyChartRow[] = keys.slice().sort((a, b) => b.costMicros - a.costMicros).slice(0, 5).map((row, index) => ({ id: `key:${row.id}`, name: row.label, cost: row.costMicros / 1_000_000, requests: row.requests, fill: KEY_COLORS[index % KEY_COLORS.length], placeholder: false }))
+  // Zero-valued placeholder rows reserve the remaining categories without exposing fake activity.
+  const chartRows: TopKeyChartRow[] = [...rows, ...Array.from({ length: 5 - rows.length }, (_, index) => ({ id: `placeholder:${index}`, name: "TBD", cost: 0, requests: 0, fill: "transparent", placeholder: true }))]
   const config = { cost: { label: "Cost" } } satisfies ChartConfig
-  // The 220px chart has 210px inside its margins: five 42px slots, with no fake data.
-  const unusedSlotHeight = (5 - rows.length) * 42
   return <Card variant="dashboard" className="relative h-140 overflow-hidden">
     {refreshing && <RefreshScrim />}
     <CardHeader><CardTitle>Top keys by cost</CardTitle><CardDescription>Concentration</CardDescription></CardHeader>
     <CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col">
       <ChartContainer config={config} className="h-[220px] aspect-auto w-full shrink-0">
-        <BarChart data={rows} layout="vertical" margin={{ top: 5, bottom: 5 + unusedSlotHeight, left: 4, right: 4 }}>
+        <BarChart data={chartRows} layout="vertical" margin={{ top: 5, bottom: 5, left: 4, right: 4 }}>
           <CartesianGrid horizontal={false} />
           <XAxis type="number" hide />
           <YAxis dataKey="id" type="category" allowDuplicatedCategory={false} tickFormatter={(id: string) => rows.find(row => row.id === id)?.name ?? ""} width={90} tickLine={false} axisLine={false} />
-          <ChartTooltip cursor={false} content={<ChartTooltipContent labelFormatter={(id) => rows.find(row => row.id === id)?.name} formatter={(value) => <div className="flex w-full items-center justify-between gap-4"><span>Cost</span><span className="font-mono">{formatCost(Number(value ?? 0) * 1_000_000)}</span></div>} />} />
-          <Bar dataKey="cost" radius={10} maxBarSize={28}>{rows.map((entry) => <Cell key={entry.id} fill={entry.fill} />)}</Bar>
+          <ChartTooltip cursor={false} content={({ active, payload, label }: TooltipContentProps<TooltipValueType, string | number>) => rows.some(row => row.id === label) ? <ChartTooltipContent active={active} payload={payload} label={label} labelFormatter={(id) => rows.find(row => row.id === id)?.name} formatter={(value) => <div className="flex w-full items-center justify-between gap-4"><span>Cost</span><span className="font-mono">{formatCost(Number(value ?? 0) * 1_000_000)}</span></div>} /> : null} />
+          <Bar dataKey="cost" radius={10} maxBarSize={28} activeBar={false} shape={(props: BarShapeProps) => chartRows[props.index]?.placeholder ? <></> : <Rectangle x={props.x} y={props.y} width={props.width} height={props.height} radius={10} fill={chartRows[props.index]?.fill} />} />
         </BarChart>
       </ChartContainer>
       <ScrollArea variant="panel" className="min-h-0 flex-1"><div className="space-y-2 pr-3">{rows.map((row) => <div key={row.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 p-3"><div className="min-w-0"><div className="truncate text-sm font-medium">{row.name}</div><div className="text-xs text-muted-foreground">{formatRequestCount(row.requests)} requests</div></div><div className="text-sm font-medium">{formatCost(row.cost * 1_000_000)}</div></div>)}</div></ScrollArea>
