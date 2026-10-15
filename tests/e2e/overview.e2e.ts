@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test"
 
 test.use({ timezoneId: "America/New_York" })
 
-test("Overview loads scoped aggregates and four compact recent attempts with retry and rolling controls", async ({ page }) => {
+test("Overview loads scoped aggregates and four compact recent attempts with retry and rolling controls", async ({ page }, testInfo) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
@@ -67,6 +67,42 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   const chart = trend.getByRole("application")
   await expect(trend.locator(".recharts-responsive-container")).toHaveCount(1)
   expect((await chart.boundingBox())!.height).toBeGreaterThanOrEqual(320)
+  // Resolve the real SVG/CSS colors: unresolved custom properties otherwise render
+  // black curves and transparent swatches without changing chart text or paths.
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(theme => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      document.documentElement.classList.toggle("light", theme === "light")
+    }, theme)
+    const colors = await trend.evaluate(element => {
+      const resolve = (color: string) => {
+        const probe = document.createElement("span")
+        probe.style.color = color
+        element.append(probe)
+        const resolved = getComputedStyle(probe).color
+        probe.remove()
+        return resolved
+      }
+      return {
+        primary: resolve("var(--primary)"),
+        cost: resolve("var(--chart-2)"),
+        strokes: Array.from(element.querySelectorAll(".recharts-area-curve"), curve => getComputedStyle(curve).stroke),
+        swatches: Array.from(element.querySelectorAll(".recharts-legend-wrapper [style]"), swatch => getComputedStyle(swatch).backgroundColor),
+        gridY: Array.from(element.querySelectorAll(".recharts-cartesian-grid-horizontal line"), line => Number(line.getAttribute("y1"))),
+        tickY: Array.from(element.querySelector(".recharts-yAxis-tick-labels")?.querySelectorAll("text") ?? [], tick => Number(tick.getAttribute("y"))),
+      }
+    })
+    expect(colors.strokes).toEqual([colors.primary, colors.cost])
+    expect(colors.primary).not.toBe(colors.cost)
+    for (const color of colors.strokes) expect(color).not.toMatch(/^(?:none|rgb\(0, 0, 0\)|rgba\(0, 0, 0, 0\))$/)
+    expect(colors.swatches).toEqual([colors.cost, colors.primary])
+    expect(colors.gridY.length).toBeGreaterThanOrEqual(4)
+    expect(colors.gridY).toEqual(expect.arrayContaining(colors.tickY))
+    expect(colors.tickY.length).toBeGreaterThanOrEqual(4)
+    const screenshotPath = testInfo.outputPath(`overview-trend-${theme}.png`)
+    await trend.screenshot({ path: screenshotPath })
+    await testInfo.attach(`overview-trend-${theme}`, { path: screenshotPath, contentType: "image/png" })
+  }
   await chart.focus()
   await page.keyboard.press("ArrowLeft")
   const tooltip = trend.locator(".recharts-tooltip-wrapper")
