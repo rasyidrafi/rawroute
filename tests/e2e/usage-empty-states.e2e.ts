@@ -146,6 +146,7 @@ for (const publicView of [false, true]) {
         await page.setViewportSize({ width, height: 900 })
         if (!publicView && width >= 768) await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible()
         const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
+        if (!loading) expect(await card("Most used models").evaluate(element => getComputedStyle(element).alignSelf)).toBe("flex-start")
         for (const [title, description] of [["Usage Trend", "Token usage over time"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
           const header = card(title).locator('[data-slot="card-header"]')
           await expect(header.locator('[data-slot="card-title"]')).toHaveText(title)

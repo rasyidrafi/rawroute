@@ -64,7 +64,7 @@ function OverviewLayout({ data, period, onPeriod, refresh, busy, error, recent, 
       <div className="flex min-w-0 flex-col gap-4"><BudgetUsageCard data={data?.overview} error={error} /><QuickAccessCard /></div>
     </div>
     <div className="grid gap-4 lg:grid-cols-2">
-      <MostUsedModels models={data?.models} totalRequests={data?.summary.requests} error={error} limit={3} action={<Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button>} />
+      <MostUsedModels className="lg:self-stretch" models={data?.models} totalRequests={data?.summary.requests} error={error} limit={3} action={<Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button>} />
       <RecentRequestsCard data={recent} loading={recentLoading} error={recentError} retry={retryRecent} />
     </div>
   </DashboardPage>
