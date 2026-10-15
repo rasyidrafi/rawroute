@@ -3,9 +3,9 @@ import { Link } from "react-router"
 import { ActivityIcon, CheckCircle2Icon, Clock3Icon, CoinsIcon, DatabaseZapIcon, LayersIcon, RefreshCwIcon } from "lucide-react"
 import { OverviewUsageTrend } from "./overview-usage-trend"
 import { DashboardPage } from "../page-layout"
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Progress } from "@/components/ui/progress"
+import { MostUsedModels } from "./most-used-models"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -64,19 +64,8 @@ function OverviewLayout({ data, period, onPeriod, refresh, busy, error, recent, 
       <div className="flex min-w-0 flex-col gap-4"><BudgetUsageCard data={data?.overview} error={error} /><QuickAccessCard /></div>
     </div>
     <div className="grid gap-4 lg:grid-cols-2">
-      <MostUsedModels data={data} error={error} />
+      <MostUsedModels models={data?.models} totalRequests={data?.summary.requests} error={error} limit={3} action={<Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button>} />
       <RecentRequestsCard data={recent} loading={recentLoading} error={recentError} retry={retryRecent} />
     </div>
   </DashboardPage>
-}
-
-function MostUsedModels({ data, error }: { data?: OverviewPayload; error?: boolean }) {
-  let content = <>{[0, 1, 2].map(index => <Skeleton key={index} className="h-16 w-full" />)}</>
-  if (error) content = <p>Model usage unavailable.</p>
-  else if (data && !data.models.length) content = <p className="text-sm text-muted-foreground">No model usage in this period.</p>
-  else if (data) content = <>{data.models.slice(0, 3).map(model => {
-    const share = data.summary.requests ? model.requests / data.summary.requests * 100 : 0
-    return <div key={model.model} className="flex flex-col gap-2"><div className="flex items-center justify-between gap-4"><div className="min-w-0"><p className="truncate font-medium" title={model.model}>{model.model}</p><p className="text-xs text-muted-foreground">{model.requests.toLocaleString()} requests · {formatTokenCount(model.tokens)} tokens</p></div><div className="shrink-0 text-right"><p className="font-medium">{formatCost(model.costMicros)}</p><p className="text-xs text-muted-foreground">{share.toFixed(1)}% of requests</p></div></div><Progress value={share} aria-label={`${model.model}: ${share.toFixed(1)} percent of requests`} /></div>
-  })}</>
-  return <Card><CardHeader><CardTitle>Most used models</CardTitle><CardDescription>Ranked by recorded requests</CardDescription><CardAction><Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button></CardAction></CardHeader><CardContent spacing="stack">{content}</CardContent></Card>
 }

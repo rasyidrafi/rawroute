@@ -42,6 +42,37 @@ const keyRow: DashboardPayload["keys"][number] = {
 }
 const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
 
+for (const publicView of [false, true]) {
+  test(`${publicView ? "public" : "workspace"} usage ranks all models by requests, not spend`, async ({ page }) => {
+    const payload = dashboardPayload({
+      trend: [{ ...trendRow, requests: 100 }],
+      models: [
+        { ...modelRow, model: "Expensive", requests: 1, costMicros: 9_000_000 },
+        { ...modelRow, model: "Popular", requests: 50, tokens: 43_542, costMicros: 10 },
+        ...[4, 3, 2, 1].map((requests, index) => ({ ...modelRow, model: `Other ${index}`, requests })),
+      ],
+    })
+    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
+    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+    else await authenticate(page)
+    await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+    const card = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
+    await expect(card.getByText("Ranked by recorded requests", { exact: true })).toBeVisible()
+    await expect(card.getByRole("progressbar")).toHaveCount(6)
+    await expect(card.getByRole("progressbar").first()).toHaveAttribute("aria-label", "Popular: 50.0 percent of requests")
+    await expect(card.getByRole("progressbar").first()).toHaveAttribute("aria-valuenow", "50")
+    await expect(card.getByRole("progressbar").nth(1)).toHaveAttribute("aria-label", "Other 0: 4.0 percent of requests")
+    await expect(card.getByText("50 requests · 43.5K tokens", { exact: true })).toBeVisible()
+    await expect(card.getByText("$0.00001", { exact: true })).toBeVisible()
+    await expect(card.getByRole("link")).toHaveCount(0)
+    await expect(card.locator("a")).toHaveCount(0)
+    await expect(card.locator("svg.recharts-surface")).toHaveCount(0)
+    await expect(page.getByText("Spend allocation", { exact: true })).toHaveCount(0)
+    await page.setViewportSize({ width: 390, height: 844 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  })
+}
+
 test("usage shares compact tokens and precise costs across summary, lists, and table", async ({ page }) => {
   const payload = dashboardPayload({
     trend: [{ ...trendRow, tokens: 28_500_000, costMicros: 10 }],
@@ -53,7 +84,7 @@ test("usage shares compact tokens and precise costs across summary, lists, and t
   await page.goto("/dashboard/ai/overview/usage")
   await expect(page.getByText("28.5M", { exact: true })).toBeVisible()
   await expect(page.getByRole("cell", { name: "43.5K", exact: true })).toBeVisible()
-  await expect(page.getByText("43.5K tokens", { exact: true })).toBeVisible()
+  await expect(page.getByText("5 requests · 43.5K tokens", { exact: true })).toBeVisible()
   await expect(page.getByText("$0.00001", { exact: true })).toHaveCount(4)
 })
 
@@ -105,13 +136,13 @@ test("overview usage keeps loading, empty, sparse, and populated panels in sync"
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByText("No key activity", { exact: true })).toBeVisible()
   await expect(page.getByText("No table rows", { exact: true })).toBeVisible()
-  await expect(page.getByText("No model mix", { exact: true })).toBeVisible()
+  await expect(page.getByText("No model usage", { exact: true })).toBeVisible()
   await expect(page.getByText("Requests and spend", { exact: true })).toBeVisible()
   await expect(page.getByText("No usage yet", { exact: true })).toHaveCount(0)
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByText("No trend data", { exact: true })).toBeVisible()
-  await expect(page.getByText("No model mix", { exact: true })).toBeVisible()
+  await expect(page.getByText("No model usage", { exact: true })).toBeVisible()
   await expect(page.getByText("E2E Usage Key", { exact: true }).first()).toBeVisible()
   await expect(page.getByText("No key activity", { exact: true })).toHaveCount(0)
   await expect(page.getByText("No table rows", { exact: true })).toHaveCount(0)
@@ -120,7 +151,7 @@ test("overview usage keeps loading, empty, sparse, and populated panels in sync"
   await expect(page.getByText("gpt-5-e2e", { exact: true }).first()).toBeVisible()
   await expect(page.getByText("Requests and spend", { exact: true })).toBeVisible()
   await expect(page.getByText("No trend data", { exact: true })).toHaveCount(0)
-  await expect(page.getByText("No model mix", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("No model usage", { exact: true })).toHaveCount(0)
 
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await refreshReached

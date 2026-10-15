@@ -6,7 +6,8 @@ import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { DashboardPage } from "@/components/dashboard/page-layout"
 import { UsageOverview } from "./usage-overview"
 import { BarChart3Icon, DatabaseIcon, KeyRoundIcon, WalletCardsIcon } from "lucide-react"
-import { DashboardTrend, ModelMix, TopKeys, UsageTable } from "./usage-panels"
+import { DashboardTrend, TopKeys, UsageTable } from "./usage-panels"
+import { MostUsedModels } from "./most-used-models"
 import { EmptyState } from "@/components/ui/empty-state"
 import { UsageSummary } from "./usage-summary"
 
@@ -30,7 +31,7 @@ function OverviewUsageContent() {
       </div>
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         {dashboard.keys.length ? <UsageTable keys={dashboard.keys} refreshing={pending} /> : <EmptyState title="No table rows" description="There is no per-key usage to show for this filter." icon={DatabaseIcon} />}
-        {dashboard.models.length ? <ModelMix models={dashboard.models} refreshing={pending} /> : <EmptyState title="No model mix" description="No model usage was recorded for this filter." icon={WalletCardsIcon} />}
+        {dashboard.models.length ? <MostUsedModels models={dashboard.models} totalRequests={dashboard.summary.requests} refreshing={pending} /> : <EmptyState title="No model usage" description="No model usage was recorded for this filter." icon={WalletCardsIcon} />}
       </div>
     </> : <EmptyState title="No usage yet" description="No gateway activity was recorded for this range." icon={DatabaseIcon} />}
   </DashboardPage>

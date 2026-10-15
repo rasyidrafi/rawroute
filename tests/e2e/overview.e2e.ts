@@ -38,7 +38,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
       generatedAt: range.to, range: { from: query.get("from"), to: query.get("to"), granularity: "hourly" },
       summary: { requests: 40, tokens: held ? 9999 : 4800, costMicros: 2500000, activeKeys: 1, pricedRequests: 35, unpricedRequests: 1 },
       overview: { inputTokens: sparse ? 0 : 4000, cacheReadTokens: sparse ? 0 : 1000, failedRequests: 4, statusCoveredRequests: sparse ? 0 : 40, durationCount: sparse ? 0 : 38, durationSumMs: sparse ? 0 : 76000, budgets: [{ id: "quiet", name: "Quiet key", enabled: true, limitMicros: 10000000, spentMicros: 1000000 }], budgetWindow: { ...range, bypassLimits: false } },
-      models: [{ model: "Real model", requests: 40, tokens: 4800, costMicros: 2500000 }], keys: [], trend: [{ bucketStart: query.get("from"), tokens: 1200, requests: 10, costMicros: 500000 }, { bucketStart: query.get("to"), tokens: 3600, requests: 30, costMicros: 2000000 }],
+      models: [{ model: "Expensive model", requests: 4, tokens: 4800, costMicros: 2500000 }, { model: "Popular model", requests: 20, tokens: 43542, costMicros: 10 }, { model: "Other model", requests: 10, tokens: 200, costMicros: 0 }, { model: "Hidden model", requests: 6, tokens: 100, costMicros: 0 }], keys: [], trend: [{ bucketStart: query.get("from"), tokens: 1200, requests: 10, costMicros: 500000 }, { bucketStart: query.get("to"), tokens: 3600, requests: 30, costMicros: 2000000 }],
     } })
   })
   await page.route("**/api/admin/request-logs?*", async route => {
@@ -62,6 +62,15 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(page.getByText("25.0%", { exact: true })).toBeVisible()
   await expect(page.getByText("2 s", { exact: true })).toBeVisible()
   await expect(page.getByText("Quiet key", { exact: true })).toBeVisible()
+  const models = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
+  await expect(models.getByRole("progressbar")).toHaveCount(3)
+  await expect(models.getByRole("progressbar").nth(0)).toHaveAttribute("aria-label", "Popular model: 50.0 percent of requests")
+  await expect(models.getByRole("progressbar").nth(1)).toHaveAttribute("aria-label", "Other model: 25.0 percent of requests")
+  await expect(models.getByRole("progressbar").nth(2)).toHaveAttribute("aria-label", "Hidden model: 15.0 percent of requests")
+  await expect(models.getByText("Expensive model", { exact: true })).toHaveCount(0)
+  await expect(models.getByText("20 requests · 43.5K tokens", { exact: true })).toBeVisible()
+  await expect(models.getByText("$0.00001", { exact: true })).toBeVisible()
+  await expect(models.locator("a", { hasText: "View all" })).toHaveAttribute("href", "/dashboard/ai/overview/usage")
   const recent = page.locator('[data-slot="card"]').filter({ has: page.getByText("Recent Requests", { exact: true }) })
   await expect(recent.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Duration", /^Time \(.+\)$/])
   await expect(recent.getByRole("row")).toHaveCount(5)
