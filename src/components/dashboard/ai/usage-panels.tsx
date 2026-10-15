@@ -3,21 +3,21 @@ import { ActivityIcon, DatabaseIcon } from "lucide-react"
 import type { BarShapeProps, TooltipContentProps, TooltipValueType } from "recharts"
 
 import { Badge } from "@/components/ui/badge"
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { EmptyState } from "@/components/ui/empty-state"
-import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Progress, ProgressLabel } from "@/components/ui/progress"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { DashboardKeyBudget, DashboardPayload } from "@/lib/types"
-import { formatAppTrendBucket } from "@/lib/timezone"
+import { UsageTrendChart } from "./usage-trend-chart"
 import { KEY_COLORS, formatDateTime, getOptionLabel } from "@/components/dashboard/ai/usage-utils"
 import { formatCost, formatRequestCount, formatTokenCount } from "@/lib/usage-display"
 
 // This module is reached through the lazy Usage/Public routes. Keep the chart engine in its own async chunk.
-const { Area, AreaChart, Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } = await import("recharts")
+const { Bar, BarChart, CartesianGrid, Rectangle, XAxis, YAxis } = await import("recharts")
 
 type KeyRow = DashboardPayload["keys"][number]
 
@@ -44,7 +44,17 @@ function ModelList({ models }: { models: string[] }) {
   return <div className="flex min-w-0 flex-wrap items-center gap-x-1 text-muted-foreground"><span>{visibleModels.join(", ")}</span>{hiddenCount > 0 && <><span aria-hidden="true">,</span><Tooltip><TooltipTrigger render={<button type="button" aria-label={`Show all ${models.length} models`} className="rounded-sm px-1 font-medium text-foreground underline decoration-dotted underline-offset-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">+{hiddenCount}</button>} /><TooltipContent side="top" align="start" className="max-w-[calc(100vw-2rem)] text-left whitespace-normal break-words sm:max-w-[36rem]">{models.join(", ")}</TooltipContent></Tooltip></>}</div>
 }
 
-export function DashboardTrend({ dashboard, refreshing }: { dashboard: DashboardPayload; refreshing: boolean }) { const data = dashboard.trend.map((point) => ({ label: formatAppTrendBucket(point.bucketStart, dashboard.range.granularity), requests: point.requests, cost: point.costMicros / 1_000_000 })); const config = { requests: { label: "Requests" }, cost: { label: "Cost" } } satisfies ChartConfig; return <Card variant="dashboard" className="relative h-140 overflow-hidden">{refreshing && <RefreshScrim />}<CardHeader><CardTitle>Usage Trend</CardTitle><CardDescription>Token usage over time</CardDescription><CardAction><Badge variant="outline">{dashboard.range.label}</Badge></CardAction></CardHeader><CardContent className="min-h-0 flex-1"><ChartContainer config={config} className="h-full w-full"><AreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}><defs><linearGradient id="usage-fill-requests" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.06} /></linearGradient><linearGradient id="usage-fill-cost" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-2)" stopOpacity={0.28} /><stop offset="100%" stopColor="var(--chart-2)" stopOpacity={0.05} /></linearGradient></defs><CartesianGrid vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis yAxisId="left" tickFormatter={formatRequestCount} tickLine={false} axisLine={false} /><YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} /><ChartTooltip content={<ChartTooltipContent formatter={(value, name) => <div className="flex w-full items-center justify-between gap-4"><span>{name === "cost" ? "Cost" : "Requests"}</span><span className="font-mono">{name === "cost" ? formatCost(Number(value ?? 0) * 1_000_000) : formatRequestCount(Number(value ?? 0))}</span></div>} />} /><Area yAxisId="left" type="monotone" dataKey="requests" stroke="var(--chart-1)" fill="url(#usage-fill-requests)" strokeWidth={2} /><Area yAxisId="right" type="monotone" dataKey="cost" stroke="var(--chart-2)" fill="url(#usage-fill-cost)" strokeWidth={2} /><ChartLegend content={<ChartLegendContent />} /></AreaChart></ChartContainer></CardContent></Card> }
+export function DashboardTrend({ dashboard, refreshing }: { dashboard: DashboardPayload; refreshing: boolean }) {
+  return <Card variant="dashboard" className="relative h-140 overflow-hidden">
+    {refreshing && <RefreshScrim />}
+    <CardHeader><CardTitle>Usage Trend</CardTitle><CardDescription>Token usage over time</CardDescription></CardHeader>
+    <CardContent className="flex min-h-0 flex-1 flex-col">
+      <div className="relative min-h-0 min-w-0 flex-1" role="img" aria-label="Token usage trend">
+        <UsageTrendChart data={dashboard.trend} granularity={dashboard.range.granularity} />
+      </div>
+    </CardContent>
+  </Card>
+}
 
 export function TopKeys({ keys, refreshing }: { keys: KeyRow[]; refreshing: boolean }) {
   const rows: TopKeyChartRow[] = keys.slice().sort((a, b) => b.costMicros - a.costMicros).slice(0, 5).map((row, index) => ({ id: `key:${row.id}`, name: row.label, cost: row.costMicros / 1_000_000, requests: row.requests, fill: KEY_COLORS[index % KEY_COLORS.length], placeholder: false }))

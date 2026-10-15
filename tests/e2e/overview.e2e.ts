@@ -26,6 +26,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   let heldUrl = ""
   let sparse = false
   let empty = false
+  let dense = false
   const models = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
   const recent = page.locator('[data-slot="card"]').filter({ has: page.getByText("Recent Requests", { exact: true }) })
   const checkLowerPair = async () => {
@@ -59,7 +60,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
       generatedAt: range.to, range: { from: query.get("from"), to: query.get("to"), granularity: "hourly" },
       summary: { requests: 4000, tokens: held ? 9999 : 4800, costMicros: 2500000, activeKeys: 1, pricedRequests: 2800, unpricedRequests: 1200 },
       overview: { inputTokens: sparse ? 0 : 4000, cacheReadTokens: sparse ? 0 : 1000, failedRequests: 400, statusCoveredRequests: sparse ? 0 : 4000, durationCount: sparse ? 0 : 3800, durationSumMs: sparse ? 0 : 7600000, budgets: [{ id: "quiet", name: "Quiet key", enabled: true, limitMicros: 10000000, spentMicros: 1000000 }], budgetWindow: { ...range, bypassLimits: false } },
-      models: empty ? [] : [{ model: "Expensive model", requests: 400, tokens: 4800, costMicros: 2500000 }, { model: "Popular model", requests: 2000, tokens: 43542, costMicros: 10 }, { model: "Other model", requests: 1000, tokens: 200, costMicros: 0 }, { model: "Hidden model", requests: 600, tokens: 100, costMicros: 0 }], keys: [], trend: [{ bucketStart: "2026-10-15T18:00:00.000Z", tokens: 11200000, requests: 1000, costMicros: 500000 }, { bucketStart: "2026-10-15T19:00:00.000Z", tokens: 0, requests: 3000, costMicros: 2000000 }],
+      models: empty ? [] : [{ model: "Expensive model", requests: 400, tokens: 4800, costMicros: 2500000 }, { model: "Popular model", requests: 2000, tokens: 43542, costMicros: 10 }, { model: "Other model", requests: 1000, tokens: 200, costMicros: 0 }, { model: "Hidden model", requests: 600, tokens: 100, costMicros: 0 }], keys: [], trend: dense ? Array.from({ length: Date.parse(query.get("to")!) - Date.parse(query.get("from")!) <= 86_400_000 ? 24 : 31 }, (_, index) => ({ bucketStart: new Date(Date.UTC(2026, 9, 1) + index * (Date.parse(query.get("to")!) - Date.parse(query.get("from")!) <= 86_400_000 ? 3_600_000 : 86_400_000)).toISOString(), tokens: index * 1000, requests: index, costMicros: index * 10000 })) : [{ bucketStart: "2026-10-15T18:00:00.000Z", tokens: 11200000, requests: 1000, costMicros: 500000 }, { bucketStart: "2026-10-15T19:00:00.000Z", tokens: 0, requests: 3000, costMicros: 2000000 }],
     } })
   })
   await page.route("**/api/admin/request-logs?*", async route => {
@@ -235,4 +236,15 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(models.getByText("No model usage in this period.")).toBeVisible()
   await expect(recent.getByText("No recorded attempts in this period.")).toBeVisible()
   await checkLowerPair()
+  dense = true
+  for (const [period, points] of [["Past 24h", 24], ["30 days", 31]] as const) {
+    await page.setViewportSize({ width: 1280, height: 844 })
+    await page.getByRole("button", { name: period, exact: true }).click()
+    await expect.poll(async () => ((await trend.locator(".recharts-area-curve").first().getAttribute("d"))?.match(/C/g) ?? []).length).toBe(points - 1)
+    const ticks = trend.locator(".recharts-xAxis-tick-labels text")
+    const desktopTicks = await ticks.count()
+    expect(desktopTicks).toBeGreaterThan(2)
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect.poll(() => ticks.count()).toBeLessThan(desktopTicks)
+  }
 })

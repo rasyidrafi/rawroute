@@ -1,4 +1,4 @@
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { LoadingTable } from "@/components/loading-layout"
@@ -20,5 +20,5 @@ export function UsageSkeleton() {
 }
 
 function ChartSkeleton({ description, title, list = false }: { description: string; title: string; list?: boolean }) {
-  return <Card variant="dashboard" className="relative h-140 overflow-hidden"><CardHeader><CardTitle>{title}</CardTitle><CardDescription>{description}</CardDescription>{!list && <CardAction><Skeleton className="h-5 w-24" /></CardAction>}</CardHeader><CardContent spacing={list ? "flow" : "default"} className="flex min-h-0 flex-1 flex-col"><Skeleton className={list ? "h-[220px] w-full shrink-0" : "h-full w-full"} />{list && <ScrollArea variant="panel" className="min-h-0 flex-1"><div className="flex flex-col gap-2 pr-3">{[0, 1, 2, 3, 4].map(key => <div key={key} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 p-3"><div className="flex min-w-0 flex-col gap-2"><Skeleton className="h-4 w-32 max-w-full" /><Skeleton className="h-3 w-24 max-w-full" /></div><Skeleton className="h-5 w-16" /></div>)}</div></ScrollArea>}</CardContent></Card>
+  return <Card variant="dashboard" className="relative h-140 overflow-hidden"><CardHeader><CardTitle>{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader><CardContent spacing={list ? "flow" : "default"} className="flex min-h-0 flex-1 flex-col"><Skeleton className={list ? "h-[220px] w-full shrink-0" : "h-full w-full"} />{list && <ScrollArea variant="panel" className="min-h-0 flex-1"><div className="flex flex-col gap-2 pr-3">{[0, 1, 2, 3, 4].map(key => <div key={key} className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 p-3"><div className="flex min-w-0 flex-col gap-2"><Skeleton className="h-4 w-32 max-w-full" /><Skeleton className="h-3 w-24 max-w-full" /></div><Skeleton className="h-5 w-16" /></div>)}</div></ScrollArea>}</CardContent></Card>
 }

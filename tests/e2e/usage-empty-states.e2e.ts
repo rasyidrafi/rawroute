@@ -43,6 +43,47 @@ const keyRow: DashboardPayload["keys"][number] = {
 const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
 
 for (const publicView of [false, true]) {
+  test(`${publicView ? "public" : "workspace"} trend keeps dense hourly and daily points with responsive time ticks`, async ({ page }) => {
+    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => {
+      const granularity = new URL(route.request().url()).searchParams.get("preset") === "today" ? "hourly" : "daily"
+      const payload = dashboardPayload({ trend: Array.from({ length: granularity === "hourly" ? 24 : 31 }, (_, index) => ({ ...trendRow, bucketStart: new Date(Date.UTC(2026, 9, 1) + index * (granularity === "hourly" ? 3_600_000 : 86_400_000)).toISOString(), tokens: index === 0 ? 0 : index * 1000 })) })
+      payload.range.granularity = granularity
+      return route.fulfill({ json: payload })
+    })
+    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+    else await authenticate(page)
+    for (const grouping of ["hourly", "daily"] as const) {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+      await page.locator("section").filter({ has: page.getByRole("heading", { name: "Usage dashboard", exact: true }) }).getByRole("combobox").first().click()
+      await page.getByRole("option", { name: grouping === "hourly" ? "Today" : "This month", exact: true }).click()
+      const trend = page.getByRole("img", { name: "Token usage trend" })
+      await expect(trend.locator(".recharts-area-curve")).toHaveCount(2)
+      await expect.poll(async () => ((await trend.locator(".recharts-area-curve").first().getAttribute("d"))?.match(/C/g) ?? []).length).toBe(grouping === "hourly" ? 23 : 30)
+      const ticks = trend.locator(".recharts-xAxis-tick-labels text")
+      await expect.poll(() => ticks.count()).toBeGreaterThan(2)
+      const desktopTicks = await ticks.count()
+      const path = await trend.locator(".recharts-area-curve").first().getAttribute("d")
+      expect((path?.match(/C/g) ?? []).length).toBe(grouping === "hourly" ? 23 : 30)
+      await page.setViewportSize({ width: 390, height: 844 })
+      await expect.poll(() => ticks.count()).toBeLessThan(desktopTicks)
+      await expect(trend.locator(".recharts-legend-wrapper")).toHaveText("CostTokens")
+      await expect(trend.locator(".recharts-area-curve").first()).toHaveAttribute("stroke", "var(--primary)")
+      const card = page.locator('[data-slot="card"]').filter({ has: trend })
+      await expect(card.locator('[data-slot="card-action"]')).toHaveCount(0)
+      await page.mouse.move(0, 0)
+      await trend.getByRole("application").focus()
+      for (let index = 0; index < 31; index++) await page.keyboard.press("ArrowLeft")
+      const tooltip = trend.locator(".recharts-tooltip-wrapper")
+      await expect(tooltip).toContainText("Tokens0")
+      await expect(tooltip).toContainText("Cost$0.015")
+      if (grouping === "hourly") await expect(tooltip).toContainText(/\d{2}:\d{2}/)
+      else await expect(tooltip).not.toContainText(/\d{2}:\d{2}/)
+    }
+  })
+}
+
+for (const publicView of [false, true]) {
   test(`${publicView ? "public" : "workspace"} top keys chart fits sparse and full rankings`, async ({ page }) => {
     if (!publicView) await authenticate(page)
     else await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
@@ -204,10 +245,10 @@ for (const publicView of [false, true]) {
     await expect(page.getByText("1.2k requests", { exact: true })).toBeVisible()
     await expect(page.getByRole("cell", { name: "1.2k", exact: true })).toBeVisible()
     const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Usage Trend", { exact: true }) })
-    await expect(trend.getByRole("application").getByText("25k", { exact: true })).toBeVisible()
+    await expect(trend.getByRole("application").getByText("30", { exact: true })).toBeVisible()
     await trend.getByRole("application").focus()
     await page.keyboard.press("ArrowRight")
-    await expect(trend.locator(".recharts-tooltip-wrapper").getByText("100k", { exact: true })).toBeVisible()
+    await expect(trend.locator(".recharts-tooltip-wrapper").getByText("120", { exact: true })).toBeVisible()
     await expect(card.getByText("$0.00001", { exact: true })).toBeVisible()
     await expect(card.getByRole("link")).toHaveCount(0)
     await expect(card.locator("a")).toHaveCount(0)
@@ -230,7 +271,7 @@ test("usage shares compact tokens and precise costs across summary, lists, and t
   await expect(page.getByText("28.5M", { exact: true })).toBeVisible()
   await expect(page.getByRole("cell", { name: "43.5K", exact: true })).toBeVisible()
   await expect(page.getByText("5 requests · 43.5K tokens", { exact: true })).toBeVisible()
-  await expect(page.getByText("$0.00001", { exact: true })).toHaveCount(4)
+  await expect(page.getByText("$0.00001", { exact: true })).toHaveCount(5)
 })
 
 test("overview usage keeps loading, empty, sparse, and populated panels in sync", async ({ page }) => {
