@@ -67,6 +67,38 @@ async function expectSeparatedSkeletons(page: Page) {
 }
 
 for (const width of [390, 1280]) {
+  test(`usage header matches Overview typography and refresh sizing at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 })
+    await authenticate(page)
+    await page.goto("/dashboard/ai/overview")
+    const overviewHeading = page.getByRole("heading", { name: "Your gateway at a glance" })
+    await expect(overviewHeading).toBeVisible()
+    await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
+    const typography = (element: Element) => {
+      const style = getComputedStyle(element)
+      return { fontSize: style.fontSize, fontWeight: style.fontWeight, letterSpacing: style.letterSpacing, lineHeight: style.lineHeight }
+    }
+    const headingStyle = await overviewHeading.evaluate(typography)
+    const subtitleStyle = await page.getByText("Recorded traffic, reliability, and spend for this workspace.", { exact: true }).evaluate(typography)
+    const refreshHeight = await page.getByRole("button", { name: /Refresh/ }).evaluate(element => element.getBoundingClientRect().height)
+    for (const path of ["/dashboard/ai/overview/usage", "/"]) {
+      await page.goto(path)
+      const heading = page.getByRole("heading", { name: "Usage dashboard", level: 1 })
+      await expect(heading).toBeVisible()
+      await expect(page.locator('[data-slot="usage-summary"]')).toHaveAttribute("aria-busy", "false")
+      expect(await heading.evaluate(typography)).toEqual(headingStyle)
+      const subtitle = heading.locator("..").locator("..").locator(":scope > div").last()
+      expect(await subtitle.evaluate(typography)).toEqual(subtitleStyle)
+      await expect(subtitle.locator(":scope > span")).toHaveCount(2)
+      await expect(subtitle.locator(":scope > span").first()).not.toBeEmpty()
+      await expect(subtitle.locator(":scope > span").last()).not.toBeEmpty()
+      await expect(subtitle.getByText(/^(daily|hourly|monthly|auto)$/i)).toHaveCount(0)
+      await expect(page.getByText("Group", { exact: true }).locator("..").getByRole("combobox")).toBeEnabled()
+      const refresh = page.getByRole("button", { name: "Refresh", exact: true })
+      expect(await refresh.evaluate(element => element.getBoundingClientRect().height)).toBe(refreshHeight)
+    }
+  })
+
   test(`all route skeleton stacks have separated bars at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 })
     await authenticate(page)
@@ -127,7 +159,7 @@ for (const width of [390, 1280, 1600]) {
     const refreshing = await hold(page, "**/api/public/dashboard?*")
     await page.getByRole("button", { name: "Refresh", exact: true }).click()
     await refreshing.reached
-    await expect(page.getByRole("button", { name: "Refreshing", exact: true })).toBeDisabled()
+    await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
     await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
     sameGeometry(initial, await geometry(page, selector))
     refreshing.release()
