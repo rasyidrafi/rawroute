@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { useRequestLogs } from "@/hooks/use-request-logs"
+import { LoadingSpinner } from "@/components/loading-spinner"
 import { ListChecksIcon, RefreshCwIcon } from "lucide-react"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { DashboardPage } from "@/components/dashboard/page-layout"
@@ -42,8 +43,10 @@ function RequestLogsWorkspace() {
           <Filter label="Date range" value={days} options={[{ id: "1", name: "Last 24 hours" }, { id: "7", name: "Last 7 days" }]} onChange={setDays} />
           <Filter label="Status" value={status} options={[{ id: "all", name: "All statuses" }, { id: "success", name: "Success" }, { id: "failed", name: "Failed" }]} onChange={setStatus} />
           <Filter label="Model" value={model} options={[{ id: "", name: "All models" }, ...(data?.models || []), ...(model && !data?.models.some(option => option.id === model) ? [{ id: model, name: model }] : [])]} onChange={setModel} />
-          <Button variant="outline" size="sm" disabled={!workspaceId} aria-disabled={isValidating} onClick={() => { if (!isValidating) refresh() }}><RefreshCwIcon data-icon="inline-start" />Refresh</Button>
-          <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm"><Checkbox checked={live} onCheckedChange={toggleLive} /><span aria-hidden="true" className={live ? "size-2 rounded-full bg-success" : "size-2 rounded-full bg-muted-foreground"} />{live ? "Live" : "Paused"}</label>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button variant="outline" size="sm" focusableWhenDisabled disabled={!workspaceId || isValidating} onClick={refresh}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon data-icon="inline-start" />}Refresh</Button>
+            <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm"><Checkbox checked={live} onCheckedChange={toggleLive} /><span aria-hidden="true" className={live ? "size-2 rounded-full bg-success" : "size-2 rounded-full bg-muted-foreground"} />{live ? "Live" : "Paused"}</label>
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">Updates every 3 seconds. Browsing older logs pauses live updates.</p>
         {error && <Alert variant="destructive"><AlertDescription>Unable to load request logs. Try refreshing. Existing entries may be stale.</AlertDescription></Alert>}

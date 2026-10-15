@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { closeLocalDatabase, getSqliteDatabase, queryLocalUsageRange } from "./local-db"
 import { getBudgetAdmission, getBudgetRows, getDashboardPayload, getOverviewPayload, recordUsageEvent, resetAnalyticsForTests, updateBudgetWindow, upsertBudget } from "./analytics"
@@ -12,16 +13,17 @@ import { usageCalendarBucket } from "./usage-projection"
 import { migrateUsageProjection } from "../../scripts/migrations/usage-projection-store"
 import type { UsageEvent } from "./types"
 
-let directory: string
+let directory = ""
 let file: string
 beforeEach(async () => {
+  directory = ""
   await closeLocalDatabase()
-  directory = mkdtempSync("/tmp/opencode/usage-range-")
+  directory = mkdtempSync(join(tmpdir(), "usage-range-"))
   file = join(directory, "test.sqlite")
   Object.assign(process.env, { SQLITE_PATH: file, RAWROUTE_DATA_DIR: directory, DATABASE_COLLECTION_PREFIX: "rawroute", STORAGE_BACKEND: "sqlite", NODE_ENV: "development", TIMEZONE: "UTC" })
   _resetMemoryBackend(); resetAnalyticsForTests()
 })
-afterEach(async () => { jest.useRealTimers(); await closeLocalDatabase(); rmSync(directory, { recursive: true, force: true }) })
+afterEach(async () => { jest.useRealTimers(); await closeLocalDatabase(); if (directory) rmSync(directory, { recursive: true, force: true }) })
 const scoped = <T>(id: string, fn: () => T) => runInWorkspace({ id, storageMode: "scoped" }, fn)
 function event(id: string, completedAt: string, extra: Partial<UsageEvent> = {}): UsageEvent {
   return { id, gatewayKeyId: "key", gatewayModelId: "coverage/model", protocol: "openai-chat", startedAt: completedAt, completedAt, status: 200, durationMs: 100, inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheCreationTokens: 1, totalTokens: 12, costMicros: 20, pricingConfidence: "exact", usageAvailable: true, usageCompleteness: "complete", ...extra }

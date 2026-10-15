@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { closeLocalDatabase, ensureLocalDatabase, getSqliteDatabase } from "./local-db"
 import { recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests } from "./analytics"
@@ -13,11 +14,12 @@ import { _resetMemoryBackend, upsertModel, upsertProvider } from "@/server/store
 import { savePricingVersion, syncModelPricingGroups } from "./model-pricing"
 import type { UsageEvent } from "./types"
 
-let directory: string
+let directory = ""
 let file: string
 beforeEach(async () => {
+  directory = ""
   await closeLocalDatabase()
-  directory = mkdtempSync("/tmp/opencode/usage-projection-")
+  directory = mkdtempSync(join(tmpdir(), "usage-projection-"))
   file = join(directory, "test.sqlite")
   process.env.SQLITE_PATH = file
   process.env.STORAGE_BACKEND = "sqlite"
@@ -26,7 +28,7 @@ beforeEach(async () => {
   _resetMemoryBackend()
   resetAnalyticsForTests()
 })
-afterEach(async () => { await closeLocalDatabase(); rmSync(directory, { recursive: true, force: true }) })
+afterEach(async () => { await closeLocalDatabase(); if (directory) rmSync(directory, { recursive: true, force: true }) })
 const scoped = <T>(id: string, fn: () => T) => runInWorkspace({ id, storageMode: "scoped" }, fn)
 function event(id: string, extra: Partial<UsageEvent> = {}): UsageEvent {
   return { id, gatewayKeyId: "key", gatewayModelId: "model", protocol: "openai-chat", startedAt: "2026-10-13T12:00:00.000Z", completedAt: "2026-10-13T12:00:00.000Z", status: 200, durationMs: 100, inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheCreationTokens: 1, totalTokens: 12, costMicros: 20, pricingConfidence: "exact", usageAvailable: true, ...extra }

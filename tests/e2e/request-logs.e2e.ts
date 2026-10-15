@@ -35,6 +35,11 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await page.goto("/dashboard/ai/overview/request-logs")
   const loading = page.getByRole("status", { name: "Loading request logs" })
   await expect(loading).toBeVisible()
+  const refresh = page.getByRole("button", { name: "Refresh", exact: true })
+  await expect(refresh).toBeDisabled()
+  await expect(refresh.locator("svg")).toHaveClass(/animate-spin/)
+  const controls = refresh.locator("..")
+  expect(await controls.evaluate(element => Math.abs(element.getBoundingClientRect().right - element.parentElement!.getBoundingClientRect().right))).toBeLessThanOrEqual(1)
   await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
   await expect(loading).toHaveAttribute("aria-busy", "true")
   await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
@@ -54,6 +59,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.getByRole("button", { name: "Older", exact: true })).toBeDisabled()
   const viewport = page.viewportSize()!
   await page.setViewportSize({ width: 640, height: viewport.height })
+  expect(await controls.evaluate(element => Math.abs(element.getBoundingClientRect().right - element.parentElement!.getBoundingClientRect().right))).toBeLessThanOrEqual(1)
   expect(await loading.getByRole("table").evaluate(table => table.getBoundingClientRect().width > table.closest('[data-slot="table-container"]')!.getBoundingClientRect().width)).toBe(true)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.setViewportSize(viewport)
@@ -61,6 +67,8 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(placeholderRows.first().locator('[data-slot="skeleton"]').first()).toHaveCSS("animation-name", "none")
   release!()
   await expect(page.getByRole("row")).toHaveCount(26)
+  await expect(refresh).toBeEnabled()
+  await expect(refresh.locator("svg")).not.toHaveClass(/animate-spin/)
   await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   await expect(page.getByText("Newest first · 25 per page", { exact: true })).toBeVisible()
@@ -206,8 +214,19 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
   await expect(page.getByRole("button", { name: "Older", exact: true })).toBeEnabled()
   await expect(live).not.toBeChecked()
   newest = 28
+  hold = true
+  release = undefined
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect.poll(() => !!release).toBe(true)
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Refresh", exact: true }).locator("svg")).toHaveClass(/animate-spin/)
+  await expect(page.getByText("Attempt 27", { exact: true })).toBeVisible()
+  await expect(page.getByRole("table")).toHaveAttribute("data-live-mounted", "yes")
+  release!()
+  hold = false
   await expect(page.getByText("Attempt 28", { exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "Refresh", exact: true }).locator("svg")).not.toHaveClass(/animate-spin/)
   await expect(page.getByRole("alert")).toHaveCount(0)
   await expect(live).not.toBeChecked()
   await page.getByRole("combobox", { name: "Date range" }).click()

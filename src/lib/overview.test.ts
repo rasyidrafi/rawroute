@@ -9,6 +9,7 @@ import { startOfZonedDay, startOfZonedHour } from "./timezone"
 import { usageCalendarBucket } from "./usage-projection"
 import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 const originalNodeEnv = process.env.NODE_ENV
@@ -134,7 +135,7 @@ test("SQLite duration aggregate ignores missing, string and negative durations a
 
 test("SQLite range totals use the typed bucket index; required read failures reject Overview", async () => {
   await closeLocalDatabase()
-  const directory = mkdtempSync("/tmp/opencode/overview-sql-")
+  const directory = mkdtempSync(join(tmpdir(), "overview-sql-"))
   process.env.SQLITE_PATH = join(directory, "test.sqlite")
   process.env.STORAGE_BACKEND = "sqlite"
   process.env.NODE_ENV = "development"

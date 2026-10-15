@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { maintainCanonicalUsage } from "../../scripts/migrations/usage-maintenance"
 import { migrateUsageProjection } from "../../scripts/migrations/usage-projection-store"
@@ -9,7 +10,7 @@ import { predictMissingUsageCosts } from "../../scripts/predict-missing-usage-co
 import { normalizeUsageMetrics } from "@/lib/usage-metrics"
 import type { UsageEvent } from "@/lib/types"
 
-let directory:string
+let directory=""
 let file:string
 const from="2026-10-13T00:00:00.000Z";const to="2026-10-14T00:00:00.000Z"
 const checksum=(path:string)=>createHash("sha256").update(readFileSync(path)).digest("hex")
@@ -17,7 +18,8 @@ function event(id:string,costMicros:number):UsageEvent {
   return {id,gatewayKeyId:"key",gatewayModelId:"synthetic/model",protocol:"openai-chat",startedAt:"2026-10-13T12:00:00.000Z",completedAt:"2026-10-13T12:00:00.000Z",status:200,durationMs:10,...normalizeUsageMetrics({input:10,output:2}),costMicros,pricingConfidence:"exact"}
 }
 beforeEach(()=>{
-  directory=mkdtempSync("/tmp/opencode/usage-maintenance-");file=join(directory,"test.sqlite")
+  directory=""
+  directory=mkdtempSync(join(tmpdir(),"usage-maintenance-"));file=join(directory,"test.sqlite")
   process.env.DATABASE_COLLECTION_PREFIX="rawroute";process.env.TIMEZONE="UTC"
   process.env.BUDGET_MISSING_USAGE_QUANTILE="0.25";process.env.BUDGET_PREDICTION_PRIOR_STRENGTH="500";process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES="30"
   const db=new Database(file)
@@ -28,7 +30,7 @@ beforeEach(()=>{
   put("rawroute_workspaces/default/usageEvents","missing",{...event("missing",0),...normalizeUsageMetrics(undefined),pricingConfidence:"unpriced"})
   db.close();migrateUsageProjection(file,{timeZone:"UTC",apply:true,writersStopped:true})
 })
-afterEach(()=>rmSync(directory,{recursive:true,force:true}))
+afterEach(()=>{if(directory)rmSync(directory,{recursive:true,force:true})})
 const plan:Parameters<typeof maintainCanonicalUsage>[2]=events=>predictMissingUsageCosts(events,from,to)
 
 test("canonical empirical repair is readonly by default, excludes flat duplicates, atomically rebuilds and is idempotent",()=>{
