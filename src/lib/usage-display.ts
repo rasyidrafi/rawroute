@@ -1,7 +1,14 @@
 const integerFormatter = new Intl.NumberFormat("en-US")
+const requestFormatter = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 })
 const currencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const subDollarCurrencyFormatter = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 6 })
 const TOKEN_UNITS = ["", "K", "M", "B", "T"] as const
+
+/** Compact request counts, with rounded values promoted to the next unit. */
+export function formatRequestCount(value: number) {
+  if (!Number.isFinite(value) || value < 0) return "Unavailable"
+  return requestFormatter.format(value === 0 ? 0 : value).replace("K", "k")
+}
 
 /** Human-readable elapsed time, promoting units when rounding crosses a boundary. */
 export function formatDuration(ms: number) {

@@ -3,13 +3,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton"
 import type { DashboardPayload } from "@/lib/types"
 import { formatNumber } from "./usage-utils"
-import { formatCost, formatTokenCount } from "@/lib/usage-display"
+import { formatCost, formatRequestCount, formatTokenCount } from "@/lib/usage-display"
 
 export function UsageSummary({ dashboard, refreshing = false }: { dashboard?: DashboardPayload; refreshing?: boolean }) {
   const summary = dashboard?.summary
   const metrics = [
     { title: "Tokens processed", value: summary && formatTokenCount(summary.tokens), detail: "Input + cached input + output tokens", icon: LayersIcon },
-    { title: "Requests", value: summary && formatNumber(summary.requests), detail: "Total request volume in the selected range.", icon: ActivityIcon },
+    { title: "Requests", value: summary && formatRequestCount(summary.requests), detail: "Total request volume in the selected range.", icon: ActivityIcon },
     { title: "Estimated spend", value: summary && formatCost(summary.costMicros), detail: "Based on configured model rates", icon: CoinsIcon },
     { title: "Active keys", value: summary && formatNumber(summary.activeKeys), detail: "Keys that handled traffic in this window.", icon: KeyRoundIcon },
   ]

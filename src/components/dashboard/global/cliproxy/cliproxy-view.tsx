@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Confirmation } from "./confirmation"
+import { formatRequestCount } from "@/lib/usage-display"
 
 type Action = { action: "install" | "start" | "stop" | "restart"; version?: string; title: string }
 
@@ -84,7 +85,7 @@ function ServiceDetails({ service }: { service: CliproxyInstanceStatus }) {
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Detail label="Installed version" value={service.version ?? (service.mode === "external" ? "Managed externally" : "Not installed")} mono />
       <Detail label="Selected release" value={service.pinnedVersion ? `${service.pinnedVersion} (pinned)` : "Latest"} />
-      <Detail label="Active requests" value={String(service.activeRequests)} mono />
+      <Detail label="Active requests" value={formatRequestCount(service.activeRequests)} mono />
       <Detail label="Recovery attempts" value={String(service.restartAttempts)} mono />
     </div>
     {service.lastError && <p role="alert" className="break-words text-sm text-destructive">{service.lastError}</p>}

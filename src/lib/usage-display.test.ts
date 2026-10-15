@@ -1,5 +1,15 @@
 import { expect, test } from "bun:test"
-import { formatCost, formatDuration, formatTokenCount } from "./usage-display"
+import { formatCost, formatDuration, formatRequestCount, formatTokenCount } from "./usage-display"
+
+test.each([
+  [0, "0"], [-0, "0"], [508, "508"], [999, "999"], [1000, "1k"], [1200, "1.2k"],
+  [999_949, "999.9k"], [999_950, "1M"], [1_000_000, "1M"], [1_250_000, "1.3M"],
+  [999_950_000, "1B"], [1_000_000_000, "1B"], [1_250_000_000, "1.3B"],
+  [999_950_000_000, "1T"], [1_000_000_000_000, "1T"], [1_250_000_000_000, "1.3T"],
+  [NaN, "Unavailable"], [Infinity, "Unavailable"], [-Infinity, "Unavailable"], [-1, "Unavailable"],
+])("formats %s requests as %s", (value, expected) => {
+  expect(formatRequestCount(value)).toBe(expected)
+})
 
 test.each([
   [NaN, "Unavailable"], [Infinity, "Unavailable"], [-Infinity, "Unavailable"], [-1, "Unavailable"],

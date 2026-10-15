@@ -94,11 +94,12 @@ for (const publicView of [false, true]) {
 for (const publicView of [false, true]) {
   test(`${publicView ? "public" : "workspace"} usage ranks all models by requests, not spend`, async ({ page }) => {
     const payload = dashboardPayload({
-      trend: [{ ...trendRow, requests: 100 }],
+      trend: [{ ...trendRow, requests: 100_000 }],
+      keys: [{ ...keyRow, requests: 1200 }],
       models: [
-        { ...modelRow, model: "Expensive", requests: 1, costMicros: 9_000_000 },
-        { ...modelRow, model: "Popular", requests: 50, tokens: 43_542, costMicros: 10 },
-        ...[4, 3, 2, 1].map((requests, index) => ({ ...modelRow, model: `Other ${index}`, requests })),
+        { ...modelRow, model: "Expensive", requests: 1000, costMicros: 9_000_000 },
+        { ...modelRow, model: "Popular", requests: 50_000, tokens: 43_542, costMicros: 10 },
+        ...[4000, 3000, 2000, 1000].map((requests, index) => ({ ...modelRow, model: `Other ${index}`, requests })),
       ],
     })
     await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
@@ -111,7 +112,15 @@ for (const publicView of [false, true]) {
     await expect(card.getByRole("progressbar").first()).toHaveAttribute("aria-label", "Popular: 50.0 percent of requests")
     await expect(card.getByRole("progressbar").first()).toHaveAttribute("aria-valuenow", "50")
     await expect(card.getByRole("progressbar").nth(1)).toHaveAttribute("aria-label", "Other 0: 4.0 percent of requests")
-    await expect(card.getByText("50 requests · 43.5K tokens", { exact: true })).toBeVisible()
+    await expect(card.getByText("50k requests · 43.5K tokens", { exact: true })).toBeVisible()
+    await expect(page.locator('[data-slot="usage-summary"]').getByText("100k", { exact: true })).toBeVisible()
+    await expect(page.getByText("1.2k requests", { exact: true })).toBeVisible()
+    await expect(page.getByRole("cell", { name: "1.2k", exact: true })).toBeVisible()
+    const trend = page.locator('[data-slot="card"]').filter({ has: page.getByText("Requests and spend", { exact: true }) })
+    await expect(trend.getByRole("application").getByText("25k", { exact: true })).toBeVisible()
+    await trend.getByRole("application").focus()
+    await page.keyboard.press("ArrowRight")
+    await expect(trend.locator(".recharts-tooltip-wrapper").getByText("100k", { exact: true })).toBeVisible()
     await expect(card.getByText("$0.00001", { exact: true })).toBeVisible()
     await expect(card.getByRole("link")).toHaveCount(0)
     await expect(card.locator("a")).toHaveCount(0)
