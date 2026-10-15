@@ -1,5 +1,6 @@
 import { mapConcurrent } from "@/lib/concurrency"
-import { queryLocalRequestLogs } from "@/lib/local-db"
+import { queryLocalRequestLogs, queryLocalUsageDurations } from "@/lib/local-db"
+import type { OverviewDetails, OverviewPayload } from "@/lib/overview"
 import { matchesRequestLog, requestLogCursor, type RequestLogQuery } from "@/lib/request-logs"
 import { createHash } from "node:crypto"
 import { FieldPath, FieldValue, getSqliteDatabase, listLocalDocuments, type SqliteDatabase, type LocalQuery } from "@/lib/local-db"
@@ -2374,12 +2375,12 @@ async function loadDashboardModelLabels() {
   return promise
 }
 
-async function buildDashboardPayload(query: DashboardQuery, publicView: boolean): Promise<DashboardPayload> {
+async function buildDashboardPayload(query: DashboardQuery, publicView: boolean, exactRange?: { from: string; to: string }): Promise<DashboardPayload & { overview?: OverviewDetails }> {
   const buildStartedAt = performance.now()
   dashboardPerf(`start workspace=${currentWorkspaceId()} preset=${query.preset || "all"} granularity=${query.granularity || "auto"}`)
   const budgetsPromise = dashboardTimed("budgets", listBudgets())
   const budgetWindowPromise = query.preset === "budget" ? dashboardTimed("budget-window", getBudgetWindow()) : undefined
-  const range = await dashboardTimed("range", resolveRange(query, budgetWindowPromise ? await budgetWindowPromise : undefined))
+  const range = exactRange ? { label: "Rolling range", from: new Date(exactRange.from), to: new Date(Date.parse(exactRange.to) - 1) } : await dashboardTimed("range", resolveRange(query, budgetWindowPromise ? await budgetWindowPromise : undefined))
   const span = Math.max(0, range.to.getTime() - range.from.getTime())
   const trendGranularity = effectiveDashboardGranularity(query.granularity, span)
   // Weekly charts are derived from daily rows. Long-range monthly charts also
@@ -2418,6 +2419,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     budgetDataPromise,
   ])
   dashboardPerf(`reads complete rollups=${rollupsResult.status === "fulfilled" ? rollupsResult.value.length : 0} boundary=${boundaryEventsResult.status === "fulfilled" ? boundaryEventsResult.value.length : 0} elapsed=${(performance.now() - buildStartedAt).toFixed(1)}ms`)
+  if (exactRange && [rollupsResult, boundaryEventsResult, keysResult, budgetResult].some(result => result.status === "rejected")) throw new Error("Overview data unavailable")
   const rollups = rollupsResult.status === "fulfilled" ? rollupsResult.value : []
   const boundaryEvents = boundaryEventsResult.status === "fulfilled" ? boundaryEventsResult.value : []
   const exactBoundaryData = boundaryEventsResult.status === "fulfilled"
@@ -2441,6 +2443,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     ? await settledParallelMap(missingDimensionRanges, ([from, to]) => listUsageEvents(from.toISOString(), to.toISOString()))
     : []
   const missingDimensionData = missingDimensionRanges.length === 0 || missingDimensionEventsResult.every((result) => result.status === "fulfilled")
+  if (exactRange && !missingDimensionData) throw new Error("Overview data unavailable")
   const missingDimensionEvents = missingDimensionData
     ? uniqueUsageEvents(missingDimensionEventsResult.flatMap((result) => result.status === "fulfilled" ? [result.value] : []))
     : []
@@ -2509,6 +2512,9 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   let totalCostMicros = 0
   let pricedRequests = 0
   let failedRequests = 0
+  let inputTokens = 0
+  let cacheReadTokens = 0
+  let statusCoveredRequests = 0
   let lastEventAt: string | null = null
 
   const compactHourLabels = (query.preset === "today" || query.preset === "yesterday") && trendGranularity === "hourly"
@@ -2519,6 +2525,9 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     costMicros: number
     pricedRequests: number
     failedRequests: number
+    inputTokens: number
+    cacheReadTokens: number
+    statusCovered: boolean
     lastEventAt?: string
     gatewayKeyId?: string
     gatewayModelId?: string
@@ -2533,6 +2542,9 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     totalCostMicros += costMicrosForRow
     pricedRequests += pricedRequestsForRow
     failedRequests += failedRequestsForRow
+    inputTokens += safeUsageInteger(row.inputTokens)
+    cacheReadTokens += safeUsageInteger(row.cacheReadTokens)
+    if (row.statusCovered) statusCoveredRequests += requests
     if (row.lastEventAt && (!lastEventAt || lastEventAt < row.lastEventAt)) lastEventAt = row.lastEventAt
 
     const trendBucket = bucketStart(new Date(row.bucketStart), trendGranularity).toISOString()
@@ -2563,7 +2575,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     aggregateUsageRow({
       bucketStart: scaled.bucketStart,
       requests: scaled.requests,
-      totalTokens: scaled.totalTokens,
+      totalTokens: exactRange ? safeUsageInteger(scaled.inputTokens) + safeUsageInteger(scaled.outputTokens) : scaled.totalTokens,
+      inputTokens: scaled.inputTokens,
+      cacheReadTokens: scaled.cacheReadTokens,
+      statusCovered: typeof rollup.failedRequests === "number",
       costMicros: scaled.costMicros,
       pricedRequests: scaled.pricedRequests || 0,
       failedRequests: Math.max(safeUsageInteger(scaled.failedRequests), Array.isArray(scaled.excludedEventIds) ? scaled.excludedEventIds.length : 0),
@@ -2576,7 +2591,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     aggregateUsageRow({
       bucketStart: bucketStart(new Date(event.completedAt), storageGranularity).toISOString(),
       requests: 1,
-      totalTokens: event.totalTokens,
+      totalTokens: exactRange ? safeUsageInteger(event.inputTokens) + safeUsageInteger(event.outputTokens) : event.totalTokens,
+      inputTokens: event.inputTokens,
+      cacheReadTokens: event.cacheReadTokens,
+      statusCovered: true,
       costMicros: event.costMicros,
       pricedRequests: event.status >= 200 && event.status < 300 && event.pricingConfidence === "exact" ? 1 : 0,
       failedRequests: event.status >= 200 && event.status < 300 ? 0 : 1,
@@ -2589,9 +2607,10 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   // Keep empty periods on the chart. This makes the x-axis represent the
   // selected window instead of the first/last period that happened to have
   // traffic. For all-time views, begin at the first recorded bucket.
-  if (trend.size || query.preset !== "all") {
+  const allTime = query.preset === "all" && !exactRange
+  if (trend.size || !allTime) {
     const existingBuckets = [...trend.keys()].sort()
-    const firstBucket = query.preset === "all"
+    const firstBucket = allTime
       ? new Date(existingBuckets[0])
       : bucketStart(range.from, trendGranularity)
     const lastBucket = bucketStart(new Date(toExclusive.getTime() - 1), trendGranularity)
@@ -2664,6 +2683,12 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
   const unpricedRequests = Math.max(0, requestCount - pricedRequests - failedRequests)
   dashboardPerf(`assembled keys=${keyRows.size} models=${modelRows.size} requests=${requestCount} elapsed=${(performance.now() - buildStartedAt).toFixed(1)}ms`)
   return {
+    ...(exactRange ? { overview: {
+      inputTokens, cacheReadTokens, failedRequests, statusCoveredRequests,
+      ...await overviewDurations(exactRange.from, exactRange.to),
+      budgets: budgetRows.map(budget => ({ id: budget.apiKeyId, name: keyMap.get(budget.apiKeyId)?.name || budget.apiKeyId, enabled: budget.enabled, limitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros })),
+      budgetWindow: budgetWindow ? { from: budgetWindow.start, to: budgetWindow.end, bypassLimits: budgetWindow.bypassLimits } : null,
+    } } : {}),
     generatedAt: new Date().toISOString(),
     range: { label: range.label, from: range.from.toISOString(), to: range.to.toISOString(), granularity: trendGranularity },
     summary: { requests: requestCount, tokens: totalTokens, costMicros: totalCostMicros, activeKeys: keyRows.size, pricedRequests, unpricedRequests },
@@ -2673,6 +2698,25 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean)
     freshness: { source: isMemory() ? "memory" : "sqlite", lastEventAt },
     pricingConfidence: { pricedRequests, unpricedRequests },
   }
+}
+
+async function overviewDurations(from: string, to: string) {
+  if (!isMemory()) return queryLocalUsageDurations(`${prefix()}_workspaces/${currentWorkspaceId()}/usageEvents`, from, to)
+  let durationCount = 0
+  let durationSumMs = 0
+  for (const event of memoryState().events.values()) {
+    if (event.completedAt >= from && event.completedAt < to && Number.isFinite(event.durationMs) && event.durationMs >= 0) {
+      durationCount++
+      durationSumMs += event.durationMs
+    }
+  }
+  return { durationCount, durationSumMs }
+}
+
+export async function getOverviewPayload(range: { from: string; to: string }): Promise<OverviewPayload> {
+  const payload = await buildDashboardPayload({ preset: "all" }, false, range)
+  if (!payload.overview) throw new Error("Overview data unavailable")
+  return { ...payload, range: { ...payload.range, ...range }, models: [...payload.models].sort((a, b) => b.requests - a.requests || a.model.localeCompare(b.model)), overview: payload.overview }
 }
 
 function dashboardBoundaryRanges(from: Date, toExclusive: Date, granularity: string) {

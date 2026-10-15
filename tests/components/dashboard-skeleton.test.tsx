@@ -40,3 +40,16 @@ test("usage loading retains the current summary content and metric structure", (
   expect(markup).toContain("Estimated spend")
   expect(markup).toContain('aria-busy="true"')
 })
+
+test("overview fallback has real-layout metric and four-row table skeletons, not preview values", () => {
+  const markup = renderToStaticMarkup(<MemoryRouter><DashboardContentSkeleton variant="overview" /></MemoryRouter>)
+  expect(markup).toContain("Your gateway at a glance")
+  expect(markup).toContain("Tokens processed")
+  expect(markup).toContain("Usage Trend")
+  expect(markup).toContain("Recent Requests")
+  expect(markup.match(/data-slot="overview-request-skeleton-row"/g)).toHaveLength(4)
+  expect(markup).toContain('aria-busy="true"')
+  expect(markup).not.toContain("6.42M")
+  expect(markup).not.toContain("sample-")
+  expect(markup).not.toContain("GPT-5")
+})

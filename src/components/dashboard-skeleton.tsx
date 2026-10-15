@@ -1,4 +1,4 @@
-import { OverviewView } from "@/components/dashboard/ai/overview-view"
+import { OverviewSkeleton } from "@/components/dashboard/ai/overview-view"
 import { RequestLogsView } from "@/components/dashboard/ai/request-logs-view"
 import { Badge } from "@/components/ui/badge"
 import { PlusIcon, Clock3Icon, BoxesIcon, DollarSignIcon, KeyRoundIcon, LinkIcon, ListOrderedIcon, RouteIcon, Share2Icon, WalletCardsIcon, RefreshCwIcon, ClipboardIcon, Trash2Icon } from "lucide-react"
@@ -28,7 +28,7 @@ export function DashboardRouteSkeleton() {
 }
 
 export function DashboardContentSkeleton({ variant }: { variant: DashboardSkeletonVariant }) {
-  if (variant === "overview") return <OverviewView />
+  if (variant === "overview") return <OverviewSkeleton />
   if (variant === "integrations") return <IntegrationsView />
   if (variant === "integration-opencode") return <IntegrationDetailView integration="opencode" />
   if (variant === "integration-codex") return <IntegrationDetailView integration="codex" />

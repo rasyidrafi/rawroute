@@ -644,6 +644,17 @@ export async function listLocalDocuments(collectionPath?: string) {
   return result.rows as Array<{ path: string; collection_path: string; document_id: string; data: DocumentData }>
 }
 
+/** One aggregate row, scanning only this workspace's indexed time range. */
+export async function queryLocalUsageDurations(collectionPath: string, from: string, to: string) {
+  await ensureSchema()
+  const result = await executeQuery(`SELECT COUNT(*) AS count, COALESCE(SUM(json_extract(data, '$.durationMs')), 0) AS total
+    FROM rawroute_documents WHERE collection_path = $1
+    AND json_extract(data, '$.completedAt') >= $2 AND json_extract(data, '$.completedAt') < $3
+    AND json_type(data, '$.durationMs') IN ('integer', 'real') AND json_extract(data, '$.durationMs') >= 0`, [collectionPath, from, to])
+  const rows = result.rows as unknown as { count: number; total: number }[]
+  return { durationCount: Number(rows[0]?.count || 0), durationSumMs: Number(rows[0]?.total || 0) }
+}
+
 /** Bounded usage history with SQL filters applied before the lookahead limit. */
 export async function queryLocalRequestLogs(collectionPath: string, query: import("./request-logs").RequestLogQuery) {
   await ensureSchema()
