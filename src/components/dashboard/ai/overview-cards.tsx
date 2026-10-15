@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { pagePaths } from "@/lib/dashboard/routes"
 import type { OverviewDetails } from "@/lib/overview"
 import type { RequestLogsPage } from "@/lib/request-logs"
-import { formatRequestCost } from "@/lib/request-log-display"
+import { formatCost } from "@/lib/usage-display"
 import { formatAppDateTime, getAppTimeZone } from "@/lib/timezone"
 
 export function BudgetUsageCard({ data, error }: { data?: OverviewDetails; error?: boolean }) {
@@ -22,7 +22,7 @@ export function BudgetUsageCard({ data, error }: { data?: OverviewDetails; error
         {!data.budgets.length ? <p className="text-sm text-muted-foreground">No configured budgets.</p> : <div className="flex max-h-56 flex-col gap-3 overflow-y-auto">{data.budgets.map(budget => {
           const limited = budget.enabled && !data.budgetWindow?.bypassLimits && budget.limitMicros > 0
           const percent = limited ? budget.spentMicros / budget.limitMicros * 100 : 0
-          return <div key={budget.id} className="flex flex-col gap-2"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{budget.name}</span><span>{formatRequestCost(budget.spentMicros)}{limited ? ` / ${formatRequestCost(budget.limitMicros)}` : !budget.enabled ? " · Disabled" : " · Unlimited"}</span></div>{limited && <Progress value={Math.min(100, percent)} aria-label={`${budget.name}: ${percent.toFixed(1)} percent used`} />}</div>
+          return <div key={budget.id} className="flex flex-col gap-2"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{budget.name}</span><span>{formatCost(budget.spentMicros)}{limited ? ` / ${formatCost(budget.limitMicros)}` : !budget.enabled ? " · Disabled" : " · Unlimited"}</span></div>{limited && <Progress value={Math.min(100, percent)} aria-label={`${budget.name}: ${percent.toFixed(1)} percent used`} />}</div>
         })}</div>}
       </>}
     </CardContent>

@@ -13,7 +13,7 @@ import { TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { formatAppDateTime } from "@/lib/timezone"
 import { RequestLogsTable } from "./request-logs-table"
 import type { RequestLogsPage } from "@/lib/request-logs"
-import { formatRequestCost } from "@/lib/request-log-display"
+import { formatCost, formatTokenCount } from "@/lib/usage-display"
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: { id: string; name: string }[]; onChange: (value: string) => void }) {
   return <Select value={value} onValueChange={value => { if (value !== null) onChange(value) }}>
@@ -58,8 +58,8 @@ function RequestLogsWorkspace() {
           <TableBody>{data.events.map(event => <TableRow key={event.id}>
             <TableCell><div className="font-semibold">{event.modelName || event.gatewayModelId}</div><div className="text-xs text-muted-foreground" title={event.id}>{event.id.slice(0, 8)} · {event.keyName || `Unknown key (${event.gatewayKeyId.slice(0, 8)})`}</div></TableCell>
             <TableCell><Badge variant={event.status >= 200 && event.status < 300 ? "secondary" : "destructive"}>{event.status >= 200 && event.status < 300 ? "Success" : "Failed"} · {event.status}</Badge></TableCell>
-            <TableCell>{event.usageAvailable ? event.totalTokens.toLocaleString() : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${event.inputTokens.toLocaleString()} in · ${(event.cacheReadTokens + event.cacheCreationTokens).toLocaleString()} cache · ${event.outputTokens.toLocaleString()} out` : "Provider usage not recorded"}</div></TableCell>
-            <TableCell>{event.pricingConfidence === "unpriced" ? "Unpriced" : formatRequestCost(event.costMicros)}{event.pricingConfidence === "assumed" && <div className="text-xs text-muted-foreground">Estimated</div>}</TableCell>
+            <TableCell>{event.usageAvailable ? formatTokenCount(event.totalTokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${formatTokenCount(event.inputTokens)} in · ${formatTokenCount(event.cacheReadTokens + event.cacheCreationTokens)} cache · ${formatTokenCount(event.outputTokens)} out` : "Provider usage not recorded"}</div></TableCell>
+            <TableCell>{event.pricingConfidence === "unpriced" ? "Unpriced" : formatCost(event.costMicros)}{event.pricingConfidence === "assumed" && <div className="text-xs text-muted-foreground">Estimated</div>}</TableCell>
             <TableCell>{event.durationMs.toLocaleString()} ms</TableCell>
             <TableCell>{formatAppDateTime(event.completedAt)}</TableCell>
           </TableRow>)}</TableBody>

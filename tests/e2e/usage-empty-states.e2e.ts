@@ -42,6 +42,21 @@ const keyRow: DashboardPayload["keys"][number] = {
 }
 const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
 
+test("usage shares compact tokens and precise costs across summary, lists, and table", async ({ page }) => {
+  const payload = dashboardPayload({
+    trend: [{ ...trendRow, tokens: 28_500_000, costMicros: 10 }],
+    keys: [{ ...keyRow, tokens: 43_542, costMicros: 10 }],
+    models: [{ ...modelRow, tokens: 43_542, costMicros: 10 }],
+  })
+  await page.route("**/api/admin/usage?*", route => route.fulfill({ json: payload }))
+  await authenticate(page)
+  await page.goto("/dashboard/ai/overview/usage")
+  await expect(page.getByText("28.5M", { exact: true })).toBeVisible()
+  await expect(page.getByRole("cell", { name: "43.5K", exact: true })).toBeVisible()
+  await expect(page.getByText("43.5K tokens", { exact: true })).toBeVisible()
+  await expect(page.getByText("$0.00001", { exact: true })).toHaveCount(4)
+})
+
 test("overview usage keeps loading, empty, sparse, and populated panels in sync", async ({ page }) => {
   const responses = [
     dashboardPayload({ trend: [trendRow] }),

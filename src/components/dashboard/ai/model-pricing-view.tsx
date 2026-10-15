@@ -6,7 +6,7 @@ import useSWR from "swr"
 
 import { useDashboardApi } from "@/components/dashboard/api-context"
 import { ConfirmAction, EmptyTableRow } from "@/components/dashboard/shared"
-import { formatCost } from "@/components/dashboard/ai/usage-utils"
+import { formatCost } from "@/lib/usage-display"
 import { DashboardContentSkeleton } from "@/components/dashboard-skeleton"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"

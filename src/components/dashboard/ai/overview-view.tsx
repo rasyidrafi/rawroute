@@ -13,7 +13,7 @@ import { pagePaths } from "@/lib/dashboard/routes"
 import { useOverview } from "@/hooks/use-overview"
 import type { OverviewPayload, OverviewPeriod } from "@/lib/overview"
 import type { RequestLogsPage } from "@/lib/request-logs"
-import { formatRequestCost } from "@/lib/request-log-display"
+import { formatCost, formatTokenCount } from "@/lib/usage-display"
 import { useDashboardApi } from "@/components/dashboard/api-context"
 
 export function OverviewView() {
@@ -36,10 +36,10 @@ function overviewMetrics(data?: OverviewPayload) {
   const summary = data?.summary
   const unavailable = "Unavailable"
   return [
-    { label: "Tokens processed", value: summary?.tokens.toLocaleString(), note: "Input (including cache) + output tokens", icon: LayersIcon },
+    { label: "Tokens processed", value: summary && formatTokenCount(summary.tokens), note: "Input (including cache) + output tokens", icon: LayersIcon },
     { label: "Requests", value: summary?.requests.toLocaleString(), note: "Recorded model attempts in this period", icon: ActivityIcon },
     { label: "Success rate", value: overview && summary && summary.requests > 0 && overview.statusCoveredRequests === summary.requests ? `${((summary.requests - overview.failedRequests) / summary.requests * 100).toFixed(1)}%` : unavailable, note: overview && summary && overview.statusCoveredRequests < summary.requests ? "Historical status coverage is incomplete" : "Successful attempts / all recorded attempts", icon: CheckCircle2Icon },
-    { label: "Estimated spend", value: summary && formatRequestCost(summary.costMicros), note: summary ? `${summary.unpricedRequests.toLocaleString()} attempts without exact pricing` : "Based on configured model rates", icon: CoinsIcon },
+    { label: "Estimated spend", value: summary && formatCost(summary.costMicros), note: summary ? `${summary.unpricedRequests.toLocaleString()} attempts without exact pricing` : "Based on configured model rates", icon: CoinsIcon },
     { label: "Recorded-attempt latency", value: overview?.durationCount ? `${(overview.durationSumMs / overview.durationCount / 1000).toFixed(2)}s` : unavailable, note: overview ? `Mean completion duration · ${overview.durationCount.toLocaleString()} recorded durations` : "Mean completion duration, not time to first token", icon: Clock3Icon },
     { label: "Cache hit rate", value: overview?.inputTokens ? `${(overview.cacheReadTokens / overview.inputTokens * 100).toFixed(1)}%` : unavailable, note: "Cache-read tokens / input tokens", icon: DatabaseZapIcon },
   ]
@@ -76,7 +76,7 @@ function MostUsedModels({ data, error }: { data?: OverviewPayload; error?: boole
   else if (data && !data.models.length) content = <p className="text-sm text-muted-foreground">No model usage in this period.</p>
   else if (data) content = <>{data.models.slice(0, 3).map(model => {
     const share = data.summary.requests ? model.requests / data.summary.requests * 100 : 0
-    return <div key={model.model} className="flex flex-col gap-2"><div className="flex items-center justify-between gap-4"><div className="min-w-0"><p className="truncate font-medium" title={model.model}>{model.model}</p><p className="text-xs text-muted-foreground">{model.requests.toLocaleString()} requests · {model.tokens.toLocaleString()} tokens</p></div><div className="shrink-0 text-right"><p className="font-medium">{formatRequestCost(model.costMicros)}</p><p className="text-xs text-muted-foreground">{share.toFixed(1)}% of requests</p></div></div><Progress value={share} aria-label={`${model.model}: ${share.toFixed(1)} percent of requests`} /></div>
+    return <div key={model.model} className="flex flex-col gap-2"><div className="flex items-center justify-between gap-4"><div className="min-w-0"><p className="truncate font-medium" title={model.model}>{model.model}</p><p className="text-xs text-muted-foreground">{model.requests.toLocaleString()} requests · {formatTokenCount(model.tokens)} tokens</p></div><div className="shrink-0 text-right"><p className="font-medium">{formatCost(model.costMicros)}</p><p className="text-xs text-muted-foreground">{share.toFixed(1)}% of requests</p></div></div><Progress value={share} aria-label={`${model.model}: ${share.toFixed(1)} percent of requests`} /></div>
   })}</>
   return <Card><CardHeader><CardTitle>Most used models</CardTitle><CardDescription>Ranked by recorded requests</CardDescription><CardAction><Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button></CardAction></CardHeader><CardContent spacing="stack">{content}</CardContent></Card>
 }

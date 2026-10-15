@@ -12,7 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { DashboardKeyBudget, DashboardPayload } from "@/lib/types"
 import { formatAppTrendBucket } from "@/lib/timezone"
-import { KEY_COLORS,  formatCost, formatDateTime, formatNumber, formatTokenCount, getOptionLabel } from "@/components/dashboard/ai/usage-utils"
+import { KEY_COLORS, formatDateTime, formatNumber, getOptionLabel } from "@/components/dashboard/ai/usage-utils"
+import { formatCost, formatTokenCount } from "@/lib/usage-display"
 
 // This module is reached through the lazy Usage/Public routes. Keep the chart engine in its own async chunk.
 const { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } = await import("recharts")

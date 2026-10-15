@@ -2,7 +2,8 @@ import { ActivityIcon, CoinsIcon, KeyRoundIcon, LayersIcon } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { DashboardPayload } from "@/lib/types"
-import { formatCost, formatNumber, formatTokenCount } from "./usage-utils"
+import { formatNumber } from "./usage-utils"
+import { formatCost, formatTokenCount } from "@/lib/usage-display"
 
 export function UsageSummary({ dashboard, refreshing = false }: { dashboard?: DashboardPayload; refreshing?: boolean }) {
   const summary = dashboard?.summary
