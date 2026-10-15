@@ -51,6 +51,7 @@
         "react-doctor": "0.9.14",
         "shadcn": "^4.16.2",
         "tailwindcss": "^4",
+        "tsc-rs": "^0.7.0",
         "typescript": "^5",
         "typescript-eslint": "^8",
       },
@@ -437,6 +438,18 @@
     "@tanstack/table-core": ["@tanstack/table-core@8.21.3", "", {}, ""],
 
     "@ts-morph/common": ["@ts-morph/common@0.27.0", "", { "dependencies": { "fast-glob": "^3.3.3", "minimatch": "^10.0.1", "path-browserify": "^1.0.1" } }, ""],
+
+    "@tsc-rs/darwin-arm64": ["@tsc-rs/darwin-arm64@0.7.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-3execGkNh7DXNZr03dhQP2wqmsjB1Q4OJnTMgKIibjeQMsjNK8HTalJZPIG6PkiXeusXUweHP3+4yJjbi5auNw=="],
+
+    "@tsc-rs/darwin-x64": ["@tsc-rs/darwin-x64@0.7.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-Wi3CNYWgyIOcWTQjihXCFPTul+aTEXVq1og8rO22Cq6/Mz6lKk+9YSXycWOkJql6D0uE0l/S1nMStq4mx7ydpA=="],
+
+    "@tsc-rs/linux-arm64": ["@tsc-rs/linux-arm64@0.7.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-sm+xPELgQGKOoFeklJAmIi99Fi3fIUFgGPYQclC/IiVdUTzHtKw6yg6JRNEI74JIaSxGRAGbtmHcVvTkC93ZLw=="],
+
+    "@tsc-rs/linux-x64": ["@tsc-rs/linux-x64@0.7.0", "", { "os": "linux", "cpu": "x64" }, "sha512-gyDPxVNmasL/RMPXzutxhaUqyLlPLTcPhWl5pWCkuZdV0dUfGpR4PG5h1Nht9Db3MMHs9ixzl+uS6Nc5+qA/jg=="],
+
+    "@tsc-rs/win32-arm64": ["@tsc-rs/win32-arm64@0.7.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-dPLJLH5iXgBzMRiuSGz4awMu8dxOI2iXRN0ZDqs/LolZ1ShbjmgIcH1bwQeObdyFwyen44c6vK8mFIiJELsv4Q=="],
+
+    "@tsc-rs/win32-x64": ["@tsc-rs/win32-x64@0.7.0", "", { "os": "win32", "cpu": "x64" }, "sha512-n/bJeMWvr0KbBPYVXroe23ia82Q6ZizUBYhgoZvsUasK4RfZ/rsJdIoP1Jpcw0ONXEbC8AKwHVi8BSOiUlSOuw=="],
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.4", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A=="],
 
@@ -1387,6 +1400,8 @@
     "ts-api-utils": ["ts-api-utils@2.5.0", "", { "peerDependencies": { "typescript": ">=4.8.4" } }, ""],
 
     "ts-morph": ["ts-morph@26.0.0", "", { "dependencies": { "@ts-morph/common": "~0.27.0", "code-block-writer": "^13.0.3" } }, ""],
+
+    "tsc-rs": ["tsc-rs@0.7.0", "", { "optionalDependencies": { "@tsc-rs/darwin-arm64": "0.7.0", "@tsc-rs/darwin-x64": "0.7.0", "@tsc-rs/linux-arm64": "0.7.0", "@tsc-rs/linux-x64": "0.7.0", "@tsc-rs/win32-arm64": "0.7.0", "@tsc-rs/win32-x64": "0.7.0" }, "bin": { "tsc-rs": "bin/tsc-rs" } }, "sha512-diVCBljoXLQjvXRkIuamR3QRrmNyqgYDePKA5SFXTSDPSjku2a2JXj/bOxG4DoPUbYkzWl/XFu1689z/46TCaA=="],
 
     "tsconfig-paths": ["tsconfig-paths@3.15.0", "", { "dependencies": { "@types/json5": "^0.0.29", "json5": "^1.0.2", "minimist": "^1.2.6", "strip-bom": "^3.0.0" } }, ""],
 

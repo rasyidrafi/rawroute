@@ -164,7 +164,8 @@ uses Bun HMR and the Tailwind plugin. API registration and authorization live in
 Build and run the production app locally with `bun run build` followed by
 `bun run start`. The built server runs from `dist/`, where Bun resolves its
 prebuilt HTML asset manifest. Docker uses the same artifact. Builds do not need
-database credentials or a live backend. `bun run typecheck` checks types separately.
+database credentials or a live backend. `bun run typecheck` checks types separately
+with the fast Rust-based `tsc-rs` compiler.
 
 Bun loads local environment files for development and maintenance commands.
 `TIMEZONE` configures both server and browser display; `/api/config` exposes only

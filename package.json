@@ -17,7 +17,7 @@
     "predict:usage": "bun scripts/predict-missing-usage-cost.ts",
     "sanitize:usage": "bun scripts/sanitize-usage-integrity.ts",
     "test:local-db": "bun scripts/local-db-smoke.ts",
-    "typecheck": "bun --bun tsc --noEmit"
+    "typecheck": "tsc-rs --fast --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -66,6 +66,7 @@
     "react-doctor": "0.9.14",
     "shadcn": "^4.16.2",
     "tailwindcss": "^4",
+    "tsc-rs": "^0.7.0",
     "typescript": "^5",
     "typescript-eslint": "^8"
   },
