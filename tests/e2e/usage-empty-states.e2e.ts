@@ -53,10 +53,19 @@ for (const publicView of [false, true]) {
     if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
     else await authenticate(page)
     for (const grouping of ["hourly", "daily"] as const) {
+      await page.emulateMedia({ colorScheme: grouping === "hourly" ? "light" : "dark" })
       await page.setViewportSize({ width: 1440, height: 900 })
       await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
       await page.locator("section").filter({ has: page.getByRole("heading", { name: "Usage dashboard", exact: true }) }).getByRole("combobox").first().click()
       await page.getByRole("option", { name: grouping === "hourly" ? "Today" : "This month", exact: true }).click()
+      const selectedRangeLabel = await page.evaluate(({ from, to }) => {
+        const date = (instant: string) => {
+          const value = new Date(instant)
+          return `${value.toLocaleString("en-US", { month: "short" })} ${String(value.getDate()).padStart(2, "0")}, ${value.getFullYear()}`
+        }
+        return `${date(from)} - ${date(to)}`
+      }, dashboardPayload().range)
+      await expect(page.getByRole("button", { name: selectedRangeLabel, exact: true })).toBeVisible()
       const trend = page.getByRole("img", { name: "Token usage trend" })
       await expect(trend.locator(".recharts-area-curve")).toHaveCount(2)
       await expect.poll(async () => ((await trend.locator(".recharts-area-curve").first().getAttribute("d"))?.match(/C/g) ?? []).length).toBe(grouping === "hourly" ? 23 : 30)
@@ -308,20 +317,46 @@ for (const publicView of [false, true]) {
   })
 }
 
-test("usage shares compact tokens and precise costs across summary, lists, and table", async ({ page }) => {
+for (const view of ["workspace", "public-light", "public-dark"] as const) {
+test(`${view} usage shares compact tokens and precise costs across summary, lists, and table`, async ({ page }) => {
+  const publicView = view !== "workspace"
+  await page.emulateMedia({ colorScheme: view === "public-dark" ? "dark" : "light" })
   const payload = dashboardPayload({
     trend: [{ ...trendRow, tokens: 28_500_000, costMicros: 10 }],
     keys: [{ ...keyRow, tokens: 43_542, costMicros: 10 }],
     models: [{ ...modelRow, tokens: 43_542, costMicros: 10 }],
   })
-  await page.route("**/api/admin/usage?*", route => route.fulfill({ json: payload }))
-  await authenticate(page)
-  await page.goto("/dashboard/ai/overview/usage")
+  const dashboardRequests: string[] = []
+  const dashboardWorkspaces: (string | null)[] = []
+  await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => {
+    dashboardRequests.push(route.request().headers()["x-rawroute-workspace-id"] ?? "")
+    dashboardWorkspaces.push(new URL(route.request().url()).searchParams.get("workspace"))
+    return route.fulfill({ json: payload })
+  })
+  if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "parity-public", name: "Public workspace", isDefault: true }] } }))
+  else await authenticate(page)
+  await page.goto(publicView ? "/?workspace=parity-public" : "/dashboard/ai/overview/usage")
   await expect(page.getByText("28.5M", { exact: true })).toBeVisible()
   await expect(page.getByRole("cell", { name: "43.5K", exact: true })).toBeVisible()
   await expect(page.getByText("5 requests · 43.5K tokens", { exact: true })).toBeVisible()
   await expect(page.getByText("$0.00001", { exact: true })).toHaveCount(5)
+  if (publicView) {
+    await expect(page.getByRole("heading", { name: "Usage dashboard", exact: true })).toHaveClass(/text-2xl/)
+    for (const description of ["Input + cached input + output tokens", "Recorded model attempts in this period", "Based on configured model rates", "Keys that handled traffic in this window."]) {
+      await expect(page.getByText(description, { exact: true })).toBeVisible()
+    }
+    await expect(page.getByText(keyRow.maskedKey, { exact: true })).toHaveCount(0)
+    await expect(page.locator('[data-slot="sidebar"]')).toHaveCount(0)
+    await expect(page.getByRole("link", { name: "Admin login", exact: true })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Refresh", exact: true })).toHaveCSS("height", "28px")
+    await expect(page.locator("html")).toHaveClass(new RegExp(view === "public-dark" ? "dark" : "light"))
+    await page.getByRole("button", { name: "Refresh", exact: true }).click()
+    await expect.poll(() => dashboardRequests.length).toBe(2)
+    expect(dashboardRequests).toEqual(["", ""])
+    expect(dashboardWorkspaces).toEqual(["parity-public", "parity-public"])
+  }
 })
+}
 
 test("overview usage keeps loading, empty, sparse, and populated panels in sync", async ({ page }) => {
   const responses = [
