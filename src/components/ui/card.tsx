@@ -78,11 +78,12 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+// Horizontal scrolling belongs to explicit inner regions such as tables and editors.
 function CardContent({ className, spacing = "default", ...props }: React.ComponentProps<"div"> & { spacing?: "default" | "stack" | "compact-stack" | "flow" | "compact-flow" }) {
   return (
     <div
       data-slot="card-content"
-      className={cn("min-w-0 max-w-full overflow-x-auto px-(--card-spacing)", spacing === "stack" && "space-y-4", spacing === "compact-stack" && "space-y-3", spacing === "flow" && "gap-4", spacing === "compact-flow" && "gap-3", className)}
+      className={cn("min-w-0 max-w-full overflow-x-clip px-(--card-spacing)", spacing === "stack" && "space-y-4", spacing === "compact-stack" && "space-y-3", spacing === "flow" && "gap-4", spacing === "compact-flow" && "gap-3", className)}
       {...props}
     />
   )

@@ -238,8 +238,9 @@ for (const publicView of [false, true]) {
         expect(await summary.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(width >= 1280 ? 4 : width >= 640 ? 2 : 1)
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
         const usageTable = card("Usage table")
-        await expect(usageTable.getByRole("columnheader", { name: "Actions", exact: true })).toHaveCount(publicView ? 0 : 1)
-        await expect(usageTable.locator("tbody tr").first().locator("td")).toHaveCount(publicView ? 8 : 9)
+        const hasActions = !publicView || !loading
+        await expect(usageTable.getByRole("columnheader", { name: "Actions", exact: true })).toHaveCount(hasActions ? 1 : 0)
+        await expect(usageTable.locator("tbody tr").first().locator("td")).toHaveCount(hasActions ? 9 : 8)
         if (loading && !publicView) {
           const actionSkeleton = usageTable.locator("tbody tr").first().locator("td").last().locator('[data-slot="skeleton"]')
           await expect(actionSkeleton).toHaveCSS("width", "28px")
@@ -262,6 +263,10 @@ for (const publicView of [false, true]) {
         if (loading) await expect(usageTable.locator('tbody tr').first()).toHaveCSS("border-bottom-width", "1px")
         const tableViewport = usageTable.locator('[data-slot="scroll-area-viewport"]').first()
         expect(await tableViewport.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+        const tableContent = usageTable.locator('[data-slot="card-content"]')
+        await expect(tableContent).toHaveCSS("overflow-x", "clip")
+        expect(await tableContent.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(await tableContent.evaluate(element => element.clientWidth))
+        await expect(tableContent.locator('[data-slot="scroll-area-scrollbar"][data-orientation="horizontal"]')).toHaveCount(1)
         await tableViewport.evaluate(element => { element.scrollLeft = 100 })
         await expect.poll(() => tableViewport.evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
         if (!publicView) {
@@ -310,10 +315,18 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   await action.click()
   await expect(page).toHaveURL(/\/usage\/keys\/usage-empty-state-key$/)
   await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
-  await expect(page.getByRole("tab")).toHaveCount(0)
+  await expect(page.getByRole("tab")).toHaveCount(2)
+  await expect(page.getByRole("tab", { name: "Cost", exact: true })).toHaveAttribute("aria-selected", "true")
   await expect(page.getByText(/sample|dummy|design preview|illustrative/i)).toHaveCount(0)
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
   const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: new RegExp(`^${title}$`) }) })
+  const dailyChart = () => page.locator('[data-slot="card"]').filter({ has: page.getByRole("tablist", { name: "Daily usage metric" }) })
+  const dateWindow = await dailyChart().locator('[data-slot="card-description"]').textContent()
+  await expect(card("Budget balance").getByText("Average daily tokens so far", { exact: true })).toBeVisible()
+  const averageTokens = card("Budget balance").getByText("Average daily tokens so far", { exact: true }).locator("..")
+  const budgetReset = card("Budget balance").getByText("Budget reset", { exact: true }).locator("..")
+  expect((await budgetReset.boundingBox())!.y).toBeGreaterThan((await averageTokens.boundingBox())!.y)
+  await expect(averageTokens.locator("p").last()).toHaveText("240")
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     for (const [first, second] of [["Budget balance", "Daily spend"], ["Where the spend goes", "Usage profile"]]) {
@@ -327,6 +340,12 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
     await card("Daily spend").locator(".recharts-bar-rectangle").first().hover()
     await expect(card("Daily spend").locator(".recharts-tooltip-wrapper")).toContainText("Cost")
     await expect(card("Daily spend").locator(".recharts-tooltip-wrapper")).toContainText("$0.006")
+    await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
+    await expect(card("Daily token usage").locator('[data-slot="card-description"]')).toHaveText(dateWindow!)
+    await card("Daily token usage").locator(".recharts-bar-rectangle").first().hover()
+    await expect(card("Daily token usage").locator(".recharts-tooltip-wrapper")).toContainText("Tokens")
+    await expect(card("Daily token usage").locator(".recharts-tooltip-wrapper")).toContainText("120")
+    await dailyChart().getByRole("tab", { name: "Cost", exact: true }).click()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     await page.screenshot({ path: testInfo.outputPath(`key-usage-live-${width}.png`), fullPage: true })
   }
@@ -349,16 +368,56 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   payload = { ...payload, summary: { ...payload.summary, tokens: 0 }, coverage: { ...payload.coverage!, tokenCoveredRequests: 1 } }
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(tokenValue).toHaveText("0")
+  payload = { ...payload, trend: payload.trend.map(point => ({ ...point, tokens: 0 })) }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
+  await expect(card("Daily token usage").getByText("No token usage recorded in this window.", { exact: true })).toBeVisible()
+  await dailyChart().getByRole("tab", { name: "Cost", exact: true }).click()
   payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, usageAvailable: false, spentMicros: null, remainingMicros: null, percentUsed: null } }], coverage: { partial: true, excludedSources: 1, tokenCoveredRequests: 0, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 } }
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(card("Budget balance").getByText("Remaining balance unavailable", { exact: true })).toBeVisible()
   await expect(card("Daily spend").getByText("Spend history unavailable: financial coverage is incomplete.", { exact: true })).toBeVisible()
+  await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
+  await expect(card("Daily token usage").getByText("Token history unavailable: token coverage is incomplete.", { exact: true })).toBeVisible()
+  await expect(card("Budget balance").getByText("Unavailable", { exact: true })).toHaveCount(3)
   await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
   await expect(tokenValue).toHaveText("Unavailable")
   await page.reload()
   await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
   await page.getByRole("link", { name: "Back to usage", exact: true }).click()
   await expect(page).toHaveURL(/\/dashboard\/ai\/overview\/usage$/)
+})
+
+test("public shared key detail switches to its recorded daily token totals", async ({ page }) => {
+  const range = { from: "2026-10-11T00:00:00.000Z", to: "2026-10-18T00:00:00.000Z" }
+  const payload = dashboardPayload({
+    trend: [
+      { ...trendRow, bucketStart: "2026-10-11T00:00:00.000Z", tokens: 120, costMicros: 6000 },
+      { ...trendRow, bucketStart: "2026-10-12T00:00:00.000Z", tokens: 120, costMicros: 9000 },
+    ],
+    keys: [{ ...keyRow, id: "Shared workspace", label: "Shared workspace", tokens: 240 }],
+  })
+  payload.range = { label: "Budget window", ...range, granularity: "daily" }
+  await page.route("**/api/auth/session", route => route.fulfill({ json: { authenticated: false } }))
+  await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "public-workspace", name: "Public workspace", isDefault: true }] } }))
+  await page.route("**/api/public/usage/keys/opaque-public-id?*", route => route.fulfill({ json: { usage: payload, recent: { events: [] } } }))
+
+  await page.goto("/usage/keys/opaque-public-id?workspace=public-workspace")
+  const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: new RegExp(`^${title}$`) }) })
+  const dailyChart = page.locator('[data-slot="card"]').filter({ has: page.getByRole("tablist", { name: "Daily usage metric" }) })
+  await expect(page.getByRole("heading", { name: "Shared workspace", exact: true })).toBeVisible()
+  await expect(page.getByRole("tab", { name: "Cost", exact: true })).toHaveAttribute("aria-selected", "true")
+  await expect(card("Budget balance").getByText("Average daily tokens so far", { exact: true })).toBeVisible()
+  await expect(card("Budget balance").getByText("240", { exact: true })).toBeVisible()
+  const dateWindow = await dailyChart.locator('[data-slot="card-description"]').textContent()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole("tab", { name: "Token", exact: true }).click()
+  const tokenCard = card("Daily token usage")
+  await expect(tokenCard.locator('[data-slot="card-description"]')).toHaveText(dateWindow!)
+  await tokenCard.locator(".recharts-bar-rectangle").first().hover()
+  await expect(tokenCard.locator(".recharts-tooltip-wrapper")).toContainText("Tokens")
+  await expect(tokenCard.locator(".recharts-tooltip-wrapper")).toContainText("120")
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
 for (const publicView of [false, true]) {

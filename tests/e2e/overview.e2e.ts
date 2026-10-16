@@ -44,6 +44,16 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
       if (width === 390) {
         expect(await models.evaluate(element => getComputedStyle(element).alignSelf)).toBe("flex-start")
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+        const recentContent = recent.locator('[data-slot="card-content"]')
+        await expect(recentContent).toHaveCSS("overflow-x", "clip")
+        expect(await recentContent.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(await recentContent.evaluate(element => element.clientWidth))
+        if (await recent.getByRole("table").count()) {
+          const recentTable = recent.getByRole("table")
+          expect(await recentTable.evaluate(table => table.getBoundingClientRect().width > table.closest('[data-slot="table-container"]')!.getBoundingClientRect().width)).toBe(true)
+          const recentViewport = recent.locator('[data-slot="table-container"] [data-slot="scroll-area-viewport"]')
+          expect(await recentViewport.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
+          await expect(recent.locator('[data-slot="table-container"] [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"]')).toHaveCount(1)
+        }
       }
     }
     await page.setViewportSize({ width: 1280, height: 844 })
@@ -94,7 +104,8 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   release!()
   await expect(recent.getByRole("row").nth(1).getByRole("cell").nth(1)).toContainText("high")
   await expect(recent.getByRole("row").nth(1).getByRole("cell").nth(1)).toContainText("2 declared tools")
-  await expect(recent.getByRole("row").nth(2).getByRole("cell").nth(1)).toContainText("—")
+  await expect(recent.getByRole("row").nth(2).getByRole("cell").nth(1)).toContainText("unknown")
+  await expect(recent.getByRole("row").nth(2).getByRole("cell").nth(1)).toContainText("undeclared tools")
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
   const trend = page.getByRole("img", { name: "Token usage trend" })
   const chart = trend.getByRole("application")

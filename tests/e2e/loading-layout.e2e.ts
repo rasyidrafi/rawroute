@@ -8,7 +8,7 @@ function barrier() {
   return { wait, release }
 }
 
-async function hold(page: Page, pattern: string) {
+async function hold(page: Page, pattern: string | RegExp) {
   const gate = barrier()
   const reached = barrier()
   await page.route(pattern, async (route: Route) => {
@@ -131,9 +131,9 @@ for (const width of [390, 1280]) {
 for (const width of [390, 1280, 1600]) {
   test(`public loading matches the loaded header and summary at ${width}px across all loading boundaries`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 })
-    const publicChunk = readdirSync("dist").find(file => file.startsWith("chunk-") && file.endsWith(".js") && readFileSync(`dist/${file}`, "utf8").includes("Public workspaces are unavailable."))
-    expect(publicChunk).toBeTruthy()
-    const script = await hold(page, `**/${publicChunk}`)
+    const publicChunks = readdirSync("dist").filter(file => file.startsWith("chunk-") && file.endsWith(".js") && readFileSync(`dist/${file}`, "utf8").includes("Public workspaces are unavailable."))
+    expect(publicChunks.length).toBeGreaterThan(0)
+    const script = await hold(page, new RegExp(`(?:${publicChunks.join("|")})$`))
     const workspaces = await hold(page, "**/api/public/workspaces")
     const dashboard = await hold(page, "**/api/public/dashboard?*")
     await page.goto("/", { waitUntil: "domcontentloaded" })

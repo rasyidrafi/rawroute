@@ -76,7 +76,8 @@ test("public usage detail reads are unauthenticated, key-scoped, and expose no m
 
   const response = await callRoute("/api/public/usage/keys/:keyId", "GET", `http://localhost/api/public/usage/keys/${publicId}?workspace=${workspace.id}`, { keyId: publicId })
   expect(response.status).toBe(200)
-  const body = await response.text()
+  const detail = await response.json() as { usage: { range: { granularity: string }; summary: { tokens: number }; trend: Array<{ tokens: number }> } }
+  const body = JSON.stringify(detail)
   expect(body).toContain("public-detail-event")
   expect(body).toContain("Visible key")
   expect(body).toContain('"reasoningEffort":"high"')
@@ -90,6 +91,9 @@ test("public usage detail reads are unauthenticated, key-scoped, and expose no m
   expect(body).not.toContain('"toolCount":-1')
   expect(body).not.toContain("other-key-event")
   expect(body).not.toContain("other private prompt")
+  expect(detail.usage.range.granularity).toBe("daily")
+  expect(detail.usage.summary.tokens).toBe(32)
+  expect(detail.usage.trend.reduce((sum, point) => sum + point.tokens, 0)).toBe(32)
 
   const mutation = await callRoute("/api/public/usage/keys/:keyId", "POST", `http://localhost/api/public/usage/keys/${publicId}?workspace=${workspace.id}`, { keyId: publicId })
   expect(mutation.status).toBe(405)

@@ -3,12 +3,12 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { UsageEvent } from "@/lib/types"
 
-export const requestLogMetadataDescription = "Requested or router-selected effort and declared tool definitions; not actual reasoning or executed tool calls."
+export const requestLogMetadataDescription = "Requested or router-selected effort and declared tool definitions; unknown means no effort was recorded, and undeclared tools means no tool metadata was recorded. Not actual reasoning or executed tool calls."
 
 export function RequestLogMetadata({ event }: { event: Pick<UsageEvent, "reasoningEffort" | "toolCount"> }) {
   return <div data-slot="request-log-metadata">
-    <div className="font-medium">{event.reasoningEffort || "—"}</div>
-    <div className="text-xs text-muted-foreground">{event.toolCount === undefined ? "—" : `${event.toolCount} declared ${event.toolCount === 1 ? "tool" : "tools"}`}</div>
+    <div className="font-medium">{event.reasoningEffort ?? "unknown"}</div>
+    <div className="text-xs text-muted-foreground">{event.toolCount === undefined ? "undeclared tools" : `${event.toolCount} declared ${event.toolCount === 1 ? "tool" : "tools"}`}</div>
   </div>
 }
 

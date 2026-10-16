@@ -102,6 +102,10 @@ function budgetState(budget?: DashboardKeyBudget) {
   return { label: "Remaining this window", value: formatCost(budget.remainingMicros) }
 }
 
+function averageDailyTokens(data: DashboardPayload, elapsedDays: number) {
+  return data.summary.requests > 0 && data.coverage?.tokenCoveredRequests === 0 ? "Unavailable" : formatTokenCount(data.summary.tokens / elapsedDays)
+}
+
 function BudgetBalance({ data }: { data: DashboardPayload }) {
   const budget = data.keys[0]?.budget
   const state = budgetState(budget)
@@ -113,7 +117,8 @@ function BudgetBalance({ data }: { data: DashboardPayload }) {
     {limited && budget.usageAvailable !== false && percent !== null && percent !== undefined && <Progress value={Math.min(100, percent)} aria-label={`Budget: ${percent.toFixed(1)} percent used`} />}
     {budget && <div className="flex flex-wrap justify-between gap-3 text-xs text-muted-foreground"><span>{budget.spentMicros === null || budget.usageAvailable === false ? "Usage unavailable" : `${formatCost(budget.spentMicros)} used`}</span><span>{formatCost(budget.weeklyLimitMicros)} allocated</span></div>}
     <Separator />
-    <div className="grid grid-cols-2 gap-4"><div><p className="text-xs text-muted-foreground">Average daily spend so far</p><p className="mt-1 font-medium">{costUnavailable(data) ? "Unavailable" : formatCost(data.summary.costMicros / elapsedDays)}</p></div><div><p className="text-xs text-muted-foreground">Budget reset</p><p className="mt-1 font-medium">{budget ? formatAppDateTime(budget.windowEnd) : "Not configured"}</p></div></div>
+    <div className="grid grid-cols-2 gap-4"><div><p className="text-xs text-muted-foreground">Average daily spend so far</p><p className="mt-1 font-medium">{costUnavailable(data) ? "Unavailable" : formatCost(data.summary.costMicros / elapsedDays)}</p></div><div><p className="text-xs text-muted-foreground">Average daily tokens so far</p><p className="mt-1 font-medium">{averageDailyTokens(data, elapsedDays)}</p></div></div>
+    <div><p className="text-xs text-muted-foreground">Budget reset</p><p className="mt-1 font-medium">{budget ? formatAppDateTime(budget.windowEnd) : "Not configured"}</p></div>
   </CardContent></Card>
 }
 

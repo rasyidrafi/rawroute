@@ -27,15 +27,17 @@ test("request log results place reasoning and tools next to the model and preser
   const markup = renderToStaticMarkup(<RequestLogResults data={{ events: [
     event("with-tools", { reasoningEffort: "high", toolCount: 2 }),
     event("no-tools", { toolCount: 0 }),
+    event("effort-without-tools", { reasoningEffort: "medium" }),
     event("unavailable"),
   ] }} loading={false} failed={false} />)
 
   expect(markup).toContain("Request / model")
   expect(markup.indexOf("Reasoning / tools")).toBeGreaterThan(markup.indexOf("Request / model"))
   expect(markup.indexOf("Reasoning / tools")).toBeLessThan(markup.indexOf(">Key</th>"))
-  expect(markup).toContain('title="Requested or router-selected effort and declared tool definitions; not actual reasoning or executed tool calls."')
+  expect(markup).toContain('title="Requested or router-selected effort and declared tool definitions; unknown means no effort was recorded, and undeclared tools means no tool metadata was recorded. Not actual reasoning or executed tool calls."')
   expect(markup).toContain(">high</div><div class=\"text-xs text-muted-foreground\">2 declared tools</div>")
-  expect(markup).toContain(">—</div><div class=\"text-xs text-muted-foreground\">0 declared tools</div>")
-  expect(markup).toContain(">—</div><div class=\"text-xs text-muted-foreground\">—</div>")
+  expect(markup).toContain(">unknown</div><div class=\"text-xs text-muted-foreground\">0 declared tools</div>")
+  expect(markup).toContain(">medium</div><div class=\"text-xs text-muted-foreground\">undeclared tools</div>")
+  expect(markup).toContain(">unknown</div><div class=\"text-xs text-muted-foreground\">undeclared tools</div>")
   expect(markup).toContain('data-slot="table-container"')
 })
