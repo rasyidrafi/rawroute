@@ -167,6 +167,7 @@ export interface AuthenticatedGatewayKey {
 
 export type PricingConfidence = "exact" | "unpriced" | "assumed"
 export type UsageCompleteness = "complete" | "partial" | "missing"
+export type ReasoningEffort = "none" | "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
 
 export interface UsageEvent {
   id: string
@@ -182,6 +183,10 @@ export interface UsageEvent {
   ttftMs?: number
   /** Serialized request body size used to calibrate missing-usage estimates. */
   requestBodyBytes?: number
+  /** Client or router-selected reasoning effort recorded when the request starts. */
+  reasoningEffort?: ReasoningEffort
+  /** Number of declared tools/functions, absent when the request did not specify them. */
+  toolCount?: number
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -354,7 +359,7 @@ export interface DashboardPayload {
   range: { label: string; from: string; to: string; granularity: string }
   summary: { requests: number; tokens: number; costMicros: number; activeKeys: number; pricedRequests: number; unpricedRequests: number }
   trend: Array<{ bucketStart: string; label: string; requests: number; tokens: number; costMicros: number }>
-  keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null; budget?: DashboardKeyBudget }>
+  keys: Array<{ id: string; label: string; maskedKey: string; requests: number; tokens: number; costMicros: number; models: string[]; lastUsed: string | null; budget?: DashboardKeyBudget; publicId?: string }>
   models: Array<{ model: string; requests: number; tokens: number; costMicros: number }>
   freshness: { source: "sqlite" | "memory"; lastEventAt: string | null }
   pricingConfidence: { pricedRequests: number; unpricedRequests: number }

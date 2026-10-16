@@ -54,6 +54,30 @@ test("endpoint exposes historical model options from returned rows and filters b
   })
 })
 
+test("request log responses retain reasoning and tool metadata, including explicit zero", async () => {
+  await runInWorkspace({ id: "request-log-metadata", storageMode: "scoped" }, async () => {
+    await recordUsageEvent(event("with-metadata", { reasoningEffort: "xhigh", toolCount: 2 }), null)
+    await recordUsageEvent(event("no-tools", { toolCount: 0 }), null)
+    await recordUsageEvent(event("metadata-unavailable"), null)
+
+    const page = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
+    expect(page.events.find(row => row.id === "with-metadata")).toMatchObject({ reasoningEffort: "xhigh", toolCount: 2 })
+    expect(page.events.find(row => row.id === "no-tools")).toMatchObject({ toolCount: 0 })
+    expect(page.events.find(row => row.id === "metadata-unavailable")).not.toHaveProperty("toolCount")
+  })
+})
+
+test("SQLite request history reads new metadata and older rows without conversion", async () => {
+  const collection = getSqliteDatabase().collection("history/metadata/usageEvents")
+  await collection.doc("new-metadata").set(event("new-metadata", { reasoningEffort: "medium", toolCount: 0 }))
+  await collection.doc("old-event").set(event("old-event"))
+
+  const rows = await queryLocalRequestLogs(collection.path, query)
+  expect(rows.find(row => row.id === "new-metadata")).toMatchObject({ reasoningEffort: "medium", toolCount: 0 })
+  expect(rows.find(row => row.id === "old-event")).not.toHaveProperty("reasoningEffort")
+  expect(rows.find(row => row.id === "old-event")).not.toHaveProperty("toolCount")
+})
+
 test("SQL keyset pages equal timestamps without gaps and filters before the hard bound", async () => {
   const collection = getSqliteDatabase().collection("history/one/usageEvents")
   for (let i = 0; i < 130; i++) await collection.doc(`id-${String(i).padStart(3, "0")}`).set(event(`id-${i}`, { status: i >= 70 ? 500 : 200, gatewayModelId: i >= 70 ? "late-model" : "model", gatewayKeyId: i >= 100 ? "late-key" : "key" }))

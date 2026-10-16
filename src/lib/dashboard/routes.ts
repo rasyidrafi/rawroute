@@ -31,9 +31,14 @@ export const dashboardPages = {
 export type DashboardPage = keyof typeof dashboardPages
 export type DashboardSkeletonVariant = typeof dashboardPages[DashboardPage]["skeleton"]
 
+export const publicUsageRoutes = {
+  keyUsage: "/usage/keys/:keyId",
+} as const
+
 export const pagePaths = {
   home: "/",
   login: "/login",
+  publicKeyUsage: publicUsageRoutes.keyUsage,
   ...Object.fromEntries(Object.entries(dashboardPages).map(([key, page]) => [key, page.path])) as { [K in DashboardPage]: typeof dashboardPages[K]["path"] },
 }
 
@@ -45,13 +50,22 @@ export function keyUsagePagePath(keyId: string) {
   return `${pagePaths.overviewUsage}/keys/${encodeURIComponent(keyId)}`
 }
 
+export function publicKeyUsagePagePath(keyId: string, workspaceId: string) {
+  const path = `/usage/keys/${encodeURIComponent(keyId)}`
+  return workspaceId === "default" ? path : `${path}?workspace=${encodeURIComponent(workspaceId)}`
+}
+
+export function publicWorkspacePagePath(workspaceId: string) {
+  return workspaceId === "default" ? pagePaths.home : `${pagePaths.home}?workspace=${encodeURIComponent(workspaceId)}`
+}
+
 export function dashboardPageForPath(pathname: string): DashboardPage | undefined {
   const exact = (Object.keys(dashboardPages) as DashboardPage[]).find(key => pagePaths[key] === pathname)
   return exact ?? (/^\/dashboard\/ai\/providers\/[^/]+$/.test(pathname) ? "provider" : /^\/dashboard\/ai\/overview\/usage\/keys\/[^/]+$/.test(pathname) ? "keyUsage" : undefined)
 }
 
 export function isPagePath(pathname: string) {
-  return pathname === pagePaths.home || pathname === pagePaths.login || dashboardPageForPath(pathname) !== undefined
+  return pathname === pagePaths.home || pathname === pagePaths.login || dashboardPageForPath(pathname) !== undefined || /^\/usage\/keys\/[^/]+$/.test(pathname)
 }
 
 export function isDashboardPage(value: unknown): value is DashboardPage {

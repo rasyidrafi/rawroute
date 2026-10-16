@@ -8,12 +8,18 @@ function Progress({
   value,
   variant = "default",
   ...props
-}: ProgressPrimitive.Root.Props & { variant?: "default" | "unlimited" }) {
+}: ProgressPrimitive.Root.Props & { variant?: "default" | "unlimited" | "warning" | "destructive" }) {
   return (
     <ProgressPrimitive.Root
       value={value}
       data-slot="progress"
-      className={cn("flex flex-wrap gap-3", variant === "unlimited" && "unlimited-progress", className)}
+      className={cn(
+        "flex flex-wrap gap-3",
+        variant === "unlimited" && "unlimited-progress",
+        variant === "warning" && "[&_[data-slot=progress-indicator]]:bg-warning",
+        variant === "destructive" && "[&_[data-slot=progress-indicator]]:bg-destructive",
+        className,
+      )}
       {...props}
     >
       {children}

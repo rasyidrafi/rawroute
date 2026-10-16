@@ -54,6 +54,7 @@ import * as ApiAuthSession from "./routes/api/auth/session"
 import * as ApiConfig from "./routes/api/config"
 import * as ApiHealth from "./routes/api/health"
 import * as ApiPublicDashboard from "./routes/api/public/dashboard"
+import * as ApiPublicKeyUsage from "./routes/api/public/usage/keys/by-key"
 import * as ApiPublicWorkspaces from "./routes/api/public/workspaces"
 import * as BackendApiCodexProxy from "./routes/backend-api/codex/proxy"
 import * as CodexCallback from "./routes/codex/callback"
@@ -125,6 +126,7 @@ export const apiRoutes = {
   "/api/config": apiRoute(ApiConfig, "public", "/api/config"),
   "/api/health": apiRoute(ApiHealth, "public", "/api/health"),
   "/api/public/dashboard": apiRoute(ApiPublicDashboard, "public", "/api/public/dashboard"),
+  "/api/public/usage/keys/:keyId": apiRoute(ApiPublicKeyUsage, "public", "/api/public/usage/keys/:keyId"),
   "/api/public/workspaces": apiRoute(ApiPublicWorkspaces, "public", "/api/public/workspaces"),
   "/backend-api/codex/*": apiRoute(BackendApiCodexProxy, "gateway", "/backend-api/codex/*"),
   "/codex/callback": apiRoute(CodexCallback, "public", "/codex/callback"),

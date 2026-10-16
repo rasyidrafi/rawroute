@@ -13,9 +13,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { formatAppDateTime } from "@/lib/timezone"
-import { RequestLogsTable } from "./request-logs-table"
+import { RequestLogMetadata, RequestLogsTable } from "./request-logs-table"
 import { formatCost, formatDuration, formatTokenCount } from "@/lib/usage-display"
-import type { RequestLogsPage } from "@/lib/request-logs"
+import type { RequestLogDisplayEvent } from "@/lib/request-logs"
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: { id: string; name: string }[]; onChange: (value: string) => void }) {
   const id = useId()
@@ -68,13 +68,14 @@ function RequestLogsWorkspace() {
   </DashboardPage>
 }
 
-export function RequestLogResults({ data, loading, failed }: { data: RequestLogsPage | undefined; loading: boolean; failed: boolean }) {
+export function RequestLogResults({ data, loading, failed }: { data: { events: RequestLogDisplayEvent[] } | undefined; loading: boolean; failed: boolean }) {
   if (!data && loading) return <RequestLogsTable loading />
   if (!data?.events.length) return !failed && <EmptyState title="No recorded attempts" description="No recorded model attempts match this range and these filters." icon={ListChecksIcon} treatment="embedded" />
   return <RequestLogsTable>
           <TableBody>{data.events.map(event => <TableRow key={event.id}>
             <TableCell><div className="font-semibold">{event.modelName || event.gatewayModelId}</div><div className="text-xs text-muted-foreground" title={event.id}>{event.id.slice(0, 8)}</div></TableCell>
-            <TableCell>{event.keyName || `Unknown key (${event.gatewayKeyId.slice(0, 8)})`}</TableCell>
+            <TableCell><RequestLogMetadata event={event} /></TableCell>
+            <TableCell>{event.keyName || (event.gatewayKeyId ? `Unknown key (${event.gatewayKeyId.slice(0, 8)})` : "Unknown key")}</TableCell>
             <TableCell><Badge variant={event.status >= 200 && event.status < 300 ? "secondary" : "destructive"}>{event.status >= 200 && event.status < 300 ? "Success" : "Failed"} · {event.status}</Badge></TableCell>
             <TableCell>{event.usageAvailable ? formatTokenCount(event.totalTokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${formatTokenCount(event.inputTokens)} in · ${formatTokenCount(event.cacheReadTokens + event.cacheCreationTokens)} cache · ${formatTokenCount(event.outputTokens)} out` : "Provider usage not recorded"}</div></TableCell>
             <TableCell>{event.pricingConfidence === "unpriced" ? "Unpriced" : formatCost(event.costMicros)}{event.pricingConfidence === "assumed" && <div className="text-xs text-muted-foreground">Estimated</div>}</TableCell>

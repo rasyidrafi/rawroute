@@ -65,7 +65,7 @@ mock.module("@/server/workspace-repository", () => ({
 }))
 
 const { BudgetDeniedError, BudgetModelExcludedError } = await import("@/lib/analytics")
-const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, testComboMemberPolicy } = await import("@/lib/cliproxy/gateway")
+const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, sharedUsageEventCopies, testComboMemberPolicy } = await import("@/lib/cliproxy/gateway")
 const { drainBackgroundTasks } = await import("@/lib/background-tasks")
 
 beforeEach(() => {
@@ -142,7 +142,98 @@ test("records structured request and completion events", async () => {
 
   const events = mocks.recordLog.mock.calls.map((call) => call[0])
   expect(mocks.recordLog).toHaveBeenCalledWith("gateway.request.started", expect.objectContaining({ model: "codex/gpt-5", protocol: "openai-responses", reasoningEffort: "low", messageCount: 2, toolCount: 2, apiKeyId: "gateway-key" }))
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ reasoningEffort: "low", toolCount: 2 })
   expect(events).toContain("gateway.request.completed")
+})
+
+test("request metadata is retained on upstream fetch failures", async () => {
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => { throw new Error("upstream unavailable") }))
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello", reasoning: { effort: "medium" }, tools: [] }),
+  }))
+
+  expect(response.status).toBe(502)
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ reasoningEffort: "medium", toolCount: 0 })
+})
+
+test("keeps absent tool metadata distinct from an explicitly empty tool list", async () => {
+  const request = (body: Record<string, unknown>) => new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "Hello", ...body }),
+  })
+
+  const absentResponse = await proxyGatewayRequest(request({}))
+  await absentResponse.text()
+  const absentStarted = mocks.recordLog.mock.calls.find((call) => call[0] === "gateway.request.started")
+  expect(absentStarted?.[1]).not.toHaveProperty("toolCount")
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).not.toHaveProperty("toolCount")
+
+  const emptyResponse = await proxyGatewayRequest(request({ tools: [] }))
+  await emptyResponse.text()
+  const emptyStarted = mocks.recordLog.mock.calls.filter((call) => call[0] === "gateway.request.started").at(-1)
+  expect(emptyStarted?.[1]).toMatchObject({ toolCount: 0 })
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ toolCount: 0 })
+
+  const nestedResponse = await proxyGatewayRequest(request({ extra_body: { tools: [{}, {}] } }))
+  await nestedResponse.text()
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ toolCount: 2 })
+
+  const directResponse = await proxyGatewayRequest(request({ tools: [{}], extra_body: { tools: [{}, {}] } }))
+  await directResponse.text()
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ toolCount: 1 })
+
+  const unsafeResponse = await proxyGatewayRequest(request({ reasoning_effort: "secret=hidden-value" }))
+  await unsafeResponse.text()
+  const unsafeStarted = mocks.recordLog.mock.calls.filter((call) => call[0] === "gateway.request.started").at(-1)
+  expect(unsafeStarted?.[1]).not.toHaveProperty("reasoningEffort")
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).not.toHaveProperty("reasoningEffort")
+
+  const ordinaryResponse = await proxyGatewayRequest(request({ reasoning_effort: "customer-private-value" }))
+  await ordinaryResponse.text()
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).not.toHaveProperty("reasoningEffort")
+
+  const conflictingResponse = await proxyGatewayRequest(request({ reasoning: { effort: "high" }, reasoning_effort: "low" }))
+  await conflictingResponse.text()
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).not.toHaveProperty("reasoningEffort")
+})
+
+test("shared event copies preserve validated reasoning and declared-tool metadata", () => {
+  const event = {
+    id: "shared-metadata",
+    gatewayKeyId: "key",
+    gatewayModelId: "provider/model",
+    protocol: "openai-chat" as const,
+    startedAt: "2026-10-15T12:00:00.000Z",
+    completedAt: "2026-10-15T12:00:01.000Z",
+    status: 200,
+    durationMs: 1,
+    inputTokens: 1,
+    outputTokens: 1,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens: 2,
+    costMicros: 10,
+    pricingConfidence: "exact" as const,
+    usageAvailable: true,
+    reasoningEffort: "high" as const,
+    toolCount: 0,
+  }
+  const shared = {
+    id: "share",
+    ownerWorkspaceId: "owner",
+    ownerWorkspaceName: "Owner",
+    consumerWorkspaceId: "consumer",
+    consumerWorkspaceName: "Consumer",
+    sourceGatewayModelId: "provider/model",
+    sourceModelId: "model-id",
+  }
+
+  const copies = sharedUsageEventCopies(event, shared)
+  expect(copies.consumerEvent).toMatchObject({ reasoningEffort: "high", toolCount: 0, sharedUsage: { role: "consumer" } })
+  expect(copies.ownerEvent).toMatchObject({ reasoningEffort: "high", toolCount: 0, sharedUsage: { role: "owner" } })
 })
 
 test("logs invalid gateway authentication failures", async () => {
@@ -225,6 +316,30 @@ test("sends combo reasoning overrides in the request body without suffixing proj
   const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body))
   expect(forwarded).toMatchObject({ model: "rr-ws-default-p-p/a", reasoning_effort: "max" })
   expect(forwarded.model).not.toContain("(max)")
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ reasoningEffort: "max" })
+})
+
+test("does not record a custom combo effort outside the reviewed vocabulary", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listCombos.mockResolvedValue([{
+    id: "combo-1",
+    combo: "custom-reasoning-combo",
+    name: "Custom reasoning combo",
+    members: [{ modelId: "p/a", reasoning: { mode: "override", effort: "customer-private-value" } }],
+    createdAt: new Date().toISOString(),
+  }])
+
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "custom-reasoning-combo", messages: [{ role: "user", content: "hello" }] }),
+  }))
+  await response.text()
+
+  expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).not.toHaveProperty("reasoningEffort")
+  const started = mocks.recordLog.mock.calls.find((call) => call[0] === "gateway.request.started")
+  expect(started?.[1]).not.toHaveProperty("reasoningEffort")
 })
 
 test("deep merges a combo member custom payload and keeps the routed model", async () => {
@@ -611,7 +726,7 @@ test("streams native Responses SSE while collecting terminal usage", async () =>
   expect(new TextDecoder().decode(first.value)).toContain("response.output_text.delta")
   while (!(await reader.read()).done) {}
   await drainBackgroundTasks()
-  expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200 }), undefined)
+  expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200, reasoningEffort: "xhigh" }), undefined)
 })
 
 test("logs the received protocol and the saved provider protocol", async () => {

@@ -1,11 +1,13 @@
 import { z } from "zod"
-import type { UsageEvent } from "./types"
+import type { DashboardPayload, UsageEvent } from "./types"
 
 const instant = z.string().datetime().refine(value => new Date(value).toISOString() === value)
 const filters = z.object({ from: instant, to: instant, status: z.enum(["all", "success", "failed"]), model: z.string().max(512), key: z.string().max(512) })
 const cursorSchema = filters.extend({ workspace: z.string(), at: instant, id: z.string().min(1).max(512) }).strict()
 export type RequestLogQuery = z.infer<typeof filters> & { after?: { at: string; id: string } }
 export type RequestLogsPage = { events: (UsageEvent & { keyName: string | null; modelName: string | null })[]; nextCursor: string | null; from: string; to: string; models: { id: string; name: string }[]; keys: { id: string; name: string }[] }
+export type RequestLogDisplayEvent = Pick<UsageEvent, "id" | "gatewayModelId" | "status" | "usageAvailable" | "usageCompleteness" | "totalTokens" | "inputTokens" | "cacheReadTokens" | "cacheCreationTokens" | "outputTokens" | "pricingConfidence" | "costMicros" | "durationMs" | "completedAt" | "reasoningEffort" | "toolCount"> & { keyName: string | null; modelName: string | null; gatewayKeyId?: string }
+export type PublicKeyUsageDetail = { usage: DashboardPayload; recent: { events: RequestLogDisplayEvent[] } }
 
 /** Cursors freeze the selected range and cannot be reused with other filters or workspaces. */
 export function parseRequestLogQuery(params: URLSearchParams, workspace: string): RequestLogQuery {

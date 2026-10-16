@@ -1,6 +1,6 @@
-import type { ComboMember, Model, ModelCombo, Protocol } from "@/lib/types"
+import type { ComboMember, Model, ModelCombo, Protocol, ReasoningEffort } from "@/lib/types"
 
-export const standardReasoningEfforts = ["none", "auto", "minimal", "low", "medium", "high", "xhigh", "max"] as const
+export const standardReasoningEfforts = ["none", "auto", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ReasoningEffort[]
 
 export const comboCustomPayloadMaxBytes = 16 * 1024
 export const comboCustomPayloadMaxDepth = 12

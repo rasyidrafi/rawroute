@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, jest } from "bun:test"
 
-import { checkBudget, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
+import { checkBudget, createGatewayUsageEvent, getBudgetAdmission, getBudgetBeyondLimitsSettings, getBudgetRequestState, getBudgetRows, getBudgetUnlimitedSettings, getBudgetWindow, listBudgetBypassSessions, getDashboardPayload, recordGatewayUsage, recordUsageEvent, reconcileCodexBudgetWindowRollover, resetAnalyticsForTests, reserveBudgetAdmission, setBudgetBeyondLimitsSettings, setBudgetBypassAutoDeactivateAtWindowEnd, setBudgetBypassEnabled, setBudgetUnlimitedSettings, updateBudgetWindow, upsertBudget } from "@/lib/analytics"
 import { savePricingVersion, syncModelPricingGroups, listPricingVersions } from "@/lib/model-pricing"
 import { createApiKey, _resetMemoryBackend, listModels, listProviders, upsertModel, upsertProvider } from "@/server/store"
 import type { UsageEvent } from "@/lib/types"
@@ -52,6 +52,26 @@ beforeEach(() => {
 })
 
 describe.serial("usage analytics", () => {
+  test("canonical usage events validate reasoning and tool metadata", async () => {
+    const base = {
+      gatewayKeyId: "metadata-key",
+      gatewayModelId: "unconfigured/metadata-model",
+      protocol: "openai-chat" as const,
+      startedAt: "2026-10-15T12:00:00.000Z",
+      status: 200,
+      durationMs: 1,
+    }
+    const valid = await createGatewayUsageEvent({ ...base, reasoningEffort: " HIGH ", toolCount: 0 })
+    expect(valid).toMatchObject({ reasoningEffort: "high", toolCount: 0 })
+
+    const unsupported = await createGatewayUsageEvent({ ...base, reasoningEffort: "customer-private-value", toolCount: -1 })
+    expect(unsupported).not.toHaveProperty("reasoningEffort")
+    expect(unsupported).not.toHaveProperty("toolCount")
+
+    const fractionalCount = await createGatewayUsageEvent({ ...base, toolCount: 1.5 })
+    expect(fractionalCount).not.toHaveProperty("toolCount")
+  })
+
   test("normalizes cache buckets and calculates integer micros", async () => {
     const key = await createApiKey("Analytics")
     await configureTestPricing({ modelId: "model-doc", gatewayModelId: "test/model", upstreamModel: "upstream", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 100_000, cacheCreationMicrosPerMillion: 200_000 })
@@ -259,6 +279,7 @@ describe.serial("usage analytics", () => {
 
     expect(payload.keys[0]).toMatchObject({ id: "Public traffic", label: "Public traffic", maskedKey: "hidden" })
     expect(payload.keys[0].id).not.toBe(key.id)
+    expect(payload.keys[0]?.publicId).toMatch(/^[a-f0-9]{64}$/)
   })
 
   test("resolves usage pricing even when a key has no budget", async () => {

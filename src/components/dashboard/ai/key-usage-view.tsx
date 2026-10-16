@@ -9,26 +9,61 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 import type { DashboardKeyBudget, DashboardPayload } from "@/lib/types"
-import type { RequestLogsPage } from "@/lib/request-logs"
-import { pagePaths } from "@/lib/dashboard/routes"
+import type { PublicKeyUsageDetail, RequestLogDisplayEvent, RequestLogsPage } from "@/lib/request-logs"
+import { pagePaths, publicWorkspacePagePath } from "@/lib/dashboard/routes"
 import { formatAppDateTime } from "@/lib/timezone"
 import { formatCost, formatRequestCount, formatTokenCount } from "@/lib/usage-display"
 import { KeySpendChart } from "./key-spend-chart"
 import { KeyUsageSkeleton } from "./key-usage-skeleton"
 import { RequestLogResults } from "./request-logs-view"
 
-export function KeyUsageView() {
+export function KeyUsageView({ publicView = false, workspaceId }: { publicView?: boolean; workspaceId?: string }) {
   const { keyId = "" } = useParams()
-  return <KeyUsageContent key={keyId} keyId={keyId} />
+  return <KeyUsageContent key={`${workspaceId || ""}:${keyId}`} keyId={keyId} publicView={publicView} workspaceId={workspaceId} />
 }
 
-function useKeyUsage(keyId: string) {
+type KeyUsageState = {
+  data?: DashboardPayload
+  error: unknown
+  isValidating: boolean
+  refresh: () => void
+  recentData?: { events: RequestLogDisplayEvent[] }
+  recentError: unknown
+}
+
+function useKeyUsage(keyId: string, publicView: boolean, selectedWorkspaceId?: string) {
   const { apiFetch, workspaceId } = useDashboardApi()
-  const usage = useSWR(workspaceId ? [workspaceId, "key-usage", keyId] : null, () => apiFetch<DashboardPayload>(`/api/admin/usage/keys/${encodeURIComponent(keyId)}`), { revalidateOnFocus: false, refreshInterval: 15_000 })
+  const publicUsage = usePublicKeyUsage(keyId, selectedWorkspaceId, apiFetch)
+  const dashboardUsage = useDashboardKeyUsage(keyId, workspaceId, apiFetch)
+  return publicView ? publicUsage : dashboardUsage
+}
+
+function usePublicKeyUsage(keyId: string, workspaceId: string | undefined, apiFetch: ReturnType<typeof useDashboardApi>["apiFetch"]): KeyUsageState {
+  const url = `/api/public/usage/keys/${encodeURIComponent(keyId)}?workspace=${encodeURIComponent(workspaceId || "default")}`
+  const usage = useSWR<PublicKeyUsageDetail>(workspaceId ? [workspaceId, "public-key-usage", keyId] : null, () => apiFetch<PublicKeyUsageDetail>(url), { revalidateOnFocus: false, refreshInterval: 15_000 })
+  return {
+    data: usage.data?.usage,
+    error: usage.error,
+    isValidating: usage.isValidating,
+    refresh: () => { void usage.mutate().catch(() => undefined) },
+    recentData: usage.data?.recent,
+    recentError: usage.error,
+  }
+}
+
+function useDashboardKeyUsage(keyId: string, workspaceId: string | null, apiFetch: ReturnType<typeof useDashboardApi>["apiFetch"]): KeyUsageState {
+  const usage = useSWR<DashboardPayload>(workspaceId ? [workspaceId, "key-usage", keyId] : null, () => apiFetch<DashboardPayload>(`/api/admin/usage/keys/${encodeURIComponent(keyId)}`), { revalidateOnFocus: false, refreshInterval: 15_000 })
   const params = usage.data ? new URLSearchParams({ from: usage.data.range.from, to: usage.data.range.to, key: keyId }) : null
   const recentUrl = params ? `/api/admin/request-logs?${params}` : null
-  const recent = useSWR(workspaceId && recentUrl ? [workspaceId, recentUrl] : null, () => apiFetch<RequestLogsPage>(recentUrl!), { revalidateOnFocus: false, refreshInterval: 15_000 })
-  return { usage, recent }
+  const recent = useSWR<RequestLogsPage>(workspaceId && recentUrl ? [workspaceId, recentUrl] : null, () => apiFetch<RequestLogsPage>(recentUrl!), { revalidateOnFocus: false, refreshInterval: 15_000 })
+  return {
+    data: usage.data,
+    error: usage.error,
+    isValidating: usage.isValidating,
+    refresh: () => { void usage.mutate().catch(() => undefined); void recent.mutate().catch(() => undefined) },
+    recentData: recent.data,
+    recentError: recent.error,
+  }
 }
 
 function costUnavailable(data: DashboardPayload) {
@@ -36,24 +71,23 @@ function costUnavailable(data: DashboardPayload) {
   return !!coverage && (coverage.financialUnavailable || coverage.excludedSources > 0 || coverage.costCoveredRequests < data.summary.requests)
 }
 
-function KeyUsageContent({ keyId }: { keyId: string }) {
-  const { usage, recent } = useKeyUsage(keyId)
-  const data = usage.data
-  if (!data && !usage.error) return <KeyUsageSkeleton />
+function KeyUsageContent({ keyId, publicView, workspaceId }: { keyId: string; publicView: boolean; workspaceId?: string }) {
+  const { data, error, isValidating, refresh, recentData, recentError } = useKeyUsage(keyId, publicView, workspaceId)
+  if (!data && !error) return <KeyUsageSkeleton />
   return <DashboardPage spacing="normal">
-    <div><Button variant="ghost" nativeButton={false} role="link" render={<Link to={pagePaths.overviewUsage} />}><ArrowLeftIcon data-icon="inline-start" />Back to usage</Button></div>
+    <div><Button variant="ghost" nativeButton={false} role="link" render={<Link to={publicView ? publicWorkspacePagePath(workspaceId || "default") : pagePaths.overviewUsage} />}><ArrowLeftIcon data-icon="inline-start" />Back to usage</Button></div>
     <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex min-w-0 items-start gap-3"><div className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted/30"><KeyRoundIcon className="size-5" /></div><div className="min-w-0"><h2 className="break-words text-2xl font-semibold tracking-tight">{data?.keys[0]?.label || keyId}</h2><p className="mt-1 break-all text-xs text-muted-foreground">Key usage · {keyId}</p></div></div>
-      <Button variant="outline" size="sm" disabled={usage.isValidating} onClick={() => { void usage.mutate().catch(() => undefined); void recent.mutate().catch(() => undefined) }}><RefreshCwIcon data-icon="inline-start" />Refresh</Button>
+      <div className="flex min-w-0 items-start gap-3"><div className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted/30"><KeyRoundIcon className="size-5" /></div><div className="min-w-0"><h2 className="break-words text-2xl font-semibold tracking-tight">{data?.keys[0]?.label || keyId}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{publicView ? "Public key usage" : `Key usage · ${keyId}`}</p></div></div>
+      <Button variant="outline" size="sm" disabled={isValidating} onClick={refresh}><RefreshCwIcon data-icon="inline-start" />Refresh</Button>
     </div>
-    {usage.error && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
+    {!!error && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && <>
       <div><h3 className="text-lg font-medium">Budget & spend</h3><p className="mt-1 text-sm text-muted-foreground">{formatAppDateTime(data.range.from)} – {formatAppDateTime(data.range.to)}</p></div>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeySpendChart data={data} unavailable={costUnavailable(data)} /></div>
       <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
       <Card><CardHeader><CardTitle>Recent requests</CardTitle><CardDescription>Latest recorded attempts for this key</CardDescription></CardHeader><CardContent>
-        {recent.error && <Alert variant="destructive"><AlertDescription>Unable to load recent requests. Try refreshing.</AlertDescription></Alert>}
-        <RequestLogResults data={recent.data && { ...recent.data, events: recent.data.events.slice(0, 5) }} loading={!recent.data && !recent.error} failed={!!recent.error} />
+        {!!recentError && <Alert variant="destructive"><AlertDescription>Unable to load recent requests. Try refreshing.</AlertDescription></Alert>}
+        <RequestLogResults data={recentData && { events: recentData.events.slice(0, 5) }} loading={!recentData && !recentError} failed={!!recentError} />
       </CardContent></Card>
     </>}
   </DashboardPage>

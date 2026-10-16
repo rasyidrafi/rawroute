@@ -29,6 +29,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
     const empty = params.get("status") === "failed"
     const events = empty ? [] : Array.from({ length: older ? 1 : 25 }, (_, i) => ({
       id: `${older ? "older" : "newest"}-${i}`, gatewayKeyId: "old-key", keyName: older ? null : "Demo key", gatewayModelId: "old-model", modelName: older ? null : "Demo model", protocol: "openai-chat", startedAt: to, completedAt: to, status: 200, durationMs: [5285, 9300, 999.5, 59_995, 65_000, 3_599_500, 3_720_000, 86_370_000][i] ?? 250, inputTokens: 28_500, outputTokens: 5_042, cacheReadTokens: 8_000, cacheCreationTokens: 2_000, totalTokens: 43_542, costMicros: 10, pricingConfidence: older ? "unpriced" : "assumed", usageAvailable: true,
+      ...(older ? {} : i === 0 ? { reasoningEffort: "medium", toolCount: 2 } : i === 1 ? { reasoningEffort: "low", toolCount: 0 } : {}),
     }))
     await route.fulfill({ json: { events, models: [{ id: "old-model", name: older ? "old-model" : "Demo model" }], keys: [{ id: "old-key", name: "Demo key" }], from: params.get("from"), to: params.get("to"), nextCursor: older || empty ? null : "test-cursor" } })
   })
@@ -56,14 +57,15 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   expect(await controls.evaluate(element => Math.abs(element.getBoundingClientRect().right - element.parentElement!.getBoundingClientRect().right))).toBeLessThanOrEqual(1)
   await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
   await expect(loading).toHaveAttribute("aria-busy", "true")
-  await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Reasoning / tools", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   const placeholderRows = loading.locator('[data-slot="request-log-skeleton-row"]')
   await expect(placeholderRows).toHaveCount(9)
-  await expect(placeholderRows.first().getByRole("cell")).toHaveCount(7)
-  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(9)
-  await expect(placeholderRows.first().getByRole("cell").nth(1).locator('[data-slot="skeleton"]')).toHaveCount(1)
-  for (const column of [0, 3]) {
+  await expect(placeholderRows.first().getByRole("cell")).toHaveCount(8)
+  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(11)
+  await expect(placeholderRows.first().getByRole("cell").nth(1).locator('[data-slot="skeleton"]')).toHaveCount(2)
+  await expect(placeholderRows.first().getByRole("cell").nth(2).locator('[data-slot="skeleton"]')).toHaveCount(1)
+  for (const column of [0, 4]) {
     const bars = placeholderRows.first().getByRole("cell").nth(column).locator('[data-slot="skeleton"]')
     const first = (await bars.nth(0).boundingBox())!
     const second = (await bars.nth(1).boundingBox())!
@@ -84,9 +86,12 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.getByRole("row")).toHaveCount(26)
   await expect(refresh).toBeEnabled()
   await expect(refresh.locator("svg")).not.toHaveClass(/animate-spin/)
-  await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Reasoning / tools", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(page.locator("tbody tr").first().getByRole("cell").nth(1)).toContainText("medium")
+  await expect(page.locator("tbody tr").first().getByRole("cell").nth(1)).toContainText("2 declared tools")
+  await expect(page.locator("tbody tr").nth(1).getByRole("cell").nth(1)).toContainText("0 declared tools")
   await expect(page.locator("tbody tr").first().getByRole("cell").nth(0)).not.toContainText("Demo key")
-  await expect(page.locator("tbody tr").first().getByRole("cell").nth(1)).toHaveText("Demo key")
+  await expect(page.locator("tbody tr").first().getByRole("cell").nth(2)).toHaveText("Demo key")
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   await expect(page.getByText("Newest first · 25 per page", { exact: true })).toBeVisible()
   await expect(loading).toHaveCount(0)

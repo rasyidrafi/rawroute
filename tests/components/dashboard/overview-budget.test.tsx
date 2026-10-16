@@ -23,7 +23,7 @@ test("overview summarizes all configured budgets rather than individual keys", (
   const html = renderBudget()
   expect(html).toContain("$300.00")
   expect(html).toContain("$60.00")
-  expect(html).toContain("20% of allocated budget")
+  expect(html).toContain("20% used · $60.00 spent")
   expect(html).not.toContain("First key")
   expect(html).not.toContain("Second key")
 })

@@ -64,3 +64,9 @@ test("metadata excludes credentials, free-form errors, URLs, control characters 
     accountId: "sk-secret", providerId: "injected\nline", outputTokens: Infinity, source: "x".repeat(200), unknown: 12,
   })).toEqual({ status: 200, durationMs: 10, apiKeyId: "key-id", model: "provider/model", inputTokens: 42, terminalEvent: true })
 })
+
+test("log metadata restricts reasoning and tools to reviewed values and nonnegative counts", () => {
+  expect(safeDetails({ reasoningEffort: " HIGH ", toolCount: 0 })).toEqual({ reasoningEffort: "high", toolCount: 0 })
+  expect(safeDetails({ reasoningEffort: "customer-private-value", toolCount: -1 })).toEqual({})
+  expect(safeDetails({ reasoningEffort: "high,low", toolCount: 1.5 })).toEqual({})
+})

@@ -6,6 +6,7 @@ import { scheduleCodexModelRefresh } from "@/lib/codex/model-refresh"
 import { trackBackgroundTask } from "@/lib/background-tasks"
 import { catalogModels } from "@/lib/catalog"
 import { applyComboMemberPolicy, comboMembers, normalizeComboCustomPayload } from "@/lib/combo-reasoning"
+import { extractRequestReasoningEffort, normalizeRequestLogMetadata, type RequestLogMetadata } from "@/lib/request-log-metadata"
 import { recordLog } from "@/server/logging/recorder"
 import { extractUsageMetrics, type UsageMetrics } from "@/lib/usage-metrics"
 import { listAliases, listCombos, listModels, listProviders } from "@/server/store"
@@ -47,45 +48,23 @@ function requestItemCount(payload: Record<string, unknown>, protocol: Protocol) 
 }
 
 function requestToolCount(payload: Record<string, unknown>) {
-  const direct = Math.max(arrayLength(payload.tools), arrayLength(payload.functions))
-  if (direct) return direct
+  // Preserve console-log precedence: direct declarations, then request and extra_body wrappers.
+  // A zero is recorded only when one of those fields was explicitly an array.
+  const directCounts = [payload.tools, payload.functions]
+    .filter(Array.isArray)
+    .map(arrayLength)
+  const directCount = Math.max(0, ...directCounts)
+  if (directCount) return directCount
+  let toolsDeclared = directCounts.length > 0
   for (const key of ["request", "extra_body"]) {
     const nested = objectValue(payload[key])
     if (!nested) continue
-    const nestedCount = Math.max(arrayLength(nested.tools), arrayLength(nested.functions))
+    const nestedCounts = [nested.tools, nested.functions].filter(Array.isArray).map(arrayLength)
+    toolsDeclared ||= nestedCounts.length > 0
+    const nestedCount = Math.max(0, ...nestedCounts)
     if (nestedCount) return nestedCount
   }
-  return 0
-}
-
-function nestedValue(payload: Record<string, unknown>, path: string[]) {
-  let current: unknown = payload
-  for (const key of path) {
-    current = objectValue(current)?.[key]
-    if (current === undefined) return undefined
-  }
-  return current
-}
-
-function extractReasoningEffort(payload: Record<string, unknown>) {
-  const paths = [
-    ["reasoning", "effort"],
-    ["reasoning_effort"],
-    ["output_config", "effort"],
-    ["thinking", "effort"],
-    ["thinking_config", "thinking_level"],
-    ["google", "thinking_config", "thinking_level"],
-    ["extra_body", "google", "thinking_config", "thinking_level"],
-    ["generationConfig", "thinkingConfig", "thinkingLevel"],
-  ]
-  const found = paths.flatMap((path) => {
-    const value = nestedValue(payload, path)
-    if (typeof value !== "string" || !value.trim() || value.trim().length > 64) return []
-    return [{ path: path.join("."), effort: value.trim() }]
-  })
-  if (!found.length) return undefined
-  const unique = new Set(found.map(({ effort }) => effort))
-  return unique.size === 1 ? found[0].effort : found.map(({ path, effort }) => `${path}:${effort}`).join(", ")
+  return toolsDeclared ? 0 : undefined
 }
 
 function completionDetails(durationMs: number, ttftMs: number | undefined, usage: UsageMetrics | undefined) {
@@ -405,11 +384,17 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
 
     const startedAtMs = Date.now()
     const startedAt = new Date(startedAtMs).toISOString()
+    const requestMetadata: RequestLogMetadata = normalizeRequestLogMetadata({
+      reasoningEffort: resolvedModel.reasoningEffort !== undefined
+        ? resolvedModel.reasoningEffort
+        : extractRequestReasoningEffort(payload, protocol),
+      toolCount: requestToolCount(payload),
+    })
     recordLog("gateway.request.started", {
       providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, upstreamModel: resolvedModel.upstreamModel,
       protocol, upstreamProtocol: resolvedModel.upstreamProtocol, apiKeyId: apiKey.id,
-      reasoningEffort: resolvedModel.reasoningEffort || extractReasoningEffort(payload),
-      messageCount: requestItemCount(payload, protocol), toolCount: requestToolCount(payload), promptCacheKey: resolvedModel.promptCacheKey,
+      ...requestMetadata,
+      messageCount: requestItemCount(payload, protocol), promptCacheKey: resolvedModel.promptCacheKey,
     })
     let response: Response
     try {
@@ -422,7 +407,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
           })
     } catch {
       await releaseBudgetReservationWithLog(reservation)
-      await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared }).catch(() => undefined)
+      await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared, ...requestMetadata }).catch(() => undefined)
       recordLog("gateway.upstream.request.failed", { providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, status: 502 }, { level: "error" })
       return new Response(JSON.stringify({ error: { message: "Upstream request failed." } }), { status: 502, headers: { "content-type": "application/json" } })
     }
@@ -434,7 +419,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
         try {
           const collected = await collectStreamUsage(monitor)
           const streamStatus = collected.terminalEventSeen ? response.status : 502
-          await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared })
+          await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared, ...requestMetadata })
             .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
           const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
           recordLog(streamStatus < 400 ? "gateway.request.completed" : "gateway.request.failed", {
@@ -451,7 +436,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     }
     const responseBody = new Uint8Array(await response.arrayBuffer())
     const usage = actualResponseUsage(responseBody, response.headers.get("content-type"))
-    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared })
+    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared, ...requestMetadata })
       .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
     if (response.ok) recordLog("gateway.request.completed", { status: response.status, ...completionDetails(Date.now() - startedAtMs, undefined, usage), streaming: false })
     else {
@@ -472,9 +457,33 @@ type GatewayUsageRecordingInput = {
   startedAt: string
   status: number
   response: ReturnType<typeof extractUsageMetrics> | undefined
+  reasoningEffort?: RequestLogMetadata["reasoningEffort"]
+  toolCount?: number
   budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
   id?: string
   shared?: ResolvedGatewayModel["shared"]
+}
+
+export function sharedUsageEventCopies(event: UsageEvent, shared: NonNullable<ResolvedGatewayModel["shared"]>) {
+  const consumerEvent: UsageEvent = {
+    ...event,
+    id: `${event.id}-consumer`,
+    costMicros: 0,
+    pricingConfidence: event.pricingConfidence === "unpriced" ? "unpriced" : "exact",
+    costSource: undefined,
+    pricingGroupId: undefined,
+    pricingVersionId: undefined,
+    pricingContextTier: undefined,
+    sharedUsage: { shareId: shared.id, role: "consumer", peerWorkspaceId: shared.ownerWorkspaceId, peerWorkspaceName: shared.ownerWorkspaceName, sourceGatewayModelId: shared.sourceGatewayModelId },
+  }
+  const ownerEvent: UsageEvent = {
+    ...event,
+    id: `${event.id}-owner`,
+    gatewayKeyId: `shared-workspace:${shared.consumerWorkspaceId}`,
+    gatewayModelId: shared.sourceGatewayModelId,
+    sharedUsage: { shareId: shared.id, role: "owner", peerWorkspaceId: shared.consumerWorkspaceId, peerWorkspaceName: shared.consumerWorkspaceName, sourceGatewayModelId: shared.sourceGatewayModelId },
+  }
+  return { consumerEvent, ownerEvent }
 }
 
 async function recordGatewayUsageWithRetry(input: GatewayUsageRecordingInput) {
@@ -503,6 +512,8 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     status: input.status,
     durationMs: Math.max(0, Date.now() - Date.parse(input.startedAt)),
     requestBodyBytes: input.budgetState.requestBodyBytes,
+    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...(input.toolCount !== undefined ? { toolCount: input.toolCount } : {}),
     metrics: input.response,
     // This estimate is only a settlement fallback when the provider omits
     // usage metadata. It is never used for admission control, and it must not
@@ -523,24 +534,7 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     return
   }
   const shared = input.shared
-  const consumerEvent: UsageEvent = {
-    ...event,
-    id: `${event.id}-consumer`,
-    costMicros: 0,
-    pricingConfidence: event.pricingConfidence === "unpriced" ? "unpriced" : "exact",
-    costSource: undefined,
-    pricingGroupId: undefined,
-    pricingVersionId: undefined,
-    pricingContextTier: undefined,
-    sharedUsage: { shareId: shared.id, role: "consumer" as const, peerWorkspaceId: shared.ownerWorkspaceId, peerWorkspaceName: shared.ownerWorkspaceName, sourceGatewayModelId: shared.sourceGatewayModelId },
-  }
-  const ownerEvent = {
-    ...event,
-    id: `${event.id}-owner`,
-    gatewayKeyId: `shared-workspace:${shared.consumerWorkspaceId}`,
-    gatewayModelId: shared.sourceGatewayModelId,
-    sharedUsage: { shareId: shared.id, role: "owner" as const, peerWorkspaceId: shared.consumerWorkspaceId, peerWorkspaceName: shared.consumerWorkspaceName, sourceGatewayModelId: shared.sourceGatewayModelId },
-  }
+  const { consumerEvent, ownerEvent } = sharedUsageEventCopies(event, shared)
   await recordUsageEvent(consumerEvent, null)
   const ownerWorkspace = await getWorkspace(shared.ownerWorkspaceId)
   if (ownerWorkspace) await runInWorkspace(ownerWorkspace, () => recordUsageEvent(ownerEvent, input.budgetState.usageContext))

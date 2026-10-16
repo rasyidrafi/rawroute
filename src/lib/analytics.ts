@@ -1,6 +1,7 @@
 import { queryLocalRequestLogs, queryLocalUsageRange } from "@/lib/local-db"
 import type { OverviewDetails, OverviewPayload } from "@/lib/overview"
 import { matchesRequestLog, requestLogCursor, type RequestLogQuery } from "@/lib/request-logs"
+import { normalizeRequestLogMetadata } from "@/lib/request-log-metadata"
 import { createHash } from "node:crypto"
 import { getSqliteDatabase, listLocalDocuments, type SqliteDatabase } from "@/lib/local-db"
 
@@ -98,6 +99,7 @@ const unlimitedSettingsInflight = new Map<string, Promise<BudgetUnlimitedSetting
 const dashboardCache = new Map<string, TimedValue<DashboardPayload>>()
 const dashboardInflight = new Map<string, Promise<DashboardPayload>>()
 const dashboardModelLabelCache = new Map<string, TimedValue<Map<string, string>>>()
+const publicUsageKeyIds = new Map<string, Map<string, string>>()
 const dashboardModelLabelInflight = new Map<string, Promise<Map<string, string>>>()
 const budgetsCaches = new Map<string, TimedValue<GatewayKeyBudget[]>>()
 const budgetsInflights = new Map<string, Promise<GatewayKeyBudget[]>>()
@@ -369,6 +371,16 @@ function beyondLimitsRef() { return workspaceRef().collection("budgetSettings").
 function unlimitedSettingsRef() { return workspaceRef().collection("budgetSettings").doc("unlimited") }
 function windowRef() { return workspaceRef().collection("budgetWindows").doc("current") }
 function hash(value: string) { return createHash("sha256").update(value).digest("hex") }
+function publicKeyUsageId(keyId: string) {
+  const workspaceId = currentWorkspaceId()
+  const publicId = hash(`${workspaceId}:${keyId}`)
+  const entries = publicUsageKeyIds.get(workspaceId) || new Map<string, string>()
+  entries.set(publicId, keyId)
+  while (entries.size > 8_192) entries.delete(entries.keys().next().value!)
+  publicUsageKeyIds.set(workspaceId, entries)
+  while (publicUsageKeyIds.size > 128) publicUsageKeyIds.delete(publicUsageKeyIds.keys().next().value!)
+  return publicId
+}
 function defaultWindow(): BudgetWindow { const start = mondayInAppTimeZone(); const end = addZonedDays(start, 7); return { start: start.toISOString(), end: end.toISOString(), anchor: "custom", codexAccountId: null, bypassLimits: false, bypassSessionId: null, bypassAutoDeactivateAtWindowEnd: false, updatedAt: new Date().toISOString() } }
 function defaultBeyondLimitsSettings(): BudgetBeyondLimitsSettings { return { enabled: false, modelIds: [], updatedAt: "" } }
 function defaultUnlimitedSettings(): BudgetUnlimitedSettings { return { excludedModelIds: [], updatedAt: "" } }
@@ -543,6 +555,8 @@ export interface GatewayUsageInput {
   durationMs: number
   ttftMs?: number
   requestBodyBytes?: number
+  reasoningEffort?: string
+  toolCount?: number
   metrics?: UsageMetrics
   assumedCostMicros?: number
   assumedCostSource?: "reservation" | "empirical" | "payload-calibrated"
@@ -551,6 +565,7 @@ export interface GatewayUsageInput {
 }
 
 export async function createGatewayUsageEvent(input: GatewayUsageInput, resolvedPricing?: ResolvedModelPricing): Promise<UsageEvent> {
+  const requestMetadata = normalizeRequestLogMetadata(input)
   const normalized = normalizeUsageMetrics(input.metrics)
   let pricing = resolvedPricing
   if (!pricing) {
@@ -586,6 +601,7 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     durationMs: Math.max(0, input.durationMs),
     ...(input.ttftMs !== undefined ? { ttftMs: Math.max(0, input.ttftMs) } : {}),
     ...(Number.isSafeInteger(input.requestBodyBytes) && Number(input.requestBodyBytes) > 0 ? { requestBodyBytes: Number(input.requestBodyBytes) } : {}),
+    ...requestMetadata,
     ...normalized,
     costMicros: assumedCostMicros ?? calculated.costMicros,
     pricingConfidence: assumedCostMicros !== undefined ? "assumed" : calculated.pricingConfidence,
@@ -1572,7 +1588,8 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
   if (keyId) {
     const key = keyMap.get(keyId)
     const shared = sharedWorkspaceIdFromBudgetId(keyId)
-    keyRows.set(keyId, { id: keyId, label: shared ? sharedWorkspaceUsageLabel(key, shared) : key?.name?.trim() || keyId, maskedKey: "hidden", requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null })
+    const label = shared ? sharedWorkspaceUsageLabel(key, shared) : publicView ? publicKeyName(key, keyId, indexedNames) : key?.name?.trim() || keyId
+    keyRows.set(keyId, { id: publicView ? label : keyId, label, ...(publicView ? { publicId: publicKeyUsageId(keyId) } : {}), maskedKey: "hidden", requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null })
     modelsByKey.set(keyId, new Set())
   }
   const models = new Map<string, DashboardPayload["models"][number]>()
@@ -1632,7 +1649,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
         const key = keyMap.get(row.gatewayKeyId)
         const shared = sharedWorkspaceIdFromBudgetId(row.gatewayKeyId)
         const name = shared ? sharedWorkspaceUsageLabel(key, shared) : publicView ? publicKeyName(key, row.gatewayKeyId, indexedNames) : key?.name?.trim() || row.gatewayKeyId
-        keyRow = { id: publicView ? name : row.gatewayKeyId, label: name, maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
+        keyRow = { id: publicView ? name : row.gatewayKeyId, label: name, ...(publicView ? { publicId: publicKeyUsageId(row.gatewayKeyId) } : {}), maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
         keyRows.set(row.gatewayKeyId, keyRow); modelsByKey.set(row.gatewayKeyId, new Set())
       }
       keyRow.requests += row.requests; keyRow.tokens += tokens; keyRow.costMicros += row.costMicros
@@ -1713,6 +1730,28 @@ function nextBucketStart(value: Date, granularity: string) {
 /** Private, workspace-scoped detail using the same canonical data as Usage. */
 export async function getKeyUsagePayload(keyId: string): Promise<DashboardPayload> {
   return buildDashboardPayload({ preset: "budget", granularity: "daily" }, false, undefined, keyId)
+}
+
+/** Public, opaque-ID detail for one key visible in the selected public workspace. */
+export async function getPublicKeyUsageDetail(publicId: string): Promise<{ keyId: string; payload: DashboardPayload } | undefined> {
+  if (!/^[a-f0-9]{64}$/.test(publicId)) return undefined
+  let keyId = publicUsageKeyIds.get(currentWorkspaceId())?.get(publicId)
+  const [keys, workspaces, indexedNames] = await Promise.all([listApiKeys(), listWorkspaces(), listIndexedApiKeyNames()])
+  const candidates = [
+    ...keys.map(key => key.id),
+    ...indexedNames.keys(),
+    ...workspaces.filter(workspace => workspace.status === "active" && workspace.id !== currentWorkspaceId()).map(workspace => sharedWorkspaceBudgetId(workspace.id)),
+  ]
+  keyId ||= candidates.find(candidate => hash(`${currentWorkspaceId()}:${candidate}`) === publicId)
+  if (!keyId) {
+    await getDashboardPayload({ preset: "all" }, true)
+    keyId = publicUsageKeyIds.get(currentWorkspaceId())?.get(publicId)
+  }
+  if (!keyId) return undefined
+  return {
+    keyId,
+    payload: await buildDashboardPayload({ preset: "budget", granularity: "daily" }, true, undefined, keyId),
+  }
 }
 
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
@@ -1892,6 +1931,7 @@ export function resetAnalyticsForTests() {
   dashboardCache.clear()
   dashboardInflight.clear()
   dashboardModelLabelCache.clear()
+  publicUsageKeyIds.clear()
   dashboardModelLabelInflight.clear()
   budgetsCaches.clear()
   budgetsInflights.clear()

@@ -1,13 +1,28 @@
 import type { ReactNode } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import type { UsageEvent } from "@/lib/types"
+
+export const requestLogMetadataDescription = "Requested or router-selected effort and declared tool definitions; not actual reasoning or executed tool calls."
+
+export function RequestLogMetadata({ event }: { event: Pick<UsageEvent, "reasoningEffort" | "toolCount"> }) {
+  return <div data-slot="request-log-metadata">
+    <div className="font-medium">{event.reasoningEffort || "—"}</div>
+    <div className="text-xs text-muted-foreground">{event.toolCount === undefined ? "—" : `${event.toolCount} declared ${event.toolCount === 1 ? "tool" : "tools"}`}</div>
+  </div>
+}
+
+export function RequestLogMetadataSkeleton() {
+  return <div aria-hidden="true" className="flex flex-col gap-2"><Skeleton motion="respect-preference" className="h-4 w-16" /><Skeleton motion="respect-preference" className="h-3 w-20" /></div>
+}
 
 /** Keep loading and recorded rows in the same columns and horizontal scroll container. */
 export function RequestLogsTable({ loading = false, children }: { loading?: boolean; children?: ReactNode }) {
-  return <div role={loading ? "status" : undefined} aria-label={loading ? "Loading request logs" : undefined} aria-busy={loading || undefined}>
-    <Table>
+  return <div className="min-w-0 max-w-full" role={loading ? "status" : undefined} aria-label={loading ? "Loading request logs" : undefined} aria-busy={loading || undefined}>
+    <Table className="min-w-max">
       <TableHeader><TableRow>
         <TableHead className="min-w-56">Request / model</TableHead>
+        <TableHead className="min-w-36" title={requestLogMetadataDescription}>Reasoning / tools</TableHead>
         <TableHead className="min-w-32">Key</TableHead>
         <TableHead className="min-w-32">Status</TableHead>
         <TableHead className="min-w-56">Tokens</TableHead>
@@ -17,6 +32,7 @@ export function RequestLogsTable({ loading = false, children }: { loading?: bool
       </TableRow></TableHeader>
       {loading ? <TableBody>{Array.from({ length: 9 }, (_, index) => <TableRow key={index} variant="static" data-slot="request-log-skeleton-row">
         <TableCell><div aria-hidden="true" className="flex flex-col gap-2"><Skeleton motion="respect-preference" className="h-4 w-40" /><Skeleton motion="respect-preference" className="h-3 w-48" /></div></TableCell>
+        <TableCell><RequestLogMetadataSkeleton /></TableCell>
         <TableCell><Skeleton aria-hidden="true" motion="respect-preference" className="h-4 w-24" /></TableCell>
         <TableCell><Skeleton aria-hidden="true" motion="respect-preference" shape="pill" className="h-5 w-24" /></TableCell>
         <TableCell><div aria-hidden="true" className="flex flex-col gap-2"><Skeleton motion="respect-preference" className="h-4 w-14" /><Skeleton motion="respect-preference" className="h-3 w-48" /></div></TableCell>
