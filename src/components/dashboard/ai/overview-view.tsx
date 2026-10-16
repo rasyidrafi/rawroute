@@ -42,8 +42,8 @@ function overviewMetrics(data?: OverviewPayload) {
     { label: "Requests", value: summary && (summary.requests === 0 && omitted ? unavailable : formatRequestCount(summary.requests)), note: "Recorded model attempts in this period", icon: ActivityIcon },
     { label: "Success rate", value: !omitted && overview && summary && summary.requests > 0 && overview.statusCoveredRequests === summary.requests ? `${((summary.requests - overview.failedRequests) / summary.requests * 100).toFixed(1)}%` : unavailable, note: omitted || (overview && summary && overview.statusCoveredRequests < summary.requests) ? "Historical status coverage is incomplete" : "Successful attempts / all recorded attempts", icon: CheckCircle2Icon },
     { label: "Estimated spend", value: summary && (summary.costMicros === 0 && (omitted || (coverage && coverage.costCoveredRequests < summary.requests)) ? unavailable : formatCost(summary.costMicros)), note: "Based on configured model rates", icon: CoinsIcon },
-    { label: "Recorded-attempt latency", value: overview?.durationCount ? formatDuration(overview.durationSumMs / overview.durationCount) : unavailable, note: overview ? `Mean completion duration · ${formatRequestCount(overview.durationCount)} recorded durations` : "Mean completion duration, not time to first token", icon: Clock3Icon },
-    { label: "Recorded cache hit rate", value: overview?.cacheUsageInputTokens ? `${(overview.cacheUsageReadTokens / overview.cacheUsageInputTokens * 100).toFixed(1)}%` : unavailable, note: "Cache-read / input tokens with known cache usage; missing measurements excluded", icon: DatabaseZapIcon },
+    { label: "Avg latency", value: overview?.durationCount ? formatDuration(overview.durationSumMs / overview.durationCount) : unavailable, note: "Average time completion", icon: Clock3Icon },
+    { label: "Cache ratio", value: overview?.cacheUsageInputTokens ? `${(overview.cacheUsageReadTokens / overview.cacheUsageInputTokens * 100).toFixed(1)}%` : unavailable, note: "Share of input tokens served from cache.", icon: DatabaseZapIcon },
   ]
 }
 
