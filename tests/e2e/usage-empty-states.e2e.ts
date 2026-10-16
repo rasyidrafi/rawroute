@@ -238,6 +238,13 @@ for (const publicView of [false, true]) {
         expect(await summary.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(width >= 1280 ? 4 : width >= 640 ? 2 : 1)
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
         const usageTable = card("Usage table")
+        await expect(usageTable.getByRole("columnheader", { name: "Actions", exact: true })).toHaveCount(publicView ? 0 : 1)
+        await expect(usageTable.locator("tbody tr").first().locator("td")).toHaveCount(publicView ? 8 : 9)
+        if (loading && !publicView) {
+          const actionSkeleton = usageTable.locator("tbody tr").first().locator("td").last().locator('[data-slot="skeleton"]')
+          await expect(actionSkeleton).toHaveCSS("width", "28px")
+          await expect(actionSkeleton).toHaveCSS("height", "28px")
+        }
         const orderLabel = usageTable.getByText("Order rows by", { exact: true })
         const orderControl = orderLabel.locator("..").locator(loading ? '[data-slot="skeleton"]' : '[data-slot="select-trigger"]')
         const labelBounds = (await orderLabel.boundingBox())!
@@ -261,6 +268,36 @@ for (const publicView of [false, true]) {
     }
   })
 }
+
+test("usage row opens three responsive key detail design variants without fetching live key usage", async ({ page }, testInfo) => {
+  await authenticate(page)
+  await page.route("**/api/admin/usage?*", route => route.fulfill({ json: dashboardPayload({ trend: [trendRow], keys: [keyRow], models: [modelRow] }) }))
+  await page.goto("/dashboard/ai/overview/usage")
+  const action = page.getByRole("link", { name: "View usage for E2E Usage Key", exact: true })
+  await expect(action).toHaveAttribute("href", "/dashboard/ai/overview/usage/keys/usage-empty-state-key")
+  await action.click()
+  await expect(page).toHaveURL(/\/usage\/keys\/usage-empty-state-key$/)
+  await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
+  await expect(page.getByText("Design preview · Sample data", { exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+  const keyRequests: string[] = []
+  page.on("request", request => { if (request.url().includes("/api/admin/usage")) keyRequests.push(request.url()) })
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    for (const [tab, heading] of [["1 · Snapshot", "At a glance"], ["2 · Explorer", "Usage explorer"], ["3 · Budget", "Budget & spend"]]) {
+      await page.getByRole("tab", { name: tab, exact: true }).click()
+      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible()
+      await expect(page.getByRole("tabpanel")).toHaveCount(1)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+      await page.screenshot({ path: testInfo.outputPath(`key-usage-${tab![0]}-${width}.png`), fullPage: true })
+    }
+  }
+  expect(keyRequests).toEqual([])
+  await page.reload()
+  await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
+  await page.getByRole("link", { name: "Back to usage", exact: true }).click()
+  await expect(page).toHaveURL(/\/dashboard\/ai\/overview\/usage$/)
+})
 
 for (const publicView of [false, true]) {
   test(`${publicView ? "public" : "workspace"} usage pairs retain natural empty and stacked heights`, async ({ page }) => {

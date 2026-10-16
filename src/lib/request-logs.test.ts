@@ -6,12 +6,12 @@ import { runInWorkspace } from "./workspace/context"
 import type { UsageEvent } from "./types"
 import { GET } from "@/server/routes/api/admin/request-logs"
 import type { RequestLogsPage } from "./request-logs"
-import { upsertAlias, upsertModel, upsertProvider } from "@/server/store"
+import { createApiKey, upsertAlias, upsertModel, upsertProvider } from "@/server/store"
 import { syncModelPricingGroups, updatePricingGroup } from "./model-pricing"
 
 process.env.SQLITE_PATH = ":memory:"
 afterAll(closeLocalDatabase)
-const query = { from: "2026-10-14T00:00:00.000Z", to: "2026-10-16T00:00:00.000Z", status: "all", model: "" } satisfies RequestLogQuery
+const query = { from: "2026-10-14T00:00:00.000Z", to: "2026-10-16T00:00:00.000Z", status: "all", model: "", key: "" } satisfies RequestLogQuery
 const event = (id: string, changes: Partial<UsageEvent> = {}): UsageEvent => ({ id, gatewayKeyId: "key", gatewayModelId: "model", protocol: "openai-chat", startedAt: query.from, completedAt: "2026-10-15T12:00:00.000Z", status: 200, durationMs: 10, inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 5, costMicros: 10, pricingConfidence: "exact", usageAvailable: true, ...changes })
 
 test("request history and filters use resolved group names for gateway, upstream and alias IDs", async () => {
@@ -34,13 +34,19 @@ test("request history and filters use resolved group names for gateway, upstream
 
 test("endpoint exposes historical model options from returned rows and filters by their ID", async () => {
   await runInWorkspace({ id: "historical-model-options", storageMode: "scoped" }, async () => {
+    const configuredKey = await createApiKey("Configured key without traffic")
     await recordUsageEvent(event("historical-one", { gatewayModelId: "removed/model" }), null)
     await recordUsageEvent(event("historical-two", { gatewayModelId: "removed/model" }), null)
-    await recordUsageEvent(event("another-model", { gatewayModelId: "shared/model" }), null)
+    await recordUsageEvent(event("another-model", { gatewayModelId: "shared/model", gatewayKeyId: "deleted-key" }), null)
     const params = new URLSearchParams(query)
     const page = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
     expect(page.models.filter(model => model.id === "removed/model")).toEqual([{ id: "removed/model", name: "removed/model" }])
     expect(page.events.find(row => row.gatewayModelId === "removed/model")?.modelName).toBeNull()
+    expect(page.keys).toContainEqual({ id: "deleted-key", name: "Unknown key (deleted-)" })
+    expect(page.keys).toContainEqual({ id: configuredKey.id, name: configuredKey.name })
+    expect(JSON.stringify(page.keys)).not.toContain(configuredKey.key)
+    const keyed = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams({ ...query, key: "deleted-key" })}`))).json() as RequestLogsPage
+    expect(keyed.events.map(row => row.id)).toEqual(["another-model"])
     params.set("model", "removed/model")
     const filtered = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
     expect(filtered.events.map(row => row.id)).toEqual(["historical-one", "historical-two"])
@@ -50,7 +56,7 @@ test("endpoint exposes historical model options from returned rows and filters b
 
 test("SQL keyset pages equal timestamps without gaps and filters before the hard bound", async () => {
   const collection = getSqliteDatabase().collection("history/one/usageEvents")
-  for (let i = 0; i < 130; i++) await collection.doc(`id-${String(i).padStart(3, "0")}`).set(event(`id-${i}`, { status: i >= 70 ? 500 : 200, gatewayModelId: i >= 70 ? "late-model" : "model" }))
+  for (let i = 0; i < 130; i++) await collection.doc(`id-${String(i).padStart(3, "0")}`).set(event(`id-${i}`, { status: i >= 70 ? 500 : 200, gatewayModelId: i >= 70 ? "late-model" : "model", gatewayKeyId: i >= 100 ? "late-key" : "key" }))
   const ids: string[] = []
   let pageQuery: RequestLogQuery = query
   for (let page = 0; page < 6; page++) {
@@ -69,6 +75,15 @@ test("SQL keyset pages equal timestamps without gaps and filters before the hard
   expect((await queryLocalRequestLogs(collection.path, { ...query, model: "late-model" })).every(row => row.gatewayModelId === "late-model")).toBe(true)
   expect(await queryLocalRequestLogs(collection.path, { ...query, model: "late-model" })).toHaveLength(26)
   expect(await queryLocalRequestLogs(collection.path, { ...query, model: "missing" })).toEqual([])
+  const keyQuery: RequestLogQuery = { ...query, key: "late-key", model: "late-model", status: "failed" }
+  const keyPage = await queryLocalRequestLogs(collection.path, keyQuery)
+  expect(keyPage).toHaveLength(26)
+  expect(keyPage.every(row => row.gatewayKeyId === "late-key" && row.gatewayModelId === "late-model" && row.status === 500)).toBe(true)
+  const last = keyPage[24]!
+  const keyNext = await queryLocalRequestLogs(collection.path, { ...keyQuery, after: { at: last.completedAt, id: last.id } })
+  expect(keyNext).toHaveLength(5)
+  expect(new Set([...keyPage.slice(0, 25), ...keyNext].map(row => row.id)).size).toBe(30)
+  expect(await queryLocalRequestLogs(collection.path, { ...query, key: "missing" })).toEqual([])
   expect(await queryLocalRequestLogs("history/two/usageEvents", query)).toEqual([])
 })
 
@@ -87,10 +102,15 @@ test("invalid ranges, parameters and cursors are rejected and cursors bind works
   expect(() => parseRequestLogQuery(valid, "two")).toThrow()
   valid.set("model", "other")
   expect(() => parseRequestLogQuery(valid, "one")).toThrow()
-  for (const [key, value] of [["cursor", "!"], ["cursor", ""], ["cursor", "a".repeat(4097)], ["from", "garbage"], ["from", query.to], ["status", "unknown"], ["status", ""], ["limit", "100000"]]) {
+  valid.set("model", "")
+  valid.set("key", "different-key")
+  expect(() => parseRequestLogQuery(valid, "one")).toThrow()
+  for (const [key, value] of [["cursor", "!"], ["cursor", ""], ["cursor", "a".repeat(4097)], ["from", "garbage"], ["from", query.to], ["status", "unknown"], ["status", ""], ["key", "a".repeat(513)], ["limit", "100000"]]) {
     const invalid = params(); invalid.set(key!, value!)
     expect(() => parseRequestLogQuery(invalid, "one")).toThrow()
   }
+  const duplicateKey = params(); duplicateKey.append("key", "another")
+  expect(() => parseRequestLogQuery(duplicateKey, "one")).toThrow()
 })
 
 test("memory history is scoped and returns a cursor with the same frozen range", async () => {
@@ -110,6 +130,10 @@ test("memory history is scoped and returns a cursor with the same frozen range",
     expect([...first.events, ...second.events, ...third.events].map(row => row.id)).toEqual(Array.from({ length: 55 }, (_, i) => `memory-${String(i).padStart(3, "0")}`))
     expect(third.to).toBe(query.to)
     expect(second.to).toBe(query.to)
+    await recordUsageEvent(event("selected-1", { gatewayKeyId: "selected-key" }), null)
+    await recordUsageEvent(event("selected-2", { gatewayKeyId: "selected-key" }), null)
+    expect((await listRequestLogs({ ...query, key: "selected-key" })).events.map(row => row.id)).toEqual(["selected-1", "selected-2"])
+    expect((await listRequestLogs({ ...query, key: "selected-key", status: "failed" })).events).toEqual([])
   })
   await runInWorkspace({ id: "history-empty", storageMode: "scoped" }, async () => { expect((await listRequestLogs(query)).events).toEqual([]) })
 })

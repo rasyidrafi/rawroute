@@ -30,14 +30,14 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
     const events = empty ? [] : Array.from({ length: older ? 1 : 25 }, (_, i) => ({
       id: `${older ? "older" : "newest"}-${i}`, gatewayKeyId: "old-key", keyName: older ? null : "Demo key", gatewayModelId: "old-model", modelName: older ? null : "Demo model", protocol: "openai-chat", startedAt: to, completedAt: to, status: 200, durationMs: [5285, 9300, 999.5, 59_995, 65_000, 3_599_500, 3_720_000, 86_370_000][i] ?? 250, inputTokens: 28_500, outputTokens: 5_042, cacheReadTokens: 8_000, cacheCreationTokens: 2_000, totalTokens: 43_542, costMicros: 10, pricingConfidence: older ? "unpriced" : "assumed", usageAvailable: true,
     }))
-    await route.fulfill({ json: { events, models: [{ id: "old-model", name: older ? "old-model" : "Demo model" }], from: params.get("from"), to: params.get("to"), nextCursor: older || empty ? null : "test-cursor" } })
+    await route.fulfill({ json: { events, models: [{ id: "old-model", name: older ? "old-model" : "Demo model" }], keys: [{ id: "old-key", name: "Demo key" }], from: params.get("from"), to: params.get("to"), nextCursor: older || empty ? null : "test-cursor" } })
   })
   await page.goto("/dashboard/ai/overview/request-logs")
   const loading = page.getByRole("status", { name: "Loading request logs" })
   await expect(loading).toBeVisible()
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 900 })
-    for (const name of ["Date range", "Status", "Model"]) {
+    for (const name of ["Date range", "Status", "Key", "Model"]) {
       const label = page.locator("label").filter({ hasText: new RegExp(`^${name}$`) })
       const trigger = page.getByRole("combobox", { name, exact: true })
       await expect(label).toBeVisible()
@@ -56,13 +56,14 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   expect(await controls.evaluate(element => Math.abs(element.getBoundingClientRect().right - element.parentElement!.getBoundingClientRect().right))).toBeLessThanOrEqual(1)
   await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
   await expect(loading).toHaveAttribute("aria-busy", "true")
-  await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   const placeholderRows = loading.locator('[data-slot="request-log-skeleton-row"]')
   await expect(placeholderRows).toHaveCount(9)
-  await expect(placeholderRows.first().getByRole("cell")).toHaveCount(6)
-  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(8)
-  for (const column of [0, 2]) {
+  await expect(placeholderRows.first().getByRole("cell")).toHaveCount(7)
+  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(9)
+  await expect(placeholderRows.first().getByRole("cell").nth(1).locator('[data-slot="skeleton"]')).toHaveCount(1)
+  for (const column of [0, 3]) {
     const bars = placeholderRows.first().getByRole("cell").nth(column).locator('[data-slot="skeleton"]')
     const first = (await bars.nth(0).boundingBox())!
     const second = (await bars.nth(1).boundingBox())!
@@ -83,7 +84,9 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.getByRole("row")).toHaveCount(26)
   await expect(refresh).toBeEnabled()
   await expect(refresh.locator("svg")).not.toHaveClass(/animate-spin/)
-  await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
+  await expect(page.locator("tbody tr").first().getByRole("cell").nth(0)).not.toContainText("Demo key")
+  await expect(page.locator("tbody tr").first().getByRole("cell").nth(1)).toHaveText("Demo key")
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   await expect(page.getByText("Newest first · 25 per page", { exact: true })).toBeVisible()
   await expect(loading).toHaveCount(0)
@@ -99,18 +102,29 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   }
   await expect(page.getByRole("cell", { name: "$0.00001 Estimated", exact: true })).toHaveCount(25)
   await expect(page.getByRole("cell", { name: "43.5K 28.5K in · 10.0K cache · 5.04K out", exact: true })).toHaveCount(25)
+  await page.getByRole("combobox", { name: "Key", exact: true }).click()
+  await page.getByRole("option", { name: "Demo key", exact: true }).click()
+  await expect(page.getByRole("row")).toHaveCount(26)
+  expect(requests.at(-1)!.get("key")).toBe("old-key")
+  expect(requests.at(-1)!.has("cursor")).toBe(false)
   const frozenTo = requests.at(-1)!.get("to")
   await page.getByRole("button", { name: "Older", exact: true }).click()
   await expect(page.getByText("Unknown key (old-key)", { exact: false })).toBeVisible()
   await expect(page.getByText("Unpriced", { exact: true })).toBeVisible()
   expect(requests.at(-1)!.get("to")).toBe(frozenTo)
+  expect(requests.at(-1)!.get("key")).toBe("old-key")
   await expect(page.getByRole("button", { name: "Older", exact: true })).toBeDisabled()
   await page.getByRole("button", { name: "Newer", exact: true }).click()
   await expect(page.getByRole("row")).toHaveCount(26)
   await page.getByRole("button", { name: "Older", exact: true }).click()
   await expect(page.getByText("Unpriced", { exact: true })).toBeVisible()
+  await page.getByRole("combobox", { name: "Key", exact: true }).click()
+  await page.getByRole("option", { name: "All keys", exact: true }).click()
+  await expect(page.getByRole("row")).toHaveCount(26)
+  expect(requests.at(-1)!.get("key")).toBe("")
+  expect(requests.at(-1)!.has("cursor")).toBe(false)
   await page.getByRole("combobox", { name: "Model", exact: true }).click()
-  await page.getByRole("option", { name: "old-model", exact: true }).click()
+  await page.getByRole("option", { name: "Demo model", exact: true }).click()
   await expect(page.getByRole("row")).toHaveCount(26)
   expect(requests.at(-1)!.get("model")).toBe("old-model")
   expect(requests.at(-1)!.has("cursor")).toBe(false)
@@ -157,7 +171,7 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
       const events = Array.from({ length: params.has("cursor") ? 1 : 25 }, (_, i) => ({
         id: `event-${params.has("cursor") ? "history" : newest - i}`, gatewayKeyId: "key", keyName: "Key", gatewayModelId: "model", modelName: `${route.request().headers()["x-rawroute-workspace-id"] === emptyWorkspaceId ? "Workspace attempt" : params.get("status") === "failed" ? "Filtered attempt" : "Attempt"} ${params.has("cursor") ? "history" : newest - i}`, protocol: "openai-chat", startedAt: params.get("to"), completedAt: params.get("to"), status: 200, durationMs: 100, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 2, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: true,
       }))
-      await route.fulfill({ json: { events, models: [{ id: "model", name: "Model" }], from: params.get("from"), to: params.get("to"), nextCursor: params.has("cursor") ? null : "cursor" } })
+      await route.fulfill({ json: { events, models: [{ id: "model", name: "Model" }], keys: [{ id: "key", name: "Key" }], from: params.get("from"), to: params.get("to"), nextCursor: params.has("cursor") ? null : "cursor" } })
     } finally { active-- }
   })
   await page.goto("/dashboard/ai/overview/request-logs")

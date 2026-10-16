@@ -4,6 +4,7 @@ export type DashboardPageMeta = { path: string; title: string; scope: "workspace
 export const dashboardPages = {
   overview: { path: "/dashboard/ai/overview", skeleton: "overview", title: "Overview", scope: "workspace", app: "ai-gateway" },
   overviewUsage: { path: "/dashboard/ai/overview/usage", skeleton: "usage", title: "Usage", scope: "workspace", app: "ai-gateway" },
+  keyUsage: { path: "/dashboard/ai/overview/usage/keys/:keyId", skeleton: "key-usage", title: "Key usage", scope: "workspace", app: "ai-gateway" },
   requestLogs: { path: "/dashboard/ai/overview/request-logs", skeleton: "request-logs", title: "Request Logs", scope: "workspace", app: "ai-gateway" },
   endpoint: { path: "/dashboard/ai/endpoint", skeleton: "endpoint-key", title: "Endpoint & Key", scope: "workspace", app: "ai-gateway" },
   providers: { path: "/dashboard/ai/providers", skeleton: "providers", title: "Providers", scope: "workspace", app: "ai-gateway" },
@@ -40,9 +41,13 @@ export function providerPagePath(providerId: string) {
   return providerId === "codex" ? pagePaths.codex : `${pagePaths.providers}/${encodeURIComponent(providerId)}`
 }
 
+export function keyUsagePagePath(keyId: string) {
+  return `${pagePaths.overviewUsage}/keys/${encodeURIComponent(keyId)}`
+}
+
 export function dashboardPageForPath(pathname: string): DashboardPage | undefined {
   const exact = (Object.keys(dashboardPages) as DashboardPage[]).find(key => pagePaths[key] === pathname)
-  return exact ?? (/^\/dashboard\/ai\/providers\/[^/]+$/.test(pathname) ? "provider" : undefined)
+  return exact ?? (/^\/dashboard\/ai\/providers\/[^/]+$/.test(pathname) ? "provider" : /^\/dashboard\/ai\/overview\/usage\/keys\/[^/]+$/.test(pathname) ? "keyUsage" : undefined)
 }
 
 export function isPagePath(pathname: string) {

@@ -109,7 +109,7 @@ test("empty states stay consistent across provider, key, request-log, and consol
   await expect(page.getByRole("heading", { name: "No gateway API keys" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Create key" })).toBeVisible()
 
-  await page.route("**/api/admin/request-logs?*", route => route.fulfill({ json: { events: [], models: [], nextCursor: null } }))
+  await page.route("**/api/admin/request-logs?*", route => route.fulfill({ json: { events: [], models: [], keys: [], nextCursor: null } }))
   await page.goto("/dashboard/ai/overview/request-logs")
   await expect(page.getByRole("heading", { name: "No recorded attempts" })).toBeVisible()
   await expect(page.getByText("No recorded model attempts match this range and these filters.")).toBeVisible()

@@ -7,15 +7,19 @@ import { UsageOverview } from "./usage-overview"
 import { UsageSummary } from "./usage-summary"
 import { DEFAULT_DASHBOARD_QUERY } from "@/lib/dashboard-defaults"
 import { MostUsedModels } from "./most-used-models"
+import { useLocation } from "react-router"
+import { pagePaths } from "@/lib/dashboard/routes"
 
 const noop = () => undefined
 
 export function UsageSkeleton() {
+  const { pathname } = useLocation()
+  const showActions = pathname !== pagePaths.home
   return <DashboardPage spacing="compact" aria-busy="true" aria-label="Loading usage dashboard" data-slot="dashboard-content-skeleton">
     <UsageOverview dashboard={null} loading preset={DEFAULT_DASHBOARD_QUERY.preset} setPreset={noop} granularity="auto" setGranularity={noop} selectedRange={undefined} onRangeChange={noop} onRefresh={noop} />
     <UsageSummary />
     <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(360px,0.6fr)]"><ChartSkeleton description="Token usage over time" title="Usage Trend" /><ChartSkeleton description="Concentration" title="Top keys by cost" list /></div>
-    <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]"><Card variant="dashboard" className="relative h-160 overflow-hidden"><CardHeader><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div><CardTitle>Usage table</CardTitle><CardDescription>Per-key detail</CardDescription></div><div className="flex min-w-0 items-center gap-2"><span className="shrink-0 text-xs font-medium text-muted-foreground">Order rows by</span><Skeleton className="h-8 min-w-0 flex-1 sm:w-44 sm:flex-none" /></div></div></CardHeader><CardContent className="min-h-0 flex-1"><ScrollArea className="h-full"><div className="min-w-[1000px]"><LoadingTable columns={["No", "Name", "Requests", "Tokens", "Cost", "Models", "Budget usage", "Last used"]} rows={5} /></div></ScrollArea></CardContent></Card><MostUsedModels className="xl:self-stretch" /></div>
+    <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]"><Card variant="dashboard" className="relative h-160 overflow-hidden"><CardHeader><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div><CardTitle>Usage table</CardTitle><CardDescription>Per-key detail</CardDescription></div><div className="flex min-w-0 items-center gap-2"><span className="shrink-0 text-xs font-medium text-muted-foreground">Order rows by</span><Skeleton className="h-8 min-w-0 flex-1 sm:w-44 sm:flex-none" /></div></div></CardHeader><CardContent className="min-h-0 flex-1"><ScrollArea className="h-full"><div className="min-w-[1000px]"><LoadingTable columns={["No", "Name", "Requests", "Tokens", "Cost", "Models", "Budget usage", "Last used", ...(showActions ? ["Actions"] : [])]} rows={5} actionColumn={showActions} /></div></ScrollArea></CardContent></Card><MostUsedModels className="xl:self-stretch" /></div>
   </DashboardPage>
 }
 

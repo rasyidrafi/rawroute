@@ -11,23 +11,23 @@ function makeRange(days: string) {
 }
 
 /** Live pages replace the latest 25 rows; pagination always uses the displayed range. */
-export function useRequestLogs(days: string, status: string, model: string) {
+export function useRequestLogs(days: string, status: string, model: string, keyId: string) {
   const { apiFetch, workspaceId } = useDashboardApi()
   const { cache } = useSWRConfig()
   const [live, setLive] = useState(true)
   const [history, setHistory] = useState<{ from: string; to: string; cursors: string[] } | null>(null)
-  const query = JSON.stringify([workspaceId, days, status, model])
+  const query = JSON.stringify([workspaceId, days, status, model, keyId])
   const [previousQuery, setPreviousQuery] = useState(query)
   if (previousQuery !== query) { setPreviousQuery(query); setHistory(null) }
   const pending = useMemo(() => ({ query, history, controllers: new Set<AbortController>() }), [query, history])
   const cursor = history?.cursors.at(-1)
-  const key = workspaceId ? ["request-logs", workspaceId, days, status, model, history?.from ?? "latest", history?.to ?? "latest", cursor ?? ""] : null
+  const key = workspaceId ? ["request-logs", workspaceId, days, status, model, keyId, history?.from ?? "latest", history?.to ?? "latest", cursor ?? ""] : null
   const cacheKey = unstable_serialize(key)
   const load = useCallback(async () => {
     const controller = new AbortController()
     pending.controllers.add(controller)
     const range = history ?? makeRange(days)
-    const params = new URLSearchParams({ from: range.from, to: range.to, status, model })
+    const params = new URLSearchParams({ from: range.from, to: range.to, status, model, key: keyId })
     if (cursor) params.set("cursor", cursor)
     try {
       const page = await apiFetch<RequestLogsPage>(`/api/admin/request-logs?${params}`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) })
@@ -44,7 +44,7 @@ export function useRequestLogs(days: string, status: string, model: string) {
     } finally {
       pending.controllers.delete(controller)
     }
-  }, [apiFetch, cache, cacheKey, cursor, days, history, model, pending, query, status])
+  }, [apiFetch, cache, cacheKey, cursor, days, history, keyId, model, pending, query, status])
   const { data: snapshot, error, isLoading, isValidating, mutate } = useSWR(key, load, {
     revalidateOnFocus: false, revalidateOnReconnect: false, shouldRetryOnError: false,
     keepPreviousData: true, dedupingInterval: 0,

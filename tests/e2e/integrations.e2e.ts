@@ -32,8 +32,21 @@ for (const width of [390, 1440]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`integrations-${width}.png`), fullPage: true })
 
+    await page.setViewportSize({ width, height: 700 })
     for (const name of ["OpenCode", "Codex"]) {
+      await expect(page.getByRole("heading", { name: "Choose your tool" })).toBeVisible()
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+      expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
       await page.getByRole("link", { name: `View ${name} setup guide` }).click()
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+      const guideHeader = page.locator('[data-slot="card-header"]').filter({ has: page.getByRole("heading", { name, exact: true }) })
+      await expect(guideHeader.locator('[data-slot="badge"]')).toHaveCount(0)
+      const logoBounds = (await guideHeader.locator("svg").boundingBox())!
+      const titleBounds = (await guideHeader.getByRole("heading", { name, exact: true }).boundingBox())!
+      const descriptionBounds = (await guideHeader.locator('[data-slot="card-description"]').boundingBox())!
+      expect(titleBounds.x).toBeGreaterThan(logoBounds.x + logoBounds.width)
+      expect(descriptionBounds.x).toBe(titleBounds.x)
+      expect(descriptionBounds.y).toBeGreaterThanOrEqual(titleBounds.y + titleBounds.height)
       await expect(page.getByRole("heading", { name: `Set up ${name}`, exact: true })).toBeVisible()
       await expect(page.getByRole("note")).toContainText("placeholders")
       await page.reload()
@@ -48,7 +61,15 @@ for (const width of [390, 1440]) {
       }))).toBe(true)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       await page.screenshot({ path: testInfo.outputPath(`${name.toLowerCase()}-${width}.png`), fullPage: true })
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+      await page.goBack()
+      await expect(page).toHaveURL(/\/dashboard\/ai\/integrations$/)
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+      await page.goForward()
+      await expect(page.getByRole("heading", { name: `Set up ${name}`, exact: true })).toBeVisible()
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
       await page.getByRole("link", { name: "Back to integrations" }).click()
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
     }
   })
 }

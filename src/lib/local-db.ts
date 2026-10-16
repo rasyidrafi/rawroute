@@ -674,6 +674,7 @@ export async function queryLocalRequestLogs(collectionPath: string, query: impor
   const parameters: unknown[] = [collectionPath, query.from, query.to]
   const clauses = ["collection_path = $1", "json_extract(data, '$.completedAt') >= $2", "json_extract(data, '$.completedAt') < $3"]
   if (query.model) { parameters.push(query.model); clauses.push(`json_extract(data, '$.gatewayModelId') = $${parameters.length}`) }
+  if (query.key) { parameters.push(query.key); clauses.push(`json_extract(data, '$.gatewayKeyId') = $${parameters.length}`) }
   if (query.status !== "all") clauses.push(query.status === "success" ? "(json_extract(data, '$.status') >= 200 AND json_extract(data, '$.status') < 300)" : "(json_extract(data, '$.status') < 200 OR json_extract(data, '$.status') >= 300)")
   if (query.after) {
     parameters.push(query.after.at, query.after.id)

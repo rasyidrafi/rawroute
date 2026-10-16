@@ -16,9 +16,13 @@ export function IntegrationDetailView({ integration }: { integration: Integratio
     <div><Button variant="ghost" nativeButton={false} role="link" render={<Link to={pagePaths.integrations} />}><ArrowLeftIcon data-icon="inline-start" />Back to integrations</Button></div>
     <Card>
       <CardHeader>
-        <div className="mb-3 flex flex-wrap items-center gap-3"><div className="flex size-12 items-center justify-center rounded-lg border bg-muted/30"><Icon className="size-6" /></div><Badge variant="secondary">{guide.category}</Badge><Badge variant="outline">Guide preview</Badge></div>
-        <CardTitle variant="page"><h2>{guide.name}</h2></CardTitle>
-        <CardDescription>{guide.description}</CardDescription>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-12 shrink-0 items-center justify-center rounded-lg border bg-muted/30"><Icon className="size-6" /></div>
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardTitle variant="page"><h2>{guide.name}</h2></CardTitle>
+            <CardDescription>{guide.description}</CardDescription>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="grid gap-3 p-px lg:grid-cols-3">

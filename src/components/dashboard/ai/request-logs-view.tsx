@@ -28,6 +28,11 @@ function Filter({ label, value, options, onChange }: { label: string; value: str
   </div>
 }
 
+function requestLogOptions(allLabel: string, selected: string, options: { id: string; name: string }[] = []) {
+  const missing = selected && !options.some(option => option.id === selected) ? [{ id: selected, name: selected }] : []
+  return [{ id: "", name: allLabel }, ...options, ...missing]
+}
+
 export function RequestLogsView() {
   const { workspaceId } = useDashboardApi()
   return <RequestLogsWorkspace key={workspaceId} />
@@ -38,7 +43,8 @@ function RequestLogsWorkspace() {
   const [days, setDays] = useState("1")
   const [status, setStatus] = useState("all")
   const [model, setModel] = useState("")
-  const { data, error, isLoading, isValidating, live, toggleLive, refresh, older, newer, hasNewer } = useRequestLogs(days, status, model)
+  const [keyId, setKeyId] = useState("")
+  const { data, error, isLoading, isValidating, live, toggleLive, refresh, older, newer, hasNewer } = useRequestLogs(days, status, model, keyId)
   return <DashboardPage spacing="normal">
     <Card>
       <CardHeader><CardTitle variant="icon"><ListChecksIcon aria-hidden="true" />Request Logs</CardTitle><CardDescription>Workspace history of recorded model attempts.</CardDescription></CardHeader>
@@ -46,7 +52,8 @@ function RequestLogsWorkspace() {
         <div className="flex flex-wrap items-center gap-2">
           <Filter label="Date range" value={days} options={[{ id: "1", name: "Last 24 hours" }, { id: "7", name: "Last 7 days" }]} onChange={setDays} />
           <Filter label="Status" value={status} options={[{ id: "all", name: "All statuses" }, { id: "success", name: "Success" }, { id: "failed", name: "Failed" }]} onChange={setStatus} />
-          <Filter label="Model" value={model} options={[{ id: "", name: "All models" }, ...(data?.models || []), ...(model && !data?.models.some(option => option.id === model) ? [{ id: model, name: model }] : [])]} onChange={setModel} />
+          <Filter label="Key" value={keyId} options={requestLogOptions("All keys", keyId, data?.keys)} onChange={setKeyId} />
+          <Filter label="Model" value={model} options={requestLogOptions("All models", model, data?.models)} onChange={setModel} />
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button variant="outline" size="sm" focusableWhenDisabled disabled={!workspaceId || isValidating} onClick={refresh}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon data-icon="inline-start" />}Refresh</Button>
             <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm"><Checkbox checked={live} onCheckedChange={toggleLive} /><span aria-hidden="true" className={live ? "size-2 rounded-full bg-success" : "size-2 rounded-full bg-muted-foreground"} />{live ? "Live" : "Paused"}</label>
@@ -66,7 +73,8 @@ function RequestLogResults({ data, loading, failed }: { data: RequestLogsPage | 
   if (!data?.events.length) return !failed && <EmptyState title="No recorded attempts" description="No recorded model attempts match this range and these filters." icon={ListChecksIcon} treatment="embedded" />
   return <RequestLogsTable>
           <TableBody>{data.events.map(event => <TableRow key={event.id}>
-            <TableCell><div className="font-semibold">{event.modelName || event.gatewayModelId}</div><div className="text-xs text-muted-foreground" title={event.id}>{event.id.slice(0, 8)} · {event.keyName || `Unknown key (${event.gatewayKeyId.slice(0, 8)})`}</div></TableCell>
+            <TableCell><div className="font-semibold">{event.modelName || event.gatewayModelId}</div><div className="text-xs text-muted-foreground" title={event.id}>{event.id.slice(0, 8)}</div></TableCell>
+            <TableCell>{event.keyName || `Unknown key (${event.gatewayKeyId.slice(0, 8)})`}</TableCell>
             <TableCell><Badge variant={event.status >= 200 && event.status < 300 ? "secondary" : "destructive"}>{event.status >= 200 && event.status < 300 ? "Success" : "Failed"} · {event.status}</Badge></TableCell>
             <TableCell>{event.usageAvailable ? formatTokenCount(event.totalTokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${formatTokenCount(event.inputTokens)} in · ${formatTokenCount(event.cacheReadTokens + event.cacheCreationTokens)} cache · ${formatTokenCount(event.outputTokens)} out` : "Provider usage not recorded"}</div></TableCell>
             <TableCell>{event.pricingConfidence === "unpriced" ? "Unpriced" : formatCost(event.costMicros)}{event.pricingConfidence === "assumed" && <div className="text-xs text-muted-foreground">Estimated</div>}</TableCell>

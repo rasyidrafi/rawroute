@@ -43,6 +43,7 @@ function StandardDashboardSkeleton({ variant }: { variant: Exclude<DashboardSkel
   if (variant === "cliproxy") return <CliProxySkeleton />
   const content = {
     "endpoint-key": <EndpointKeySkeleton />,
+    "key-usage": <LoadingCard title="Key usage" description="Loading design preview"><div className="flex gap-2">{[0, 1, 2].map(index => <Skeleton key={index} className="h-8 w-24" />)}</div><Skeleton className="h-64 w-full" /></LoadingCard>,
     "providers": <ProvidersSkeleton />,
     "aliases": <AliasesSkeleton />,
     "provider-detail": <ProviderDetailSkeleton codex={false} />,

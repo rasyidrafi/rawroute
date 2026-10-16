@@ -13,6 +13,7 @@ import { dashboardViews } from "@/components/dashboard/route-views"
 import { dashboardPages, type DashboardPage, pagePaths } from "@/lib/dashboard/routes"
 import { NotFoundPage } from "@/pages/not-found"
 import { LoginPage } from "@/pages/login"
+import { RouteScrollReset } from "@/components/route-scroll-reset"
 
 const PublicPage = lazy(() => import("@/pages/public").then((module) => ({ default: module.PublicPage })))
 
@@ -44,7 +45,7 @@ function RouteFallback() {
 
 
 export function App() {
-  return <BrowserRouter><Suspense fallback={<RouteFallback />}><Routes>
+  return <BrowserRouter><RouteScrollReset /><Suspense fallback={<RouteFallback />}><Routes>
     <Route path={pagePaths.home} element={<PublicPage />} />
     <Route path={pagePaths.login} element={<SessionGate login />} />
     <Route element={<SessionGate />}>

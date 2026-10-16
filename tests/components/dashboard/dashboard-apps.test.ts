@@ -1,9 +1,13 @@
-import { dashboardPages, dashboardPageForPath, pagePaths } from "@/lib/dashboard/routes"
+import { dashboardPages, dashboardPageForPath, keyUsagePagePath, pagePaths } from "@/lib/dashboard/routes"
 import { expect, test } from "bun:test"
 
 import { dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
 
 test("resolves the application from canonical route metadata", () => {
+  const keyPath = keyUsagePagePath("shared-workspace:team/one")
+  expect(keyPath).toEndWith("shared-workspace%3Ateam%2Fone")
+  expect(dashboardPageForPath(keyPath)).toBe("keyUsage")
+  expect(dashboardPages.keyUsage.scope).toBe("workspace")
   expect(dashboardPageForPath(pagePaths.overview)).toBe("overview")
   expect(dashboardPages[dashboardPageForPath(pagePaths.endpoint)!].app).toBe("ai-gateway")
   expect(dashboardPageForPath(pagePaths.endpoint)).toBe("endpoint")
