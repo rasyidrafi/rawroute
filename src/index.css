@@ -150,6 +150,46 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Match ScrollArea's border-colored thumb and transparent track for native
+     scrollers too (pages, virtual lists, command menus, code and textareas).
+     Leave ScrollArea viewports alone: Base UI hides their native scrollbars. */
+  :where(:not([data-slot="scroll-area-viewport"])) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  @supports selector(::-webkit-scrollbar) {
+    :where(:not([data-slot="scroll-area-viewport"])) {
+      scrollbar-width: auto;
+      scrollbar-color: auto;
+    }
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    ::-webkit-scrollbar-track,
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      border: 2px solid transparent;
+      border-radius: 9999px;
+      background: var(--border);
+      background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-button {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+  }
+  @media (forced-colors: active) {
+    :where(:not([data-slot="scroll-area-viewport"])) {
+      scrollbar-color: auto;
+    }
+    ::-webkit-scrollbar-thumb {
+      background-color: CanvasText;
+    }
+  }
   body {
     @apply bg-background text-foreground;
   }

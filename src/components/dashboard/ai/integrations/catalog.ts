@@ -1,21 +1,22 @@
-import { BlocksIcon, CodeXmlIcon, FileCodeIcon, SparklesIcon, SquareTerminalIcon, TerminalIcon, type LucideIcon } from "lucide-react"
+import type { ComponentType, SVGProps } from "react"
 import { pagePaths } from "@/lib/dashboard/routes"
+import { AnthropicLogo, ContinueLogo, CursorLogo, OpenAILogo, OpenCodeLogo } from "./logos"
 
 export type Integration = {
   name: string
   category: string
   description: string
-  icon: LucideIcon
+  icon: ComponentType<SVGProps<SVGSVGElement>>
   href?: string
 }
 
 export const integrations: Integration[] = [
-  { name: "OpenCode", category: "Terminal & editor", description: "Bring your workspace models into an open-source coding agent with a custom provider.", icon: SquareTerminalIcon, href: pagePaths.integrationOpencode },
-  { name: "Codex", category: "Terminal", description: "Connect OpenAI’s coding agent to RawRoute through the Responses API.", icon: TerminalIcon, href: pagePaths.integrationCodex },
-  { name: "Claude Code", category: "Terminal", description: "Use your gateway with Claude Code’s Anthropic-compatible connection settings.", icon: SparklesIcon },
-  { name: "Cursor", category: "Editor", description: "Configure a custom OpenAI-compatible base URL for your coding workflow.", icon: CodeXmlIcon },
-  { name: "Continue", category: "Editor", description: "Connect your editor assistant to models available through your workspace.", icon: FileCodeIcon },
-  { name: "OpenAI-compatible apps", category: "Universal", description: "Use a shared base URL and gateway key with compatible clients and SDKs.", icon: BlocksIcon },
+  { name: "OpenCode", category: "Terminal & editor", description: "Bring your workspace models into an open-source coding agent with a custom provider.", icon: OpenCodeLogo, href: pagePaths.integrationOpencode },
+  { name: "Codex", category: "Terminal", description: "Connect OpenAI’s coding agent to RawRoute through the Responses API.", icon: OpenAILogo, href: pagePaths.integrationCodex },
+  { name: "Claude Code", category: "Terminal", description: "Use your gateway with Claude Code’s Anthropic-compatible connection settings.", icon: AnthropicLogo },
+  { name: "Cursor", category: "Editor", description: "Configure a custom OpenAI-compatible base URL for your coding workflow.", icon: CursorLogo },
+  { name: "Continue", category: "Editor", description: "Connect your editor assistant to models available through your workspace.", icon: ContinueLogo },
+  { name: "OpenAI-compatible apps", category: "Universal", description: "Use a shared base URL and gateway key with compatible clients and SDKs.", icon: OpenAILogo },
 ]
 
 export type IntegrationGuideId = "opencode" | "codex"
@@ -23,7 +24,7 @@ export type IntegrationGuideId = "opencode" | "codex"
 export const integrationGuides = {
   opencode: {
     name: "OpenCode",
-    icon: SquareTerminalIcon,
+    icon: OpenCodeLogo,
     category: "Terminal & editor",
     description: "One custom provider for your workspace models. Configure OpenCode, choose a model, and start a coding session.",
     configPath: "~/.config/opencode/opencode.json",
@@ -37,7 +38,7 @@ export const integrationGuides = {
   },
   codex: {
     name: "Codex",
-    icon: TerminalIcon,
+    icon: OpenAILogo,
     category: "Terminal",
     description: "Route your Codex sessions through RawRoute with a custom provider and a workspace gateway key.",
     configPath: "~/.codex/config.toml",

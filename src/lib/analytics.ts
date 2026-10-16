@@ -1486,7 +1486,8 @@ function publicKeyName(key: { name?: string } | undefined, keyId: string, indexe
   return key?.name?.trim() || indexedNames.get(keyId)?.trim() || keyId
 }
 
-async function loadDashboardModelLabels() {
+/** Shared display labels for analytics and request history, including groups and aliases. */
+export async function loadDashboardModelLabels() {
   const workspaceId = currentWorkspaceId()
   const cached = dashboardModelLabelCache.get(workspaceId)
   if (cached && cached.expiresAt > Date.now()) return cached.value

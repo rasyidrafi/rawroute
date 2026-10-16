@@ -21,7 +21,10 @@ test("budget controls and loading layout fit mobile, medium, and desktop widths"
         ...data,
         codexAccounts: [{ id: "responsive-account", name: accountName }],
         apiKeys: [{ id: "available-key", name: "Gateway key with a deliberately long name for responsive layout verification" }],
-        budgets: [{ apiKeyId: "configured-key", name: "Configured gateway key", weeklyLimitMicros: 50000000, spentMicros: 10000000, enabled: true }],
+        budgets: [
+          { apiKeyId: "higher-limit", name: "Higher limit key", weeklyLimitMicros: 100000000, spentMicros: 1000000, enabled: true },
+          { apiKeyId: "configured-key", name: "Configured gateway key", weeklyLimitMicros: 50000000, spentMicros: 10000000, enabled: true },
+        ],
         window: { ...data.window, anchor: "custom" },
       } })
     })
@@ -30,6 +33,13 @@ test("budget controls and loading layout fit mobile, medium, and desktop widths"
     await expectNoCardOverflow(page)
     release()
     await expect(page.getByRole("button", { name: "Save window", exact: true })).toBeEnabled()
+    const order = page.getByRole("combobox", { name: "Order rows by", exact: true })
+    await expect(order).toContainText("Highest usage first")
+    const labelBox = (await page.getByText("Order rows by", { exact: true }).boundingBox())!
+    const orderBox = (await order.boundingBox())!
+    expect(orderBox.x).toBeGreaterThanOrEqual(labelBox.x + labelBox.width)
+    expect(Math.abs(labelBox.y + labelBox.height / 2 - orderBox.y - orderBox.height / 2)).toBeLessThan(1)
+    await expect(page.locator("tbody tr").first()).toContainText("Configured gateway key")
     await expectNoCardOverflow(page)
     const windowCard = page.locator('[data-slot="card"]').filter({ has: page.getByText("Budget window", { exact: true }) })
     for (const control of await windowCard.locator("button").all()) {

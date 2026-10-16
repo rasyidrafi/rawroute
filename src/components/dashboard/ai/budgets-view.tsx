@@ -137,7 +137,7 @@ export function BudgetsView() {
   })
   const [apiKeyId, setApiKeyId] = useState("")
   const [limit, setLimit] = useState("50")
-  const [sortBy, setSortBy] = useState<BudgetSortKey>("limit")
+  const [sortBy, setSortBy] = useState<BudgetSortKey>("usage")
 
   const [bypassDialogOpen, setBypassDialogOpen] = useState(false)
   const [activationAutoDeactivate, setActivationAutoDeactivate] = useState(false)
@@ -203,7 +203,7 @@ export function BudgetsView() {
             <BeyondLimitsSettings key={data.beyondLimits.updatedAt} settings={data.beyondLimits} modelOptions={data.modelOptions} pending={isPending("save-beyond-limits")} onSave={actions.saveBeyondLimits} />
           </TabsContent>
         </Tabs>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex flex-col gap-2 sm:w-auto"><span className="text-sm font-medium">Order rows by</span><Select value={sortBy} onValueChange={(value) => { if (value) setSortBy(value as BudgetSortKey) }}><SelectTrigger className="min-w-44"><span className="truncate">{budgetSortLabel(sortBy)}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Ordering</SelectLabel>{budgetSortOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></div></div>
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex min-w-0 max-w-full items-center gap-2"><span className="shrink-0 text-xs font-medium text-muted-foreground">Order rows by</span><Select value={sortBy} onValueChange={(value) => { if (value) setSortBy(value as BudgetSortKey) }}><SelectTrigger aria-label="Order rows by" className="h-8 min-w-0 flex-1 sm:w-44 sm:flex-none"><span className="truncate">{budgetSortLabel(sortBy)}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Ordering</SelectLabel>{budgetSortOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></div></div>
         <Table><TableColumns columns={[{ id: "Key", label: "Key" }, { id: "Status", label: "Status" }, { id: "Limit", label: "Limit" }, { id: "Usage", label: "Usage" }, { id: "actions" }]} /><TableBody>{sortedBudgets.map((budget) => <BudgetRow key={budget.apiKeyId} budget={budget} bypass={bypass} windowStart={data.window.start} isPending={isPending} toggle={actions.toggle} remove={actions.remove} updateLimit={actions.updateLimit} />)}{!sortedBudgets.length && <EmptyTableRow title="No budgets configured" description="Select a gateway key above and create a budget to track its usage." icon={WalletCardsIcon} colSpan={5} />}</TableBody></Table>
       </CardContent>
     </Card>

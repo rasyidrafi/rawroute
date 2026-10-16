@@ -1,4 +1,23 @@
-import { expect, test } from "@playwright/test"
+import { expect, test, type Page } from "@playwright/test"
+
+async function blockPricingRefresh(page: Page) {
+  let release = () => {}
+  let reached = () => {}
+  let finish = () => {}
+  let blocked = false
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const requested = new Promise<void>(resolve => { reached = resolve })
+  const finished = new Promise<void>(resolve => { finish = resolve })
+  await page.route("**/api/admin/model-pricing", async route => {
+    if (route.request().method() !== "GET" || blocked) { await route.continue(); return }
+    blocked = true
+    reached()
+    await gate
+    await route.continue()
+    finish()
+  })
+  return { requested, release, finished }
+}
 
 test("pricing dialogs preserve existing context rates and save edited drafts", async ({ page }) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
@@ -54,6 +73,19 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
     contextTiers: [{ ...tier, outputMicrosPerMillion: 9_000_000 }],
   })
 
+  await row.getByRole("button", { name: "Pricing", exact: true }).click()
+  await dialog.getByRole("button", { name: "Replace current version", exact: true }).click()
+  const replacement = page.getByRole("dialog", { name: "Reprice historical usage?" })
+  const pricingRefresh = await blockPricingRefresh(page)
+  try {
+    await replacement.getByRole("button", { name: "Replace and reprice", exact: true }).click()
+    await pricingRefresh.requested
+    await expect(replacement).toBeHidden()
+    await expect(dialog).toBeHidden()
+  } finally { pricingRefresh.release() }
+  await pricingRefresh.finished
+  await page.unroute("**/api/admin/model-pricing")
+
   const canonical = { id: "test/canonical", name: "Canonical tier test", provider: "test", family: null, source: "models.dev", contextLimit: 1000000, pricing: rates, contextTiers: [tier] }
   await page.route("**/api/admin/model-pricing?*", async route => {
     if (new URL(route.request().url()).searchParams.has("catalog")) await route.fulfill({ json: { models: [canonical] } })
@@ -67,7 +99,7 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await expect(page.getByRole("dialog", { name: "Edit Pricing editor test", exact: true })).toBeHidden()
   const imported = await (await page.request.get("/api/admin/model-pricing", { headers: { "x-rawroute-workspace-id": "default" } })).json()
   expect(imported.groups.find((entry: { id: string }) => entry.id === group.id).currentVersion).toMatchObject({ ...rates, contextTiers: [tier] })
-  expect(imported.jobs).toHaveLength(0)
+  expect(imported.jobs).toHaveLength(1)
 
   const canonicalRow = page.getByRole("row").filter({ hasText: "Canonical tier test" })
   await canonicalRow.getByRole("button", { name: "Models", exact: true }).click()
@@ -82,8 +114,15 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await expect(confirmation).toBeHidden()
   await expect(page.getByRole("dialog", { name: /Edit Canonical tier test/ })).toBeVisible()
   await page.getByRole("dialog", { name: "Edit Canonical tier test", exact: true }).getByRole("button", { name: "Save and reprice", exact: true }).click()
-  await confirmation.getByRole("button", { name: "Save and reprice", exact: true }).click()
-  await expect(confirmation).toBeHidden()
+  const groupRefresh = await blockPricingRefresh(page)
+  try {
+    await confirmation.getByRole("button", { name: "Save and reprice", exact: true }).click()
+    await groupRefresh.requested
+    await expect(confirmation).toBeHidden()
+    await expect(page.getByRole("dialog", { name: "Edit Canonical tier test", exact: true })).toBeHidden()
+  } finally { groupRefresh.release() }
+  await groupRefresh.finished
+  await page.unroute("**/api/admin/model-pricing")
   const repriced = await (await page.request.get("/api/admin/model-pricing", { headers: { "x-rawroute-workspace-id": "default" } })).json()
   expect(repriced.jobs.some((job: { groupId: string }) => job.groupId === group.id)).toBe(true)
 })

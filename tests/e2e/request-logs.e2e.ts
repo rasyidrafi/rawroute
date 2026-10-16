@@ -35,6 +35,20 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await page.goto("/dashboard/ai/overview/request-logs")
   const loading = page.getByRole("status", { name: "Loading request logs" })
   await expect(loading).toBeVisible()
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 900 })
+    for (const name of ["Date range", "Status", "Model"]) {
+      const label = page.locator("label").filter({ hasText: new RegExp(`^${name}$`) })
+      const trigger = page.getByRole("combobox", { name, exact: true })
+      await expect(label).toBeVisible()
+      await expect(label).toHaveAttribute("for", (await trigger.getAttribute("id"))!)
+      const left = (await label.boundingBox())!
+      const right = (await trigger.boundingBox())!
+      expect(right.x).toBeGreaterThanOrEqual(left.x + left.width)
+      expect(Math.abs(left.y + left.height / 2 - right.y - right.height / 2)).toBeLessThan(1)
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+  }
   const refresh = page.getByRole("button", { name: "Refresh", exact: true })
   await expect(refresh).toBeDisabled()
   await expect(refresh.locator("svg")).toHaveClass(/animate-spin/)

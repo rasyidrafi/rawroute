@@ -102,7 +102,7 @@ function BudgetsSkeleton() {
         </div>
         <div className="rounded-xl border"><div className="border-b px-4 py-3"><div className="font-medium">Unlimited Mode history</div><div className="text-sm text-muted-foreground">Each activation is recorded as its own session.</div></div><LoadingTable columns={["Started", "Ended", "Duration", "Result"]} rows={1} /></div>
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex flex-col gap-2"><span className="text-sm font-medium">Order rows by</span><Skeleton className="h-8 w-44" /></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><div className="text-sm font-medium">Budget usage</div><div className="text-xs text-muted-foreground">Usage is measured across the shared budget window.</div></div><div className="flex min-w-0 max-w-full items-center gap-2"><span className="shrink-0 text-xs font-medium text-muted-foreground">Order rows by</span><Skeleton className="h-8 w-44 min-w-0 shrink sm:flex-none" /></div></div>
       <LoadingTable columns={["Key", "Status", "Limit", "Usage", ""]} />
     </LoadingCard>
   </>

@@ -6,11 +6,31 @@ import { runInWorkspace } from "./workspace/context"
 import type { UsageEvent } from "./types"
 import { GET } from "@/server/routes/api/admin/request-logs"
 import type { RequestLogsPage } from "./request-logs"
+import { upsertAlias, upsertModel, upsertProvider } from "@/server/store"
+import { syncModelPricingGroups, updatePricingGroup } from "./model-pricing"
 
 process.env.SQLITE_PATH = ":memory:"
 afterAll(closeLocalDatabase)
 const query = { from: "2026-10-14T00:00:00.000Z", to: "2026-10-16T00:00:00.000Z", status: "all", model: "" } satisfies RequestLogQuery
 const event = (id: string, changes: Partial<UsageEvent> = {}): UsageEvent => ({ id, gatewayKeyId: "key", gatewayModelId: "model", protocol: "openai-chat", startedAt: query.from, completedAt: "2026-10-15T12:00:00.000Z", status: 200, durationMs: 10, inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 5, costMicros: 10, pricingConfidence: "exact", usageAvailable: true, ...changes })
+
+test("request history and filters use resolved group names for gateway, upstream and alias IDs", async () => {
+  await runInWorkspace({ id: "resolved-history-names", storageMode: "scoped" }, async () => {
+    const provider = await upsertProvider({ name: "Provider", prefix: "resolved", baseUrl: "https://example.test/v1", protocol: "openai-chat", authType: "none", headers: {}, enabled: true })
+    const model = await upsertModel(provider.id, { name: "GPT 6.1 Sol", gatewayModelId: "resolved/gpt-6.1-sol", upstreamModel: "gpt-6.1-sol", enabled: true })
+    const group = (await syncModelPricingGroups()).find(entry => entry.memberModelIds.includes(model.id))!
+    await updatePricingGroup(group.id, group.memberModelIds, undefined, "GPT-6.1 Sol")
+    await upsertAlias({ alias: "sol-alias", name: "Alias label", targetModelId: model.gatewayModelId })
+    const ids = [model.gatewayModelId, model.upstreamModel, "sol-alias"]
+    for (const [index, gatewayModelId] of ids.entries()) await recordUsageEvent(event(`resolved-${index}`, { gatewayModelId }), null)
+    const response = await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))
+    expect(response.status).toBe(200)
+    const page = await response.json() as RequestLogsPage
+    expect(page.events).toHaveLength(3)
+    expect(page.events.every(row => row.modelName === "GPT-6.1 Sol")).toBe(true)
+    for (const id of ids) expect(page.models).toContainEqual({ id, name: "GPT-6.1 Sol" })
+  })
+})
 
 test("endpoint exposes historical model options from returned rows and filters by their ID", async () => {
   await runInWorkspace({ id: "historical-model-options", storageMode: "scoped" }, async () => {

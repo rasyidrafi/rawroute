@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useId, useState } from "react"
 import { useRequestLogs } from "@/hooks/use-request-logs"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { ListChecksIcon, RefreshCwIcon } from "lucide-react"
@@ -18,10 +18,14 @@ import { formatCost, formatDuration, formatTokenCount } from "@/lib/usage-displa
 import type { RequestLogsPage } from "@/lib/request-logs"
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: { id: string; name: string }[]; onChange: (value: string) => void }) {
-  return <Select value={value} onValueChange={value => { if (value !== null) onChange(value) }}>
-    <SelectTrigger aria-label={label}><SelectValue>{options.find(option => option.id === value)?.name || value}</SelectValue></SelectTrigger>
+  const id = useId()
+  return <div className="flex min-w-0 max-w-full items-center gap-2">
+    <label htmlFor={id} className="shrink-0 text-xs font-medium text-muted-foreground">{label}</label>
+    <Select value={value} onValueChange={value => { if (value !== null) onChange(value) }}>
+    <SelectTrigger id={id} aria-label={label} className="min-w-0"><SelectValue>{options.find(option => option.id === value)?.name || value}</SelectValue></SelectTrigger>
     <SelectContent><SelectGroup>{options.map(option => <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>)}</SelectGroup></SelectContent>
-  </Select>
+    </Select>
+  </div>
 }
 
 export function RequestLogsView() {

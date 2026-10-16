@@ -19,14 +19,25 @@ export function BudgetUsageCard({ data, error }: { data?: OverviewDetails; error
     <CardContent spacing="compact-stack">
       {error ? <p>Budget usage unavailable.</p> : !data ? <Skeleton className="h-20 w-full" /> : <>
         {data.budgetWindow && <p className="text-xs text-muted-foreground">{formatAppDateTime(data.budgetWindow.from)} – {formatAppDateTime(data.budgetWindow.to)}{data.budgetWindow.bypassLimits ? " · Unlimited mode" : ""}</p>}
-        {!data.budgets.length ? <p className="text-sm text-muted-foreground">No configured budgets.</p> : <div className="flex max-h-56 flex-col gap-3 overflow-y-auto">{data.budgets.map(budget => {
-          const limited = budget.enabled && !data.budgetWindow?.bypassLimits && budget.limitMicros > 0
-          const percent = limited && budget.spentMicros !== null ? budget.spentMicros / budget.limitMicros * 100 : 0
-          return <div key={budget.id} className="flex flex-col gap-2"><div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{budget.name}</span><span>{budget.usageAvailable === false || budget.spentMicros === null ? "Unavailable" : formatCost(budget.spentMicros)}{limited ? ` / ${formatCost(budget.limitMicros)}` : !budget.enabled ? " · Disabled" : " · Unlimited"}</span></div>{limited && budget.usageAvailable !== false && budget.spentMicros !== null && <Progress value={Math.min(100, percent)} aria-label={`${budget.name}: ${percent.toFixed(1)} percent used`} />}</div>
-        })}</div>}
+        <GlobalBudgetSummary data={data} />
       </>}
     </CardContent>
   </Card>
+}
+
+function GlobalBudgetSummary({ data }: { data: OverviewDetails }) {
+  const allocated = data.budgets.reduce((total, budget) => total + budget.limitMicros, 0)
+  const spent = data.budgets.reduce((total, budget) => total + (budget.spentMicros ?? 0), 0)
+  const unavailable = data.budgets.some(budget => budget.usageAvailable === false || budget.spentMicros === null)
+  const percent = allocated > 0 ? spent / allocated * 100 : 0
+  if (!data.budgets.length) return <p className="text-sm text-muted-foreground">No configured budgets.</p>
+  return <>
+          <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm"><span className="text-muted-foreground">Total budget allocated</span><span className="font-medium tabular-nums">{formatCost(allocated)}</span></div>
+          <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm"><span className="text-muted-foreground">Total budget used</span><span className="font-medium tabular-nums">{unavailable ? "Unavailable" : formatCost(spent)}</span></div>
+          {!unavailable && <Progress value={Math.min(100, percent)} aria-label={`Total budget: ${percent.toFixed(1)} percent used`} />}
+          <p className="text-xs text-muted-foreground">{unavailable ? "Some historical financial coverage is unavailable" : data.budgetWindow?.bypassLimits ? "Unlimited Mode active" : allocated > 0 ? `${Math.round(percent)}% of allocated budget` : "No budget limits configured"}</p>
+          <p className="text-xs text-muted-foreground">Across {data.budgets.length} configured {data.budgets.length === 1 ? "budget" : "budgets"} in this window</p>
+  </>
 }
 
 export function QuickAccessCard() {

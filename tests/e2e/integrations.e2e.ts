@@ -16,7 +16,19 @@ for (const width of [390, 1440]) {
     await page.emulateMedia({ colorScheme: width === 390 ? "dark" : "light" })
     await page.goto("/dashboard/ai/integrations")
     await expect(page.getByRole("heading", { name: "Choose your tool" })).toBeVisible()
+    await expect(page.getByText("Connect your coding agents to RawRoute.", { exact: true })).toBeVisible()
+    await expect(page.getByRole("note")).toHaveCount(0)
+    await expect(page.locator('[data-slot="card-footer"]')).toHaveCount(0)
     await expect(page.getByRole("button", { name: "Guide coming soon" })).toHaveCount(4)
+    for (const name of ["OpenCode", "Codex", "Claude Code", "Cursor", "Continue", "OpenAI-compatible apps"]) {
+      const card = page.locator('[data-slot="card"]').filter({ has: page.getByRole("heading", { name, exact: true }) })
+      const logo = card.locator('[data-slot="card-header"] svg')
+      await expect(logo).toHaveCount(1)
+      await expect(logo).toHaveAttribute("fill", "currentColor")
+      await expect(logo).toHaveAttribute("aria-hidden", "true")
+      await expect(logo.locator("path")).toHaveCount(1)
+      expect(await logo.evaluate(element => element.getBoundingClientRect().width)).toBe(20)
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`integrations-${width}.png`), fullPage: true })
 
@@ -47,8 +59,12 @@ test("integration copy actions use the current origin and placeholder configurat
   await page.goto("/dashboard/ai/integrations")
   await page.getByRole("button", { name: "Copy base URL", exact: true }).click()
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("http://127.0.0.1:3100/v1")
-  await page.getByRole("button", { name: "Copy Responses endpoint", exact: true }).click()
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("http://127.0.0.1:3100/v1/responses")
+  for (const [name, path] of [["Chat Completions", "/chat/completions"], ["Responses", "/responses"], ["Messages", "/messages"]]) {
+    const copy = page.getByRole("button", { name: `Copy ${name} endpoint`, exact: true })
+    await expect(copy.locator("..").locator("code")).toHaveText(path!)
+    await copy.click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`http://127.0.0.1:3100/v1${path}`)
+  }
   await page.getByRole("link", { name: "View OpenCode setup guide" }).click()
   await page.getByRole("button", { name: "Copy opencode.json", exact: true }).click()
   await expect.poll(async () => JSON.parse(await page.evaluate(() => navigator.clipboard.readText()))).toMatchObject({

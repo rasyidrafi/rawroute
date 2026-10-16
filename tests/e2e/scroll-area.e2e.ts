@@ -145,3 +145,46 @@ test("wide model tables use horizontal ScrollArea scrolling", async ({ page }) =
   await viewport.evaluate((element) => { element.scrollLeft = element.scrollWidth })
   await expect.poll(() => viewport.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
 })
+
+test("native page, list, code and textarea scrollbars match ScrollArea in both themes", async ({ page }) => {
+  await page.goto(`/dashboard/ai/providers/${firstProviderId}`)
+  await expect(page.getByText("Provider details")).toBeVisible()
+  // Exercise native scrolling without coupling the theme contract to one feature.
+  await page.evaluate(() => {
+    const fixture = document.createElement("section")
+    fixture.id = "native-scroll-fixture"
+    for (const tag of ["div", "pre", "textarea"]) {
+      const scroller = document.createElement(tag)
+      scroller.style.cssText = "width:180px;height:100px;overflow:auto;white-space:pre;flex-shrink:0"
+      scroller.textContent = Array.from({ length: 40 }, () => "Long scrollable content ".repeat(20)).join("\n")
+      fixture.append(scroller)
+    }
+    document.body.append(fixture)
+  })
+  for (const dark of [false, true]) {
+    await page.evaluate(value => document.documentElement.classList.toggle("dark", value), dark)
+    const styles = await page.locator("html, #native-scroll-fixture > *").evaluateAll(elements => elements.map(element => {
+      const thumb = getComputedStyle(element, "::-webkit-scrollbar-thumb")
+      const bar = getComputedStyle(element, "::-webkit-scrollbar")
+      const button = getComputedStyle(element, "::-webkit-scrollbar-button")
+      const swatch = document.createElement("span")
+      swatch.style.backgroundColor = getComputedStyle(element).getPropertyValue("--border")
+      document.body.append(swatch)
+      const expectedColor = getComputedStyle(swatch).backgroundColor
+      swatch.remove()
+      return { width: bar.width, height: bar.height, color: thumb.backgroundColor, radius: thumb.borderRadius, buttons: button.display, expectedColor }
+    }))
+    for (const style of styles) {
+      expect(style.width).toBe("10px")
+      expect(style.height).toBe("10px")
+      expect(style.color).toBe(style.expectedColor)
+      expect(style.radius).toBe("9999px")
+      expect(style.buttons).toBe("none")
+    }
+  }
+  for (const scroller of await page.locator("#native-scroll-fixture > *").all()) {
+    await scroller.evaluate(element => { element.scrollTop = 50; element.scrollLeft = 50 })
+    expect(await scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+    expect(await scroller.evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
+  }
+})

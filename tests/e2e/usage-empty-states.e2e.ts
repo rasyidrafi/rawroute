@@ -238,6 +238,12 @@ for (const publicView of [false, true]) {
         expect(await summary.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(width >= 1280 ? 4 : width >= 640 ? 2 : 1)
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
         const usageTable = card("Usage table")
+        const orderLabel = usageTable.getByText("Order rows by", { exact: true })
+        const orderControl = orderLabel.locator("..").locator(loading ? '[data-slot="skeleton"]' : '[data-slot="select-trigger"]')
+        const labelBounds = (await orderLabel.boundingBox())!
+        const controlBounds = (await orderControl.boundingBox())!
+        expect(controlBounds.x).toBeGreaterThanOrEqual(labelBounds.x + labelBounds.width)
+        expect(Math.abs(labelBounds.y + labelBounds.height / 2 - controlBounds.y - controlBounds.height / 2)).toBeLessThan(1)
         await expect(usageTable).toHaveCSS("height", "640px")
         await expect(usageTable).not.toHaveCSS("box-shadow", "none")
         await expect(usageTable).toHaveCSS("border-radius", "14px")

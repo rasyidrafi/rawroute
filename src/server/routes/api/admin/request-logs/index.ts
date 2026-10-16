@@ -1,17 +1,16 @@
-import { listRequestLogs } from "@/lib/analytics"
+import { listRequestLogs, loadDashboardModelLabels } from "@/lib/analytics"
 import { parseRequestLogQuery } from "@/lib/request-logs"
 import { currentWorkspaceId } from "@/lib/workspace/context"
 import { jsonError } from "@/lib/http"
-import { listApiKeys, listModels } from "@/server/store"
+import { listApiKeys } from "@/server/store"
 
 export async function GET(request: Request) {
   let query
   try { query = parseRequestLogQuery(new URL(request.url).searchParams, currentWorkspaceId()) }
   catch { return jsonError("Invalid request log range, filters or cursor.", 400) }
   try {
-    const [page, models, keys] = await Promise.all([listRequestLogs(query), listModels(), listApiKeys()])
+    const [page, modelNames, keys] = await Promise.all([listRequestLogs(query), loadDashboardModelLabels(), listApiKeys()])
     const keyNames = new Map(keys.map(key => [key.id, key.name]))
-    const modelNames = new Map(models.map(model => [model.gatewayModelId, model.name]))
     const modelOptions = new Map(modelNames)
     // Include historical, alias and shared IDs seen on this bounded page, without scanning history.
     for (const event of page.events) if (!modelOptions.has(event.gatewayModelId)) modelOptions.set(event.gatewayModelId, event.gatewayModelId)

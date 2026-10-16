@@ -107,8 +107,9 @@ export function ModelPricingView() {
       setGroupDialog(result.group.id)
       const pricing = groupPricingPayload(result.group.id, canonicalModel, editingGroup?.currentVersion, reprice)
       if (pricing) await apiPost("/api/admin/model-pricing", pricing)
-      await mutate(); setRepriceGroupOpen(false); setGroupDialog(undefined)
+      setRepriceGroupOpen(false); setGroupDialog(undefined)
       toast.success(reprice ? "Group saved; historical usage is being repriced." : "Group saved. Pricing applies to future requests only.")
+      void refreshPricingAfterSave(mutate)
     } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save model group") }
     finally { setPending(false) }
   }
@@ -326,6 +327,12 @@ function PricingGroupIdentity({ group }: { group: PricingGroupRow }) {
   return <TableCell><div className="font-medium">{group.name}</div><div className="text-xs text-muted-foreground">{group.currentVersion ? `v${group.currentVersion.version} active ${formatAppDate(group.currentVersion.effectiveAt)}` : "No version configured"}</div>{(group.canonicalModel || group.canonicalModelId) && <div className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="shrink-0">{canonicalSourceLabel(group.canonicalSource || "custom")}</span><span className="truncate">{group.canonicalModel?.name || group.canonicalModelId}</span></div>}</TableCell>
 }
 
+/** A successful save must not wait for catalog loading or background job progress. */
+async function refreshPricingAfterSave(refresh: () => Promise<unknown>) {
+  try { await refresh() }
+  catch { toast.error("Saved, but unable to refresh pricing. Reload the page to see the latest status.") }
+}
+
 function PricingVersionDialog({ group, onClose, onSaved }: { group: PricingGroupRow; onClose: () => void; onSaved: () => Promise<unknown> }) {
   const { apiPost } = useDashboardApi()
   const [pending, setPending] = useState(false)
@@ -344,7 +351,7 @@ function PricingVersionDialog({ group, onClose, onSaved }: { group: PricingGroup
   const [replaceOpen, setReplaceOpen] = useState(false)
   async function saveVersion(mode: "new" | "replace") {
     setPending(true)
-    try { await apiPost("/api/admin/model-pricing", { action: "save-version", groupId: group.id, mode, ...rates, contextTiers }); await onSaved(); onClose(); setReplaceOpen(false); toast.success(mode === "replace" ? "Pricing replaced; historical usage is being repriced." : "New pricing version saved.") }
+    try { await apiPost("/api/admin/model-pricing", { action: "save-version", groupId: group.id, mode, ...rates, contextTiers }); onClose(); setReplaceOpen(false); toast.success(mode === "replace" ? "Pricing replaced; historical usage is being repriced." : "New pricing version saved."); void refreshPricingAfterSave(onSaved) }
     catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save pricing version") }
     finally { setPending(false) }
   }
