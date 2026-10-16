@@ -637,8 +637,8 @@ export async function ensureLocalDatabase() {
   assertUsageProjection(getDatabase())
 }
 
-export async function queryLocalUsageRange(workspaceId: string, from: string, to: string, hourly = false) {
-  return withTransaction(async () => readSqliteUsageRange(getDatabase(), workspaceId, `${usagePrefix()}_workspaces/${workspaceId}/usageEvents`, from, to, hourly))
+export async function queryLocalUsageRange(workspaceId: string, from: string, to: string, hourly = false, keyId?: string) {
+  return withTransaction(async () => readSqliteUsageRange(getDatabase(), workspaceId, `${usagePrefix()}_workspaces/${workspaceId}/usageEvents`, from, to, hourly, keyId))
 }
 
 export async function localDatabaseHealth() {

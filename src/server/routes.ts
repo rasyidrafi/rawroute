@@ -43,6 +43,7 @@ import * as ApiAdminProvidersByProvider from "./routes/api/admin/providers/by-pr
 import * as ApiAdminProviders from "./routes/api/admin/providers"
 import * as ApiAdminToolGatewayStatus from "./routes/api/admin/tool-gateway/status"
 import * as ApiAdminUsage from "./routes/api/admin/usage"
+import * as ApiAdminKeyUsage from "./routes/api/admin/usage/keys/by-key"
 import * as ApiAdminRequestLogs from "./routes/api/admin/request-logs"
 import * as ApiAdminOverview from "./routes/api/admin/overview"
 import * as ApiAdminWorkspacesByWorkspace from "./routes/api/admin/workspaces/by-workspace"
@@ -115,6 +116,7 @@ export const apiRoutes = {
   "/api/admin/providers": apiRoute(ApiAdminProviders, "workspace", "/api/admin/providers"),
   "/api/admin/tool-gateway/status": apiRoute(ApiAdminToolGatewayStatus, "session", "/api/admin/tool-gateway/status"),
   "/api/admin/usage": apiRoute(ApiAdminUsage, "workspace", "/api/admin/usage"),
+  "/api/admin/usage/keys/:keyId": apiRoute(ApiAdminKeyUsage, "workspace", "/api/admin/usage/keys/:keyId"),
   "/api/admin/workspaces/:workspaceId": apiRoute(ApiAdminWorkspacesByWorkspace, "session", "/api/admin/workspaces/:workspaceId"),
   "/api/admin/workspaces": apiRoute(ApiAdminWorkspaces, "session", "/api/admin/workspaces"),
   "/api/auth/login": apiRoute(ApiAuthLogin, "public", "/api/auth/login"),

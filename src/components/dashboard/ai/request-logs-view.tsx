@@ -68,7 +68,7 @@ function RequestLogsWorkspace() {
   </DashboardPage>
 }
 
-function RequestLogResults({ data, loading, failed }: { data: RequestLogsPage | undefined; loading: boolean; failed: boolean }) {
+export function RequestLogResults({ data, loading, failed }: { data: RequestLogsPage | undefined; loading: boolean; failed: boolean }) {
   if (!data && loading) return <RequestLogsTable loading />
   if (!data?.events.length) return !failed && <EmptyState title="No recorded attempts" description="No recorded model attempts match this range and these filters." icon={ListChecksIcon} treatment="embedded" />
   return <RequestLogsTable>

@@ -121,7 +121,7 @@ function finish(selected: Selected[], histories: UsageBucket[], unavailable: Set
   return { rows, totals, coverage, financialUnavailableKeys: unavailable, stages, gaps }
 }
 
-export function readSqliteUsageRange(db: Database, workspaceId: string, collection: string, from: string, to: string, hourly = false): UsageRangeResult {
+export function readSqliteUsageRange(db: Database, workspaceId: string, collection: string, from: string, to: string, hourly = false, keyId?: string): UsageRangeResult {
   const selected: Selected[] = []
   let rawRows = 0
   let bucketRows = 0
@@ -135,35 +135,35 @@ export function readSqliteUsageRange(db: Database, workspaceId: string, collecti
         ${usageMeasures.map(key => `SUM(${rawExpressions[key]}) AS ${key}`).join(",")},
         MAX(json_extract(data,'$.completedAt')) AS latestEventAt,
         MAX(CASE WHEN ${successful} THEN json_extract(data,'$.completedAt') END) AS latestSuccessAt
-        FROM usage_projection_raw_events WHERE collection_path = ? AND json_extract(data,'$.completedAt') >= ? AND json_extract(data,'$.completedAt') < ?
-        GROUP BY gatewayKeyId, gatewayModelId`).all(workspaceId, bounds.bucketStart, bounds.bucketEnd, collection, segment.from, segment.to)
+        FROM usage_projection_raw_events WHERE collection_path = ? AND json_extract(data,'$.completedAt') >= ? AND json_extract(data,'$.completedAt') < ? ${keyId ? "AND json_extract(data,'$.gatewayKeyId') = ?" : ""}
+        GROUP BY gatewayKeyId, gatewayModelId`).all(workspaceId, bounds.bucketStart, bounds.bucketEnd, collection, segment.from, segment.to, ...(keyId ? [keyId] : []))
       rawRows += rows.reduce((sum, row) => sum + row.requests, 0)
     } else {
       rows = db.query<UsageBucket, string[]>(`SELECT workspaceId, granularity, bucketStart, bucketEnd, gatewayKeyId, gatewayModelId, provenance,
         ${usageMeasures.map(key => `SUM(${key}) AS ${key}`).join(",")}, MAX(latestEventAt) AS latestEventAt, MAX(latestSuccessAt) AS latestSuccessAt
-        FROM usage_buckets WHERE workspaceId = ? AND granularity = ? AND bucketStart >= ? AND bucketStart < ? AND bucketEnd <= ?
-        GROUP BY bucketStart, bucketEnd, gatewayKeyId, gatewayModelId`).all(workspaceId, segment.granularity, segment.from, segment.to, segment.to)
+        FROM usage_buckets WHERE workspaceId = ? AND granularity = ? AND bucketStart >= ? AND bucketStart < ? AND bucketEnd <= ? ${keyId ? "AND gatewayKeyId = ?" : ""}
+        GROUP BY bucketStart, bucketEnd, gatewayKeyId, gatewayModelId`).all(workspaceId, segment.granularity, segment.from, segment.to, segment.to, ...(keyId ? [keyId] : []))
       bucketRows += rows.length
     }
     selected.push(...rows.map(row => ({ row, segment })))
   }
   const histories = db.query<UsageBucket, string[]>(`SELECT workspaceId, granularity, bucketStart, bucketEnd, gatewayKeyId, gatewayModelId, 'historical' AS provenance,
     ${usageMeasures.map(key => `json_extract(measuresJson,'$.${key}') AS ${key}`).join(",")}, json_extract(measuresJson,'$.latestEventAt') AS latestEventAt, json_extract(measuresJson,'$.latestSuccessAt') AS latestSuccessAt
-    FROM usage_projection_history WHERE workspaceId = ? AND disposition = 'included' AND bucketStart >= ? AND bucketEnd <= ?`).all(workspaceId, from, to)
+    FROM usage_projection_history WHERE workspaceId = ? AND disposition = 'included' AND bucketStart >= ? AND bucketEnd <= ? ${keyId ? "AND gatewayKeyId = ?" : ""}`).all(workspaceId, from, to, ...(keyId ? [keyId] : []))
   const omitted = db.query<{ gatewayKeyId: string; bucketStart: string | null; bucketEnd: string | null; omitted: number; unavailable: number }, string[]>(`SELECT gatewayKeyId, bucketStart, bucketEnd,
     CASE WHEN disposition = 'excluded' OR bucketStart IS NULL OR bucketEnd IS NULL OR ((bucketStart < ? OR bucketEnd > ?) AND COALESCE(json_extract(measuresJson,'$.requests'),1) > 0) THEN 1 ELSE 0 END AS omitted,
     CASE WHEN ${historicalFinancialUnavailableSql} THEN 1 ELSE 0 END AS unavailable
-    FROM usage_projection_history WHERE workspaceId = ? AND disposition <> 'duplicate' AND (bucketStart IS NULL OR bucketStart < ?) AND (bucketEnd IS NULL OR bucketEnd > ?)`).all(from, to, from, to, workspaceId, to, from)
+    FROM usage_projection_history WHERE workspaceId = ? AND disposition <> 'duplicate' AND (bucketStart IS NULL OR bucketStart < ?) AND (bucketEnd IS NULL OR bucketEnd > ?) ${keyId ? "AND (gatewayKeyId = '' OR gatewayKeyId = ?)" : ""}`).all(from, to, from, to, workspaceId, to, from, ...(keyId ? [keyId] : []))
   return finish(selected, histories, new Set(omitted.filter(row => row.unavailable).map(row => row.gatewayKeyId)), omitted.filter(row => row.omitted).map(row => ({ from: row.bucketStart, to: row.bucketEnd })), { bucketRows, rawRows, historyRows: histories.length })
 }
 
-export function readMemoryUsageRange(workspaceId: string, buckets: ReadonlyMap<string, UsageBucket>, events: ReadonlyMap<string, UsageEvent>, eventsByHour: ReadonlyMap<string, ReadonlySet<string>>, from: string, to: string, hourly = false): UsageRangeResult {
+export function readMemoryUsageRange(workspaceId: string, buckets: ReadonlyMap<string, UsageBucket>, events: ReadonlyMap<string, UsageEvent>, eventsByHour: ReadonlyMap<string, ReadonlySet<string>>, from: string, to: string, hourly = false, keyId?: string): UsageRangeResult {
   const selected: Selected[] = []
   let rawRows = 0
   let bucketRows = 0
   for (const segment of usageRangeSegments(from, to, hourly)) {
     if (segment.granularity !== "raw") {
-      const rows = [...buckets.values()].filter(row => row.granularity === segment.granularity && row.bucketStart >= segment.from && row.bucketStart < segment.to && row.bucketEnd <= segment.to)
+      const rows = [...buckets.values()].filter(row => (!keyId || row.gatewayKeyId === keyId) && row.granularity === segment.granularity && row.bucketStart >= segment.from && row.bucketStart < segment.to && row.bucketEnd <= segment.to)
       selected.push(...rows.map(row => ({ row: { ...row }, segment })))
       bucketRows += rows.length
       continue
@@ -173,7 +173,7 @@ export function readMemoryUsageRange(workspaceId: string, buckets: ReadonlyMap<s
     const first = usageCalendarBucket(segment.from, "hourly")
     for (const id of eventsByHour.get(first.bucketStart) || []) {
       const event = events.get(id)
-      if (!event || event.completedAt < segment.from || event.completedAt >= segment.to) continue
+      if (!event || (keyId && event.gatewayKeyId !== keyId) || event.completedAt < segment.from || event.completedAt >= segment.to) continue
       const row = eventUsageBuckets(workspaceId, { ...event })[0]!
       grouped.set(usageBucketKey(row), addUsageBucket(grouped.get(usageBucketKey(row)), row))
       rawRows++

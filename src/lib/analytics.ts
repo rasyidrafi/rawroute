@@ -1096,10 +1096,10 @@ export async function deleteBudget(apiKeyId: string) {
   invalidateBudgetReadCaches()
 }
 
-async function canonicalUsageRange(from: string, to: string, hourly = false): Promise<UsageRangeResult> {
+async function canonicalUsageRange(from: string, to: string, hourly = false, keyId?: string): Promise<UsageRangeResult> {
   const result = isMemory()
-    ? readMemoryUsageRange(currentWorkspaceId(), memoryState().projection, memoryState().events, memoryState().eventsByHour, from, to, hourly)
-    : await queryLocalUsageRange(currentWorkspaceId(), from, to, hourly)
+    ? readMemoryUsageRange(currentWorkspaceId(), memoryState().projection, memoryState().events, memoryState().eventsByHour, from, to, hourly, keyId)
+    : await queryLocalUsageRange(currentWorkspaceId(), from, to, hourly, keyId)
   dashboardPerf("range.rows", { rollupRows: result.stages.bucketRows, boundaryRows: result.stages.rawRows, count: result.stages.historyRows })
   return result
 }
@@ -1545,17 +1545,17 @@ export async function loadDashboardModelLabels() {
   return promise
 }
 
-async function buildDashboardPayload(query: DashboardQuery, publicView: boolean, exactRange?: { from: string; to: string }): Promise<DashboardPayload & { overview?: OverviewDetails }> {
+async function buildDashboardPayload(query: DashboardQuery, publicView: boolean, exactRange?: { from: string; to: string }, keyId?: string): Promise<DashboardPayload & { overview?: OverviewDetails }> {
   const startedAt = performance.now()
   dashboardPerf("builder.start", { workspaceId: currentWorkspaceId() })
-  const budgetsPromise = dashboardTimed("budgets", listBudgets())
+  const budgetsPromise = dashboardTimed("budgets", listBudgets()).then(budgets => keyId ? budgets.filter(budget => budget.apiKeyId === keyId) : budgets)
   const windowPromise = query.preset === "budget" ? dashboardTimed("budget-window", getBudgetWindow()) : undefined
   const range = exactRange ? { label: "Rolling range", from: new Date(exactRange.from), to: new Date(Date.parse(exactRange.to) - 1) } : await resolveRange(query, windowPromise ? await windowPromise : undefined)
   const trendGranularity = effectiveDashboardGranularity(query.granularity, range.to.getTime() - range.from.getTime())
   const toExclusive = exactRange ? exactRange.to : new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1)).toISOString()
   const from = range.from.toISOString()
   const [usage, keys, indexedNames, labels, budgetData] = await Promise.all([
-    dashboardTimed("usage.range", canonicalUsageRange(from, toExclusive, trendGranularity === "hourly")),
+    dashboardTimed("usage.range", canonicalUsageRange(from, toExclusive, trendGranularity === "hourly", keyId)),
     dashboardTimed("keys", budgetSelectableKeys()),
     publicView ? listIndexedApiKeyNames() : Promise.resolve(new Map<string, string>()),
     loadDashboardModelLabels(),
@@ -1568,6 +1568,13 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
   const budgetMap = new Map(budgetData.rows.map(budget => [budget.apiKeyId, budget]))
   const keyRows = new Map<string, DashboardPayload["keys"][number]>()
   const modelsByKey = new Map<string, Set<string>>()
+  // Keep quiet/configured keys visible even when this window has no attempts.
+  if (keyId) {
+    const key = keyMap.get(keyId)
+    const shared = sharedWorkspaceIdFromBudgetId(keyId)
+    keyRows.set(keyId, { id: keyId, label: shared ? sharedWorkspaceUsageLabel(key, shared) : key?.name?.trim() || keyId, maskedKey: "hidden", requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null })
+    modelsByKey.set(keyId, new Set())
+  }
   const models = new Map<string, DashboardPayload["models"][number]>()
   const trend = new Map<string, DashboardPayload["trend"][number]>()
   const compact = (query.preset === "today" || query.preset === "yesterday") && trendGranularity === "hourly"
@@ -1655,6 +1662,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
     row.models = [...(modelsByKey.get(id) || [])].sort((a,b) => a.localeCompare(b))
     const budget = budgetMap.get(id)
     if (budget && budgetData.window) row.budget = {
+      enabled: budget.enabled,
       weeklyLimitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros,
       remainingMicros: budget.spentMicros === null ? null : Math.max(0, budget.weeklyLimitMicros - budget.spentMicros),
       percentUsed: budget.spentMicros === null ? null : budget.weeklyLimitMicros > 0 ? budget.spentMicros / budget.weeklyLimitMicros * 100 : 0,
@@ -1676,7 +1684,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
     } } : {}),
     generatedAt: new Date().toISOString(),
     range: { label: range.label, from, to: range.to.toISOString(), granularity: trendGranularity },
-    summary: { requests: totals.requests, tokens: exactRange ? totals.inputTokens + totals.outputTokens : totals.totalTokens, costMicros: totals.costMicros, activeKeys: keyRows.size, pricedRequests: totals.pricedRequests, unpricedRequests: totals.unpricedRequests },
+    summary: { requests: totals.requests, tokens: exactRange ? totals.inputTokens + totals.outputTokens : totals.totalTokens, costMicros: totals.costMicros, activeKeys: [...keyRows.values()].filter(row => row.requests > 0).length, pricedRequests: totals.pricedRequests, unpricedRequests: totals.unpricedRequests },
     trend: [...trend.values()].sort((a,b) => a.bucketStart.localeCompare(b.bucketStart)),
     keys: [...keyRows.values()].sort((a,b) => b.requests - a.requests),
     models: [...models.values()].sort((a,b) => b.costMicros - a.costMicros || b.requests - a.requests),
@@ -1700,6 +1708,11 @@ function nextBucketStart(value: Date, granularity: string) {
   if (granularity === "monthly") return addZonedMonths(value, 1)
   if (granularity === "weekly") return addZonedDays(value, 7)
   return new Date(usageCalendarBucket(value.toISOString(), "daily").bucketEnd)
+}
+
+/** Private, workspace-scoped detail using the same canonical data as Usage. */
+export async function getKeyUsagePayload(keyId: string): Promise<DashboardPayload> {
+  return buildDashboardPayload({ preset: "budget", granularity: "daily" }, false, undefined, keyId)
 }
 
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {

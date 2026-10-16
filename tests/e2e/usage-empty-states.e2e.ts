@@ -264,35 +264,89 @@ for (const publicView of [false, true]) {
         expect(await tableViewport.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true)
         await tableViewport.evaluate(element => { element.scrollLeft = 100 })
         await expect.poll(() => tableViewport.evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
+        if (!publicView) {
+          const actions = usageTable.getByRole("columnheader", { name: "Actions", exact: true })
+          const actionCell = usageTable.locator("tbody tr").first().locator("td").last()
+          const content = actionCell.locator(loading ? '[data-slot="skeleton"]' : 'a')
+          await expect(actions).toHaveCSS("position", "sticky")
+          await expect(actionCell).toHaveCSS("position", "sticky")
+          const before = (await actionCell.boundingBox())!
+          const viewportBox = (await tableViewport.boundingBox())!
+          expect(Math.abs(before.x + before.width - viewportBox.x - viewportBox.width)).toBeLessThanOrEqual(2)
+          const contentBox = (await content.boundingBox())!
+          expect(Math.abs(contentBox.x + contentBox.width / 2 - before.x - before.width / 2)).toBeLessThan(1)
+          await tableViewport.evaluate(element => { element.scrollLeft = element.scrollWidth })
+          const after = (await actionCell.boundingBox())!
+          expect(Math.abs(after.x - before.x)).toBeLessThanOrEqual(1)
+        }
       }
     }
   })
 }
 
-test("usage row opens three responsive key detail design variants without fetching live key usage", async ({ page }, testInfo) => {
+test("usage row opens live key detail with matching cards, chart tooltips and budget states", async ({ page }, testInfo) => {
   await authenticate(page)
+  const real = await page.request.get("/api/admin/usage/keys/usage-empty-state-key", { headers: { "x-rawroute-workspace-id": "default" } })
+  expect(real.ok()).toBe(true)
+  expect((await real.json()).summary.requests).toBe(0)
+  expect((await page.request.get("/api/admin/usage/keys/usage-empty-state-key")).status()).toBe(400)
   await page.route("**/api/admin/usage?*", route => route.fulfill({ json: dashboardPayload({ trend: [trendRow], keys: [keyRow], models: [modelRow] }) }))
+  const budget = { enabled: true, weeklyLimitMicros: 1_000_000, spentMicros: 15000, remainingMicros: 985000, percentUsed: 1.5, bypassLimits: false, usageStartAt: "2026-10-11T00:00:00.000Z", windowStart: "2026-10-11T00:00:00.000Z", windowEnd: "2026-10-18T00:00:00.000Z" }
+  let payload = dashboardPayload({ trend: [{ ...trendRow, bucketStart: "2026-10-11T00:00:00.000Z", costMicros: 6000 }, { ...trendRow, bucketStart: "2026-10-12T00:00:00.000Z", costMicros: 9000 }], keys: [{ ...keyRow, budget }], models: [modelRow] })
+  payload.range.granularity = "daily"
+  payload.range.from = budget.windowStart
+  payload.range.to = budget.windowEnd
+  await page.route("**/api/admin/usage/keys/usage-empty-state-key", route => route.fulfill({ json: payload }))
+  await page.route("**/api/admin/request-logs?*", route => {
+    const params = new URL(route.request().url()).searchParams
+    expect(params.get("key")).toBe(keyRow.id)
+    expect(params.get("from")).toBe(payload.range.from)
+    expect(params.get("to")).toBe(payload.range.to)
+    return route.fulfill({ json: { events: [], models: [], keys: [{ id: keyRow.id, name: keyRow.label }], nextCursor: null, from: params.get("from"), to: params.get("to") } })
+  })
   await page.goto("/dashboard/ai/overview/usage")
   const action = page.getByRole("link", { name: "View usage for E2E Usage Key", exact: true })
   await expect(action).toHaveAttribute("href", "/dashboard/ai/overview/usage/keys/usage-empty-state-key")
   await action.click()
   await expect(page).toHaveURL(/\/usage\/keys\/usage-empty-state-key$/)
   await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
-  await expect(page.getByText("Design preview · Sample data", { exact: true })).toBeVisible()
+  await expect(page.getByRole("tab")).toHaveCount(0)
+  await expect(page.getByText(/sample|dummy|design preview|illustrative/i)).toHaveCount(0)
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
-  const keyRequests: string[] = []
-  page.on("request", request => { if (request.url().includes("/api/admin/usage")) keyRequests.push(request.url()) })
+  const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: new RegExp(`^${title}$`) }) })
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
-    for (const [tab, heading] of [["1 · Snapshot", "At a glance"], ["2 · Explorer", "Usage explorer"], ["3 · Budget", "Budget & spend"]]) {
-      await page.getByRole("tab", { name: tab, exact: true }).click()
-      await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible()
-      await expect(page.getByRole("tabpanel")).toHaveCount(1)
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
-      await page.screenshot({ path: testInfo.outputPath(`key-usage-${tab![0]}-${width}.png`), fullPage: true })
+    for (const [first, second] of [["Budget balance", "Daily spend"], ["Where the spend goes", "Usage profile"]]) {
+      const left = (await card(first!).boundingBox())!
+      const right = (await card(second!).boundingBox())!
+      if (width >= 1024) {
+        expect(Math.abs(left.y - right.y)).toBeLessThan(1)
+        expect(Math.abs(left.height - right.height)).toBeLessThan(1)
+      } else expect(right.y).toBeGreaterThanOrEqual(left.y + left.height)
     }
+    await card("Daily spend").locator(".recharts-bar-rectangle").first().hover()
+    await expect(card("Daily spend").locator(".recharts-tooltip-wrapper")).toContainText("Cost")
+    await expect(card("Daily spend").locator(".recharts-tooltip-wrapper")).toContainText("$0.006")
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.screenshot({ path: testInfo.outputPath(`key-usage-live-${width}.png`), fullPage: true })
   }
-  expect(keyRequests).toEqual([])
+  payload = { ...payload, keys: [{ ...keyRow }] }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(card("Budget balance").getByText("No budget configured", { exact: true })).toBeVisible()
+  await expect(card("Budget balance").getByText("Unlimited", { exact: true })).toBeVisible()
+  await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
+  payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, enabled: false } }] }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(card("Budget balance").getByText("Budget limits disabled", { exact: true })).toBeVisible()
+  await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
+  payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, bypassLimits: true } }] }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(card("Budget balance").getByText("Unlimited mode active", { exact: true })).toBeVisible()
+  payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, usageAvailable: false, spentMicros: null, remainingMicros: null, percentUsed: null } }], coverage: { partial: true, excludedSources: 1, tokenCoveredRequests: 0, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 } }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(card("Budget balance").getByText("Remaining balance unavailable", { exact: true })).toBeVisible()
+  await expect(card("Daily spend").getByText("Spend history unavailable: financial coverage is incomplete.", { exact: true })).toBeVisible()
+  await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
   await page.reload()
   await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
   await page.getByRole("link", { name: "Back to usage", exact: true }).click()

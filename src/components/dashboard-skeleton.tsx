@@ -13,6 +13,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { LoadingCard, LoadingTable } from "@/components/loading-layout"
 import { DashboardPage, logPageClassName } from "@/components/dashboard/page-layout"
 import { UsageSkeleton } from "@/components/dashboard/ai/usage-skeleton"
+import { KeyUsageSkeleton } from "@/components/dashboard/ai/key-usage-skeleton"
 import { SettingsSkeleton } from "@/components/dashboard/global/settings/settings-skeleton"
 import { CliProxySkeleton } from "@/components/dashboard/global/cliproxy/skeleton"
 import { dashboardPageForPath, dashboardPages, type DashboardSkeletonVariant } from "@/lib/dashboard/routes"
@@ -39,11 +40,11 @@ function StandardDashboardSkeleton({ variant }: { variant: Exclude<DashboardSkel
   if (variant === "request-logs") return <RequestLogsView />
   if (variant === "settings") return <SettingsSkeleton />
   if (variant === "usage") return <UsageSkeleton />
+  if (variant === "key-usage") return <KeyUsageSkeleton />
   if (variant === "console-log" || variant === "system-logs") return <ConsoleLogSkeleton global={variant === "system-logs"} />
   if (variant === "cliproxy") return <CliProxySkeleton />
   const content = {
     "endpoint-key": <EndpointKeySkeleton />,
-    "key-usage": <LoadingCard title="Key usage" description="Loading design preview"><div className="flex gap-2">{[0, 1, 2].map(index => <Skeleton key={index} className="h-8 w-24" />)}</div><Skeleton className="h-64 w-full" /></LoadingCard>,
     "providers": <ProvidersSkeleton />,
     "aliases": <AliasesSkeleton />,
     "provider-detail": <ProviderDetailSkeleton codex={false} />,

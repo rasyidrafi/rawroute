@@ -9,11 +9,11 @@ export function LoadingCard({ title, description, action = false, children, clas
 }
 
 export function TableSkeletonRows({ columns, rows = 3, actionColumn = false }: { columns: number; rows?: number; actionColumn?: boolean }) {
-  return <>{Array.from({ length: rows }, (_, row) => <TableRow key={row} aria-hidden="true">{Array.from({ length: columns }, (_, column) => <TableCell key={column}><Skeleton className={actionColumn && column === columns - 1 ? "size-7" : column === 0 ? "my-2 h-4 w-32 max-w-full" : "my-2 h-4 w-20 max-w-full"} /></TableCell>)}</TableRow>)}</>
+  return <>{Array.from({ length: rows }, (_, row) => <TableRow key={row} aria-hidden="true">{Array.from({ length: columns }, (_, column) => actionColumn && column === columns - 1 ? <TableCell key={column} variant="sticky-action"><div className="flex justify-center"><Skeleton className="size-7" /></div></TableCell> : <TableCell key={column}><Skeleton className={column === 0 ? "my-2 h-4 w-32 max-w-full" : "my-2 h-4 w-20 max-w-full"} /></TableCell>)}</TableRow>)}</>
 }
 
-export function LoadingTable({ columns, rows = 3, actionColumn = false }: { columns: string[]; rows?: number; actionColumn?: boolean }) {
-  return <Table><TableColumns columns={columns.map((label, index) => ({ id: String(index), label }))} /><TableBody><TableSkeletonRows columns={columns.length} rows={rows} actionColumn={actionColumn} /></TableBody></Table>
+export function LoadingTable({ columns, rows = 3, actionColumn = false, scrollable = true }: { columns: string[]; rows?: number; actionColumn?: boolean; scrollable?: boolean }) {
+  return <Table scrollable={scrollable}><TableColumns columns={columns.map((label, index) => ({ id: String(index), label, variant: actionColumn && index === columns.length - 1 ? "sticky-action" : "default" }))} /><TableBody><TableSkeletonRows columns={columns.length} rows={rows} actionColumn={actionColumn} /></TableBody></Table>
 }
 
 export function FormSkeleton({ labels }: { labels: string[] }) {

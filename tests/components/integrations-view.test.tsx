@@ -17,11 +17,11 @@ test("integrations follows model routing and uses the wrench icon", () => {
   expect(dashboardPages.integrations.scope).toBe("workspace")
 })
 
-test("integrations links to scoped guides and identifies preview content", () => {
+test("integrations links to scoped guides and describes the connection", () => {
   const markup = renderToStaticMarkup(<MemoryRouter><IntegrationsView /></MemoryRouter>)
   expect(markup).toContain(`href="${pagePaths.integrationOpencode}"`)
   expect(markup).toContain(`href="${pagePaths.integrationCodex}"`)
-  expect(markup).toContain("Setup preview")
+  expect(markup).toContain("Connect your coding agents to RawRoute.")
   for (const page of ["integrationOpencode", "integrationCodex"] as const) {
     expect(dashboardPageForPath(pagePaths[page])).toBe(page)
     expect(dashboardPages[page].scope).toBe("workspace")

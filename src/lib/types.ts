@@ -323,6 +323,7 @@ export interface DashboardQuery {
 }
 
 export interface DashboardKeyBudget {
+  enabled?: boolean
   usageAvailable?: boolean
   weeklyLimitMicros: number
   spentMicros: number | null
