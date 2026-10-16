@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { AnalyticsCoverage, UsageEvent } from "./types"
-import { addUsageBucket, emptyUsageMeasures, eventUsageBuckets, historicalFinancialUnavailableSql, usageBucketKey, usageCalendarBucket, usageMeasures, validUsageInteger, type UsageBucket, type UsageMeasures } from "./usage-projection"
+import { addUsageBucket, emptyUsageMeasures, eventUsageBuckets, historicalFinancialUnavailableSql, usageBucketKey, usageCalendarBucket, usageEventMeasures, usageMeasures, validUsageInteger, type UsageBucket, type UsageMeasures } from "./usage-projection"
 
 export interface UsageRangeResult {
   rows: UsageBucket[]
@@ -121,6 +121,27 @@ function finish(selected: Selected[], histories: UsageBucket[], unavailable: Set
   return { rows, totals, coverage, financialUnavailableKeys: unavailable, stages, gaps }
 }
 
+type CoveredTokens = Pick<UsageMeasures, "totalTokens" | "tokenCoveredRequests">
+
+/** Key detail counts measured token totals only. Mixed runtime buckets must be
+ * re-aggregated: their persisted total also contains incomplete request values.
+ * Historical aggregates cannot be split, so exclude any with unknown tokens. */
+function excludeUnknownTokens(result: UsageRangeResult, from: string, to: string, readCovered: (row: UsageBucket, start: string, end: string) => CoveredTokens) {
+  result.totals.totalTokens = 0
+  result.totals.tokenCoveredRequests = 0
+  for (const row of result.rows) {
+    if (row.tokenCoveredRequests !== row.requests) {
+      const covered = row.provenance === "historical" ? { totalTokens: 0, tokenCoveredRequests: 0 } : readCovered(row, row.bucketStart > from ? row.bucketStart : from, row.bucketEnd < to ? row.bucketEnd : to)
+      row.totalTokens = covered.totalTokens
+      row.tokenCoveredRequests = covered.tokenCoveredRequests
+    }
+    result.totals.totalTokens += row.totalTokens
+    result.totals.tokenCoveredRequests += row.tokenCoveredRequests
+  }
+  result.coverage.tokenCoveredRequests = result.totals.tokenCoveredRequests
+  return result
+}
+
 export function readSqliteUsageRange(db: Database, workspaceId: string, collection: string, from: string, to: string, hourly = false, keyId?: string): UsageRangeResult {
   const selected: Selected[] = []
   let rawRows = 0
@@ -154,7 +175,11 @@ export function readSqliteUsageRange(db: Database, workspaceId: string, collecti
     CASE WHEN disposition = 'excluded' OR bucketStart IS NULL OR bucketEnd IS NULL OR ((bucketStart < ? OR bucketEnd > ?) AND COALESCE(json_extract(measuresJson,'$.requests'),1) > 0) THEN 1 ELSE 0 END AS omitted,
     CASE WHEN ${historicalFinancialUnavailableSql} THEN 1 ELSE 0 END AS unavailable
     FROM usage_projection_history WHERE workspaceId = ? AND disposition <> 'duplicate' AND (bucketStart IS NULL OR bucketStart < ?) AND (bucketEnd IS NULL OR bucketEnd > ?) ${keyId ? "AND (gatewayKeyId = '' OR gatewayKeyId = ?)" : ""}`).all(from, to, from, to, workspaceId, to, from, ...(keyId ? [keyId] : []))
-  return finish(selected, histories, new Set(omitted.filter(row => row.unavailable).map(row => row.gatewayKeyId)), omitted.filter(row => row.omitted).map(row => ({ from: row.bucketStart, to: row.bucketEnd })), { bucketRows, rawRows, historyRows: histories.length })
+  const result = finish(selected, histories, new Set(omitted.filter(row => row.unavailable).map(row => row.gatewayKeyId)), omitted.filter(row => row.omitted).map(row => ({ from: row.bucketStart, to: row.bucketEnd })), { bucketRows, rawRows, historyRows: histories.length })
+  if (!keyId) return result
+  return excludeUnknownTokens(result, from, to, (row, start, end) => db.query<CoveredTokens, string[]>(`SELECT COALESCE(SUM(json_extract(data,'$.totalTokens')),0) AS totalTokens, COUNT(*) AS tokenCoveredRequests
+    FROM usage_projection_raw_events WHERE collection_path = ? AND json_extract(data,'$.completedAt') >= ? AND json_extract(data,'$.completedAt') < ?
+    AND json_extract(data,'$.gatewayKeyId') = ? AND COALESCE(json_extract(data,'$.gatewayModelId'),'') = ? AND ${tokensKnown}`).get(collection, start, end, keyId, row.gatewayModelId)!)
 }
 
 export function readMemoryUsageRange(workspaceId: string, buckets: ReadonlyMap<string, UsageBucket>, events: ReadonlyMap<string, UsageEvent>, eventsByHour: ReadonlyMap<string, ReadonlySet<string>>, from: string, to: string, hourly = false, keyId?: string): UsageRangeResult {
@@ -180,5 +205,22 @@ export function readMemoryUsageRange(workspaceId: string, buckets: ReadonlyMap<s
     }
     selected.push(...[...grouped.values()].map(row => ({ row, segment })))
   }
-  return finish(selected, [], new Set(), [], { bucketRows, rawRows, historyRows: 0 })
+  const result = finish(selected, [], new Set(), [], { bucketRows, rawRows, historyRows: 0 })
+  if (!keyId) return result
+  return excludeUnknownTokens(result, from, to, (row, start, end) => {
+    const covered: CoveredTokens = { totalTokens: 0, tokenCoveredRequests: 0 }
+    for (let cursor = start; cursor < end;) {
+      const hour = usageCalendarBucket(cursor, "hourly")
+      for (const id of eventsByHour.get(hour.bucketStart) || []) {
+        const event = events.get(id)
+        if (!event || event.gatewayKeyId !== keyId || (event.gatewayModelId || "") !== row.gatewayModelId || event.completedAt < start || event.completedAt >= end) continue
+        const measures = usageEventMeasures({ ...event })
+        if (!measures.tokenCoveredRequests) continue
+        covered.totalTokens += measures.totalTokens
+        covered.tokenCoveredRequests++
+      }
+      cursor = hour.bucketEnd
+    }
+    return covered
+  })
 }

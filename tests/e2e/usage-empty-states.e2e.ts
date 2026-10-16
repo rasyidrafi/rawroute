@@ -342,11 +342,19 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, bypassLimits: true } }] }
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(card("Budget balance").getByText("Unlimited mode active", { exact: true })).toBeVisible()
+  const tokenValue = card("Usage profile").getByText("Tokens processed", { exact: true }).locator("..").locator("p").first()
+  payload = { ...payload, coverage: { partial: true, excludedSources: 1, tokenCoveredRequests: 2, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 } }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(tokenValue).toHaveText("240")
+  payload = { ...payload, summary: { ...payload.summary, tokens: 0 }, coverage: { ...payload.coverage!, tokenCoveredRequests: 1 } }
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(tokenValue).toHaveText("0")
   payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, usageAvailable: false, spentMicros: null, remainingMicros: null, percentUsed: null } }], coverage: { partial: true, excludedSources: 1, tokenCoveredRequests: 0, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 } }
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(card("Budget balance").getByText("Remaining balance unavailable", { exact: true })).toBeVisible()
   await expect(card("Daily spend").getByText("Spend history unavailable: financial coverage is incomplete.", { exact: true })).toBeVisible()
   await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
+  await expect(tokenValue).toHaveText("Unavailable")
   await page.reload()
   await expect(page.getByRole("heading", { name: "E2E Usage Key", exact: true })).toBeVisible()
   await page.getByRole("link", { name: "Back to usage", exact: true }).click()

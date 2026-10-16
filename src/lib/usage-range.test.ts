@@ -202,6 +202,18 @@ test("unknown historical finance fails admission only for the affected key/windo
   await scoped("other",async()=>expect((await getDashboardPayload({preset:"all"},true)).summary.requests).toBe(0))
 })
 
+test("key token totals retain covered history and runtime but exclude unknown historical token aggregates", async () => {
+  const db = historicalFixture()
+  const base = { gatewayKeyId: "key", gatewayModelId: "coverage/model", requests: 2, inputTokens: 20, outputTokens: 4, cacheReadTokens: 6, cacheCreationTokens: 2, totalTokens: 24, costMicros: 40, successfulCostMicros: 40, statusCoveredRequests: 2, failedRequests: 0, pricedRequests: 2, unpricedRequests: 0, backfillSource: "ccs-usage-v2", granularity: "hourly" }
+  source(db, "rawroute_workspaces/token-history/usageRollups", "known", { ...base, bucketStart: "2026-10-01T12:00:00.000Z" })
+  source(db, "rawroute_workspaces/token-history/usageRollups", "unknown", { ...base, outputTokens: undefined, totalTokens: 200, bucketStart: "2026-10-01T13:00:00.000Z" })
+  source(db, "rawroute_workspaces/token-history/usageEvents", "runtime", event("runtime", "2026-10-01T14:00:00.000Z"))
+  db.close(); migrateUsageProjection(file, { timeZone: "UTC", apply: true, writersStopped: true })
+  const selected = await queryLocalUsageRange("token-history", "2026-10-01T00:00:00.000Z", "2026-10-02T00:00:00.000Z", false, "key")
+  expect(selected.totals).toMatchObject({ requests: 5, totalTokens: 36, tokenCoveredRequests: 3, costMicros: 100 })
+  expect(selected.coverage).toMatchObject({ partial: true, tokenCoveredRequests: 3, financialUnavailable: false })
+})
+
 test("historical midnight folds retain disjoint daily segments and exact ranges", async () => {
   process.env.TIMEZONE = "America/Goose_Bay"
   const attempts = ["2010-11-07T02:59:00.000Z", "2010-11-07T03:00:30.000Z", "2010-11-07T03:15:00.000Z", "2010-11-07T04:00:00.000Z"]

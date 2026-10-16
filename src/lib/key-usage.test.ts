@@ -60,3 +60,33 @@ for (const backend of ["memory", "sqlite"] as const) test(`${backend}: key detai
     expect(data.keys[0]?.budget).toBeUndefined()
   })
 })
+
+for (const backend of ["memory", "sqlite"] as const) test(`${backend}: key token totals exclude incomplete requests without discarding measured usage`, async () => {
+  process.env.STORAGE_BACKEND = backend
+  if (backend === "sqlite") process.env.NODE_ENV = "development"
+  await runInWorkspace({ id: `key-tokens-${backend}`, storageMode: "scoped" }, async () => {
+    await updateBudgetWindow({ anchor: "custom", start: "2026-10-13T12:15:00.000Z", end: "2026-10-20T12:15:00.000Z" })
+    // Mix valid and incomplete requests in both a partial-hour boundary and a
+    // full daily bucket; excluding whole buckets would lose good requests too.
+    for (const [index, at] of ["2026-10-13T12:30:00.000Z", "2026-10-14T10:00:00.000Z"].entries()) {
+      await recordUsageEvent(attempt(`valid-${index}`, "mixed", at, 100), null)
+      await recordUsageEvent({ ...attempt(`partial-${index}`, "mixed", at, 100), totalTokens: 900_000, usageCompleteness: "partial" }, null)
+      await recordUsageEvent({ ...attempt(`missing-${index}`, "mixed", at, 100), totalTokens: 800_000, usageAvailable: false }, null)
+      await recordUsageEvent({ ...attempt(`malformed-${index}`, "mixed", at, 100), totalTokens: 700_000, inputTokens: -1 }, null)
+    }
+    const data = await getKeyUsagePayload("mixed")
+    expect(data.summary).toMatchObject({ requests: 8, tokens: 240 })
+    expect(data.keys[0]?.tokens).toBe(240)
+    expect(data.models[0]?.tokens).toBe(240)
+    expect(data.trend.reduce((sum, point) => sum + point.tokens, 0)).toBe(240)
+    expect(data.coverage).toMatchObject({ tokenCoveredRequests: 2, partial: true })
+    await recordUsageEvent({ ...attempt("zero", "zero-key", "2026-10-14T10:00:00.000Z", 0), inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, totalTokens: 0 }, null)
+    const zero = await getKeyUsagePayload("zero-key")
+    expect(zero.summary.tokens).toBe(0)
+    expect(zero.coverage?.tokenCoveredRequests).toBe(1)
+    await recordUsageEvent({ ...attempt("unknown", "unknown-key", "2026-10-14T10:00:00.000Z", 0), totalTokens: 999, usageCompleteness: "partial" }, null)
+    const unknown = await getKeyUsagePayload("unknown-key")
+    expect(unknown.summary.tokens).toBe(0)
+    expect(unknown.coverage?.tokenCoveredRequests).toBe(0)
+  })
+})

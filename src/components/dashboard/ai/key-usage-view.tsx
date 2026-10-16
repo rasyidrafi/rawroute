@@ -97,7 +97,7 @@ function UsageProfile({ data }: { data: DashboardPayload }) {
   const unavailable = costUnavailable(data)
   const average = data.summary.requests ? data.summary.costMicros / data.summary.requests : 0
   const top = data.models[0]
-  const tokensUnavailable = data.coverage && (data.coverage.excludedSources > 0 || data.coverage.tokenCoveredRequests < data.summary.requests)
+  const tokensUnavailable = data.coverage ? data.coverage.tokenCoveredRequests === 0 : data.summary.requests === 0
   return <Card><CardHeader><CardTitle>Usage profile</CardTitle><CardDescription>How this key uses the gateway</CardDescription></CardHeader><CardContent spacing="stack">
     <div><p className="text-3xl font-semibold tabular-nums">{unavailable || !data.summary.requests ? "Unavailable" : formatCost(average)}</p><p className="mt-1 text-xs text-muted-foreground">Average cost per recorded request</p></div>
     <Separator />
