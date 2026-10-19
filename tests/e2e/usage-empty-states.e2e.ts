@@ -378,7 +378,7 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   await expect(card("Budget balance").getByText("Remaining balance unavailable", { exact: true })).toBeVisible()
   await expect(card("Daily spend").getByText("Spend history unavailable: financial coverage is incomplete.", { exact: true })).toBeVisible()
   await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
-  await expect(card("Daily token usage").getByText("Token history unavailable: token coverage is incomplete.", { exact: true })).toBeVisible()
+  await expect(card("Daily token usage").getByRole("tabpanel", { name: "Token", exact: true }).getByText("Token history unavailable: token coverage is incomplete.", { exact: true })).toBeVisible()
   await expect(card("Budget balance").getByText("Unavailable", { exact: true })).toHaveCount(3)
   await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
   await expect(tokenValue).toHaveText("Unavailable")
