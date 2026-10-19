@@ -1,7 +1,7 @@
-import { setBudgetUnlimitedSettings } from "@/lib/analytics"
+import { validateBudgetModelIds } from "@/server/budget-models"
+import { getBudgetUnlimitedSettings, setBudgetUnlimitedSettings } from "@/lib/analytics"
 import { jsonError } from "@/lib/http"
 import { recordLog } from "@/server/logging/recorder"
-import { listAliases, listCombos, listModels, listProviders } from "@/server/store"
 
 export async function PATCH(request: Request) {
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
@@ -11,14 +11,8 @@ export async function PATCH(request: Request) {
   const excludedModelIds = [...new Set(body.excludedModelIds.map((id) => id.trim()).filter(Boolean))]
   if (excludedModelIds.length > 100) return jsonError("Choose at most 100 models.", 400)
   try {
-    const [models, providers, aliases, combos] = await Promise.all([listModels(), listProviders(), listAliases(), listCombos()])
-    const enabledProviderIds = new Set(providers.filter((provider) => provider.enabled).map((provider) => provider.id))
-    const availableModelIds = new Set([
-      ...models.filter((model) => model.enabled && enabledProviderIds.has(model.providerId)).map((model) => model.gatewayModelId || model.id),
-      ...aliases.map((alias) => alias.alias),
-      ...combos.map((combo) => combo.combo),
-    ])
-    if (excludedModelIds.some((id) => !availableModelIds.has(id))) return jsonError("One or more selected models are unavailable.", 400)
+    const current = await getBudgetUnlimitedSettings()
+    if (!await validateBudgetModelIds(excludedModelIds, current.excludedModelIds)) return jsonError("One or more selected models are unavailable.", 400)
     const settings = await setBudgetUnlimitedSettings({ excludedModelIds })
     recordLog("admin.unlimited.mode.exclusions.updated", { modelCount: settings.excludedModelIds.length }, { level: "info" })
     return Response.json({ settings })

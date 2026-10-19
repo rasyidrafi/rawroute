@@ -1,3 +1,4 @@
+import { budgetModelOptions } from "@/server/budget-models"
 import { queryLocalRequestLogs, queryLocalUsageRange } from "@/lib/local-db"
 import type { OverviewDetails, OverviewPayload } from "@/lib/overview"
 import { matchesRequestLog, requestLogCursor, type RequestLogQuery } from "@/lib/request-logs"
@@ -6,7 +7,7 @@ import { createHash } from "node:crypto"
 import { getSqliteDatabase, listLocalDocuments, type SqliteDatabase } from "@/lib/local-db"
 
 import { localCacheSetIfAbsent } from "@/lib/local-cache"
-import { listAliases, listApiKeys, listCombos, listIndexedApiKeyNames, listModels, listProviders } from "@/server/store"
+import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "@/server/store"
 import { listCodexAccounts } from "@/lib/codex/oauth"
 import { getCodexUsageForAccount } from "@/lib/codex/usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "@/lib/model-pricing"
@@ -1284,6 +1285,7 @@ export interface BudgetRequestState {
   predictionSampleCount?: number
 }
 
+// requestedCombo is trusted routing context, never a client payload field.
 export async function getBudgetRequestState(
   apiKeyId: string,
   gatewayModelId: string,
@@ -1291,6 +1293,7 @@ export async function getBudgetRequestState(
   payload?: Record<string, unknown>,
   requestBodyBytes?: number,
   protocol: UsageEvent["protocol"] = "openai-chat",
+  requestedCombo?: string,
 ): Promise<BudgetRequestState> {
   await warmUsagePredictionSamples()
   const budget = await budgetConfig(apiKeyId)
@@ -1313,7 +1316,7 @@ export async function getBudgetRequestState(
   const window = await getBudgetWindow()
   if (window.bypassLimits) {
     const requestedModel = typeof payload?.model === "string" ? payload.model.trim() : ""
-    await assertUnlimitedModelsAllowed([requestedModel, gatewayModelId, providerModelId], window)
+    await assertUnlimitedModelsAllowed([requestedCombo, requestedModel, gatewayModelId, providerModelId], window)
   }
   if (!budget) return { pricing, requestBodyBytes, ...estimatedState }
 
@@ -1327,7 +1330,7 @@ export async function getBudgetRequestState(
   if (spentMicros >= budget.weeklyLimitMicros) {
     const beyondLimits = await getBudgetBeyondLimitsSettings()
     const requestedModel = typeof payload?.model === "string" ? payload.model : ""
-    if (beyondLimits.enabled && (beyondLimits.modelIds.includes(gatewayModelId) || (requestedModel && beyondLimits.modelIds.includes(requestedModel)))) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
+    if (beyondLimits.enabled && (beyondLimits.modelIds.includes(gatewayModelId) || (requestedModel && beyondLimits.modelIds.includes(requestedModel)) || (requestedCombo && beyondLimits.modelIds.includes(requestedCombo)))) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
     throw new BudgetDeniedError("Weekly budget exceeded.", budgetRetryAfter(window))
   }
   return {
@@ -1424,14 +1427,11 @@ async function loadBudgetRows(
 }
 
 export async function getBudgetAdminData() {
-  const [keys, window, codex, models, providers, aliases, combos, beyondLimits, unlimited] = await Promise.all([
+  const [keys, window, codex, modelOptions, beyondLimits, unlimited] = await Promise.all([
     budgetSelectableKeys(),
     getBudgetWindow(),
     listCodexAccounts().catch(() => ({ provider: null, accounts: [] })),
-    listModels(),
-    listProviders(),
-    listAliases(),
-    listCombos(),
+    budgetModelOptions(),
     getBudgetBeyondLimitsSettings(),
     getBudgetUnlimitedSettings(),
   ])
@@ -1445,14 +1445,7 @@ export async function getBudgetAdminData() {
     window,
     beyondLimits,
     unlimited,
-    modelOptions: [
-      ...models
-      .filter((model) => model.enabled && providers.some((provider) => provider.id === model.providerId && provider.enabled))
-      .map((model) => ({ id: model.gatewayModelId || model.id, name: model.name, provider: providers.find((provider) => provider.id === model.providerId)?.name || "Unknown provider" })),
-      ...aliases.map((alias) => ({ id: alias.alias, name: alias.name || alias.alias, provider: "Alias" })),
-      ...combos.map((combo) => ({ id: combo.combo, name: combo.name || combo.combo, provider: "Combo" })),
-    ]
-      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
+    modelOptions,
     apiKeys: keys.map((key) => ({ id: key.id, name: key.name })),
     codexAccounts: codex.accounts.map((account) => ({ id: account.id, name: account.name, ...(account.planType ? { planType: account.planType } : {}) })),
   }

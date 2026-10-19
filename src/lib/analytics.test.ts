@@ -447,6 +447,21 @@ describe.serial("usage analytics", () => {
     expect((await getBudgetRows()).find((row) => row.apiKeyId === key.id)?.spentMicros).toBe(125)
   })
 
+  test("a Beyond Limits combo exception applies only through its trusted routing context", async () => {
+    const key = await createApiKey("Combo exception")
+    const model = await configureTestPricing({ modelId: "combo-member", gatewayModelId: "test/combo-member", upstreamModel: "combo-member", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1, enabled: true })
+    await recordGatewayUsage({ gatewayKeyId: key.id, providerModelId: model.id, gatewayModelId: model.gatewayModelId, protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, metrics: { input: 2 } })
+    await setBudgetBeyondLimitsSettings({ enabled: true, modelIds: ["coding"] })
+    expect((await getBudgetRequestState(key.id, model.gatewayModelId, model.id, { model: model.gatewayModelId }, 64, "openai-chat", "coding")).admission).toBeUndefined()
+    await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { model: model.gatewayModelId, combo: "coding" })).rejects.toThrow("budget")
+    await setBudgetBeyondLimitsSettings({ enabled: false, modelIds: ["coding"] })
+    await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { model: model.gatewayModelId }, 64, "openai-chat", "coding")).rejects.toThrow("budget")
+    await setBudgetUnlimitedSettings({ excludedModelIds: ["coding"] })
+    await setBudgetBypassEnabled(true)
+    await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { model: model.gatewayModelId }, 64, "openai-chat", "coding")).rejects.toMatchObject({ code: "model_excluded_in_unlimited_mode" })
+  })
+
   test("tracks Unlimited Mode usage from the active session in budgets and usage payloads", async () => {
     const key = await createApiKey("Unlimited usage")
     await configureTestPricing({ modelId: "unlimited-model", gatewayModelId: "test/unlimited", upstreamModel: "unlimited", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 })
