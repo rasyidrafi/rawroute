@@ -41,6 +41,8 @@ const { lifecycle } = await import("@/server/cliproxy/http")
 await initializeInstance()
 
 beforeEach(() => {
+  process.env.CLIPROXY_MODE = "managed"
+  process.env.RAWROUTE_PUBLIC_URL = origin
   Object.assign(state, stopped)
   synced.length = 0
   mock.clearAllMocks()

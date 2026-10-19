@@ -275,7 +275,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
       body: JSON.stringify({ ...memberPayload, model: memberModelId }),
       signal: request.signal,
     })
-    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, customPayload } : undefined))
+    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, customPayload } : undefined, requestedModel))
     if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
       return responseWithoutComboHeaders(response)
@@ -287,7 +287,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
 }
 
-async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }, preResolved?: ResolvedGatewayModel) {
+async function proxyGatewaySingleRequest(request: Request, path: string, apiKey: { id: string; name?: string }, preResolved?: ResolvedGatewayModel, requestedCombo?: string) {
   const supplied = suppliedGatewayKey(request)
 
   const isInference = request.method !== "GET" && request.method !== "HEAD" && !path.endsWith("/models")
@@ -334,6 +334,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     let reservation: BudgetReservation | undefined
     try {
       const ownerWorkspace = resolvedModel.shared ? await getWorkspace(resolvedModel.shared.ownerWorkspaceId) : undefined
+      // A recipient combo exception must never bypass the shared owner policy.
       budgetState = resolvedModel.shared && ownerWorkspace
         ? await runInWorkspace(ownerWorkspace, () => getBudgetRequestState(
             `shared-workspace:${resolvedModel.shared!.consumerWorkspaceId}`,
@@ -350,6 +351,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
             forwardedBody.byteLength,
             protocol,
+            requestedCombo,
           )
     } catch (error) {
       if (error instanceof BudgetModelExcludedError) {
@@ -358,11 +360,11 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       }
       if (error instanceof BudgetDeniedError) {
         recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
-        return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" } })
+        return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), ...(requestedCombo ? { "x-rawroute-combo-member-unavailable": "1" } : { "x-rawroute-combo-terminal": "1" }) } })
       }
       if (error instanceof BudgetPricingUnavailableError) {
         recordLog("gateway.budget.pricing.unavailable", { apiKeyId: apiKey.id, status: error.status, model: estimate.model }, { level: "warn" })
-        return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
+        return new Response(JSON.stringify({ error: { message: error.message } }), { status: error.status, headers: { "content-type": "application/json", ...(requestedCombo ? { "x-rawroute-combo-member-unavailable": "1" } : { "x-rawroute-combo-terminal": "1" }) } })
       }
       recordLog("gateway.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
       return new Response(JSON.stringify({ error: { message: "Budget state is unavailable." } }), { status: 503, headers: { "content-type": "application/json", "x-rawroute-combo-terminal": "1" } })
@@ -375,7 +377,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
         recordLog("gateway.budget.admission.denied", { apiKeyId: apiKey.id, status: error.status, retryAfter: error.retryAfterSeconds }, { level: "warn" })
         return new Response(JSON.stringify({ error: { message: error.message } }), {
           status: error.status,
-          headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), "x-rawroute-combo-terminal": "1" },
+          headers: { "content-type": "application/json", "retry-after": String(error.retryAfterSeconds), ...(requestedCombo ? { "x-rawroute-combo-member-unavailable": "1" } : { "x-rawroute-combo-terminal": "1" }) },
         })
       }
       recordLog("gateway.shared.budget.state.unavailable", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })

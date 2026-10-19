@@ -10,50 +10,66 @@ function modelGatewayId(model: Model) {
   return model.gatewayModelId || model.id
 }
 
-export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = [], combos: ModelCombo[] = [], sharedModels: SharedModelView[] = []) {
-  const enabledProviders = enabledProviderIndex(providers)
-  const enabledModels = new Map<string, { model: Model; provider: Provider }>()
-  const entries: Array<{ id: string; object: "model"; created: number; owned_by: string; protocol: string }> = []
+export interface RoutingModelOption {
+  id: string
+  name: string
+  provider: string
+  kind: "model" | "alias" | "combo"
+  available: boolean
+  unavailableReason?: string
+  members: string[]
+}
 
+export function routingModelCatalog(providers: Provider[], models: Model[], aliases: ModelAlias[] = [], combos: ModelCombo[] = [], sharedModels: SharedModelView[] = []) {
+  const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
+  const modelIndex = new Map(models.flatMap((model) => [[model.id, model], [modelGatewayId(model), model]] as const))
+  const shares = new Map(sharedModels.map((share) => [share.id, share]))
+  const modelAvailable = (model: Model | undefined) => Boolean(model?.enabled && providerIndex.get(model.providerId)?.enabled)
+  const aliasAvailable = (alias: ModelAlias) => alias.sharedModelId
+    ? shares.get(alias.sharedModelId)?.status === "active"
+    : modelAvailable(modelIndex.get(alias.targetModelId))
+  const availableAliases = new Set(aliases.filter(aliasAvailable).map((alias) => alias.alias))
+  const entries: Array<RoutingModelOption & { created: number; owned_by: string; protocol: string }> = []
   for (const model of models) {
-    if (!model.enabled) continue
-    const provider = enabledProviders.get(model.providerId)
-    if (!provider) continue
-    const gatewayModelId = modelGatewayId(model)
-    if (!enabledModels.has(gatewayModelId)) enabledModels.set(gatewayModelId, { model, provider })
+    const provider = providerIndex.get(model.providerId)
+    const available = modelAvailable(model)
     entries.push({
-      id: gatewayModelId,
-      object: "model",
-      created: Math.floor(Date.parse(model.createdAt) / 1000),
-      owned_by: provider.prefix,
-      protocol: provider.protocol,
+      id: modelGatewayId(model), name: model.name || modelGatewayId(model), provider: provider?.name || "Unknown provider", kind: "model", available,
+      ...(!available ? { unavailableReason: !model.enabled ? "Model disabled" : "Provider unavailable" } : {}), members: [],
+      created: Math.floor(Date.parse(model.createdAt) / 1000), owned_by: provider?.prefix || "rawroute", protocol: provider?.protocol || "openai-chat",
     })
   }
-
   for (const alias of aliases) {
-    const target = enabledModels.get(alias.targetModelId)
-    if (!target) continue
+    const target = modelIndex.get(alias.targetModelId)
+    const provider = target ? providerIndex.get(target.providerId) : undefined
+    const available = aliasAvailable(alias)
     entries.push({
-      id: alias.alias,
-      object: "model",
-      created: Math.floor(Date.parse(alias.createdAt) / 1000),
-      owned_by: target.provider.prefix,
-      protocol: target.provider.protocol,
+      id: alias.alias, name: alias.name || alias.alias, provider: "Alias", kind: "alias", available,
+      ...(!available ? { unavailableReason: "Target model unavailable" } : {}), members: [alias.targetModelId],
+      created: Math.floor(Date.parse(alias.createdAt) / 1000), owned_by: provider?.prefix || "rawroute", protocol: provider?.protocol || "openai-chat",
     })
   }
-  const availableAliases = new Set(aliases.filter((alias) => enabledModels.has(alias.targetModelId) || Boolean(alias.sharedModelId)).map((alias) => alias.alias))
-  const availableShares = new Set(sharedModels.filter((model) => model.status === "active").map((model) => model.id))
   for (const combo of combos) {
-    if (!combo.members.some((member) => member.sharedModelId ? availableShares.has(member.sharedModelId) : enabledModels.has(member.modelId) || availableAliases.has(member.modelId))) continue
+    const available = combo.members.some((member) => member.sharedModelId
+      ? shares.get(member.sharedModelId)?.status === "active"
+      : modelAvailable(modelIndex.get(member.modelId)) || availableAliases.has(member.modelId))
     entries.push({
-      id: combo.combo,
-      object: "model",
-      created: Math.floor(Date.parse(combo.createdAt) / 1000),
-      owned_by: "rawroute",
-      protocol: "openai-chat",
+      id: combo.combo, name: combo.name || combo.combo, provider: "Combo", kind: "combo", available,
+      ...(!available ? { unavailableReason: "No available members" } : {}),
+      members: combo.members.map((member) => {
+        const share = member.sharedModelId ? shares.get(member.sharedModelId) : undefined
+        return member.sharedModelId ? `${member.modelId} (budget: ${share?.ownerWorkspaceName || "owner workspace"})` : member.modelId
+      }),
+      created: Math.floor(Date.parse(combo.createdAt) / 1000), owned_by: "rawroute", protocol: "openai-chat",
     })
   }
   return entries
+}
+
+export function catalogModels(providers: Provider[], models: Model[], aliases: ModelAlias[] = [], combos: ModelCombo[] = [], sharedModels: SharedModelView[] = []) {
+  return routingModelCatalog(providers, models, aliases, combos, sharedModels)
+    .filter((entry) => entry.available)
+    .map(({ id, created, owned_by, protocol }) => ({ id, object: "model" as const, created, owned_by, protocol }))
 }
 
 export function catalogLiteLlmModelInfo(providers: Provider[], models: Model[], aliases: ModelAlias[] = []) {

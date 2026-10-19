@@ -24,7 +24,8 @@ mock.module("@/lib/analytics", () => ({
   assertUnlimitedModelsAllowed: mocks.assertUnlimitedModelsAllowed,
   BudgetDeniedError: class BudgetDeniedError extends Error {
     status = 429
-    retryAfterSeconds = 1
+    retryAfterSeconds: number
+    constructor(message: string, retryAfterSeconds: number) { super(message); this.retryAfterSeconds = retryAfterSeconds }
   },
   BudgetPricingUnavailableError: class BudgetPricingUnavailableError extends Error {
     status = 503
@@ -810,4 +811,36 @@ test("rejects unknown runtime models before calling the backend", async () => {
 
   expect(response.status).toBe(400)
   expect(globalThis.fetch).not.toHaveBeenCalled()
+})
+
+function budgetComboFixture() {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", enabled: true }])
+  mocks.listModels.mockResolvedValue(["a", "b"].map((id) => ({ id, providerId: "p", gatewayModelId: `p/${id}`, name: id, upstreamModel: id, enabled: true, createdAt: new Date().toISOString() })))
+  mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "budget-fallback", name: "Budget fallback", members: ["p/a", "p/b"].map(modelId => ({ modelId })), createdAt: new Date().toISOString() }])
+  return new Request("http://gateway/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "budget-fallback", messages: [{ role: "user", content: "hello" }] }) })
+}
+
+test("falls back after a member budget denial and retains the requested combo for admission", async () => {
+  const request = budgetComboFixture()
+  mocks.getBudgetRequestState.mockRejectedValueOnce(new BudgetDeniedError("Weekly budget exceeded.", 60))
+  const response = await proxyGatewayRequest(request)
+  expect(response.status).toBe(200)
+  expect(mocks.getBudgetRequestState).toHaveBeenCalledTimes(2)
+  expect(mocks.getBudgetRequestState.mock.calls.map((call) => [call[1], call[6]])).toEqual([["p/a", "budget-fallback"], ["p/b", "budget-fallback"]])
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body)).model).toBe("rr-ws-default-p-p/b")
+  expect(response.headers.has("x-rawroute-combo-member-unavailable")).toBe(false)
+})
+
+test("all budget-denied combo members return the budget error without calling upstream", async () => {
+  const request = budgetComboFixture()
+  mocks.getBudgetRequestState.mockRejectedValue(new BudgetDeniedError("Weekly budget exceeded.", 60))
+  const response = await proxyGatewayRequest(request)
+  expect(response.status).toBe(429)
+  expect(response.headers.get("retry-after")).toBe("60")
+  expect(response.headers.has("x-rawroute-combo-member-unavailable")).toBe(false)
+  expect(response.headers.has("x-rawroute-combo-terminal")).toBe(false)
+  expect(globalThis.fetch).not.toHaveBeenCalled()
+  // Restore the default implementation for subsequent tests.
+  mocks.getBudgetRequestState.mockResolvedValue({ admission: undefined, usageContext: undefined })
 })
