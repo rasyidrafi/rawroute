@@ -21,5 +21,8 @@ test("combo form pairs gateway ID and name with ordered local and shared models"
   expect(form).toContain("Select a local or shared model")
   expect(form).toContain("disabled={!selectedModel || members.length >= 8}")
   expect(form).toContain('sharedModels.filter((model) => model.status === "active")')
+  expect(form).toContain("shared: false")
+  expect(form).toContain("shared: true")
+  expect(form).toContain('{target.shared && <Badge variant="secondary" className="ml-2">Shared</Badge>}')
   expect(form).toContain("onDragEnd={reorderMembers}")
 })
