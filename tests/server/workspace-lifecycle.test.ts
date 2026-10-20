@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { closeLocalDatabase, getDatabase, getSqliteDatabase } from "../../packages/platform/src/server/database"
 import { createWorkspaceRepository, drainWorkspaceDeletions, type WorkspaceCleanupParticipant } from "../../packages/platform/src/server/workspace-repository"
@@ -34,7 +35,7 @@ const workspaceIds = new Set<string>()
 beforeEach(async () => {
   await closeLocalDatabase()
   await closeLocalCache()
-  directory = mkdtempSync("/tmp/opencode/rawroute-lifecycle-")
+  directory = mkdtempSync(join(tmpdir(), "rawroute-lifecycle-"))
   process.env.SQLITE_PATH = join(directory, "test.sqlite")
   process.env.DATABASE_COLLECTION_PREFIX = "lifecycle_test"
   process.env.NODE_ENV = "development"
