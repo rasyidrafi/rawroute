@@ -113,6 +113,7 @@ function removeFixtureRoot(root: string): void {
 let fixtureRoot: string | undefined;
 let fixtureExecutable: string | undefined;
 let failingFixtureExecutable: string | undefined;
+let fixtureScenarioNumber = 0;
 
 function getFixtureExecutable(failing = false): string {
   const cached = failing ? failingFixtureExecutable : fixtureExecutable;
@@ -182,6 +183,7 @@ function getFixtureExecutable(failing = false): string {
           } catch {}
           fs.writeFileSync(signalPath, JSON.stringify({ signal: "SIGTERM", currentTarget }));
         }
+        if (process.env.CLIPROXY_FIXTURE_IGNORE_SIGTERM === "1") return;
         server.stop();
         process.exit(0);
       });
@@ -295,12 +297,15 @@ interface FixtureScenarioContext {
 
 interface FixtureScenarioOptions {
   timeoutMs?: number;
+  scenarioName?: string;
 }
 
 async function runFixtureScenario(
   createScript: (context: FixtureScenarioContext) => string,
-  { timeoutMs = FIXTURE_SCENARIO_TIMEOUT_MS }: FixtureScenarioOptions = {}
+  { timeoutMs = FIXTURE_SCENARIO_TIMEOUT_MS, scenarioName }: FixtureScenarioOptions = {}
 ): Promise<Record<string, unknown>> {
+  const startedAt = performance.now();
+  const timingLabel = scenarioName ?? `scenario ${++fixtureScenarioNumber}`;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cliproxy-transaction-test-"));
   const context: FixtureScenarioContext = {
     root,
@@ -349,11 +354,13 @@ async function runFixtureScenario(
     }
   }
   if (scenarioError && cleanupError) {
+    console.info(`[CLIProxy fixture] ${timingLabel}: ${Math.round(performance.now() - startedAt)} ms`);
     throw new AggregateError(
       [scenarioError, cleanupError],
       "Fixture scenario failed and its process group could not be reaped"
     );
   }
+  console.info(`[CLIProxy fixture] ${timingLabel}: ${Math.round(performance.now() - startedAt)} ms`);
   if (scenarioError) throw scenarioError;
   if (cleanupError) throw cleanupError;
   return result as Record<string, unknown>;
@@ -504,12 +511,60 @@ describe("CLIProxy service helpers", () => {
           await waitForFile(readyPath);
           await new Promise(() => {});
         `,
-        { timeoutMs: 1_000 }
+        { timeoutMs: 1_000, scenarioName: "timeout cleanup" }
       )
     ).rejects.toThrow("Timed out waiting for fixture scenario");
 
     await waitForFixturePortRelease();
   }, FIXTURE_TIMEOUT_REGRESSION_TEST_TIMEOUT_MS);
+
+  test("cancels the termination deadline after a graceful child exit", async () => {
+    const startedAt = Date.now();
+    const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
+      ${serviceFixturePrelude(dataRoot, executable)}
+      installVersion("1.2.3");
+      setCurrent("1.2.3");
+      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "1.2.3", pinnedVersion: null });
+      const service = await import(${JSON.stringify(moduleUrl)});
+      await service.initCliproxy();
+      await service.start();
+      await service.stop();
+      const status = await service.getStatus();
+      await service.shutdownCliproxy();
+      console.log(JSON.stringify({ processRunning: status.processRunning, desiredRunning: status.desiredRunning }));
+    `, { scenarioName: "graceful stop clears timeout" });
+
+    expect(result.processRunning).toBe(false);
+    expect(result.desiredRunning).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test("preserves the SIGTERM deadline and escalates an unresponsive child to SIGKILL", async () => {
+    const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl, root }) => `
+      ${serviceFixturePrelude(dataRoot, executable)}
+      const signalPath = path.join(${JSON.stringify(root)}, "sigterm-received");
+      process.env.CLIPROXY_FIXTURE_SIGNAL_PATH = signalPath;
+      process.env.CLIPROXY_FIXTURE_IGNORE_SIGTERM = "1";
+      installVersion("1.2.3");
+      setCurrent("1.2.3");
+      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "1.2.3", pinnedVersion: null });
+      const service = await import(${JSON.stringify(moduleUrl)});
+      await service.initCliproxy();
+      await service.start();
+      const stopStartedAt = Date.now();
+      await service.stop();
+      const stopElapsedMs = Date.now() - stopStartedAt;
+      const status = await service.getStatus();
+      const termWasSent = fs.existsSync(signalPath);
+      await service.shutdownCliproxy();
+      console.log(JSON.stringify({ stopElapsedMs, termWasSent, processRunning: status.processRunning }));
+    `, { scenarioName: "SIGTERM timeout escalates to SIGKILL" });
+
+    expect(result.termWasSent).toBe(true);
+    expect(result.stopElapsedMs).toBeGreaterThanOrEqual(4_800);
+    expect(result.stopElapsedMs).toBeLessThan(7_500);
+    expect(result.processRunning).toBe(false);
+  }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("commits initial install and update transactions without a release download", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
@@ -1819,6 +1874,7 @@ describe("CLIProxy service helpers", () => {
   }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("reaps a child when child-record persistence fails and leaves status safe", async () => {
+    const startedAt = Date.now();
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
       installVersion("1.2.3");
@@ -1863,7 +1919,7 @@ describe("CLIProxy service helpers", () => {
         statusError: status.lastError,
         managerRemovedAfterShutdown: !fs.existsSync(path.join(serviceRoot, "manager.json")),
       }));
-    `);
+    `, { scenarioName: "failed record persistence clears timeout" });
 
     expect(result.startError).toContain("Refusing to replace a non-regular CLIProxy state file: child.json");
     expect(result.orphanedPids).toEqual([]);
@@ -1872,6 +1928,7 @@ describe("CLIProxy service helpers", () => {
     expect(result.statusHealthy).toBe(false);
     expect(result.statusError).toContain("Refusing to replace a non-regular CLIProxy state file: child.json");
     expect(result.managerRemovedAfterShutdown).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
   }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("reaps a child and clears its record when its authenticated health check fails", async () => {

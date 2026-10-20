@@ -1,7 +1,43 @@
-import { expect } from "@playwright/test"
+import { expect, type Page, type Request } from "@playwright/test"
 import { test } from "./empty-workspace.fixture"
 
 test.use({ timezoneId: "Asia/Tokyo" })
+
+function observeRequestSettlement(page: Page, expectedRequest: Request): Promise<"finished" | "failed"> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error(`Browser request did not settle: ${expectedRequest.url()}`))
+    }, 5_000)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      page.off("requestfinished", onFinished)
+      page.off("requestfailed", onFailed)
+    }
+    const onFinished = (request: Request) => {
+      if (request !== expectedRequest) return
+      cleanup()
+      resolve("finished")
+    }
+    const onFailed = (request: Request) => {
+      if (request !== expectedRequest) return
+      cleanup()
+      resolve("failed")
+    }
+    page.on("requestfinished", onFinished)
+    page.on("requestfailed", onFailed)
+  })
+}
+
+// Consume a browser request after the clock tick before sampling the route log.
+async function flushBrowserNetworkEvents(page: Page) {
+  const responseBody = await page.evaluate(async () => {
+    const response = await fetch("/__e2e/network-barrier", { cache: "no-store" })
+    if (!response.ok) throw new Error("Browser network barrier failed")
+    return await response.text()
+  })
+  expect(responseBody).toBe("settled")
+}
 
 test("request log filters, pagination, refresh and feedback states", async ({ page, emptyWorkspaceId }) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
@@ -167,23 +203,42 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
   let fail: boolean | "network" = false
   let hold = false
   let release: (() => void) | undefined
+  let heldRequest: Request | undefined
   let active = 0
   let maxActive = 0
+  // Drain mock handlers only after the browser-side request settlement is asserted.
+  const idleWaiters = new Set<() => void>()
+  const routeHandlersIdle = () => active === 0
+    ? Promise.resolve()
+    : new Promise<void>(resolve => idleWaiters.add(resolve))
   await page.route("**/api/admin/request-logs?*", async route => {
     const params = new URL(route.request().url()).searchParams
     requests.push(params)
     active++
     maxActive = Math.max(maxActive, active)
     try {
-      if (hold && !params.has("cursor")) await new Promise<void>(resolve => { release = resolve })
+      if (hold && !params.has("cursor")) {
+        heldRequest = route.request()
+        await new Promise<void>(resolve => { release = resolve })
+        if (route.request().failure()) return
+      }
       if (fail === "network") { await route.abort("failed"); return }
       if (fail) { await route.fulfill({ status: 500, json: { error: { message: "Unavailable" } } }); return }
       const events = Array.from({ length: params.has("cursor") ? 1 : 25 }, (_, i) => ({
         id: `event-${params.has("cursor") ? "history" : newest - i}`, gatewayKeyId: "key", keyName: "Key", gatewayModelId: "model", modelName: `${route.request().headers()["x-rawroute-workspace-id"] === emptyWorkspaceId ? "Workspace attempt" : params.get("status") === "failed" ? "Filtered attempt" : "Attempt"} ${params.has("cursor") ? "history" : newest - i}`, protocol: "openai-chat", startedAt: params.get("to"), completedAt: params.get("to"), status: 200, durationMs: 100, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 2, costMicros: 0, pricingConfidence: "unpriced", usageAvailable: true,
       }))
       await route.fulfill({ json: { events, models: [{ id: "model", name: "Model" }], keys: [{ id: "key", name: "Key" }], from: params.get("from"), to: params.get("to"), nextCursor: params.has("cursor") ? null : "cursor" } })
-    } finally { active-- }
+    } finally {
+      if (heldRequest === route.request()) heldRequest = undefined
+      active--
+      if (active === 0) {
+        for (const resolve of idleWaiters) resolve()
+        idleWaiters.clear()
+      }
+    }
   })
+  await page.route("**/__e2e/network-barrier", route => route.fulfill({ body: "settled" }))
+  await page.clock.install()
   await page.goto("/dashboard/ai/overview/request-logs")
   const live = page.getByRole("checkbox")
   await expect(live).toBeChecked()
@@ -192,6 +247,7 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
   await page.getByRole("table").evaluate(table => table.setAttribute("data-live-mounted", "yes"))
   await page.getByRole("button", { name: "Refresh", exact: true }).focus()
   newest = 25
+  await page.clock.fastForward(3_000)
   await expect(page.getByText("Attempt 25", { exact: true })).toBeVisible({ timeout: 6000 })
   await expect(page.getByText("Attempt 0", { exact: true })).toHaveCount(0)
   await expect(page.getByRole("row")).toHaveCount(26)
@@ -200,52 +256,65 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
   expect(requests.at(-1)!.get("to")).not.toBe(firstTo)
   expect(Number(new Date(requests.at(-1)!.get("to")!)) - Number(new Date(requests.at(-1)!.get("from")!))).toBe(86_400_000)
   fail = true
+  await page.clock.fastForward(3_000)
   await expect(page.getByRole("alert")).toBeVisible({ timeout: 6000 })
   await expect(page.getByText("Attempt 25", { exact: true })).toBeVisible()
   await expect(page.getByRole("table")).toHaveAttribute("data-live-mounted", "yes")
   fail = false
   newest = 26
+  await page.clock.fastForward(3_000)
   await expect(page.getByText("Attempt 26", { exact: true })).toBeVisible({ timeout: 6000 })
   await expect(page.getByRole("alert")).toHaveCount(0)
   fail = "network"
+  await page.clock.fastForward(3_000)
   await expect(page.getByRole("alert")).toBeVisible({ timeout: 6000 })
   await expect(page.getByText("Attempt 26", { exact: true })).toBeVisible()
   fail = false
+  await page.clock.fastForward(3_000)
   await expect(page.getByRole("alert")).toHaveCount(0, { timeout: 6000 })
   expect(maxActive).toBe(1)
   hold = true
+  await page.clock.fastForward(3_000)
   await expect.poll(() => !!release, { timeout: 6000 }).toBe(true)
+  const pausedSnapshotRequest = heldRequest
+  expect(pausedSnapshotRequest).toBeDefined()
+  const pausedSnapshotSettlement = observeRequestSettlement(page, pausedSnapshotRequest!)
   await live.uncheck()
-  await expect(page.getByText("Attempt 26", { exact: true })).toBeVisible()
-  await expect(page.getByRole("alert")).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Older", exact: true })).toBeEnabled()
+  expect(await pausedSnapshotSettlement).toBe("failed")
   newest = 100
   release!()
   hold = false
   release = undefined
-  await page.waitForTimeout(200)
+  await routeHandlersIdle()
   await expect(page.getByText("Attempt 100", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Attempt 26", { exact: true })).toBeVisible()
   await expect(page.getByRole("alert")).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Older", exact: true })).toBeEnabled()
   await expect(page.getByRole("row")).toHaveCount(26)
   const pausedCount = requests.length
-  await page.waitForTimeout(3300)
+  await page.clock.fastForward(3_300)
+  await flushBrowserNetworkEvents(page)
   expect(requests).toHaveLength(pausedCount)
   newest = 27
   await live.check()
   await expect(page.getByText("Attempt 27", { exact: true })).toBeVisible()
   const displayedTo = requests.at(-1)!.get("to")
   hold = true
+  await page.clock.fastForward(3_000)
   await expect.poll(() => !!release, { timeout: 6000 }).toBe(true)
+  const liveSnapshotRequest = heldRequest
+  expect(liveSnapshotRequest).toBeDefined()
+  const liveSnapshotSettlement = observeRequestSettlement(page, liveSnapshotRequest!)
   await page.getByRole("button", { name: "Older", exact: true }).click()
   await expect(live).not.toBeChecked()
   await expect(page.getByText("Attempt history", { exact: true })).toBeVisible()
-  expect(requests.at(-1)!.get("to")).toBe(displayedTo)
+  expect(await liveSnapshotSettlement).toBe("failed")
   release!()
   hold = false
-  await page.waitForTimeout(200)
+  await routeHandlersIdle()
   await expect(page.getByText("Attempt history", { exact: true })).toBeVisible()
+  expect(requests.at(-1)!.get("to")).toBe(displayedTo)
   await page.getByRole("button", { name: "Newer", exact: true }).click()
   await expect(page.getByText("Attempt 27", { exact: true })).toBeVisible()
   await expect(page.getByRole("alert")).toHaveCount(0)
@@ -278,7 +347,8 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
     document.dispatchEvent(new Event("visibilitychange"))
   })
   const hiddenCount = requests.length
-  await page.waitForTimeout(3300)
+  await page.clock.fastForward(3_300)
+  await flushBrowserNetworkEvents(page)
   expect(requests).toHaveLength(hiddenCount)
   newest = 29
   await page.evaluate(() => {
@@ -288,38 +358,48 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
   await expect(page.getByText("Attempt 29", { exact: true })).toBeVisible()
   await page.context().setOffline(true)
   const offlineCount = requests.length
-  await page.waitForTimeout(3300)
+  await page.clock.fastForward(3_300)
+  await flushBrowserNetworkEvents(page)
   expect(requests).toHaveLength(offlineCount)
   newest = 30
   await page.context().setOffline(false)
   await expect(page.getByText("Attempt 30", { exact: true })).toBeVisible()
   hold = true
   release = undefined
+  await page.clock.fastForward(3_000)
   await expect.poll(() => !!release, { timeout: 6000 }).toBe(true)
+  const statusChangeRequest = heldRequest
+  expect(statusChangeRequest).toBeDefined()
+  const statusChangeSettlement = observeRequestSettlement(page, statusChangeRequest!)
   await page.getByRole("combobox", { name: "Status", exact: true }).click()
-  // Only the old query is held; release it after the new query has been requested.
+  // Keep the old query held while the filtered response is rendered and cancellation is observed.
   hold = false
   await page.getByRole("option", { name: "Failed", exact: true }).click()
   await expect(page.getByText("Filtered attempt 30", { exact: true })).toBeVisible()
+  expect(await statusChangeSettlement).toBe("failed")
   release!()
-  await page.waitForTimeout(200)
+  await routeHandlersIdle()
   await expect(page.getByText("Attempt 30", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Filtered attempt 30", { exact: true })).toBeVisible()
   await expect(page.getByRole("alert")).toHaveCount(0)
   hold = true
   release = undefined
+  await page.clock.fastForward(3_000)
   await expect.poll(() => !!release, { timeout: 6000 }).toBe(true)
+  const workspaceChangeRequest = heldRequest
+  expect(workspaceChangeRequest).toBeDefined()
+  const workspaceChangeSettlement = observeRequestSettlement(page, workspaceChangeRequest!)
   const workspaces = (await (await page.request.get("/api/admin/workspaces")).json()).workspaces as { id: string; name: string }[]
   const workspace = workspaces.find(item => item.id === emptyWorkspaceId)!
   await page.getByRole("button", { name: /RawRoute/ }).first().click()
   hold = false
   await page.getByRole("menuitemradio", { name: workspace.name, exact: true }).click()
   await expect(page.getByText("Workspace attempt 30", { exact: true })).toBeVisible()
+  expect(await workspaceChangeSettlement).toBe("failed")
   release!()
-  await page.waitForTimeout(200)
+  await routeHandlersIdle()
   await expect(page.getByText("Filtered attempt 30", { exact: true })).toHaveCount(0)
   await expect(page.getByRole("alert")).toHaveCount(0)
-  // The held request was aborted before the history request; the mock handler can
-  // still be waiting even though the browser has already canceled its transport.
+  // The workspace change cancels the old filtered request before mock-route cleanup.
   expect(maxActive).toBeLessThanOrEqual(2)
 })

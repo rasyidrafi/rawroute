@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test"
+import { expect, test, type Page, type Request, type Route } from "@playwright/test"
 import { pagePaths } from "../../src/lib/dashboard/routes"
 
 const sessionUrl = "**/api/auth/session"
@@ -67,10 +67,15 @@ test("retry shows progress, handles repeated failure, and recovers to login", as
 
 test("a stalled session request times out and allows retry", async ({ page }) => {
   const errors = browserErrors(page)
+  await page.clock.install()
   await page.route(sessionUrl, () => {})
+  const timedOutRequest = page.waitForEvent("requestfailed", request => request.url().endsWith("/api/auth/session"))
   await page.goto(pagePaths.login)
   await expect(page.getByRole("button", { name: "Checking session…" })).toBeDisabled()
   await expect(page.getByLabel("Password", { exact: true })).toBeDisabled()
+  await page.clock.fastForward(10_100)
+  const failedRequest: Request = await timedOutRequest
+  expect(failedRequest.failure()).not.toBeNull()
   await expect(page.getByRole("alert", { name: errorTitle })).toBeVisible({ timeout: 15_000 })
   await page.unroute(sessionUrl)
   await page.getByRole("button", { name: "Try again" }).click()
@@ -81,6 +86,7 @@ test("a stalled session request times out and allows retry", async ({ page }) =>
 test("recovered sessions restore the requested dashboard and expired sessions redirect to login", async ({ page }) => {
   const errors = browserErrors(page)
   await authenticate(page)
+  await page.clock.install()
   await page.route(sessionUrl, route => route.fulfill({ status: 503 }))
   await page.goto(pagePaths.overviewUsage)
   await expect(page.getByRole("alert", { name: errorTitle })).toBeVisible()
@@ -90,7 +96,7 @@ test("recovered sessions restore the requested dashboard and expired sessions re
   await expect(page).toHaveURL(pagePaths.overviewUsage)
   // A failed background check keeps the verified dashboard mounted beneath the banner.
   await page.route(sessionUrl, route => route.fulfill({ status: 503 }))
-  await page.waitForTimeout(5_100)
+  await page.clock.fastForward(5_100)
   await page.evaluate(() => window.dispatchEvent(new Event("focus")))
   await expect(page.getByRole("alert", { name: errorTitle })).toBeVisible()
   await expect(page.getByRole("heading", { name: "Usage summary", exact: true })).toBeVisible()
@@ -105,6 +111,7 @@ test("recovered sessions restore the requested dashboard and expired sessions re
 test("offline banner preserves dashboard drafts and reconnects automatically", async ({ page, context }) => {
   const errors = browserErrors(page)
   await authenticate(page)
+  await page.clock.install()
   await page.goto(pagePaths.settings)
   const password = page.getByLabel("Current password", { exact: true })
   await password.fill("unsaved-draft")
@@ -114,7 +121,7 @@ test("offline banner preserves dashboard drafts and reconnects automatically", a
   await expect(password).toHaveValue("unsaved-draft")
   await expect(password).toBeEnabled()
   // Let the session deduplication window elapse before reconnecting.
-  await page.waitForTimeout(2_100)
+  await page.clock.fastForward(2_100)
   const rechecked = page.waitForResponse(response => response.url().endsWith("/api/auth/session") && response.ok())
   await context.setOffline(false)
   await rechecked
@@ -124,11 +131,12 @@ test("offline banner preserves dashboard drafts and reconnects automatically", a
 })
 
 test("a failed background session check preserves login input through retry", async ({ page }) => {
+  await page.clock.install()
   await page.goto(pagePaths.login)
   const password = page.getByLabel("Password", { exact: true })
   await password.fill("unsaved-login-password")
   await page.route(sessionUrl, route => route.fulfill({ status: 503 }))
-  await page.waitForTimeout(5_100)
+  await page.clock.fastForward(5_100)
   await page.evaluate(() => window.dispatchEvent(new Event("focus")))
   await expect(page.getByRole("alert", { name: errorTitle })).toBeVisible()
   await expect(password).toHaveValue("unsaved-login-password")

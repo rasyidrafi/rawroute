@@ -128,44 +128,61 @@ for (const width of [390, 1280]) {
   })
 }
 
-for (const width of [390, 1280, 1600]) {
-  test(`public loading matches the loaded header and summary at ${width}px across all loading boundaries`, async ({ page }, testInfo) => {
+test("public loading matches the loaded header and summary at every responsive width", async ({ page }, testInfo) => {
+  const widths = [390, 1280, 1600]
+  await page.setViewportSize({ width: widths[0]!, height: 1000 })
+  const publicChunks = readdirSync("dist").filter(file => file.startsWith("chunk-") && file.endsWith(".js") && readFileSync(`dist/${file}`, "utf8").includes("Public workspaces are unavailable."))
+  expect(publicChunks.length).toBeGreaterThan(0)
+  const script = await hold(page, new RegExp(`(?:${publicChunks.join("|")})$`))
+  const workspaces = await hold(page, "**/api/public/workspaces")
+  const dashboard = await hold(page, "**/api/public/dashboard?*")
+  await page.goto("/", { waitUntil: "domcontentloaded" })
+  await script.reached
+  await expect(page.getByRole("heading", { name: "Usage dashboard" })).toBeVisible()
+  await expect(page.getByText("API Endpoint", { exact: true })).toHaveCount(0)
+  const selector = '[data-slot="public-header"], [data-slot="usage-summary"], [data-slot="usage-summary"] [data-slot="card"], [data-slot="usage-summary"] [data-slot="card-header"], [data-slot="usage-summary"] [data-slot="card-footer"]'
+  const initial = new Map<number, Awaited<ReturnType<typeof geometry>>>()
+  for (const width of widths) {
     await page.setViewportSize({ width, height: 1000 })
-    const publicChunks = readdirSync("dist").filter(file => file.startsWith("chunk-") && file.endsWith(".js") && readFileSync(`dist/${file}`, "utf8").includes("Public workspaces are unavailable."))
-    expect(publicChunks.length).toBeGreaterThan(0)
-    const script = await hold(page, new RegExp(`(?:${publicChunks.join("|")})$`))
-    const workspaces = await hold(page, "**/api/public/workspaces")
-    const dashboard = await hold(page, "**/api/public/dashboard?*")
-    await page.goto("/", { waitUntil: "domcontentloaded" })
-    await script.reached
-    await expect(page.getByRole("heading", { name: "Usage dashboard" })).toBeVisible()
     await expectSeparatedSkeletons(page)
-    await expect(page.getByText("API Endpoint", { exact: true })).toHaveCount(0)
-    const selector = '[data-slot="public-header"], [data-slot="usage-summary"], [data-slot="usage-summary"] [data-slot="card"], [data-slot="usage-summary"] [data-slot="card-header"], [data-slot="usage-summary"] [data-slot="card-footer"]'
-    const initial = await geometry(page, selector)
-    await page.screenshot({ path: testInfo.outputPath("public-loading.png"), fullPage: true })
-    script.release()
-    await workspaces.reached
-    sameGeometry(initial, await geometry(page, selector))
-    workspaces.release()
-    await dashboard.reached
-    await expect(page.getByRole("combobox", { name: "Workspace", exact: true })).toBeVisible()
-    sameGeometry(initial, await geometry(page, selector))
-    dashboard.release()
-    await expect(page.locator('[data-slot="usage-summary"]')).toHaveAttribute("aria-busy", "false")
-    sameGeometry(initial, await geometry(page, selector))
+    initial.set(width, await geometry(page, selector))
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-    await page.screenshot({ path: testInfo.outputPath("public-loaded.png"), fullPage: true })
-    const refreshing = await hold(page, "**/api/public/dashboard?*")
-    await page.getByRole("button", { name: "Refresh", exact: true }).click()
-    await refreshing.reached
-    await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
-    await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
-    sameGeometry(initial, await geometry(page, selector))
-    refreshing.release()
-    await expect(page.locator('[data-slot="usage-summary"]')).toHaveAttribute("aria-busy", "false")
-  })
-}
+    await page.screenshot({ path: testInfo.outputPath(`public-loading-${width}.png`), fullPage: true })
+  }
+  script.release()
+  await workspaces.reached
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1000 })
+    sameGeometry(initial.get(width)!, await geometry(page, selector))
+  }
+  workspaces.release()
+  await dashboard.reached
+  await expect(page.getByRole("combobox", { name: "Workspace", exact: true })).toBeVisible()
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1000 })
+    sameGeometry(initial.get(width)!, await geometry(page, selector))
+  }
+  dashboard.release()
+  await expect(page.locator('[data-slot="usage-summary"]')).toHaveAttribute("aria-busy", "false")
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1000 })
+    sameGeometry(initial.get(width)!, await geometry(page, selector))
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`public-loaded-${width}.png`), fullPage: true })
+  }
+  const refreshing = await hold(page, "**/api/public/dashboard?*")
+  await page.setViewportSize({ width: widths[0]!, height: 1000 })
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await refreshing.reached
+  await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
+  await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1000 })
+    sameGeometry(initial.get(width)!, await geometry(page, selector))
+  }
+  refreshing.release()
+  await expect(page.locator('[data-slot="usage-summary"]')).toHaveAttribute("aria-busy", "false")
+})
 
 for (const width of [390, 1280]) {
     test(`administrator settings loading preserves bounds at ${width}px`, async ({ page }) => {

@@ -258,6 +258,20 @@ async function waitForPidExit(record: ProcessRecord, timeoutMs: number): Promise
   return !recordIdentityMatches(record);
 }
 
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      child.exited.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function stopRecord(record: ProcessRecord, requirePortOwnership: boolean): Promise<void> {
   if (!recordIdentityMatches(record) || !isManagedBinaryPath(record.executablePath)) return;
   if (requirePortOwnership && !listenersOwnedBy(record)) {
@@ -499,16 +513,10 @@ async function stopActiveChild(): Promise<void> {
   if (!child || !record) return;
   intentionalExits.add(child.pid);
   if (child.exitCode === null) child.kill("SIGTERM");
-  const exited = await Promise.race([
-    child.exited.then(() => true),
-    delay(TERM_TIMEOUT_MS).then(() => false),
-  ]);
+  const exited = await waitForChildExit(child, TERM_TIMEOUT_MS);
   if (!exited && child.exitCode === null) {
     child.kill("SIGKILL");
-    const killed = await Promise.race([
-      child.exited.then(() => true),
-      delay(TERM_TIMEOUT_MS).then(() => false),
-    ]);
+    const killed = await waitForChildExit(child, TERM_TIMEOUT_MS);
     if (!killed) throw new Error("CLIProxy process did not exit after SIGKILL");
   }
   if (activeProcess === child) activeProcess = undefined;
@@ -651,7 +659,7 @@ async function startCurrentVersion(): Promise<void> {
     writeProcessRecord(record);
   } catch (error) {
     child.kill("SIGTERM");
-    await Promise.race([child.exited, delay(TERM_TIMEOUT_MS)]);
+    await waitForChildExit(child, TERM_TIMEOUT_MS);
     if (child.exitCode === null) child.kill("SIGKILL");
     throw error;
   }

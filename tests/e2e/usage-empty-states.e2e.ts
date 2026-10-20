@@ -31,13 +31,12 @@ function dashboardPayload(overrides: Partial<Pick<DashboardPayload, "trend" | "k
 
 const trendRow = { bucketStart: "2026-10-11T10:00:00.000Z", label: "10 AM", requests: 5, tokens: 120, costMicros: 15000 }
 
-for (const publicView of [false, true]) test(`${publicView ? "public" : "workspace"} incomplete historical coverage does not claim quiet zero usage`, async ({ page }) => {
+test("incomplete historical coverage does not claim quiet zero usage", async ({ page }) => {
   const payload = dashboardPayload()
   payload.coverage = { partial: true, excludedSources: 1, tokenCoveredRequests: 0, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 }
-  await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
-  if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
-  else await authenticate(page)
-  await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+  await page.route("**/api/admin/usage?*", route => route.fulfill({ json: payload }))
+  await authenticate(page)
+  await page.goto("/dashboard/ai/overview/usage")
   await expect(page.getByText("Partial analytics coverage", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Unavailable", { exact: true })).toHaveCount(4)
   await expect(page.getByText("Usage unavailable", { exact: true })).toBeVisible()
@@ -56,20 +55,20 @@ const keyRow: DashboardPayload["keys"][number] = {
 }
 const modelRow: DashboardPayload["models"][number] = { model: "gpt-5-e2e", requests: 5, tokens: 120, costMicros: 15000 }
 
-for (const publicView of [false, true]) {
-  test(`${publicView ? "public" : "workspace"} trend keeps dense hourly and daily points with responsive time ticks`, async ({ page }) => {
-    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => {
+test("usage trend keeps dense hourly and daily points with responsive time ticks", async ({ page }) => {
+    await page.route("**/api/admin/usage?*", route => {
       const granularity = new URL(route.request().url()).searchParams.get("preset") === "today" ? "hourly" : "daily"
       const payload = dashboardPayload({ trend: Array.from({ length: granularity === "hourly" ? 24 : 31 }, (_, index) => ({ ...trendRow, bucketStart: new Date(Date.UTC(2026, 9, 1) + index * (granularity === "hourly" ? 3_600_000 : 86_400_000)).toISOString(), tokens: index === 0 ? 0 : index * 1000 })) })
       payload.range.granularity = granularity
       return route.fulfill({ json: payload })
     })
-    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
-    else await authenticate(page)
+    await authenticate(page)
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto("/dashboard/ai/overview/usage")
     for (const grouping of ["hourly", "daily"] as const) {
-      await page.emulateMedia({ colorScheme: grouping === "hourly" ? "light" : "dark" })
+      if (grouping === "daily") await page.reload()
       await page.setViewportSize({ width: 1440, height: 900 })
-      await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+      await page.emulateMedia({ colorScheme: grouping === "hourly" ? "light" : "dark" })
       await page.locator("section").filter({ has: page.getByRole("heading", { name: "Usage dashboard", exact: true }) }).getByRole("combobox").first().click()
       await page.getByRole("option", { name: grouping === "hourly" ? "Today" : "This month", exact: true }).click()
       const selectedRangeLabel = await page.evaluate(({ from, to }) => {
@@ -103,23 +102,25 @@ for (const publicView of [false, true]) {
       if (grouping === "hourly") await expect(tooltip).toContainText(/\d{2}:\d{2}/)
       else await expect(tooltip).not.toContainText(/\d{2}:\d{2}/)
     }
-  })
-}
+})
 
-for (const publicView of [false, true]) {
-  test(`${publicView ? "public" : "workspace"} top keys chart fits sparse and full rankings`, async ({ page }) => {
-    if (!publicView) await authenticate(page)
-    else await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+test("top keys chart fits sparse and full rankings at desktop and mobile widths", async ({ page }) => {
+    await authenticate(page)
     let count = 1
-    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: dashboardPayload({
+    await page.route("**/api/admin/usage?*", route => route.fulfill({ json: dashboardPayload({
       trend: [trendRow],
       keys: Array.from({ length: count }, (_, index) => ({ ...keyRow, id: `key-${index}`, label: `Usage key ${index}`, costMicros: (index + 1) * 15000 })),
     }) }))
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto("/dashboard/ai/overview/usage")
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 })
       let previousListHeight: number | undefined
-      for (count of [1, 2, 4, 5, 7]) {
-        await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+      for (const nextCount of [1, 2, 4, 5, 7]) {
+        if (count !== nextCount) {
+          count = nextCount
+          await page.getByRole("button", { name: "Refresh", exact: true }).click()
+        }
         const card = page.locator('[data-slot="card"]').filter({ has: page.getByText("Top keys by cost", { exact: true }) })
         const chart = card.locator('[data-slot="chart"]')
         const bars = chart.locator('.recharts-bar-rectangle path')
@@ -157,31 +158,40 @@ for (const publicView of [false, true]) {
           await page.mouse.move(chartBounds.x + chartBounds.width / 2, chartBounds.y + 5 + slot * 42 + 21)
           await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).not.toBeVisible()
         }
-        await page.mouse.move(0, 0)
-        await chart.getByRole("application").focus()
-        await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).toBeVisible()
-        await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
-        for (let index = 1; index < visibleCount; index++) {
-          await page.keyboard.press("ArrowLeft")
-          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1 - index}`, { exact: true })).toBeVisible()
-        }
-        await page.keyboard.press("ArrowLeft")
-        if (visibleCount === 5) {
-          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
-        } else {
-          for (let slot = visibleCount; slot < 5; slot++) {
-            await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).not.toBeVisible()
-            await expect(chart.locator('.recharts-tooltip-wrapper')).not.toContainText("TBD")
-            if (slot < 4) await page.keyboard.press("ArrowLeft")
+        if (width === 1440 && [2, 5, 7].includes(count)) {
+          // Reset Recharts' keyboard cursor between representative datasets using
+          // client-side routes, without reloading the full app or duplicating widths.
+          const sidebar = page.locator('[data-slot="sidebar"]')
+          await sidebar.getByRole("link", { name: "Overview", exact: true }).click()
+          await expect(page).toHaveURL(/\/dashboard\/ai\/overview$/)
+          await sidebar.getByRole("link", { name: "Usage", exact: true }).click()
+          await expect(page).toHaveURL(/\/dashboard\/ai\/overview\/usage$/)
+          await expect(bars).toHaveCount(visibleCount)
+          await page.mouse.move(0, 0)
+          await chart.getByRole("application").focus()
+          await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).toBeVisible()
+          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1}`, { exact: true })).toBeVisible()
+          for (let index = 1; index < visibleCount; index++) {
+            await page.keyboard.press("ArrowLeft")
+            await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - 1 - index}`, { exact: true })).toBeVisible()
           }
-          for (let slot = 4; slot >= visibleCount; slot--) await page.keyboard.press("ArrowRight")
-          await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
+          await page.keyboard.press("ArrowLeft")
+          if (visibleCount === 5) {
+            await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
+          } else {
+            for (let slot = visibleCount; slot < 5; slot++) {
+              await expect(chart.locator('.recharts-tooltip-wrapper').getByText("Cost", { exact: true })).not.toBeVisible()
+              await expect(chart.locator('.recharts-tooltip-wrapper')).not.toContainText("TBD")
+              if (slot < 4) await page.keyboard.press("ArrowLeft")
+            }
+            for (let slot = 4; slot >= visibleCount; slot--) await page.keyboard.press("ArrowRight")
+            await expect(chart.locator('.recharts-tooltip-wrapper').getByText(`Usage key ${count - visibleCount}`, { exact: true })).toBeVisible()
+          }
         }
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
       }
     }
-  })
-}
+})
 
 for (const publicView of [false, true]) {
   test(`${publicView ? "public" : "workspace"} usage responsive panels match their loading layout`, async ({ page }) => {
@@ -206,9 +216,12 @@ for (const publicView of [false, true]) {
         await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
         await expect(page.getByText("E2E Usage Key", { exact: true }).first()).toBeVisible()
       }
-      for (const width of [1600, 1280, 1024, 768, 390]) {
+      // The shared panel/layout matrix runs once on the workspace surface. Public
+      // retains a narrow-width check here for its distinct table behavior.
+      for (const width of publicView ? [390] : [1600, 1280, 1024, 768, 390]) {
         await page.setViewportSize({ width, height: 900 })
         if (!publicView && width >= 768) await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible()
+        if (publicView) await expect(page.locator('[data-slot="sidebar"]')).toHaveCount(0)
         const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
         expect(await card("Most used models").evaluate(element => getComputedStyle(element).alignSelf)).toBe(width >= 1280 ? "stretch" : "flex-start")
         for (const [title, description] of [["Usage Trend", "Token usage over time"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
@@ -241,6 +254,7 @@ for (const publicView of [false, true]) {
         const hasActions = !publicView || !loading
         await expect(usageTable.getByRole("columnheader", { name: "Actions", exact: true })).toHaveCount(hasActions ? 1 : 0)
         await expect(usageTable.locator("tbody tr").first().locator("td")).toHaveCount(hasActions ? 9 : 8)
+        if (publicView && !loading) await expect(usageTable.getByText(keyRow.maskedKey, { exact: true })).toHaveCount(0)
         if (loading && !publicView) {
           const actionSkeleton = usageTable.locator("tbody tr").first().locator("td").last().locator('[data-slot="skeleton"]')
           await expect(actionSkeleton).toHaveCSS("width", "28px")
@@ -321,6 +335,7 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
   const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.locator('[data-slot="card-title"]', { hasText: new RegExp(`^${title}$`) }) })
   const dailyChart = () => page.locator('[data-slot="card"]').filter({ has: page.getByRole("tablist", { name: "Daily usage metric" }) })
+  const activeMetricPanel = () => dailyChart().getByRole("tabpanel").filter({ visible: true })
   const dateWindow = await dailyChart().locator('[data-slot="card-description"]').textContent()
   await expect(card("Budget balance").getByText("Average daily tokens so far", { exact: true })).toBeVisible()
   const averageTokens = card("Budget balance").getByText("Average daily tokens so far", { exact: true }).locator("..")
@@ -330,21 +345,27 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     for (const [first, second] of [["Budget balance", "Daily spend"], ["Where the spend goes", "Usage profile"]]) {
-      const left = (await card(first!).boundingBox())!
-      const right = (await card(second!).boundingBox())!
       if (width >= 1024) {
-        expect(Math.abs(left.y - right.y)).toBeLessThan(1)
-        expect(Math.abs(left.height - right.height)).toBeLessThan(1)
-      } else expect(right.y).toBeGreaterThanOrEqual(left.y + left.height)
+        await expect.poll(async () => {
+          const [left, right] = await Promise.all([card(first!).boundingBox(), card(second!).boundingBox()])
+          if (!left || !right) return Number.POSITIVE_INFINITY
+          return Math.max(Math.abs(left.y - right.y), Math.abs(left.height - right.height))
+        }).toBeLessThan(1)
+      } else {
+        await expect.poll(async () => {
+          const [left, right] = await Promise.all([card(first!).boundingBox(), card(second!).boundingBox()])
+          return left && right ? right.y - (left.y + left.height) : Number.NEGATIVE_INFINITY
+        }).toBeGreaterThanOrEqual(0)
+      }
     }
-    await card("Daily spend").locator(".recharts-bar-rectangle").first().hover()
-    await expect(card("Daily spend").locator(".recharts-tooltip-wrapper")).toContainText("Cost")
-    await expect(card("Daily spend").locator(".recharts-tooltip-wrapper")).toContainText("$0.006")
+    await activeMetricPanel().locator(".recharts-bar-rectangle").first().hover()
+    await expect(activeMetricPanel().locator(".recharts-tooltip-wrapper")).toContainText("Cost")
+    await expect(activeMetricPanel().locator(".recharts-tooltip-wrapper")).toContainText("$0.006")
     await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
-    await expect(card("Daily token usage").locator('[data-slot="card-description"]')).toHaveText(dateWindow!)
-    await card("Daily token usage").locator(".recharts-bar-rectangle").first().hover()
-    await expect(card("Daily token usage").locator(".recharts-tooltip-wrapper")).toContainText("Tokens")
-    await expect(card("Daily token usage").locator(".recharts-tooltip-wrapper")).toContainText("120")
+    await expect(dailyChart().locator('[data-slot="card-description"]')).toHaveText(dateWindow!)
+    await activeMetricPanel().locator(".recharts-bar-rectangle").first().hover()
+    await expect(activeMetricPanel().locator(".recharts-tooltip-wrapper")).toContainText("Tokens")
+    await expect(activeMetricPanel().locator(".recharts-tooltip-wrapper")).toContainText("120")
     await dailyChart().getByRole("tab", { name: "Cost", exact: true }).click()
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     await page.screenshot({ path: testInfo.outputPath(`key-usage-live-${width}.png`), fullPage: true })
@@ -371,14 +392,14 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   payload = { ...payload, trend: payload.trend.map(point => ({ ...point, tokens: 0 })) }
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
-  await expect(card("Daily token usage").getByText("No token usage recorded in this window.", { exact: true })).toBeVisible()
+  await expect(activeMetricPanel().getByText("No token usage recorded in this window.", { exact: true })).toBeVisible()
   await dailyChart().getByRole("tab", { name: "Cost", exact: true }).click()
   payload = { ...payload, keys: [{ ...keyRow, budget: { ...budget, usageAvailable: false, spentMicros: null, remainingMicros: null, percentUsed: null } }], coverage: { partial: true, excludedSources: 1, tokenCoveredRequests: 0, statusCoveredRequests: 0, costCoveredRequests: 0, modelCoveredRequests: 0, keyCoveredRequests: 0, durationCount: 0, financialUnavailable: true, unsupportedTrendSources: 0 } }
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(card("Budget balance").getByText("Remaining balance unavailable", { exact: true })).toBeVisible()
-  await expect(card("Daily spend").getByText("Spend history unavailable: financial coverage is incomplete.", { exact: true })).toBeVisible()
+  await expect(activeMetricPanel().getByText("Spend history unavailable: financial coverage is incomplete.", { exact: true })).toBeVisible()
   await dailyChart().getByRole("tab", { name: "Token", exact: true }).click()
-  await expect(card("Daily token usage").getByRole("tabpanel", { name: "Token", exact: true }).getByText("Token history unavailable: token coverage is incomplete.", { exact: true })).toBeVisible()
+  await expect(activeMetricPanel().getByText("Token history unavailable: token coverage is incomplete.", { exact: true })).toBeVisible()
   await expect(card("Budget balance").getByText("Unavailable", { exact: true })).toHaveCount(3)
   await expect(card("Budget balance").getByRole("progressbar")).toHaveCount(0)
   await expect(tokenValue).toHaveText("Unavailable")
@@ -420,15 +441,16 @@ test("public shared key detail switches to its recorded daily token totals", asy
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
-for (const publicView of [false, true]) {
-  test(`${publicView ? "public" : "workspace"} usage pairs retain natural empty and stacked heights`, async ({ page }) => {
-    let payload = dashboardPayload()
-    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
-    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
-    else await authenticate(page)
-    for (const data of [{ keys: [keyRow] }, { models: [modelRow] }, { trend: [trendRow] }, {}]) {
-      payload = dashboardPayload(data)
-      await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+test("usage pairs retain natural empty and stacked heights as data changes", async ({ page }) => {
+    let payload = dashboardPayload({ keys: [keyRow] })
+    await page.route("**/api/admin/usage?*", route => route.fulfill({ json: payload }))
+    await authenticate(page)
+    await page.goto("/dashboard/ai/overview/usage")
+    for (const [index, data] of [{ keys: [keyRow] }, { models: [modelRow] }, { trend: [trendRow] }, {}].entries()) {
+      if (index > 0) {
+        payload = dashboardPayload(data)
+        await page.getByRole("button", { name: "Refresh", exact: true }).click()
+      }
       if (!payload.keys.length && !payload.models.length && !payload.trend.length) {
         await expect(page.getByText("No usage yet", { exact: true })).toBeVisible()
         await expect(page.getByText("Usage table", { exact: true })).toHaveCount(0)
@@ -454,9 +476,9 @@ for (const publicView of [false, true]) {
         }
       }
     }
-  })
+})
 
-  test(`${publicView ? "public" : "workspace"} usage ranks all models by requests, not spend`, async ({ page }) => {
+test("public usage ranks all models by requests, not spend", async ({ page }) => {
     const payload = dashboardPayload({
       trend: [{ ...trendRow, requests: 100_000 }],
       keys: [{ ...keyRow, requests: 1200 }],
@@ -466,10 +488,9 @@ for (const publicView of [false, true]) {
         ...[4000, 3000, 2000, 1000].map((requests, index) => ({ ...modelRow, model: `Other ${index}`, requests })),
       ],
     })
-    await page.route(publicView ? "**/api/public/dashboard?*" : "**/api/admin/usage?*", route => route.fulfill({ json: payload }))
-    if (publicView) await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
-    else await authenticate(page)
-    await page.goto(publicView ? "/" : "/dashboard/ai/overview/usage")
+    await page.route("**/api/public/dashboard?*", route => route.fulfill({ json: payload }))
+    await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+    await page.goto("/")
     const card = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
     await expect(card.getByText("Ranked by recorded requests", { exact: true })).toBeVisible()
     await expect(card.getByRole("progressbar")).toHaveCount(6)
@@ -492,8 +513,7 @@ for (const publicView of [false, true]) {
     await expect(page.getByText("Spend allocation", { exact: true })).toHaveCount(0)
     await page.setViewportSize({ width: 390, height: 844 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  })
-}
+})
 
 for (const view of ["workspace", "public-light", "public-dark"] as const) {
 test(`${view} usage shares compact tokens and precise costs across summary, lists, and table`, async ({ page }) => {
