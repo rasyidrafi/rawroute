@@ -7,8 +7,8 @@ import { join } from "node:path"
 import { maintainCanonicalUsage } from "../../scripts/migrations/usage-maintenance"
 import { migrateUsageProjection } from "../../scripts/migrations/usage-projection-store"
 import { predictMissingUsageCosts } from "../../scripts/predict-missing-usage-cost"
-import { normalizeUsageMetrics } from "@/lib/usage-metrics"
-import type { UsageEvent } from "@/lib/types"
+import { normalizeUsageMetrics } from "../../packages/gateway-ai/src/server/usage-metrics"
+import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 
 let directory=""
 let file:string

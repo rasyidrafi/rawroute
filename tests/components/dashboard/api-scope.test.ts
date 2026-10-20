@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test"
-import { createApiClient } from "@/components/dashboard/api"
+import { createApiClient } from "../../../packages/platform/src/web/api"
 
 const target = globalThis as unknown as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
 let mocked: ReturnType<typeof spyOn> | undefined

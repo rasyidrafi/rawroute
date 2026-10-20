@@ -1,13 +1,16 @@
+import "../../apps/console/src/server/composition"
 import { beforeEach, expect, test } from "bun:test"
-import { budgetModelOptions } from "@/server/budget-models"
-import { _resetMemoryBackend, listAliases, listCombos, listModels, listProviders, upsertCombo, upsertModel, upsertProvider } from "@/server/store"
-import { getBudgetBeyondLimitsSettings, getBudgetUnlimitedSettings, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetUnlimitedSettings } from "@/lib/analytics"
-import { catalogModels } from "@/lib/catalog"
-import { PATCH as saveBeyond } from "@/server/routes/api/admin/budgets/beyond-limits"
-import { PATCH as saveUnlimited } from "@/server/routes/api/admin/budgets/unlimited"
-import { resetModelSharesForTests, setModelShareTargets, listSharedModelsForRecipient } from "@/lib/workspace/model-shares"
-import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/server/workspace-repository"
-import { runInWorkspace } from "@/lib/workspace/context"
+import { testsInWorkspace } from "../helpers/workspace-test"
+const workspaceTest = testsInWorkspace("default")
+import { budgetModelOptions } from "../../packages/gateway-ai/src/server/budget-models"
+import { _resetMemoryBackend, listAliases, listCombos, listModels, listProviders, upsertCombo, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
+import { getBudgetBeyondLimitsSettings, getBudgetUnlimitedSettings, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetUnlimitedSettings } from "../../packages/gateway-ai/src/server/analytics"
+import { catalogModels } from "../../packages/gateway-ai/src/contracts/catalog"
+import { PATCH as saveBeyond } from "../../packages/gateway-ai/src/server/routes/api/admin/budgets/beyond-limits/index"
+import { PATCH as saveUnlimited } from "../../packages/gateway-ai/src/server/routes/api/admin/budgets/unlimited/index"
+import { resetModelSharesForTests, setModelShareTargets, listSharedModelsForRecipient } from "../../packages/gateway-ai/src/server/model-shares"
+import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
+import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
@@ -25,7 +28,7 @@ async function fixture() {
   return { provider, model }
 }
 
-test("both budget APIs accept the same available combo advertised by the gateway", async () => {
+workspaceTest("both budget APIs accept the same available combo advertised by the gateway", async () => {
   await fixture()
   const options = await budgetModelOptions()
   const catalog = catalogModels(await listProviders(), await listModels(), await listAliases(), await listCombos())
@@ -35,7 +38,7 @@ test("both budget APIs accept the same available combo advertised by the gateway
   expect(await getBudgetBeyondLimitsSettings()).toMatchObject({ modelIds: ["budget-combo"] })
 })
 
-test("disabled selections stay visible and can be retained or removed without blocking settings", async () => {
+workspaceTest("disabled selections stay visible and can be retained or removed without blocking settings", async () => {
   const { provider, model } = await fixture()
   await setBudgetBeyondLimitsSettings({ enabled: true, modelIds: [model.gatewayModelId] })
   await setBudgetUnlimitedSettings({ excludedModelIds: [model.gatewayModelId, "removed-model"] })

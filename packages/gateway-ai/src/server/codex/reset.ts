@@ -1,0 +1,52 @@
+import { invalidateCodexUsageCache, parseUnusedCodexResetCredits } from "./usage"
+import { cliProxyCodexApiCall } from "./cliproxy"
+import { recordLog } from "../logging"
+import type { ProviderApiKey } from "../../contracts/domain"
+import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
+import { auditRemoteOperation } from "@rawroute/platform/server/audit"
+
+const consumeUrl = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+const locks = new Map<string, string>()
+type ResetLock = { key: string; token: string }
+
+async function acquire(accountId: string): Promise<ResetLock | undefined> {
+  const key = `rawroute:codex-reset-lock:${currentWorkspaceId()}:${accountId}`
+  const token = crypto.randomUUID()
+  if (locks.has(key)) return undefined
+  if (locks.size >= 4096) throw new Error("Reset coordination capacity exceeded.")
+  locks.set(key, token)
+  return { key, token }
+}
+
+async function release(lock: ResetLock) {
+  if (locks.get(lock.key) === lock.token) locks.delete(lock.key)
+}
+
+function numberValue(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0 }
+function objectValue(value: unknown) { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined }
+
+export async function redeemCodexReset(account: ProviderApiKey, confirmation: string) {
+  if (account.credentialKind !== "codex-cli-proxy") throw new Error("Codex reset credits are only available for CLIProxy-managed OAuth accounts.")
+  if (!confirmation.toLowerCase().includes("use my codex reset")) throw new Error("Confirmation must contain: use my codex reset")
+  const lock = await acquire(account.id)
+  if (!lock) throw new Error("A reset redemption is already in progress for this account.")
+  const redeemRequestId = crypto.randomUUID()
+  try {
+    const headers: Record<string, string> = { authorization: "Bearer $TOKEN$", accept: "application/json" }
+    if (account.accountId) headers["chatgpt-account-id"] = account.accountId
+    if (process.env.CODEX_FEDRAMP === "true") headers["chatgpt-federated"] = "true"
+    const usageResponse = await cliProxyCodexApiCall(account, { method: "GET", url: process.env.CODEX_USAGE_URL || "https://chatgpt.com/backend-api/wham/usage", headers })
+    if (usageResponse.status < 200 || usageResponse.status >= 300) throw new Error(`Codex usage request failed (${usageResponse.status})`)
+    const usage = objectValue(JSON.parse(usageResponse.body) as unknown)
+    if ((parseUnusedCodexResetCredits(usage) ?? 0) < 1) throw new Error("No unused Codex reset credits are available.")
+    const rateLimit = objectValue(usage?.rate_limit) || objectValue(usage?.rate_limits)
+    const weekly = objectValue(rateLimit?.secondary_window)
+    const weeklyUsed = numberValue(weekly?.used_percent ?? weekly?.percent_used)
+    if (weeklyUsed < 100) throw new Error("The weekly Codex quota must be exhausted before redeeming a reset credit.")
+    const response = await auditRemoteOperation({ action: "oauth.remote", resource: "oauth", workspaceId: currentWorkspaceId() }, () => cliProxyCodexApiCall(account, { method: "POST", url: consumeUrl, headers: { ...headers, "content-type": "application/json" }, data: JSON.stringify({ redeem_request_id: redeemRequestId }) }), result => result.status >= 200 && result.status < 300)
+    if (response.status < 200 || response.status >= 300) throw new Error(`Codex reset redemption failed (${response.status})`)
+    await invalidateCodexUsageCache(account.id)
+    recordLog("admin.codex.reset.credit.redeemed", { accountId: account.id, redeemRequestId }, { level: "info" })
+    return { ok: true, redeemRequestId, status: response.status, message: "Codex reset credit redeemed." }
+  } finally { await release(lock) }
+}

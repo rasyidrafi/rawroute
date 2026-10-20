@@ -162,11 +162,18 @@ The development server listens on `http://localhost:3000`. SQLite defaults to
 `data/rawroute.sqlite`; set `SQLITE_PATH` to choose another local file. No external
 storage services are required.
 
-The application uses native Bun full-stack React: `src/index.ts` serves the HTML
-entry, bundled assets, and HTTP APIs on one port. `src/frontend.tsx` mounts React;
-`src/App.tsx` owns browser routes and reuses the dashboard components. Development
+The application uses native Bun full-stack React: `apps/console/src/server/index.ts` serves the HTML
+entry, bundled assets, and HTTP APIs on one port. `apps/console/src/frontend/frontend.tsx` mounts React;
+`apps/console/src/frontend/App.tsx` owns browser routes and reuses the dashboard components. Development
 uses Bun HMR and the Tailwind plugin. API registration and authorization live in
-`src/server/routes.ts` and `src/server/http.ts`.
+`apps/console/src/server/routes.ts` and `packages/platform/src/server/http.ts`.
+
+This is a Bun workspace modular monolith: console composes platform, AI, Tools,
+neutral observability and UI packages through explicit contracts/server/web
+exports. There is no root `src/` compatibility tree, mixed package barrel or
+additional deployment. See the [workspace developer guide](docs/architecture/005-workspaces.md)
+for the dependency DAG, entrypoints, registration points and concrete gateway
+extension checklist. Architecture boundaries run in lint, tests and CI.
 
 Build and run the production app locally with `bun run build` followed by
 `bun run start`. The built server runs from `dist/`, where Bun resolves its

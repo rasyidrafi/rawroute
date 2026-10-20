@@ -2,7 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { randomBytes, randomUUID } from "node:crypto"
 import * as lockfile from "proper-lockfile"
-import { ensureLayout, getServicePaths, writeAtomic } from "../../src/server/cliproxy/store"
+import { ensureLayout, getServicePaths, writeAtomic } from "@rawroute/gateway-ai/server/maintenance/cliproxy"
 
 function copyPrivate(source: string, destination: string) {
   const info = fs.lstatSync(source)

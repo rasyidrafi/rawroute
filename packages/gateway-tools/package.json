@@ -1,0 +1,24 @@
+{
+  "name": "@rawroute/gateway-tools",
+  "version": "1.1.9",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/index.ts",
+    "./contracts/pages": "./src/contracts/pages.ts",
+    "./server": "./src/server/integration.ts",
+    "./server/integration": "./src/server/integration.ts",
+    "./server/logging": "./src/server/logging.ts",
+    "./server/routes": "./src/server/routes.ts",
+    "./web": "./src/web/index.ts"
+  },
+  "dependencies": {
+    "@rawroute/observability": "workspace:*",
+    "@rawroute/platform": "workspace:*",
+    "@rawroute/ui": "workspace:*",
+    "lucide-react": "^1.27.0",
+    "react": "19.2.7",
+    "react-router": "^8.4.0",
+    "swr": "^2.4.2"
+  }
+}

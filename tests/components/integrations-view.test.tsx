@@ -2,23 +2,24 @@ import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { WrenchIcon } from "lucide-react"
 import { MemoryRouter } from "react-router"
-import { IntegrationsView } from "@/components/dashboard/ai/integrations-view"
-import { IntegrationDetailView } from "@/components/dashboard/ai/integrations/detail-view"
-import { integrationSnippets } from "@/components/dashboard/ai/integrations/catalog"
-import { dashboardApps } from "@/components/dashboard/dashboard-apps"
-import { dashboardPageForPath, dashboardPages, pagePaths } from "@/lib/dashboard/routes"
+import { IntegrationsView } from "../../packages/gateway-ai/src/web/components/integrations-view"
+import { IntegrationDetailView } from "../../packages/gateway-ai/src/web/components/integrations/detail-view"
+import { integrationSnippets } from "../../packages/gateway-ai/src/web/components/integrations/catalog"
+import { dashboardApps } from "../../apps/console/src/frontend/browser-modules"
+import { dashboardPageForPath, dashboardPages, pagePaths } from "../../apps/console/src/frontend/contracts/dashboard/routes"
+import { ShellFixture } from "./shell-fixture"
 
 test("integrations follows model routing and uses the wrench icon", () => {
   const items = dashboardApps.find(app => app.id === "ai-gateway")?.navigation.find(group => group.label === "Gateway")?.items
   const routingIndex = items?.findIndex(item => item.href === pagePaths.aliases) ?? -1
   expect(routingIndex).toBeGreaterThanOrEqual(0)
-  expect(items?.[routingIndex + 1]).toEqual({ title: "Integrations", icon: WrenchIcon, href: pagePaths.integrations })
+  expect(items?.[routingIndex + 1]).toEqual({ page: "integrations", title: "Integrations", icon: WrenchIcon, href: pagePaths.integrations })
   expect(dashboardPageForPath(pagePaths.integrations)).toBe("integrations")
   expect(dashboardPages.integrations.scope).toBe("workspace")
 })
 
 test("integrations links to scoped guides and describes the connection", () => {
-  const markup = renderToStaticMarkup(<MemoryRouter><IntegrationsView /></MemoryRouter>)
+  const markup = renderToStaticMarkup(<ShellFixture><MemoryRouter><IntegrationsView /></MemoryRouter></ShellFixture>)
   expect(markup).toContain(`href="${pagePaths.integrationOpencode}"`)
   expect(markup).toContain(`href="${pagePaths.integrationCodex}"`)
   expect(markup).toContain("Connect your coding agents to RawRoute.")
@@ -30,7 +31,7 @@ test("integrations links to scoped guides and describes the connection", () => {
 
 test("guide previews include configuration, placeholder credentials, and return navigation", () => {
   for (const integration of ["opencode", "codex"] as const) {
-    const markup = renderToStaticMarkup(<MemoryRouter><IntegrationDetailView integration={integration} /></MemoryRouter>)
+    const markup = renderToStaticMarkup(<ShellFixture><MemoryRouter><IntegrationDetailView integration={integration} /></MemoryRouter></ShellFixture>)
     expect(markup).toContain(`href="${pagePaths.integrations}"`)
     expect(markup).toContain(integration === "opencode" ? "YOUR_MODEL_ID" : "gpt-6-luna")
     expect(markup).toContain(integration === "opencode" ? "YOUR_WORKSPACE_API_KEY" : "PUT_TOKEN_HERE")

@@ -71,7 +71,7 @@ integer/financial underflows remain errors in both backends.
 ## One shared bounded range reader
 
 Overview, private/public Usage, budget windows and Unlimited Mode session windows
-use `src/lib/usage-range.ts`:
+use `packages/gateway-ai/src/server/usage-range.ts`:
 
 1. Sum complete daily interiors from typed buckets.
 2. Sum complete hours on the day edges (or throughout an hourly chart).

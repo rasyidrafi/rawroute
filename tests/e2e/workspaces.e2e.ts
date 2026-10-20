@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
-import { pagePaths } from "../../src/lib/dashboard/routes"
+import { pagePaths } from "../../apps/console/src/frontend/contracts/dashboard/routes"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })

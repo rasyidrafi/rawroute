@@ -3,14 +3,14 @@ import { expect, test } from "@playwright/test"
 
 test("browser formatting and calendar round trips use the native zone, including DST", async ({ browser }) => {
   // Exercise the browser-target bundle rather than mocking Intl or the server environment.
-  const source = execFileSync("bun", ["build", "src/lib/timezone.ts", "--target", "browser"], { encoding: "utf8" })
+  const source = execFileSync("bun", ["build", "packages/observability/src/contracts/timezone.ts", "--target", "browser"], { encoding: "utf8" })
   for (const timeZone of ["America/New_York", "Asia/Tokyo"]) {
     const context = await browser.newContext({ timezoneId: timeZone })
     const page = await context.newPage()
     await page.goto("about:blank")
     const result = await page.evaluate(async code => {
       const moduleUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }))
-      const tz: typeof import("../../src/lib/timezone") = await import(moduleUrl)
+      const tz: typeof import("../../packages/observability/src/contracts/timezone") = await import(moduleUrl)
       URL.revokeObjectURL(moduleUrl)
       const instant = "2026-08-05T00:00:00.000Z"
       const calendar = tz.calendarDateFromInstant(instant)

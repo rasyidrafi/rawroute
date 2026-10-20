@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { chmodSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
-import type { UsageEvent } from "../../src/lib/types"
-import { assertUsageProjection, usagePrefix, usageWorkspace } from "../../src/lib/usage-projection"
+import type { UsageEvent } from "@rawroute/gateway-ai/contracts"
+import { assertUsageProjection, usagePrefix, usageWorkspace } from "@rawroute/gateway-ai/server/maintenance/usage-projection"
 import { rebuildCanonicalUsageProjection } from "./usage-projection-store"
 
 export interface MaintenanceOptions { timeZone: string; apply?: boolean; writersStopped?: boolean; backup?: string }

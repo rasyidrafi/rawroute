@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
-import type { Model, ProviderSummary } from "../../src/lib/types"
-import type { LogSnapshot } from "../../src/lib/logging/types"
+import type { Model, ProviderSummary } from "../../packages/gateway-ai/src/contracts/domain"
+import type { LogSnapshot } from "../../packages/observability/src/contracts/types"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })

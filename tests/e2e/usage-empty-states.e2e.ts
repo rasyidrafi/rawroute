@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
-import type { DashboardPayload } from "../../src/lib/types"
+import type { DashboardPayload } from "../../packages/gateway-ai/src/contracts/domain"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })

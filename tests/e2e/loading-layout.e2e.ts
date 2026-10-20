@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 import { readFileSync, readdirSync } from "node:fs"
-import { dashboardPages } from "../../src/lib/dashboard/routes"
+import { dashboardPages } from "../../apps/console/src/frontend/contracts/dashboard/routes"
 
 function barrier() {
   let release!: () => void

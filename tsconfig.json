@@ -18,9 +18,7 @@
     "jsx": "react-jsx",
     "incremental": true,
     "paths": {
-      "@/*": [
-        "./src/*"
-      ]
+      "@rawroute/ui": ["./packages/ui/src"]
     },
     "types": [
       "bun",
@@ -29,13 +27,15 @@
     ]
   },
   "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx",
     "scripts/**/*.ts",
     "tests/**/*.ts",
     "tests/**/*.tsx",
     "*.ts",
-    "bun-env.d.ts"
+    "bun-env.d.ts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx"
   ],
   "exclude": [
     "node_modules",

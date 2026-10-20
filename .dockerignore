@@ -1,6 +1,9 @@
 .git
 dist
 node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
 old-uage
 cliproxy
 *.log

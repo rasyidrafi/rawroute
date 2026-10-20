@@ -1,4 +1,4 @@
-import { DEFAULT_ADMIN_PASSWORD } from "../src/lib/auth-defaults"
+import { DEFAULT_ADMIN_PASSWORD } from "@rawroute/platform/contracts/auth-defaults"
 import { randomBytes } from "node:crypto"
 import { mkdirSync, writeFileSync, existsSync } from "node:fs"
 import { resolve, join } from "node:path"

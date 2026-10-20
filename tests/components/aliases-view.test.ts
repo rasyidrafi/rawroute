@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 test("combos expose copyable gateway IDs and shared models", () => {
-  const view = readFileSync(new URL("../../src/components/dashboard/ai/aliases-view.tsx", import.meta.url), "utf8")
+  const view = readFileSync(new URL("../../packages/gateway-ai/src/web/components/aliases-view.tsx", import.meta.url), "utf8")
 
   expect(view).toContain('id: "Gateway ID", label: "Gateway ID"')
   expect(view).toContain('copy(combo.combo, "Gateway ID copied")')
@@ -13,7 +13,7 @@ test("combos expose copyable gateway IDs and shared models", () => {
 })
 
 test("combo form pairs gateway ID and name with ordered local and shared models", () => {
-  const form = readFileSync(new URL("../../src/components/dashboard/ai/combo-form.tsx", import.meta.url), "utf8")
+  const form = readFileSync(new URL("../../packages/gateway-ai/src/web/components/combo-form.tsx", import.meta.url), "utf8")
 
   expect(form).toContain('label="Gateway ID"')
   expect(form).toContain('label="Name"')

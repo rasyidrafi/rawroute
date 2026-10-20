@@ -2,8 +2,8 @@ import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
 
-import { DashboardContentSkeleton, DashboardRouteSkeleton } from "@/components/dashboard-skeleton"
-import { UsageSummary } from "@/components/dashboard/ai/usage-summary"
+import { DashboardContentSkeleton, DashboardRouteSkeleton } from "../../apps/console/src/frontend/route-skeleton"
+import { UsageSummary } from "../../packages/gateway-ai/src/web/components/usage-summary"
 
 for (const [path, heading] of [
   ["/dashboard/ai/overview/usage", "Usage summary"],

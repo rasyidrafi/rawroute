@@ -11,9 +11,9 @@ All diagnostics remain enabled. Score uploads and crash reporting are disabled.
 
 `doctor.config.json` excludes generated `dist/` artifacts, matching the source lint
 boundary. Bun places both server and browser chunks there; the directory is not a
-public web root. Source checks cover the entire project, including `src/server/`,
+public web root. Source checks cover the entire project, including `apps/console/src/server/`,
 without rule overrides or inline suppressions. SQLite storage and workspace
-persistence live in `src/server/` and cannot be imported by browser components.
+persistence live in `packages/platform/src/server/` and cannot be imported by browser components.
 
 `eslint.config.mjs` registers `@shadcn/lint` alongside React, React Hooks, accessibility, and TypeScript
 checks. It enables the five core rules from the
@@ -28,12 +28,14 @@ checks. It enables the five core rules from the
 Component appearances belong in named variants, such as dashboard cards, log-level badges,
 inline/code inputs, and unlimited-budget controls.
 
-Theme tokens live in `src/index.css`. Console tokens intentionally keep a
+Theme tokens live in `apps/console/src/frontend/index.css`. Console tokens intentionally keep a
 dark surface in both themes. Workspace surfaces and small text tokens preserve
 the existing dashboard design.
 
-As recommended upstream, `src/components/ui/**` owns its styling and is exempt
-from `no-restyle`, `no-arbitrary-values`, and `require-static-classes`.
+As recommended upstream, the explicitly enumerated original primitive files in
+`packages/ui/src/` own their styling and are exempt from `no-restyle`,
+`no-arbitrary-values`, and `require-static-classes`. This is not a directory-wide
+exemption: loading/layout/resource helpers and all domain UI retain the rules.
 Color and inline-style checks still apply. Chart series use the theme's
 `--chart-*` tokens directly rather than injecting per-chart style elements.
 

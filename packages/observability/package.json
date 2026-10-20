@@ -1,0 +1,23 @@
+{
+  "name": "@rawroute/observability",
+  "version": "1.1.9",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/index.ts",
+    "./contracts/browser-events": "./src/contracts/browser-events.ts",
+    "./contracts/http": "./src/contracts/http.ts",
+    "./contracts/timezone": "./src/contracts/timezone.ts",
+    "./contracts/types": "./src/contracts/types.ts",
+    "./server": "./src/server/recorder.ts",
+    "./server/audit-context": "./src/server/audit-context.ts",
+    "./server/http": "./src/server/http.ts",
+    "./server/recorder": "./src/server/recorder.ts",
+    "./server/request-context": "./src/server/request-context.ts",
+    "./server/store": "./src/server/store.ts",
+    "./web": "./src/web/index.ts",
+    "./web/client": "./src/web/client.ts",
+    "./web/format": "./src/web/format.ts"
+  },
+  "dependencies": {}
+}

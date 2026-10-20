@@ -3,4 +3,4 @@ plugins = ["bun-plugin-tailwind"]
 env = "disable"
 
 [test]
-preload = ["./tests/setup.ts"]
+preload = ["./tests/setup"]

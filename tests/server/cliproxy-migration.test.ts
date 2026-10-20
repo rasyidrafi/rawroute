@@ -3,8 +3,8 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { importLegacyInstance } from "../../scripts/migrations/cliproxy-instance"
-import { getServicePaths, validateLoopbackConfig } from "../../src/server/cliproxy/store"
-import { snapshotConfiguration, restoreConfiguration } from "../../src/server/cliproxy/backup"
+import { getServicePaths, validateLoopbackConfig } from "../../packages/gateway-ai/src/server/cliproxy/store"
+import { snapshotConfiguration, restoreConfiguration } from "../../packages/gateway-ai/src/server/cliproxy/backup"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })

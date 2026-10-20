@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite"
 import { chmodSync, existsSync } from "node:fs"
 import { join } from "node:path"
-import { cleanAliasId } from "../../src/lib/http"
-import type { ComboMember, ModelAlias, ModelCombo } from "../../src/lib/types"
+import { cleanAliasId } from "@rawroute/gateway-ai/server/maintenance/identifiers"
+import type { ComboMember, ModelAlias, ModelCombo } from "@rawroute/gateway-ai/contracts"
 
 type StoredRow = { path: string; collection_path: string; document_id: string; data: string }
 type Write = { path: string; collection: string; id: string; data: object }

@@ -19,10 +19,16 @@ key, but the upstream Executor deployment itself remains shared.
 
 ## Adding a feature
 
-1. Declare its path, title, scope, app and skeleton in `src/lib/dashboard/routes.ts` and add
-   its lazy view in `src/components/dashboard/route-views.tsx`. Build sidebar entries from this metadata in
-   `src/components/dashboard/dashboard-apps.ts`.
-2. Declare each API access policy and route template in `src/server/routes.ts`.
+1. Declare its path, title, owner, scope, app and skeleton in the owner's
+   `contracts/pages.ts` (platform uses `contracts/dashboard.ts`). Add its view,
+   skeleton and navigation to the owner's `web/module.ts` contribution.
+   `apps/console/src/frontend/contracts/dashboard/routes.ts` composes browser-safe metadata for the server;
+   `apps/console/src/frontend/browser-modules.ts` explicitly registers and validates browser modules.
+2. Declare each API access policy and route template once in the owner's
+   `server/routes.ts` under `packages/{platform,gateway-ai,gateway-tools}/src`;
+   operational-log authorization adapters are in platform's
+   `server/operational-logs/routes.ts`. `apps/console/src/server/routes.ts` composes
+   those explicit contributions; it does not duplicate their path keys.
    `session` means authenticated global administration; `workspace` and
    `explicit-workspace` require an authenticated session and an explicit valid
    `x-rawroute-workspace-id`. Both execute inside `runInWorkspace`.
@@ -30,20 +36,33 @@ key, but the upstream Executor deployment itself remains shared.
 3. Use `useDashboardApi()` inside workspace components/hooks. The client captures
    its workspace, so delayed mutations and follow-up calls keep their original
    owner. The dashboard shell gives each workspace a separate SWR cache and resets
-   it on switching. Standalone exports from `dashboard/api.ts` are global clients.
-4. For server activity, add a stable event/message/source to
-   `src/lib/logging/events.ts`, then call `recordLog(event, details, { level })`.
+   it on switching. Standalone exports from `packages/platform/src/web/api.ts` are global clients.
+4. For server activity, add a stable event/message/source to the owner's
+   `server/events.ts`, then call its recorder with `recordLog(event, details, { level })`.
    Use identifiers and structured status/timing/count fields. Add metadata fields
-   deliberately to `safeDetails` in `src/server/logging/recorder.ts`.
+   deliberately to the owner normalizer. AI's reviewed metadata normalization is
+   `packages/gateway-ai/src/server/logging.ts`; neutral operational recording is
+   `packages/observability/src/server/recorder.ts`. `createRecorder(catalog, normalize)`
+   contributes a closed catalog without introducing a global event registry.
 5. Workspace background jobs must use `scheduleWorkspaceTask` or execute inside
    `runInWorkspace` after checking the workspace is active. Context carries both
    storage scope and log admission. Unscoped server activity belongs to global logs.
+   Workspace repositories reject missing scope; global logging does not imply a
+   Default data workspace. Track already-started stream/accounting work with
+   `trackBackgroundTask` so deletion and shutdown drain it.
 
-Browser-safe event types, page metadata, formatting and reporting live under
-`src/lib/logging`. Storage, request context and HTTP handlers live under
-`src/server`. Browser code must never import the server recorder or storage.
-Reusable log components live in `src/components/dashboard/logs`; loading, polling
-and cancellation live in `src/hooks/use-console-logs.ts`.
+Browser-safe event types live in `packages/observability/src/contracts`; formatting
+and reporting live in its neutral `web/`. Log UI lives in
+`packages/platform/src/web/operational-logs`. Console page/scope validation
+remains in `apps/console/src/frontend/contracts/logging/browser-events.ts`. Storage,
+request context and recorders live under `packages/observability/src/server`; authenticated
+HTTP adapters live under `packages/platform/src/server/operational-logs`. The executable injects
+workspace lookup/admission and browser page/scope validation; observability does
+not import domain implementations or dashboard metadata. Generic workspace scope
+and background admission live under `packages/platform/src/server`. Browser code must
+never import a server recorder or storage.
+Reusable log components live in `packages/platform/src/web/operational-logs/logs`; loading, polling
+and cancellation live in `packages/platform/src/web/operational-logs/use-console-logs.ts`.
 
 ## Log behavior
 
@@ -75,6 +94,12 @@ stops older in-flight writers until a new request obtains a current admission.
 Compatible development hot reloads retain history; restarts discard it. Multiple
 server processes have independent histories. This is an operational console,
 not persistent audit storage or a replacement for usage analytics.
+
+Persistent server-derived security audit is separately owned by platform and is
+not affected by clearing these logs or deleting a workspace. See
+[`architecture/002-scope-lifecycle-audit.md`](architecture/002-scope-lifecycle-audit.md)
+for its action catalog, atomicity, remote intent/outcome semantics and resumable
+workspace deletion protocol.
 
 ## Shared settings
 
@@ -110,11 +135,13 @@ Shared workspace logs use `/dashboard/logs`. Global pages remain
 
 Only canonical URLs are registered. Removed URLs return 404; no aliases or
 redirect compatibility layer is retained. Login and all navigation target the
-canonical URLs. Metadata in `src/lib/dashboard/routes.ts` drives server HTML
+canonical URLs. Metadata in `apps/console/src/frontend/contracts/dashboard/routes.ts` drives server HTML
 routes, the React router, navigation labels, scopes, page headers and skeletons.
 
-Feature components live in `src/components/dashboard/ai`, `tools`, and `global`.
-The dashboard root owns the shared shell, API context, workspace selection,
-cache boundaries and navigation. Reusable log rendering remains in `logs`.
+Feature components live in their owner's `web/`: AI includes global CLIProxy and
+public usage, Tools owns its global runtime pages, observability owns both log
+views, and platform owns auth/settings and the generic shell. Platform owns API,
+workspace and SWR contexts; console injects composition data through
+`ShellCompositionProvider`, never reverse imports from platform or a gateway.
 Tool Gateway's runtime is currently global; assigning workspace scope requires
 backend ownership and isolation, not just changing its route metadata.

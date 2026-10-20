@@ -1,5 +1,5 @@
 import { copyFileSync, chmodSync, readFileSync, existsSync } from "node:fs"
-import { writeAtomic, validateLoopbackConfig } from "../../src/server/cliproxy/store"
+import { writeAtomic, validateLoopbackConfig } from "@rawroute/gateway-ai/server/maintenance/cliproxy"
 
 /** Offline conversion; preserves credentials, account mappings, and provider configuration. */
 export function convertCliProxyDefaults(file: string, apply = false) {

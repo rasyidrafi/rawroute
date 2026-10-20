@@ -1,0 +1,308 @@
+import "../../apps/console/src/server/composition"
+import { beforeEach, describe, expect, test } from "bun:test"
+import { testsInWorkspace } from "../helpers/workspace-test"
+// Explicitly exercise the seeded Default workspace's key rules.
+const workspaceTest = testsInWorkspace("default")
+
+import {
+  _memorySnapshot,
+  _resetMemoryBackend,
+  createApiKey,
+  deleteApiKey,
+  deleteProvider,
+  deleteProviderApiKey,
+  getProvider,
+  listApiKeys,
+  listIndexedApiKeyNames,
+  listProviderApiKeys,
+  listProviderModels,
+  stripUndefined,
+  updateApiKeyName,
+  upsertModel,
+  upsertProvider,
+  upsertProviderApiKey,
+} from "../../packages/gateway-ai/src/server/store"
+import { hashPassword, validatePasswordUpdate, verifyPassword } from "../../packages/platform/src/server/identity"
+import { identity, readMeta, updateMeta } from "../../packages/platform/src/server/runtime"
+import { assertProductionBootstrap } from "../../apps/console/src/server/bootstrap"
+
+import type { Model, Provider } from "../../packages/gateway-ai/src/contracts/domain"
+
+beforeEach(() => {
+  process.env.STORAGE_BACKEND = "memory"
+  _resetMemoryBackend()
+  identity.reset()
+})
+
+function providerInput(id = "openai"): Partial<Provider> {
+  return {
+    id,
+    name: id === "openai" ? "OpenAI" : id,
+    prefix: id,
+    baseUrl: "https://api.example.com/v1",
+    protocol: "openai-chat",
+    authType: "bearer",
+    headers: {},
+    enabled: true,
+  }
+}
+
+describe("admin passwords", () => {
+  test("stores a salted hash rather than the password", () => {
+    const hash = hashPassword("a-strong-test-password")
+    expect(hash).not.toContain("a-strong-test-password")
+    expect(verifyPassword("a-strong-test-password", hash)).toBe(true)
+  })
+
+  test("rejects the wrong password", () => {
+    const hash = hashPassword("correct-password")
+    expect(verifyPassword("wrong-password", hash)).toBe(false)
+  })
+
+  test("validates current password and matching replacement", () => {
+    const hash = hashPassword("current-password")
+    expect(() => validatePasswordUpdate("wrong-password", "new-password-123", "new-password-123", hash)).toThrow("Current password is incorrect.")
+    expect(() => validatePasswordUpdate("current-password", "new-password-123", "different-password", hash)).toThrow("New passwords do not match.")
+    expect(() => validatePasswordUpdate("current-password", "new-password-123", "new-password-123", hash)).not.toThrow()
+  })
+})
+
+describe("configuration storage", () => {
+  test("removes undefined optional fields before database writes", () => {
+    const data = stripUndefined({
+      providers: [{ id: "openai", secret: undefined }],
+      models: [{ id: "oa/test", staleField: undefined }],
+      nested: { keep: "value", omit: undefined },
+    })
+
+    expect(data as unknown).toEqual({
+      providers: [{ id: "openai" }],
+      models: [{ id: "oa/test" }],
+      nested: { keep: "value" },
+    })
+  })
+
+  test("persists metadata through the canonical store API", async () => {
+    const before = await readMeta()
+    await updateMeta((meta) => { meta.admin.mustChangePassword = false })
+    const after = await readMeta()
+    expect(after.admin.mustChangePassword).toBe(false)
+    after.admin.mustChangePassword = true
+    expect((await readMeta()).admin.mustChangePassword).toBe(false)
+    await updateMeta((meta) => { meta.admin.mustChangePassword = before.admin.mustChangePassword })
+  })
+
+  workspaceTest("maintains provider counters for API keys and models", async () => {
+    const provider = await upsertProvider(providerInput())
+    expect(await getProvider(provider.id)).toMatchObject({
+      apiKeyCount: 0,
+      enabledApiKeyCount: 0,
+      modelCount: 0,
+      enabledModelCount: 0,
+    })
+
+    await upsertProviderApiKey(provider.id, { name: "Enabled", key: "enabled-key", enabled: true })
+    await upsertProviderApiKey(provider.id, { name: "Disabled", key: "disabled-key", enabled: false })
+    const firstModel = await upsertModel(provider.id, { id: "openai/first", name: "First", upstreamModel: "first", enabled: true })
+    await upsertModel(provider.id, { id: "openai/second", name: "Second", upstreamModel: "second", enabled: false })
+
+    expect(await getProvider(provider.id)).toMatchObject({
+      apiKeyCount: 2,
+      enabledApiKeyCount: 1,
+      modelCount: 2,
+      enabledModelCount: 1,
+    })
+
+    await upsertModel(provider.id, { originalId: firstModel.id, name: "First", upstreamModel: "first", enabled: false })
+    expect(await getProvider(provider.id)).toMatchObject({ modelCount: 2, enabledModelCount: 0 })
+  })
+
+  workspaceTest("assigns generated document IDs while preserving gateway identifiers", async () => {
+    const provider = await upsertProvider({ ...providerInput(), id: "user-supplied-provider-id" })
+    const apiKey = await upsertProviderApiKey(provider.id, { id: "user-supplied-key-id", name: "Primary", key: "provider-key" })
+    const model = await upsertModel(provider.id, { id: "openai/chat", name: "Chat", upstreamModel: "upstream-chat" })
+
+    expect(provider.id).not.toBe("user-supplied-provider-id")
+    expect(apiKey.id).not.toBe("user-supplied-key-id")
+    expect(model.id).not.toBe("openai/chat")
+    expect(model.gatewayModelId).toBe("openai/chat")
+  })
+
+  workspaceTest("keeps provider subcollections when provider details change", async () => {
+    const provider = await upsertProvider(providerInput("renamed"))
+    await upsertProviderApiKey(provider.id, { name: "Primary", key: "provider-key", enabled: true })
+    await upsertModel(provider.id, { id: "renamed/chat", name: "Chat", upstreamModel: "upstream-chat", enabled: true })
+
+    await upsertProvider({ originalId: provider.id, prefix: "current", name: "Current", baseUrl: "https://api.example.com/v2", protocol: "openai-chat", authType: "bearer", headers: {}, enabled: true })
+
+    expect(await getProvider(provider.id)).toMatchObject({ id: provider.id, prefix: "current", apiKeyCount: 1, modelCount: 1 })
+    expect(await listProviderApiKeys(provider.id)).toMatchObject([{ providerId: provider.id, key: "provider-key" }])
+    expect(await listProviderModels(provider.id)).toMatchObject([{ providerId: provider.id, gatewayModelId: "current/chat" }])
+    expect(_memorySnapshot().providerApiKeys.has(provider.id)).toBe(true)
+    expect(_memorySnapshot().models.has(provider.id)).toBe(true)
+  })
+
+  workspaceTest("deleting a provider cascades its API keys and models", async () => {
+    const provider = await upsertProvider(providerInput())
+    await upsertProviderApiKey(provider.id, { name: "Primary", key: "provider-key", enabled: true })
+    await upsertModel(provider.id, { id: "openai/chat", name: "Chat", upstreamModel: "upstream-chat", enabled: true })
+
+    await deleteProvider(provider.id)
+
+    expect(await getProvider(provider.id)).toBeUndefined()
+    expect(await listProviderApiKeys(provider.id)).toEqual([])
+    expect(await listProviderModels(provider.id)).toEqual([])
+    expect(_memorySnapshot().providers.has(provider.id)).toBe(false)
+    expect(_memorySnapshot().providerApiKeys.has(provider.id)).toBe(false)
+    expect(_memorySnapshot().models.has(provider.id)).toBe(false)
+  })
+
+  workspaceTest("tracks enabled provider API keys across updates and deletes", async () => {
+    const provider = await upsertProvider(providerInput())
+    const apiKey = await upsertProviderApiKey(provider.id, { name: "Rotating", key: "provider-key", enabled: false })
+    expect(await getProvider(provider.id)).toMatchObject({ apiKeyCount: 1, enabledApiKeyCount: 0 })
+
+    await upsertProviderApiKey(provider.id, { originalId: apiKey.id, name: "Rotating", key: "provider-key", enabled: true })
+    expect(await getProvider(provider.id)).toMatchObject({ apiKeyCount: 1, enabledApiKeyCount: 1 })
+
+    await upsertProviderApiKey(provider.id, { originalId: apiKey.id, name: "Rotating", key: "provider-key", enabled: false })
+    await deleteProviderApiKey(provider.id, apiKey.id)
+    expect(await getProvider(provider.id)).toMatchObject({ apiKeyCount: 0, enabledApiKeyCount: 0 })
+  })
+
+  workspaceTest("stores CLIProxy Codex mappings without an API key value", async () => {
+    const provider = await upsertProvider(providerInput("codex"))
+    const account = await upsertProviderApiKey(provider.id, {
+      name: "Codex account",
+      key: "",
+      credentialKind: "codex-cli-proxy",
+      cliProxyAuthFile: "codex-account.json",
+      cliProxyAuthIndex: "auth-index-1",
+      enabled: true,
+      rpmLimit: 60,
+      maxConcurrency: 4,
+    })
+
+    expect(account).toMatchObject({
+      credentialKind: "codex-cli-proxy",
+      key: "",
+      cliProxyAuthFile: "codex-account.json",
+      cliProxyAuthIndex: "auth-index-1",
+    })
+    expect(account.rpmLimit).toBeUndefined()
+    expect(account.maxConcurrency).toBeUndefined()
+  })
+
+  workspaceTest("persists only canonical model fields", async () => {
+    const provider = await upsertProvider(providerInput())
+    const model = await upsertModel(provider.id, {
+      gatewayModelId: "openai/chat",
+      name: "Chat",
+      upstreamModel: "upstream-chat",
+      unexpectedField: true,
+    } as Partial<Model> & { unexpectedField: boolean })
+
+    const updated = await upsertModel(provider.id, {
+      originalId: model.id,
+      gatewayModelId: "openai/chat",
+      name: "Chat",
+      upstreamModel: "upstream-chat",
+    })
+
+    expect(updated).not.toHaveProperty("unexpectedField")
+    expect(updated).not.toHaveProperty("protocol")
+  })
+
+  workspaceTest("persists only canonical provider fields", async () => {
+    const provider = await upsertProvider({
+      ...providerInput(),
+      unexpectedField: true,
+    } as Partial<Provider> & { unexpectedField: boolean })
+
+    expect(provider).not.toHaveProperty("unexpectedField")
+  })
+
+  workspaceTest("rejects invalid provider API key configuration", async () => {
+    const provider = await upsertProvider(providerInput())
+    await expect(upsertProviderApiKey(provider.id, { name: "", key: "" })).rejects.toThrow("API key name is required.")
+    await expect(upsertProviderApiKey(provider.id, { name: "Primary", key: "key", rpmLimit: 0 })).rejects.toThrow("RPM limit")
+  })
+
+  workspaceTest("allows a workspace to delete its final gateway API key", async () => {
+    const onlyKey = (await listApiKeys())[0]
+    if (!onlyKey) throw new Error("Memory backend did not seed a gateway API key.")
+    await deleteApiKey(onlyKey.id)
+    expect(await listApiKeys()).toEqual([])
+
+    const extraKey = await createApiKey("Extra")
+    expect((await listApiKeys()).map((apiKey) => apiKey.id)).toEqual([extraKey.id])
+  })
+
+  workspaceTest("supports custom gateway key values and preserves generated keys", async () => {
+    const generated = await createApiKey("Generated")
+    const custom = await createApiKey("Custom", "  client-secret  ")
+    expect(generated.key).toMatch(/^sk-rr-/)
+    expect(custom.key).toBe("client-secret")
+  })
+
+  workspaceTest("updates a gateway API key name without changing its value", async () => {
+    const apiKey = await createApiKey("Original", "client-secret")
+    const updated = await updateApiKeyName(apiKey.id, " Renamed ")
+    expect(updated).toMatchObject({ id: apiKey.id, name: "Renamed", key: "client-secret" })
+    expect((await listApiKeys()).find((entry) => entry.id === apiKey.id)).toMatchObject({ name: "Renamed", key: "client-secret" })
+  })
+
+  workspaceTest("resolves API-key names from every workspace index", async () => {
+    const defaultKey = await createApiKey("Default name", "default-name-secret")
+    const scopedKey = await createApiKey("Scoped name", "scoped-name-secret")
+    expect((await listIndexedApiKeyNames()).get(defaultKey.id)).toBe("Default name")
+    expect((await listIndexedApiKeyNames()).get(scopedKey.id)).toBe("Scoped name")
+  })
+
+  workspaceTest("enforces case-sensitive uniqueness against the bootstrap key and cleans indexes on delete", async () => {
+    const bootstrap = (await listApiKeys())[0]
+    if (!bootstrap) throw new Error("Memory backend did not seed a gateway API key.")
+    await expect(createApiKey("Duplicate", bootstrap.key)).rejects.toThrow("already in use")
+    const lower = await createApiKey("Lower", "Case-Sensitive")
+    const upper = await createApiKey("Upper", "case-sensitive")
+    expect(lower.key).not.toBe(upper.key)
+    await deleteApiKey(lower.id)
+    const recreated = await createApiKey("Recreated", lower.key)
+    expect(recreated.key).toBe(lower.key)
+  })
+
+  workspaceTest("rejects empty and oversized custom values", async () => {
+    await expect(createApiKey("Empty", "   ")).rejects.toThrow("value is required")
+    await expect(createApiKey("Long", "x".repeat(257))).rejects.toThrow("256 characters")
+  })
+
+  workspaceTest("allows the canonical API to remove the final gateway key", async () => {
+    const key = (await listApiKeys())[0]
+    if (!key) throw new Error("Memory backend did not seed a gateway API key.")
+    await deleteApiKey(key.id)
+    expect(await listApiKeys()).toEqual([])
+  })
+})
+
+describe("production bootstrap", () => {
+  test("rejects missing or documented default infrastructure secrets", () => {
+    expect(() => assertProductionBootstrap({})).toThrow()
+    expect(() => assertProductionBootstrap({
+      DEFAULT_ADMIN_PASSWORD: "change-me-now",
+      DEFAULT_PROXY_API_KEY: "sk-local-change-me",
+      SESSION_SECRET: "01234567890123456789012345678901",
+    })).toThrow()
+  })
+
+  test("allows the built-in password with mandatory rotation and private infrastructure secrets", () => {
+    expect(() => assertProductionBootstrap({ DEFAULT_PROXY_API_KEY: "sk-private-gateway-key", SESSION_SECRET: "01234567890123456789012345678901" })).not.toThrow()
+  })
+
+  test("accepts explicitly configured non-default secrets", () => {
+    expect(() => assertProductionBootstrap({
+      DEFAULT_ADMIN_PASSWORD: "a-private-admin-password",
+      DEFAULT_PROXY_API_KEY: "sk-private-gateway-key",
+      SESSION_SECRET: "01234567890123456789012345678901",
+    })).not.toThrow()
+  })
+})

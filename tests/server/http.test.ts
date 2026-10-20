@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, test, mock } from "bun:test"
-import type { Server } from "bun"
+import type { BunRequest, Server } from "bun"
+import type { RouteOptions } from "../../packages/platform/src/contracts/http"
 
-import { createSession, isAuthenticated } from "@/lib/auth"
-import { drainBackgroundTasks, scheduleWorkspaceTask } from "@/lib/background-tasks"
-import { _resetMemoryBackend, readMeta, updateMeta } from "@/server/store"
-import { currentWorkspaceId, runInWorkspace } from "@/lib/workspace/context"
-import { createWorkspace, resetWorkspacesForTests } from "@/server/workspace-repository"
-import { apiRoute } from "@/server/http"
-import { apiRoutes } from "@/server/routes"
+import { identity, createSession, isAuthenticated, readMeta, updateMeta } from "../../packages/platform/src/server/runtime"
+import { drainBackgroundTasks, scheduleWorkspaceTask } from "../../packages/platform/src/server/background-tasks"
+import { _resetMemoryBackend } from "../../packages/gateway-ai/src/server/store"
+import { currentWorkspaceId, runInWorkspace } from "../../packages/platform/src/server/workspace-context"
+import { createWorkspace, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
+import { apiRoute } from "../../packages/platform/src/server/http"
+import { apiRoutes } from "../../apps/console/src/server/routes"
 
 let server: Server<undefined> | undefined
 
@@ -16,6 +17,7 @@ beforeEach(async () => {
   process.env.SESSION_SECRET = "rawroute-http-tests-session-secret"
   process.env.DEFAULT_ADMIN_PASSWORD = "http-test-password"
   _resetMemoryBackend()
+  identity.reset()
   await updateMeta(meta => { meta.admin.mustChangePassword = false })
   await resetWorkspacesForTests()
 })
@@ -95,6 +97,40 @@ test("initial password change keeps the session and accepts only the new passwor
   expect(await accepted.json()).toEqual({ ok: true, mustChangePassword: false })
 })
 
+test("initial-password exceptions are declared options, not inferred from canonical account URLs", async () => {
+  await updateMeta(meta => { meta.admin.mustChangePassword = true })
+  const base = start({
+    "/api/admin/account": apiRoute({ GET: () => Response.json({ allowed: true }) }, "session"),
+    "/rotation": apiRoute({ GET: () => Response.json({ allowed: true }) }, "session", "/rotation", { allowInitialPassword: true }),
+  })
+  const cookie = (await createSession(new Request(base))).split(";", 1)[0]
+  const blocked = await fetch(new URL("/api/admin/account", base), { headers: { cookie } })
+  expect(blocked.status).toBe(403)
+  await blocked.body?.cancel()
+  const allowed = await fetch(new URL("/rotation", base), { headers: { cookie } })
+  expect(allowed.status).toBe(200)
+  expect(await allowed.json()).toEqual({ allowed: true })
+})
+
+test("long-running request timeouts follow concrete options and methods, not CLIProxy or workspace paths", async () => {
+  const timeout = mock(() => undefined)
+  const transport = { timeout } as unknown as Server<undefined>
+  async function call(path: string, method: string, options?: RouteOptions) {
+    const response = await apiRoute({ GET: () => new Response(), DELETE: () => new Response() }, "public", path, options)(new Request(`http://localhost${path}`, { method }) as BunRequest<string>, transport)
+    expect(response.status).toBe(200)
+  }
+  await call("/api/admin/cliproxy/versions", "GET")
+  await call("/api/admin/cliproxy/service/restart", "GET")
+  await call("/api/admin/workspaces/example", "DELETE")
+  expect(timeout).not.toHaveBeenCalled()
+  await call("/declared-long-running", "GET", { idleTimeout: 0 })
+  expect(timeout).toHaveBeenCalledTimes(1)
+  await call("/declared-drain", "GET", { idleTimeout: 0, idleTimeoutMethods: ["DELETE"] })
+  expect(timeout).toHaveBeenCalledTimes(1)
+  await call("/declared-drain", "DELETE", { idleTimeout: 0, idleTimeoutMethods: ["DELETE"] })
+  expect(timeout).toHaveBeenCalledTimes(2)
+})
+
 test("session cookies are explicit, signed, expiring, and removed on logout", async () => {
   const base = start(apiRoutes)
   const login = await fetch(new URL("/api/auth/login", base), {
@@ -167,7 +203,7 @@ test("concurrent requests and deferred jobs retain their own workspace", async (
   expect(responses).toEqual([{ before: first.id, after: first.id }, { before: second.id, after: second.id }])
   await drainBackgroundTasks()
   expect(jobs.sort()).toEqual([first.id, second.id].sort())
-  expect(currentWorkspaceId()).toBe("default")
+  expect(() => currentWorkspaceId()).toThrow("Workspace scope is required")
   expect((await fetch(new URL("/explicit", base), { headers: { cookie } })).status).toBe(400)
   expect((await fetch(new URL("/scoped", base), { headers: { cookie, "x-rawroute-workspace-id": "deleted" } })).status).toBe(404)
 })

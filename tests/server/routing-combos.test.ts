@@ -1,12 +1,15 @@
+import "../../apps/console/src/server/composition"
 import { beforeEach, expect, test } from "bun:test"
-import { POST } from "../../src/server/routes/api/admin/combos"
-import { _resetMemoryBackend, listCombos, upsertModel, upsertProvider } from "@/server/store"
-import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/server/workspace-repository"
-import { runInWorkspace } from "@/lib/workspace/context"
-import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/workspace/model-shares"
-import { resolveGatewayModel } from "@/lib/cliproxy/model-resolution"
-import { catalogModels } from "@/lib/catalog"
-import type { ComboMember, ModelCombo } from "@/lib/types"
+import { testsInWorkspace } from "../helpers/workspace-test"
+const workspaceTest = testsInWorkspace("routing-tests")
+import { POST } from "../../packages/gateway-ai/src/server/routes/api/admin/combos/index"
+import { _resetMemoryBackend, listCombos, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
+import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
+import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
+import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "../../packages/gateway-ai/src/server/model-shares"
+import { resolveGatewayModel } from "../../packages/gateway-ai/src/server/cliproxy/model-resolution"
+import { catalogModels } from "../../packages/gateway-ai/src/contracts/catalog"
+import type { ComboMember, ModelCombo } from "../../packages/gateway-ai/src/contracts/domain"
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
@@ -19,7 +22,7 @@ function save(members: ComboMember[], originalId?: string) {
   return POST(new Request("http://localhost/api/admin/combos", { method: "POST", body: JSON.stringify({ combo: { combo: "my-model", name: "My model", members, originalId } }) }))
 }
 
-test("one-model aliases can grow into fallback combos and reject empty membership", async () => {
+workspaceTest("one-model aliases can grow into fallback combos and reject empty membership", async () => {
   const provider = await upsertProvider({ name: "Test", prefix: "test", baseUrl: "https://example.test", protocol: "openai-chat", authType: "none", enabled: true })
   const first = await upsertModel(provider.id, { name: "First", gatewayModelId: "test/first", upstreamModel: "first", enabled: true })
   const second = await upsertModel(provider.id, { name: "Second", gatewayModelId: "test/second", upstreamModel: "second", enabled: true })

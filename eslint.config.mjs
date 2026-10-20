@@ -33,7 +33,7 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    files: ["src/components/ui/**"],
+    files: ["packages/ui/src/{alert-dialog,alert,avatar,badge,breadcrumb,button-group,button,calendar,card,chart,checkbox,command,dialog,drawer,dropdown-menu,empty-state,empty,field,input,label,popover,progress,scroll-area,select,separator,sheet,sidebar,skeleton,sonner,switch,table,tabs,textarea,toggle-group,toggle,tooltip}.tsx"],
     rules: {
       "shadcn/no-restyle": "off",
       "shadcn/no-arbitrary-values": "off",
@@ -41,12 +41,20 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    files: ["src/components/**", "src/pages/**", "src/App.tsx", "src/frontend.tsx"],
+    files: ["packages/*/src/web/**", "packages/*/src/contracts/**", "packages/ui/src/**", "apps/console/src/frontend/**"],
     rules: {
       "no-restricted-imports": ["error", {
         patterns: [
-          { group: ["@/server/**", "@/lib/auth", "@/lib/analytics", "@/lib/local-db", "@/lib/local-cache", "@/lib/credential-secrets", "@/lib/background-tasks", "bun", "node:*"], message: "Browser code must access server resources through HTTP APIs." },
+          { group: ["@rawroute/*/server", "@rawroute/*/server/**", "bun", "bun:*", "node:*"], message: "Browser code must access server resources through HTTP APIs." },
         ],
+      }],
+    },
+  },
+  {
+    files: ["packages/platform/src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{ group: ["@rawroute/console", "@rawroute/gateway-*"], message: "Platform cannot depend on gateways or console composition." }],
       }],
     },
   },

@@ -1,11 +1,14 @@
+import "../../apps/console/src/server/composition"
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
-import { _resetMemoryBackend, createApiKey, upsertCombo, upsertModel, upsertProvider } from "@/server/store"
-import { getBudgetRequestState, getBudgetRows, recordGatewayUsage, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, setBudgetUnlimitedSettings, upsertBudget } from "@/lib/analytics"
-import { proxyGatewayRequest } from "@/lib/cliproxy/gateway"
-import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "@/lib/model-pricing"
-import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "@/server/workspace-repository"
-import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "@/lib/workspace/model-shares"
-import { runInWorkspace } from "@/lib/workspace/context"
+import { testsInWorkspace } from "../helpers/workspace-test"
+const workspaceTest = testsInWorkspace("default")
+import { _resetMemoryBackend, createApiKey, upsertCombo, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
+import { getBudgetRequestState, getBudgetRows, recordGatewayUsage, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, setBudgetUnlimitedSettings, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
+import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/cliproxy/gateway"
+import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "../../packages/gateway-ai/src/server/model-pricing"
+import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
+import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "../../packages/gateway-ai/src/server/model-shares"
+import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
 
 const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
 let upstream = spyOn(fetchTarget, "fetch")
@@ -36,7 +39,7 @@ function request(key: string, model: string) {
   return new Request("http://localhost/v1/responses", { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify({ model, input: "Hello" }) })
 }
 
-test("real admission skips a denied member, allows the selected fallback, and counts its usage", async () => {
+workspaceTest("real admission skips a denied member, allows the selected fallback, and counts its usage", async () => {
   const first = await pricedModel("expensive")
   const second = await pricedModel("cheap")
   const key = await createApiKey("Combo key")
@@ -51,7 +54,7 @@ test("real admission skips a denied member, allows the selected fallback, and co
   await expect(getBudgetRequestState(key.id, second.gatewayModelId, second.id)).rejects.toThrow("budget")
 })
 
-test("allowing a combo does not allow direct member requests, and Unlimited exclusions still block it", async () => {
+workspaceTest("allowing a combo does not allow direct member requests, and Unlimited exclusions still block it", async () => {
   const model = await pricedModel("local")
   const key = await createApiKey("Combo key")
   await upsertCombo({ combo: "coding", name: "Coding", members: [{ modelId: model.gatewayModelId }] })

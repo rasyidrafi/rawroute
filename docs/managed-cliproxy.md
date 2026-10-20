@@ -20,12 +20,14 @@ PID identity and exclusive port ownership before signaling a process. Supported
 release architectures are Linux amd64 and arm64. One supervisor owns a data root;
 do not share that root between active RawRoute replicas.
 
-`src/server/cliproxy/` contains lifecycle, release verification, persisted state,
+`packages/gateway-ai/src/server/cliproxy/` contains lifecycle, release verification, persisted state,
 process inspection, mutation coordination, migration, and global HTTP handlers.
-`src/lib/cliproxy/types.ts` is the browser-safe contract. Existing gateway and
+`packages/gateway-ai/src/contracts/cliproxy.ts` is the browser-safe contract. Existing gateway and
 Codex clients use `connection.ts` through the shared management/transport clients.
 Provider updates serialize their complete management read/modify/write operation
 with lifecycle operations. The supervisor survives Bun hot reloads as a singleton.
+Console startup, health and shutdown use the AI-owned `aiServer` integration
+surface, not transport credentials or mutable repositories.
 
 ## New deployments
 

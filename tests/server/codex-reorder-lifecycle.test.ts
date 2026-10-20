@@ -1,5 +1,5 @@
 import { beforeEach, expect, mock, test } from "bun:test"
-import { withLifecycleMutation } from "@/server/cliproxy/mutations"
+import { withLifecycleMutation } from "../../packages/gateway-ai/src/server/cliproxy/mutations"
 
 const accounts = [
   { id: "a", priority: 1, credentialKind: "codex-cli-proxy", cliProxyAuthFile: "a.json" },
@@ -7,19 +7,19 @@ const accounts = [
 ]
 const management = mock<(path: string, init?: RequestInit) => Promise<Response>>()
 const reorderDatabase = mock<(providerId: string, orderedIds: string[]) => Promise<void>>()
-mock.module("@/lib/cliproxy/management", () => ({ cliproxyManagement: management }))
-mock.module("@/lib/codex/oauth", () => ({ listCodexAccounts: async () => ({ accounts }) }))
-mock.module("@/server/store", () => ({
+mock.module("../../packages/gateway-ai/src/server/cliproxy/management", () => ({ cliproxyManagement: management }))
+mock.module("../../packages/gateway-ai/src/server/codex/oauth", () => ({ listCodexAccounts: async () => ({ accounts }) }))
+mock.module("../../packages/gateway-ai/src/server/store", () => ({
   getProvider: async () => ({ prefix: "codex" }),
   reorderProviderApiKeys: reorderDatabase,
   listProviderApiKeys: async () => accounts,
   listProviders: async () => [],
   upsertProviderApiKey: async () => undefined,
 }))
-mock.module("@/server/workspace-repository", () => ({ listWorkspaces: async () => [] }))
-mock.module("@/server/logging/recorder", () => ({ recordLog: () => undefined }))
-mock.module("@/lib/cliproxy/provider-sync", () => ({ syncNonCodexProviderProjection: async () => undefined }))
-const { POST } = await import("@/server/routes/api/admin/providers/by-provider/api-keys/reorder")
+mock.module("../../packages/platform/src/server/runtime", () => ({ listWorkspaces: async () => [] }))
+mock.module("../../packages/gateway-ai/src/server/logging", () => ({ recordLog: () => undefined }))
+mock.module("../../packages/gateway-ai/src/server/cliproxy/provider-sync", () => ({ syncNonCodexProviderProjection: async () => undefined }))
+const { POST } = await import("../../packages/gateway-ai/src/server/routes/api/admin/providers/by-provider/api-keys/reorder/index")
 
 beforeEach(() => {
   process.env.CLIPROXY_MODE = "external"

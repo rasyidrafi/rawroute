@@ -1,17 +1,19 @@
 # Frontend empty-state audit
 
-This audit covers browser-rendered empty collections and no-result states under
-`src/components/` and `src/pages/`. It was checked against conditional list
+This historical audit covered browser-rendered empty collections and no-result
+states in the original mixed component/page tree. Those views now live in their
+owner packages' `src/web/`; see [workspace ownership](architecture/005-workspaces.md).
+It was checked against conditional list
 rendering, zero-length collections, search-result branches, and existing
 empty-copy strings. All included data-empty states use
-`src/components/ui/empty-state.tsx`; table rows use the `table` treatment, and
+`packages/ui/src/empty-state.tsx`; table rows use the `table` treatment, and
 content inside an existing card, dialog, popover, command list, or terminal uses
 the borderless `embedded` treatment to avoid nested cards and duplicate borders.
 
 The default treatment is a rounded bordered card with a centered muted circular
 icon, semantic heading, description, and optional action slot. Compact treatment
 keeps the same hierarchy in denser contexts. `EmptyTableRow` and the retained
-`EmptyRow` adapter in `src/components/dashboard/shared.tsx` provide valid table
+`EmptyRow` adapter in `packages/ui/src/resource-feedback.tsx` provide valid table
 markup and preserve table headers and actions.
 
 ## Included surfaces

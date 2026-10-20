@@ -1,6 +1,6 @@
 # Offline dashboard benchmark
 
-Run `bun run --no-env-file scripts/dashboard-perf.ts [events=10000] [trials=3]`.
+Run `bun run --no-env-file tests/diagnostics/dashboard-perf.ts [events=10000] [trials=3]`.
 The supported maximum is 100,000 events and 10 trials. No server, network,
 repository data directory, `.env`, or live credentials are used. Child processes
 receive an explicit allowlisted environment and SQLite backend in development

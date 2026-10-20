@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import type { Server } from "bun"
-import { DEFAULT_ADMIN_PASSWORD } from "@/lib/auth-defaults"
-import { createSession } from "@/lib/auth"
-import { _resetMemoryBackend, hashPassword, updateMeta } from "@/server/store"
-import { GET as bootstrap } from "@/server/routes/api/auth/bootstrap"
-import { apiRoutes } from "@/server/routes"
+import { DEFAULT_ADMIN_PASSWORD } from "../../packages/platform/src/contracts/auth-defaults"
+import { identity, createSession, updateMeta } from "../../packages/platform/src/server/runtime"
+import { hashPassword } from "../../packages/platform/src/server/identity"
+import { _resetMemoryBackend } from "../../packages/gateway-ai/src/server/store"
+import { GET as bootstrap } from "../../packages/platform/src/server/routes/api/auth/bootstrap/index"
+import { apiRoutes } from "../../apps/console/src/server/routes"
 
 let server: Server<undefined>
 let cookie: string
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
+  identity.reset()
   process.env.SESSION_SECRET = "bootstrap-tests-private-session-secret"
   delete process.env.DEFAULT_ADMIN_PASSWORD
   delete process.env.AUTH_SHOW_DEFAULT_PASSWORD_HINT

@@ -5,7 +5,7 @@
   "tsx": true,
   "tailwind": {
     "config": "",
-    "css": "src/index.css",
+    "css": "apps/console/src/frontend/index.css",
     "baseColor": "neutral",
     "cssVariables": true,
     "prefix": ""
@@ -13,11 +13,11 @@
   "iconLibrary": "lucide",
   "rtl": false,
   "aliases": {
-    "components": "@/components",
-    "utils": "@/lib/utils",
-    "ui": "@/components/ui",
-    "lib": "@/lib",
-    "hooks": "@/hooks"
+    "components": "@rawroute/ui",
+    "utils": "@rawroute/ui/utils",
+    "ui": "@rawroute/ui",
+    "lib": "@rawroute/ui",
+    "hooks": "@rawroute/ui"
   },
   "menuColor": "default",
   "menuAccent": "subtle",

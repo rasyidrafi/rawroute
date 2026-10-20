@@ -1,7 +1,7 @@
 import { expect } from "bun:test"
-import { initCliproxy, getStatus, restart, stop, start, shutdownCliproxy } from "@/server/cliproxy/service"
-import { cliproxyBaseUrl, cliproxySecret } from "@/server/cliproxy/connection"
-import { cliproxyManagement, cliproxyManagementJson } from "@/lib/cliproxy/management"
+import { initCliproxy, getStatus, restart, stop, start, shutdownCliproxy } from "../../packages/gateway-ai/src/server/cliproxy/service"
+import { cliproxyBaseUrl, cliproxySecret } from "../../packages/gateway-ai/src/server/cliproxy/connection"
+import { cliproxyManagement, cliproxyManagementJson } from "../../packages/gateway-ai/src/server/cliproxy/management"
 
 const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   expect(request.headers.get("authorization")).toBe("Bearer fixture-provider-key")

@@ -1,0 +1,41 @@
+import { DEFAULT_ADMIN_PASSWORD } from "../../../../../../contracts/auth-defaults"
+import { jsonError } from "@rawroute/observability/contracts/http"
+
+import { recordLog } from "@rawroute/observability/server/recorder"
+import { hashPassword, validatePasswordUpdate, verifyPassword } from "../../../../../identity"
+import { updateMeta } from "../../../../../runtime"
+import { appendAudit } from "../../../../../audit"
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null
+  if (!body) {
+    await appendAudit({ action: "auth.password", resource: "administrator", result: "failure" })
+    return jsonError("Invalid request.", 400)
+  }
+
+  try {
+    const meta = await updateMeta(async (current) => {
+      if (typeof body.password === "string" && body.password.length > 0) {
+        if (!current.admin.mustChangePassword) throw new Error("Current password is required.")
+        if (body.password === DEFAULT_ADMIN_PASSWORD) throw new Error("Choose a private password instead of the documented default.")
+        if (verifyPassword(body.password, current.admin.passwordHash)) throw new Error("New password must be different from the current password.")
+        if (body.password.length < 10) throw new Error("Password must be at least 10 characters.")
+        current.admin.passwordHash = hashPassword(body.password)
+        current.admin.mustChangePassword = false
+        return
+      }
+      const currentPassword = String(body.currentPassword || "")
+      const newPassword = String(body.newPassword || "")
+      const confirmPassword = String(body.confirmPassword || "")
+      validatePasswordUpdate(currentPassword, newPassword, confirmPassword, current.admin.passwordHash)
+      current.admin.passwordHash = hashPassword(newPassword)
+      current.admin.mustChangePassword = false
+    })
+    recordLog("auth.password.changed", {}, { level: "info" })
+    return Response.json({ ok: true, mustChangePassword: meta.admin.mustChangePassword })
+  } catch (error) {
+    await appendAudit({ action: "auth.password", resource: "administrator", result: "failure" })
+    recordLog("auth.password.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
+    return jsonError(error instanceof Error ? error.message : "Unable to update password.", 400)
+  }
+}

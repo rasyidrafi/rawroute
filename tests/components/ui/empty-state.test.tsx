@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { ArrowRightIcon } from "lucide-react"
 
-import { EmptyState } from "@/components/ui/empty-state"
+import { EmptyState } from "../../../packages/ui/src/empty-state"
 
 test("default empty state is a semantic bordered card with icon, title, description, and action", () => {
   const markup = renderToStaticMarkup(<EmptyState title="Nothing here" description="Add an item to get started." icon={ArrowRightIcon} action={<button type="button">Add item</button>} />)

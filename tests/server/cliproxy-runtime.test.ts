@@ -1,7 +1,7 @@
 import { beforeEach, expect, mock, test } from "bun:test"
-import type { CliproxyStatus } from "@/lib/cliproxy/types"
-import { currentWorkspaceId } from "@/lib/workspace/context"
-import { activeExecutions, admitExecution } from "@/server/cliproxy/admission"
+import type { CliproxyStatus } from "../../packages/gateway-ai/src/contracts/cliproxy"
+import { currentWorkspaceId } from "../../packages/platform/src/server/workspace-context"
+import { activeExecutions, admitExecution } from "../../packages/gateway-ai/src/server/cliproxy/admission"
 
 const origin = "http://localhost:3000"
 process.env.CLIPROXY_MODE = "managed"
@@ -26,18 +26,20 @@ const reconcile = mock(async (providerId: string) => {
   if (!state.healthy) throw new Error("Connection refused: stopped engine")
   synced.push({ providerId, workspaceId: currentWorkspaceId() })
 })
-mock.module("@/server/cliproxy/service-module", () => ({ managedService: async () => service }))
-mock.module("@/lib/codex/cli-login", () => ({ hasPendingCodexLogin: async () => false }))
-mock.module("@/lib/cliproxy/transport", () => ({ cliProxyHealth: async () => false }))
-mock.module("@/server/logging/recorder", () => ({ recordLog: () => undefined }))
-mock.module("@/server/workspace-repository", () => ({ listWorkspaces: async () => [{ id: "workspace-a", status: "active" }, { id: "workspace-b", status: "active" }] }))
-mock.module("@/server/store", () => ({
+mock.module("../../packages/gateway-ai/src/server/cliproxy/service-module", () => ({ managedService: async () => service }))
+mock.module("../../packages/gateway-ai/src/server/codex/cli-login", () => ({ hasPendingCodexLogin: async () => false }))
+mock.module("../../packages/gateway-ai/src/server/cliproxy/transport", () => ({ cliProxyHealth: async () => false }))
+mock.module("../../packages/gateway-ai/src/server/logging", () => ({ recordLog: () => undefined }))
+mock.module("../../packages/platform/src/server/runtime", () => ({
+  listWorkspaces: async () => [{ id: "workspace-a", status: "active" }, { id: "workspace-b", status: "active" }],
   readMeta: async () => ({ admin: { mustChangePassword: false } }),
+}))
+mock.module("../../packages/gateway-ai/src/server/store", () => ({
   listProviders: async () => [{ id: "provider-a", prefix: "openai" }, { id: "codex", prefix: "codex" }],
 }))
-mock.module("@/lib/cliproxy/provider-sync", () => ({ invalidateProviderProjections: () => undefined, syncNonCodexProviderProjection: reconcile }))
-const { initializeInstance, runInstanceAction } = await import("@/server/cliproxy/runtime")
-const { lifecycle } = await import("@/server/cliproxy/http")
+mock.module("../../packages/gateway-ai/src/server/cliproxy/provider-sync", () => ({ invalidateProviderProjections: () => undefined, syncNonCodexProviderProjection: reconcile }))
+const { initializeInstance, runInstanceAction } = await import("../../packages/gateway-ai/src/server/cliproxy/runtime")
+const { lifecycle } = await import("../../packages/gateway-ai/src/server/cliproxy/http")
 await initializeInstance()
 
 beforeEach(() => {

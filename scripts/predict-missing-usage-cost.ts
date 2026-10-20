@@ -1,4 +1,4 @@
-import type { UsageEvent } from "../src/lib/types"
+import type { UsageEvent } from "@rawroute/gateway-ai/contracts"
 import { maintainCanonicalUsage, maintenanceArguments, type CanonicalEventDocument, type UsageRepair } from "./migrations/usage-maintenance"
 
 const methods = new Set(["same-key-model-p25", "pooled-model-p25", "default-model-shrunk-p25"])

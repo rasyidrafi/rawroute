@@ -1,0 +1,23 @@
+export const serverEvents = {
+  "auth.login.rejected": { message: "Admin login rejected", source: "auth" },
+  "auth.login.succeeded": { message: "Admin signed in", source: "auth" },
+  "auth.logout": { message: "Admin signed out", source: "auth" },
+  "workspace.created": { message: "Workspace created", source: "admin" },
+  "admin.workspace.create.failed": { message: "Workspace create failed", source: "admin" },
+  "workspace.renamed": { message: "Workspace renamed", source: "admin" },
+  "admin.workspace.rename.failed": { message: "Workspace rename failed", source: "admin" },
+  "workspace.deleted": { message: "Workspace deleted", source: "admin" },
+  "admin.workspace.delete.failed": { message: "Workspace delete failed", source: "admin" },
+  "auth.password.changed": { message: "Password updated", source: "admin" },
+  "auth.password.failed": { message: "Password update failed", source: "admin" },
+  "http.request.failed": { message: "HTTP request failed", source: "system" },
+  "background.failed": { message: "Background task failed", source: "system" },
+  "http.request.completed": { message: "API request completed", source: "http" },
+  "http.request.rejected": { message: "API request rejected", source: "http" },
+  "system.started": { message: "RawRoute started", source: "system" },
+  "system.stopping": { message: "RawRoute shutdown started", source: "system" },
+  "system.stopped": { message: "RawRoute shutdown completed", source: "system" },
+  "system.shutdown.failed": { message: "RawRoute shutdown failed", source: "system" },
+  "logs.cleared": { message: "Log history cleared", source: "console" },
+} as const
+export type ServerEvent = keyof typeof serverEvents

@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Request, type Route } from "@playwright/test"
-import { pagePaths } from "../../src/lib/dashboard/routes"
+import { pagePaths } from "../../apps/console/src/frontend/contracts/dashboard/routes"
 
 const sessionUrl = "**/api/auth/session"
 const errorTitle = "Unable to check your session"

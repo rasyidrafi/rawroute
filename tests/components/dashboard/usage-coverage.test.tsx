@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
-import { UsageSummary } from "@/components/dashboard/ai/usage-summary"
-import { BudgetUsageCard } from "@/components/dashboard/ai/overview-cards"
-import type { AnalyticsCoverage, DashboardPayload } from "@/lib/types"
+import { UsageSummary } from "../../../packages/gateway-ai/src/web/components/usage-summary"
+import { BudgetUsageCard } from "../../../packages/gateway-ai/src/web/components/overview-cards"
+import type { AnalyticsCoverage, DashboardPayload } from "../../../packages/gateway-ai/src/contracts/domain"
 
 const complete:AnalyticsCoverage={partial:false,excludedSources:0,tokenCoveredRequests:0,statusCoveredRequests:0,costCoveredRequests:0,modelCoveredRequests:0,keyCoveredRequests:0,durationCount:0,financialUnavailable:false,unsupportedTrendSources:0}
 test("unsupported-only summaries and budget balances render unavailable, not zero totals or remaining credit",()=>{

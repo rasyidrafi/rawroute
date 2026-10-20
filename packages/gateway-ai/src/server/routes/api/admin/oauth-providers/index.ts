@@ -1,0 +1,34 @@
+import { listCodexAccounts } from "../../../../codex/oauth"
+import { jsonError } from "@rawroute/observability/contracts/http"
+
+
+function publicAccount(account: Awaited<ReturnType<typeof listCodexAccounts>>["accounts"][number]) {
+  return {
+    id: account.id,
+    providerId: account.providerId,
+    name: account.name,
+    email: account.email,
+    accountId: account.accountId,
+    planType: account.planType,
+    enabled: account.enabled,
+    expiresAt: account.expiresAt,
+    lastRefresh: account.lastRefresh,
+    priority: account.priority,
+    credentialKind: account.credentialKind,
+    cliProxyStatus: account.cliProxyStatus,
+    cliProxyStatusMessage: account.cliProxyStatusMessage,
+    createdAt: account.createdAt,
+  }
+}
+
+export async function GET() {
+  try {
+    const result = await listCodexAccounts()
+    return Response.json({
+      provider: result.provider ? { id: result.provider.id, name: result.provider.name, prefix: result.provider.prefix, baseUrl: result.provider.baseUrl } : null,
+      accounts: result.accounts.map(publicAccount),
+    })
+  } catch (error) {
+    return jsonError(error instanceof Error ? error.message : "Unable to synchronize Codex accounts.", 502)
+  }
+}

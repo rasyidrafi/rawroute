@@ -1,7 +1,8 @@
-import { dashboardPages, dashboardPageForPath, keyUsagePagePath, pagePaths } from "@/lib/dashboard/routes"
+import { dashboardPages, dashboardPageForPath, pagePaths } from "../../../apps/console/src/frontend/contracts/dashboard/routes"
+import { keyUsagePagePath } from "../../../packages/gateway-ai/src/contracts/pages"
 import { expect, test } from "bun:test"
 
-import { dashboardApps, isDashboardNavigationItemActive } from "@/components/dashboard/dashboard-apps"
+import { dashboardApps, isDashboardNavigationItemActive } from "../../../apps/console/src/frontend/browser-modules"
 
 test("resolves the application from canonical route metadata", () => {
   const keyPath = keyUsagePagePath("shared-workspace:team/one")

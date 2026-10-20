@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { renderConfig } from "../../src/server/cliproxy/store"
+import { renderConfig } from "../../packages/gateway-ai/src/server/cliproxy/store"
 import { convertCliProxyDefaults } from "../../scripts/migrations/cliproxy-defaults"
 
 const defaults = { debug: false, "logging-to-file": true, "logs-max-total-size-mb": 100, "usage-statistics-enabled": true, "request-retry": 0, "max-retry-interval": 0, routing: { strategy: "fill-first" } }

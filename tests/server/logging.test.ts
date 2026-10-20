@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import type { Server } from "bun"
-import { createSession } from "@/lib/auth"
-import { runInWorkspace } from "@/lib/workspace/context"
-import { updateMeta, _resetMemoryBackend, createApiKey } from "@/server/store"
-import { createWorkspace, deleteWorkspace, resetWorkspacesForTests } from "@/server/workspace-repository"
-import { recordLog } from "@/server/logging/recorder"
-import { logs } from "@/server/logging/store"
-import { requestContext } from "@/server/request-context"
-import { apiRoutes } from "@/server/routes"
-import { apiRoute } from "@/server/http"
-import { drainBackgroundTasks } from "@/lib/background-tasks"
+import { identity, createSession, updateMeta } from "../../packages/platform/src/server/runtime"
+import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
+import { _resetMemoryBackend, createApiKey } from "../../packages/gateway-ai/src/server/store"
+import { createWorkspace, deleteWorkspace, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
+import { recordLog } from "../../packages/observability/src/server/recorder"
+import { recordLog as recordAiLog } from "../../packages/gateway-ai/src/server/logging"
+import { logs } from "../../packages/observability/src/server/store"
+import { requestContext } from "../../packages/observability/src/server/request-context"
+import { apiRoutes } from "../../apps/console/src/server/routes"
+import { apiRoute } from "../../packages/platform/src/server/http"
+import { drainBackgroundTasks } from "../../packages/platform/src/server/background-tasks"
 
 let server: Server<undefined>
 let cookie: string
@@ -18,6 +19,7 @@ beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
   process.env.DEFAULT_ADMIN_PASSWORD = "logging-test-password"
   _resetMemoryBackend()
+  identity.reset()
   await updateMeta(meta => { meta.admin.mustChangePassword = false })
   await resetWorkspacesForTests()
   logs.clear({ kind: "global" })
@@ -46,8 +48,8 @@ test("global activity never appears in Default and global APIs ignore workspace 
 
 test("read and clear operate on exactly one scope and polling does not log itself", async () => {
   const a = await createWorkspace("Log Alpha"), b = await createWorkspace("Log Beta")
-  runInWorkspace(a, () => recordLog("gateway.request.completed", { status: 200 }))
-  runInWorkspace(b, () => recordLog("gateway.request.failed", { status: 502 }))
+  runInWorkspace(a, () => recordAiLog("gateway.request.completed", { status: 200 }))
+  runInWorkspace(b, () => recordAiLog("gateway.request.failed", { status: 502 }))
   recordLog("system.started")
   const before = await (await call("/api/admin/logs", a.id)).json()
   const again = await (await call("/api/admin/logs", a.id)).json()
@@ -72,14 +74,13 @@ test("request failures retain workspace and generated request ID without free-fo
 
 test("late completion and nested work cannot recreate a deleted workspace log", async () => {
   const a = await createWorkspace("Deleted logs")
-  await runInWorkspace(a, async () => {
-    recordLog("gateway.request.started")
-    const admission = requestContext().logScope
-    await deleteWorkspace(a.id, a.name)
-    expect(recordLog("gateway.request.completed")).toBe(false)
-    expect(runInWorkspace(a, () => recordLog("gateway.request.completed"))).toBe(false)
-    expect(logs.snapshot(admission).entries).toHaveLength(0)
+  const admission = await runInWorkspace(a, async () => {
+    recordAiLog("gateway.request.started")
+    return requestContext().logScope
   })
+  await deleteWorkspace(a.id, a.name)
+  expect(() => runInWorkspace(a, () => recordAiLog("gateway.request.completed"))).toThrow("unavailable")
+  expect(logs.snapshot(admission).entries).toHaveLength(0)
 })
 
 test("gateway authentication uses the key workspace, never the supplied workspace header", async () => {

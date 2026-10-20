@@ -2,8 +2,8 @@ import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 test("admin usage does not seed a browser-selected workspace with Default data", () => {
-  const page = readFileSync(new URL("../../../src/components/dashboard/route-views.tsx", import.meta.url), "utf8")
-  const wrapper = readFileSync(new URL("../../../src/components/dashboard/ai/overview-usage-view.tsx", import.meta.url), "utf8")
+  const page = readFileSync(new URL("../../../packages/gateway-ai/src/web/views.tsx", import.meta.url), "utf8")
+  const wrapper = readFileSync(new URL("../../../packages/gateway-ai/src/web/components/overview-usage-view.tsx", import.meta.url), "utf8")
 
   expect(page).not.toContain("getDashboardPayload")
   expect(page).toContain("<OverviewUsageView />")
@@ -11,8 +11,8 @@ test("admin usage does not seed a browser-selected workspace with Default data",
 })
 
 test("public usage starts on the budget window", () => {
-  const usageView = readFileSync(new URL("../../../src/hooks/use-usage-dashboard.ts", import.meta.url), "utf8")
-  const overview = readFileSync(new URL("../../../src/components/dashboard/ai/usage-overview.tsx", import.meta.url), "utf8")
+  const usageView = readFileSync(new URL("../../../packages/gateway-ai/src/web/use-usage-dashboard.ts", import.meta.url), "utf8")
+  const overview = readFileSync(new URL("../../../packages/gateway-ai/src/web/components/usage-overview.tsx", import.meta.url), "utf8")
 
   expect(usageView).toContain("DEFAULT_DASHBOARD_QUERY.preset")
   expect(usageView).not.toContain("publicView ? \"today\" : DEFAULT_PRESET")

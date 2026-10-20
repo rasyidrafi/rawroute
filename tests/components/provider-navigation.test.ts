@@ -2,10 +2,10 @@ import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 test("providers use a list page and a dynamic detail page", () => {
-  const routes = readFileSync(new URL("../../src/components/dashboard/route-views.tsx", import.meta.url), "utf8")
-  const list = readFileSync(new URL("../../src/components/dashboard/ai/providers-view.tsx", import.meta.url), "utf8")
-  const detail = readFileSync(new URL("../../src/components/dashboard/ai/provider-detail-view.tsx", import.meta.url), "utf8")
-  const loginDialog = readFileSync(new URL("../../src/components/dashboard/ai/codex-login-dialog.tsx", import.meta.url), "utf8")
+  const routes = readFileSync(new URL("../../packages/gateway-ai/src/web/views.tsx", import.meta.url), "utf8")
+  const list = readFileSync(new URL("../../packages/gateway-ai/src/web/components/providers-view.tsx", import.meta.url), "utf8")
+  const detail = readFileSync(new URL("../../packages/gateway-ai/src/web/components/provider-detail-view.tsx", import.meta.url), "utf8")
+  const loginDialog = readFileSync(new URL("../../packages/gateway-ai/src/web/components/codex-login-dialog.tsx", import.meta.url), "utf8")
 
   expect(routes).toContain("<ProviderPage />")
   expect(routes).toContain('providerId="codex"')

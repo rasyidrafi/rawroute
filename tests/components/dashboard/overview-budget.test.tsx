@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
-import { BudgetUsageCard } from "@/components/dashboard/ai/overview-cards"
-import type { OverviewDetails } from "@/lib/overview"
+import { BudgetUsageCard } from "../../../packages/gateway-ai/src/web/components/overview-cards"
+import type { OverviewDetails } from "../../../packages/gateway-ai/src/contracts/overview"
 
 const data: OverviewDetails = {
   cacheUsageInputTokens: 0, cacheUsageReadTokens: 0, cacheUsageCoveredRequests: 0,

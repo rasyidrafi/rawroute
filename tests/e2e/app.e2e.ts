@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { pagePaths } from "../../src/lib/dashboard/routes"
+import { pagePaths } from "../../apps/console/src/frontend/contracts/dashboard/routes"
 
 test("production serves every dashboard deep link and keeps unknown APIs out of the HTML app", async ({ request }) => {
   for (const path of Object.values(pagePaths)) {

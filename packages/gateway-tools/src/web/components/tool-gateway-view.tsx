@@ -1,0 +1,87 @@
+import { toolPagePaths as pagePaths } from "../../contracts/pages"
+import { DashboardPage } from "@rawroute/ui/page-layout"
+import { Link } from "react-router"
+
+import { toolsApp } from "../navigation"
+import { useToolGatewayStatus } from "./tool-gateway-status"
+import { Badge } from "@rawroute/ui/badge"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
+import { EmptyState } from "@rawroute/ui/empty-state"
+import { DatabaseIcon } from "lucide-react"
+
+type ToolGatewayPage = "overview" | "tools" | "connections" | "policies" | "activity" | "settings"
+
+const pageCopy: Record<Exclude<ToolGatewayPage, "overview">, { title: string; description: string }> = {
+  tools: {
+    title: "Tools",
+    description: "Tool inventory and configuration remain available through the Executor API; RawRoute does not expose a browser manager in this deployment.",
+  },
+  connections: {
+    title: "Connections",
+    description: "Connections and integrations are managed by Executor through its API. This dashboard does not create or edit them.",
+  },
+  policies: {
+    title: "Policies",
+    description: "Executor policy management is API-only here. No workspace-scoped policy controls are available in RawRoute.",
+  },
+  activity: {
+    title: "Activity",
+    description: "RawRoute does not query Executor for activity or logs, so this page intentionally shows no status or event data.",
+  },
+  settings: {
+    title: "Settings",
+    description: "Executor deployment settings are server configuration and are not displayed in the dashboard.",
+  },
+}
+
+const statusCopy = {
+  available: { label: "Available", variant: "default", description: "Executor is available." },
+  disabled: { label: "Not configured", variant: "secondary", description: "Executor is not configured. Enable the optional Executor service and configure its server-side API key to use this gateway." },
+  unavailable: { label: "Unavailable", variant: "destructive", description: "Executor is configured but is not reachable. The Tool Gateway will remain disabled until the service becomes healthy." },
+  checking: { label: "Checking", variant: "secondary", description: "Checking the optional Executor service." },
+} as const
+
+export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
+  const { data, error } = useToolGatewayStatus()
+  const state = error ? "unavailable" : data?.state
+  const available = state === "available"
+  const status = statusCopy[state || "checking"]
+  const toolNavigation = toolsApp.navigation[0].items
+
+  return <DashboardPage spacing="normal" width="narrow">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={status.variant}>{status.label}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
+          <CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription>
+        </CardHeader>
+        <CardContent spacing="compact-stack">
+          {available ? <>
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-xs font-medium text-muted-foreground">Public proxy base</p>
+              <code className="mt-1 block text-sm">/executor/api</code>
+            </div>
+            <p className="text-sm text-muted-foreground">This is a shared Executor deployment. Switching RawRoute workspaces does not isolate Executor tools, connections, integrations, policies, or activity.</p>
+          </> : <div role="status" className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{status.description}</div>}
+        </CardContent>
+      </Card>
+
+      {available && (page === "overview" ? <Card>
+        <CardHeader>
+          <CardTitle>Tool Gateway overview</CardTitle>
+          <CardDescription>Use the API proxy with a RawRoute gateway key. This dashboard provides deployment context only and does not report live Executor state.</CardDescription>
+        </CardHeader>
+        <CardContent spacing="compact-flow" className="grid sm:grid-cols-2">
+          {toolNavigation.filter((item) => item.href !== pagePaths.tools).map((item) => <Link key={item.href} to={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <div className="flex items-center gap-2 font-medium"><item.icon className="size-4" />{item.title}</div>
+            <p className="mt-1 text-sm text-muted-foreground">View current API-only availability.</p>
+          </Link>)}
+        </CardContent>
+      </Card> : <Card>
+        <CardHeader>
+          <CardTitle>{pageCopy[page].title}</CardTitle>
+          <CardDescription>{pageCopy[page].description}</CardDescription>
+        </CardHeader>
+        <CardContent><EmptyState title="No workspace-scoped data" description="No workspace-scoped Executor data is shown in RawRoute." icon={DatabaseIcon} treatment="embedded" /></CardContent>
+      </Card>)}
+    </DashboardPage>
+}
