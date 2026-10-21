@@ -1,9 +1,13 @@
 import { standardReasoningEfforts } from "../contracts/combo-reasoning"
 import type { Protocol, ReasoningEffort } from "../contracts/domain"
+import { normalizeServiceTier } from "../contracts/service-tier"
 
 export type RequestLogMetadata = {
   reasoningEffort?: ReasoningEffort
   toolCount?: number
+  requestedServiceTier?: string
+  effectiveServiceTier?: string
+  pricingServiceTier?: string
 }
 
 const supportedEfforts = new Set<string>(standardReasoningEfforts)
@@ -34,12 +38,18 @@ export function normalizeRequestToolCount(value: unknown): number | undefined {
 }
 
 /** Validate stored metadata again at public/API projection boundaries. */
-export function normalizeRequestLogMetadata(value: { reasoningEffort?: unknown; toolCount?: unknown }): RequestLogMetadata {
+export function normalizeRequestLogMetadata(value: { reasoningEffort?: unknown; toolCount?: unknown; requestedServiceTier?: unknown; effectiveServiceTier?: unknown; pricingServiceTier?: unknown }): RequestLogMetadata {
   const reasoningEffort = normalizeRequestReasoningEffort(value.reasoningEffort)
   const toolCount = normalizeRequestToolCount(value.toolCount)
+  const requestedServiceTier = normalizeServiceTier(value.requestedServiceTier)
+  const effectiveServiceTier = normalizeServiceTier(value.effectiveServiceTier)
+  const pricingServiceTier = normalizeServiceTier(value.pricingServiceTier)
   return {
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(toolCount !== undefined ? { toolCount } : {}),
+    ...(requestedServiceTier ? { requestedServiceTier } : {}),
+    ...(effectiveServiceTier ? { effectiveServiceTier } : {}),
+    ...(pricingServiceTier ? { pricingServiceTier } : {}),
   }
 }
 

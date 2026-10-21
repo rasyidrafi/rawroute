@@ -6,6 +6,7 @@ import { deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPric
 import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
 import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
 import type { Provider, UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
+import { getBudgetRequestState, recordGatewayUsage } from "../../packages/gateway-ai/src/server/analytics"
 
 beforeEach(() => {
   process.env.STORAGE_BACKEND = "memory"
@@ -18,6 +19,23 @@ function provider(id: string): Partial<Provider> {
 }
 
 describe("model pricing catalog", () => {
+  test("reserves requested tier rates and settles a reported downgrade at served rates", async () => {
+    const upstream = await upsertProvider(provider("tiers"))
+    const model = await upsertModel(upstream.id, { id: "astra", name: "Astra", gatewayModelId: "tiers/astra", upstreamModel: "astra" })
+    const group = (await syncModelPricingGroups()).find(entry => entry.memberModelIds.includes(model.id))!
+    const rates = { inputMicrosPerMillion: 10_000_000, outputMicrosPerMillion: 50_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }
+    await savePricingVersion({ groupId: group.id, rates, contextTiers: [], serviceTiers: [{ serviceTier: "priority", ...rates, inputMicrosPerMillion: 20_000_000, outputMicrosPerMillion: 100_000_000, contextTiers: [] }], mode: "new" })
+    const key = await createApiKey("Tier budgets")
+    await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 100_000_000, enabled: true })
+    const payload = { messages: [{ role: "user", content: "hello" }], max_tokens: 100 }
+    const standard = await getBudgetRequestState(key.id, model.gatewayModelId, model.id, payload, 100)
+    const fast = await getBudgetRequestState(key.id, model.gatewayModelId, model.id, { ...payload, service_tier: "priority" }, 100)
+    expect(fast.admission!.reservationMicros).toBe(standard.admission!.reservationMicros * 2)
+    expect(fast.estimatedCostMicros).toBe(standard.estimatedCostMicros! * 2)
+    await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { ...payload, service_tier: "ultrafast" })).rejects.toThrow("without configured pricing")
+    await recordGatewayUsage({ gatewayKeyId: key.id, gatewayModelId: model.gatewayModelId, providerModelId: model.id, protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, requestedServiceTier: "priority", metrics: { input: 10000, output: 1000, effectiveServiceTier: "default" } })
+    expect((await listUsageEvents()).at(-1)).toMatchObject({ requestedServiceTier: "priority", effectiveServiceTier: "default", pricingServiceTier: "default", costMicros: 150000, pricingConfidence: "exact" })
+  })
   test("repricing a group without a current version still queues historical repricing", async () => {
     const entry = await upsertProvider(provider("cx"))
     await upsertModel(entry.id, { id: "first", name: "First", gatewayModelId: "cx/first", upstreamModel: "first" })

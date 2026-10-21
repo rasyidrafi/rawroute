@@ -177,6 +177,10 @@ export interface UsageEvent {
   reasoningEffort?: ReasoningEffort
   /** Number of declared tools/functions, absent when the request did not specify them. */
   toolCount?: number
+  requestedServiceTier?: string
+  effectiveServiceTier?: string
+  /** Rate schedule actually used; may be assumed when the provider omitted its tier. */
+  pricingServiceTier?: string
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -216,6 +220,11 @@ export interface PricingContextTier extends PricingRates {
   thresholdTokens: number
 }
 
+export interface PricingServiceTier extends PricingRates {
+  serviceTier: string
+  contextTiers: PricingContextTier[]
+}
+
 export type PricingCanonicalSource = "models.dev" | "custom"
 
 export interface CanonicalModelSummary {
@@ -225,6 +234,7 @@ export interface CanonicalModelSummary {
   family: string | null
   pricing: PricingRates
   contextTiers: PricingContextTier[]
+  serviceTiers?: PricingServiceTier[]
   contextLimit: number | null
   source: PricingCanonicalSource
 }
@@ -255,6 +265,7 @@ export interface ModelPricingVersion extends PricingRates {
   createdAt: string
   updatedAt: string
   contextTiers: PricingContextTier[]
+  serviceTiers?: PricingServiceTier[]
 }
 
 export type PricingJobStatus = "queued" | "running" | "completed" | "failed"

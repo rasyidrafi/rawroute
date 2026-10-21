@@ -8,6 +8,7 @@ import { aiDocumentAudit } from "./ai-audit"
 import { appendAuditSqlite } from "@rawroute/platform/server/audit"
 import { assertWorkspaceActivity } from "@rawroute/platform/server/workspace-activity"
 import { assertRequestLogSchema } from "./request-log-schema"
+import { assertServiceTierSchema } from "./service-tier-schema"
 
 // Application persistence composition. All callbacks execute on the platform's
 // single connection, inside its existing transaction/queue boundary.
@@ -19,6 +20,7 @@ export const aiDocumentIntegration: DocumentIntegration = {
     }
     assertUsageProjection(database, initial)
     assertRequestLogSchema(database, initial)
+    assertServiceTierSchema(database, initial)
   },
   validateCollection(collection) {
     const parts = collection.split("/")

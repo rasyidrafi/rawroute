@@ -13,6 +13,8 @@ import { listCodexAccounts } from "./codex/oauth"
 import { getCodexUsageForAccount } from "./codex/usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "./model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "./usage-metrics"
+import { selectServiceTierPricing } from "./service-tier-pricing"
+import { normalizeServiceTier } from "../contracts/service-tier"
 import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "./usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, getAppTimeZone, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@rawroute/platform/server/timezone"
 import { recordLog } from "./logging"
@@ -92,6 +94,7 @@ interface ExpectedCostPrediction {
   source: "empirical" | "payload-calibrated" | "bounded-formula"
   predictionMethod?: NonNullable<UsageEvent["predictionMethod"]>
   predictionSampleCount?: number
+  predictedUsage?: UsageMetrics
 }
 
 const usagePredictionSamples = new Map<string, UsagePredictionSamples>()
@@ -144,7 +147,8 @@ function predictionSampleKeys(workspaceId: string, gatewayKeyId: string | undefi
 function rememberUsagePrediction(event: UsageEvent, workspaceId = currentWorkspaceId()) {
   if (event.status < 200 || event.status >= 300 || event.pricingConfidence !== "exact" || event.usageCompleteness === "partial" || event.usageCompleteness === "missing") return
   const output = Number.isSafeInteger(event.outputTokens) && event.outputTokens > 0 ? event.outputTokens : undefined
-  const cost = Number.isSafeInteger(event.costMicros) && event.costMicros > 0 ? event.costMicros : undefined
+  const standardTier = !event.pricingServiceTier || ["default", "standard"].includes(event.pricingServiceTier)
+  const cost = standardTier && Number.isSafeInteger(event.costMicros) && event.costMicros > 0 ? event.costMicros : undefined
   const payload = isOpenAiCodexModel(event.gatewayModelId)
     && Number.isSafeInteger(event.requestBodyBytes)
     && Number(event.requestBodyBytes) > 0
@@ -533,7 +537,9 @@ export interface GatewayUsageInput {
   requestBodyBytes?: number
   reasoningEffort?: string
   toolCount?: number
+  requestedServiceTier?: string
   metrics?: UsageMetrics
+  estimatedUsage?: UsageMetrics
   assumedCostMicros?: number
   assumedCostSource?: "reservation" | "empirical" | "payload-calibrated"
   predictionMethod?: UsageEvent["predictionMethod"]
@@ -541,22 +547,24 @@ export interface GatewayUsageInput {
 }
 
 export async function createGatewayUsageEvent(input: GatewayUsageInput, resolvedPricing?: ResolvedModelPricing): Promise<UsageEvent> {
-  const requestMetadata = normalizeRequestLogMetadata(input)
+  const requestMetadata = normalizeRequestLogMetadata({ ...input, effectiveServiceTier: input.metrics?.effectiveServiceTier })
   const normalized = normalizeUsageMetrics(input.metrics)
   let pricing = resolvedPricing
   if (!pricing) {
     try { pricing = await getPricingForModel(input.gatewayModelId, input.providerModelId) }
     catch { pricing = undefined }
   }
-  const calculated = calculateCostMicros(normalized, pricing)
+  const calculated = calculateCostMicros(normalized, pricing, requestMetadata)
+  const tierPricing = selectServiceTierPricing(pricing, requestMetadata)
   // Pricing confidence describes whether every pricing-relevant field was
   // observed. It does not describe whether the provider returned enough token
   // usage to justify replacing the measured calculation with a request
   // estimate. An omitted cache field keeps the confidence assumed, but a
   // complete input/output pair still gives us the measured settlement basis.
   const fallbackEligible = input.status >= 200 && input.status < 300 && normalized.usageCompleteness !== "complete"
-  const suppliedAssumption = fallbackEligible && pricing && Number.isSafeInteger(input.assumedCostMicros) && Number(input.assumedCostMicros) > 0
-    ? Number(input.assumedCostMicros)
+  const estimatedCost = input.estimatedUsage ? calculateCostMicros(normalizeUsageMetrics(input.estimatedUsage), pricing, requestMetadata).costMicros : input.assumedCostMicros
+  const suppliedAssumption = fallbackEligible && tierPricing.rates && Number.isSafeInteger(estimatedCost) && Number(estimatedCost) > 0
+    ? Math.min(missingUsageEstimateMaxCostMicros, Number(estimatedCost))
     : undefined
   // A partial response gives us a useful lower-bound calculation. The request
   // admission estimate is conservative, so settle to the larger of the two
@@ -597,6 +605,7 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     ...(pricing && "pricingGroupId" in pricing && pricing.pricingGroupId ? { pricingGroupId: pricing.pricingGroupId } : {}),
     ...(pricing && "pricingVersionId" in pricing && pricing.pricingVersionId ? { pricingVersionId: pricing.pricingVersionId } : {}),
     ...(calculated.pricingContextTier ? { pricingContextTier: calculated.pricingContextTier } : {}),
+    ...(calculated.pricingServiceTier || assumedCostMicros !== undefined ? { pricingServiceTier: calculated.pricingServiceTier || tierPricing.serviceTier } : {}),
   }
 }
 
@@ -1211,6 +1220,7 @@ function estimateExpectedCostMicros(
   providerModelId?: string,
   requestBodyBytes?: number,
   protocol: UsageEvent["protocol"] = "openai-chat",
+  allowHistoricalCost = true,
 ) : ExpectedCostPrediction {
   if (pricing) {
     const calibrated = calibratedPayloadPrediction(payload, pricing, gatewayKeyId, gatewayModelId, protocol, requestBodyBytes)
@@ -1220,10 +1230,11 @@ function estimateExpectedCostMicros(
         source: "payload-calibrated",
         predictionMethod: calibrated.method,
         predictionSampleCount: calibrated.sampleCount,
+        predictedUsage: { input: calibrated.predictedUsage.inputTokens, output: calibrated.predictedUsage.outputTokens, cached: calibrated.predictedUsage.cacheReadTokens, cacheCreation: calibrated.predictedUsage.cacheCreationTokens },
       }
     }
   }
-  const historicalCost = historicalCostPrediction(gatewayKeyId, gatewayModelId)
+  const historicalCost = allowHistoricalCost ? historicalCostPrediction(gatewayKeyId, gatewayModelId) : undefined
   if (historicalCost) {
     return {
       costMicros: historicalCost.value,
@@ -1246,6 +1257,7 @@ function estimateExpectedCostMicros(
   return {
     costMicros: Math.min(missingUsageEstimateMaxCostMicros, calculatedCost),
     source: "bounded-formula",
+    predictedUsage: { input: estimatedInputTokens, cached: estimatedCachedTokens, output: expectedOutputTokens },
     ...(historicalOutput ? { predictionSampleCount: historicalOutput.sampleCount } : {}),
   }
 }
@@ -1261,6 +1273,7 @@ export interface BudgetRequestState {
   estimatedCostSource?: ExpectedCostPrediction["source"]
   predictionMethod?: NonNullable<UsageEvent["predictionMethod"]>
   predictionSampleCount?: number
+  estimatedUsage?: UsageMetrics
 }
 
 // requestedCombo is trusted routing context, never a client payload field.
@@ -1280,13 +1293,16 @@ export async function getBudgetRequestState(
   let pricing: ResolvedModelPricing | undefined
   try { pricing = await getPricingForModel(gatewayModelId, providerModelId) }
   catch { pricing = undefined }
-  const estimatedCost = pricing
-    ? estimateExpectedCostMicros(payload, pricing, apiKeyId, gatewayModelId, providerModelId, requestBodyBytes, protocol)
+  const requestedServiceTier = normalizeServiceTier(payload?.service_tier)
+  const selectedPricing = selectServiceTierPricing(pricing, { requestedServiceTier }).rates
+  const estimatedCost = selectedPricing
+    ? estimateExpectedCostMicros(payload, selectedPricing, apiKeyId, gatewayModelId, providerModelId, requestBodyBytes, protocol, !requestedServiceTier && !pricing?.serviceTiers?.length)
     : undefined
   const estimatedState = estimatedCost
     ? {
       estimatedCostMicros: estimatedCost.costMicros,
       estimatedCostSource: estimatedCost.source,
+      estimatedUsage: estimatedCost.predictedUsage,
       ...(estimatedCost.predictionMethod ? { predictionMethod: estimatedCost.predictionMethod } : {}),
       ...(estimatedCost.predictionSampleCount !== undefined ? { predictionSampleCount: estimatedCost.predictionSampleCount } : {}),
     }
@@ -1302,7 +1318,7 @@ export async function getBudgetRequestState(
   const usageContext = { usageStartAt, windowEnd: window.end } satisfies BudgetUsageContext
   if (window.bypassLimits) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
   if (!budget.enabled) return { usageContext, pricing, requestBodyBytes, ...estimatedState }
-  if (!pricing) throw new BudgetPricingUnavailableError("This API key cannot call a model without configured pricing.")
+  if (!selectedPricing) throw new BudgetPricingUnavailableError("This API key cannot call a model or service tier without configured pricing.")
 
   const spentMicros = await budgetSpentMicros(budget, window)
   if (spentMicros >= budget.weeklyLimitMicros) {
@@ -1318,7 +1334,7 @@ export async function getBudgetRequestState(
       key: `rawroute:budget:v2:${currentWorkspaceId()}:${budgetIntervalId(apiKeyId, usageStartAt)}:${hash(`${budget.updatedAt || ""}:${window.updatedAt || ""}`).slice(0, 16)}`,
       limitMicros: budget.weeklyLimitMicros,
       spentMicros,
-      reservationMicros: estimateReservationMicros(payload, pricing, budget.weeklyLimitMicros, requestBodyBytes, apiKeyId, gatewayModelId, protocol),
+      reservationMicros: estimateReservationMicros(payload, selectedPricing, budget.weeklyLimitMicros, requestBodyBytes, apiKeyId, gatewayModelId, protocol),
       ttlSeconds: budgetRetryAfter(window) + 60,
     },
     requestBodyBytes,
@@ -1769,7 +1785,7 @@ function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingV
     }
   }
   const normalized = normalizeUsageMetrics({ input: event.inputTokens, output: event.outputTokens, cached: event.cacheReadTokens, cacheCreation: event.cacheCreationTokens })
-  const calculated = calculateCostMicros(normalized, version)
+  const calculated = calculateCostMicros(normalized, version, event)
   // Persisted events do not retain cache-field presence. If the original
   // event was complete but pricing was assumed, recalculating the token-based
   // amount is safe, while promoting it to exact would invent certainty that
@@ -1790,6 +1806,8 @@ function repriceEvent(event: UsageEvent, groupId: string, version: ModelPricingV
   }
   if (calculated.pricingContextTier) after.pricingContextTier = calculated.pricingContextTier
   else delete after.pricingContextTier
+  if (calculated.pricingServiceTier) after.pricingServiceTier = calculated.pricingServiceTier
+  else delete after.pricingServiceTier
   return { after }
 }
 

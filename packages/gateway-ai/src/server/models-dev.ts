@@ -1,6 +1,7 @@
-import type { CanonicalModelSummary, PricingContextTier, PricingRates } from "../contracts/domain"
+import type { CanonicalModelSummary } from "../contracts/domain"
+import { modelsDevPricing } from "./models-dev-pricing"
 
-const MODELS_DEV_URL = "https://models.dev/api.json"
+export const MODELS_DEV_URL = "https://models.dev/experimental/v2.0/api.json"
 const MODELS_DEV_TTL_MS = 60 * 60 * 1000
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 100
@@ -16,53 +17,18 @@ function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
-function microsPerMillion(value: unknown) {
-  const number = asNumber(value)
-  return number === undefined ? 0 : Math.round(number * 1_000_000)
-}
-
-function modelPricing(detail: Record<string, unknown>): PricingRates {
-  const cost = asRecord(detail.cost) || asRecord(detail.pricing) || {}
-  return {
-    inputMicrosPerMillion: microsPerMillion(cost.input ?? cost.prompt),
-    outputMicrosPerMillion: microsPerMillion(cost.output ?? cost.completion),
-    cacheReadMicrosPerMillion: microsPerMillion(cost.cache_read ?? cost.cacheRead),
-    cacheCreationMicrosPerMillion: microsPerMillion(cost.cache_write ?? cost.cacheWrite),
-  }
-}
-
 function contextLimit(detail: Record<string, unknown>) {
   const limit = asRecord(detail.limit)
   return asNumber(limit?.context ?? detail.context_length) ?? null
 }
 
-function modelContextTiers(detail: Record<string, unknown>): PricingContextTier[] {
-  const cost = asRecord(detail.cost) || asRecord(detail.pricing) || {}
-  const tiers = new Map<number, PricingContextTier>()
-  const addTier = (threshold: unknown, value: Record<string, unknown>) => {
-    const size = asNumber(threshold)
-    if (!size || !Number.isSafeInteger(size)) return
-    tiers.set(size, { id: `models-dev-context-${size}`, thresholdTokens: size, ...modelPricing({ cost: { ...cost, ...value } }) })
-  }
-  if (Array.isArray(cost.tiers)) {
-    for (const value of cost.tiers) {
-      const entry = asRecord(value)
-      const tier = asRecord(entry?.tier)
-      if (entry && tier?.type === "context") addTier(tier.size, entry)
-    }
-  }
-  const over200k = asRecord(cost.context_over_200k)
-  if (!tiers.size && over200k) addTier(200000, over200k)
-  return [...tiers.values()].sort((a, b) => a.thresholdTokens - b.thresholdTokens)
-}
-
 function toCatalogModel(provider: string, modelId: string, value: unknown): CatalogModel | undefined {
   const detail = asRecord(value)
   if (!detail) return undefined
-  const id = modelId.includes("/") ? modelId : `${provider}/${modelId}`
+  const id = `${provider}/${modelId}`
   const name = typeof detail.name === "string" && detail.name.trim() ? detail.name.trim() : id
   const family = typeof detail.family === "string" && detail.family.trim() ? detail.family.trim() : null
-  return { id, name, provider, family, pricing: modelPricing(detail), contextTiers: modelContextTiers(detail), contextLimit: contextLimit(detail), source: "models.dev" }
+  return { id, name, provider, family, ...modelsDevPricing(detail), contextLimit: contextLimit(detail), source: "models.dev" }
 }
 
 function buildCatalogModels(catalog: RawCatalog) {

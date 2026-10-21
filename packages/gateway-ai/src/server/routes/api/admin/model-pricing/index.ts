@@ -5,7 +5,7 @@ import { createPricingGroup, deletePricingGroup, getPricingAdminData, runPricing
 import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { recordLog } from "../../../../logging"
-import type { PricingCanonicalSource } from "../../../../../contracts/domain"
+import type { PricingCanonicalSource, PricingServiceTier } from "../../../../../contracts/domain"
 
 export async function GET(request: Request) {
   try {
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
         const value = tier as Record<string, unknown>
         return { id: typeof value.id === "string" ? value.id : crypto.randomUUID(), thresholdTokens: Number(value.thresholdTokens), inputMicrosPerMillion: Number(value.inputMicrosPerMillion), outputMicrosPerMillion: Number(value.outputMicrosPerMillion), cacheReadMicrosPerMillion: Number(value.cacheReadMicrosPerMillion), cacheCreationMicrosPerMillion: Number(value.cacheCreationMicrosPerMillion) }
       }) : []
-      const result = await savePricingVersion({ groupId: String(body?.groupId || ""), rates, contextTiers, mode: body?.mode === "replace" ? "replace" : "new" })
+      const result = await savePricingVersion({ groupId: String(body?.groupId || ""), rates, contextTiers, serviceTiers: body?.serviceTiers as PricingServiceTier[] | undefined, mode: body?.mode === "replace" ? "replace" : "new" })
       const job = result.job
       if (job) {
         void scheduleWorkspaceTask(`pricing:${job.id}`, () => runPricingJob(job.id))

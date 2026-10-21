@@ -1,0 +1,47 @@
+import { afterEach, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
+import { migrateServiceTierPricing } from "../../scripts/migrations/service-tier-pricing"
+import { hasServiceTierSchema } from "../../packages/gateway-ai/src/server/service-tier-schema"
+
+let directory: string | undefined
+afterEach(() => { if (directory) rmSync(directory, { recursive: true, force: true }) })
+const model = { cost: { text: { input: { price: 10 }, output: { price: 50 } }, multipliers: [{ when: { service_tier: { equals: "priority" } }, factor: 2 }] } }
+const catalog = { openai: { models: { astra: model } }, edenai: { models: { "openai/astra": model } } }
+
+test("offline migration repairs reseller links, preserves history, validates backup and is idempotent", () => {
+  directory = mkdtempSync(join(tmpdir(), "service-tier-"))
+  const file = join(directory, "test.sqlite")
+  const db = new Database(file)
+  db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY, collection_path TEXT, document_id TEXT, data TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+  const insert = (collection: string, id: string, data: unknown) => db.run("INSERT INTO rawroute_documents(path,collection_path,document_id,data) VALUES(?,?,?,?)", [`rawroute_workspaces/w/${collection}/${id}`, `rawroute_workspaces/w/${collection}`, id, JSON.stringify(data)])
+  insert("modelPricingGroups", "g", { id: "g", canonicalSource: "models.dev", canonicalModelId: "openai/astra", canonicalProvider: "edenai" })
+  insert("modelPricingGroups", "ambiguous", { id: "ambiguous", canonicalSource: "models.dev", canonicalModelId: "openai/astra" })
+  insert("modelPricingVersions", "old", { id: "old", groupId: "g", version: 1, effectiveAt: "2020-01-01", inputMicrosPerMillion: 123, contextTiers: [] })
+  insert("usageEvents", "historical", { costMicros: 987, requestedModel: "astra" })
+  db.close()
+  const before = readFileSync(file)
+  expect(migrateServiceTierPricing(file, catalog)).toMatchObject({ applied: false, addedVersions: 1, detachedLinks: ["rawroute_workspaces/w/modelPricingGroups/ambiguous"] })
+  expect(readFileSync(file)).toEqual(before)
+  expect(() => migrateServiceTierPricing(file, catalog, { apply: true })).toThrow("Stop all writers")
+  expect(() => migrateServiceTierPricing(file, catalog, { apply: true, writersStopped: true, backup: file })).toThrow("overwrite")
+  const backup = join(directory, "backup.sqlite")
+  expect(migrateServiceTierPricing(file, catalog, { apply: true, writersStopped: true, backup })).toMatchObject({ applied: true, addedVersions: 1 })
+  const converted = new Database(file)
+  const copy = new Database(backup)
+  try {
+    expect(hasServiceTierSchema(converted)).toBe(true)
+    expect(hasServiceTierSchema(copy)).toBe(false)
+    const rows = converted.query<{ data: string; document_id: string; collection_path: string }, []>("SELECT * FROM rawroute_documents").all()
+    const get = (id: string) => JSON.parse(rows.find(row => row.document_id === id)!.data)
+    expect(get("g").canonicalModelId).toBe("edenai/openai/astra")
+    expect(get("ambiguous").canonicalModelId).toBeUndefined()
+    expect(get("old")).toMatchObject({ inputMicrosPerMillion: 123, serviceTiers: [] })
+    expect(get("historical")).toEqual({ costMicros: 987, requestedModel: "astra" })
+    const versions = rows.filter(row => row.collection_path.endsWith("modelPricingVersions")).map(row => JSON.parse(row.data))
+    expect(versions.find(version => version.id !== "old")).toMatchObject({ version: 2, inputMicrosPerMillion: 123, serviceTiers: [{ serviceTier: "priority", inputMicrosPerMillion: 20_000_000 }] })
+  } finally { converted.close(); copy.close() }
+  expect(migrateServiceTierPricing(file, catalog, { apply: true, writersStopped: true })).toEqual({ applied: false, required: false })
+})

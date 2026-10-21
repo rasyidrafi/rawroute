@@ -11,6 +11,7 @@
     "./server/routes": "./src/server/routes.ts",
     "./server/maintenance/usage-projection": "./src/server/usage-projection.ts",
     "./server/maintenance/request-logs": "./src/server/request-log-schema.ts",
+    "./server/maintenance/service-tier-pricing": "./src/server/maintenance/service-tier-pricing.ts",
     "./server/maintenance/cliproxy": "./src/server/maintenance/cliproxy.ts",
     "./server/maintenance/identifiers": "./src/server/maintenance/identifiers.ts",
     "./web": "./src/web/index.ts"

@@ -8,6 +8,7 @@ import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { formatCost, formatDuration, formatTokenCount } from "../../contracts/usage-display"
 import type { RequestLogDisplayEvent } from "../../contracts/request-logs"
 import { RequestLogMetadata } from "./request-logs-table"
+import { ServiceTierBadge } from "./service-tier-badge"
 
 export function RequestModelId({ label, value }: { label: string; value?: string }) {
   return <div className="flex min-h-6 max-w-64 items-center gap-1 text-xs text-muted-foreground">
@@ -40,7 +41,7 @@ export function RequestAttemptRow({ event, nested = false, id }: { event: Reques
   return <TableRow id={id} data-slot={nested ? "request-attempt-row" : "request-log-row"}>
     <TableCell><div className={nested ? "ml-3 border-l-2 border-border pl-4" : undefined}>
       {nested && <div className="text-xs text-muted-foreground">{(event.attemptIndex ?? 0) + 1} · {event.attemptIndex === 0 ? "Main" : "Fallback"}</div>}
-      <div className="font-semibold">{event.modelName || event.gatewayModelId}</div>
+      <div className="flex max-w-72 flex-wrap items-center gap-1"><span className="font-semibold">{event.modelName || event.gatewayModelId}</span><ServiceTierBadge event={event} /></div>
       <RequestModelId label={nested ? "Gateway" : "Payload"} value={nested ? event.gatewayModelId : event.requestedModel} />
       <div className="text-xs text-muted-foreground" title={nested ? event.id : event.requestId || event.id}>{nested ? "Attempt" : event.requestId ? "Request" : "Historical attempt"}: {(nested ? event.id : event.requestId || event.id).slice(0, 8)}</div>
     </div></TableCell>
@@ -82,6 +83,7 @@ function GroupIdentity({ final, count, expanded, id, toggle }: { final: RequestL
     <Button variant="ghost" size="sm" className="max-w-64 justify-start whitespace-normal text-left" aria-label={`${expanded ? "Collapse" : "Expand"} request ${requestId}`} aria-expanded={expanded} aria-controls={expanded ? id : undefined} onClick={toggle}>
       {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}<span className="font-semibold">{final.modelName || final.gatewayModelId}</span>
     </Button>
+    <ServiceTierBadge event={final} />
     <RequestModelId label="Payload" value={final.requestedModel} />
     <div className="max-w-64 whitespace-normal text-xs text-muted-foreground" title={requestId}>Request: {requestId.slice(0, 8)} · {count} recorded {count === 1 ? "attempt" : "attempts"}</div>
   </TableCell>

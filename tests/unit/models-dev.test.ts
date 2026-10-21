@@ -10,7 +10,7 @@ describe("models.dev canonical catalog", () => {
           "gpt-5": {
             name: "GPT-5",
             family: "gpt",
-            cost: { input: 1.25, output: 10, cache_read: 0.125, cache_write: 2.5 },
+            cost: { text: { input: { price: 1.25, cache: { read: 0.125, write: 2.5 } }, output: { price: 10 } } },
             limit: { context: 400000 },
           },
         },
@@ -24,29 +24,45 @@ describe("models.dev canonical catalog", () => {
       pricing: { inputMicrosPerMillion: 1_250_000, outputMicrosPerMillion: 10_000_000, cacheReadMicrosPerMillion: 125_000, cacheCreationMicrosPerMillion: 2_500_000 },
       contextLimit: 400000,
       contextTiers: [],
+      serviceTiers: [],
       source: "models.dev",
     }])
   })
 
-  test("imports context tiers, inherits omitted rates, and prefers explicit tiers over the 200k fallback", () => {
+  test("imports v2 context conditions with exact boundaries and inherited cache rates", () => {
     const [model] = buildModelsDevCanonicalModels({ provider: { models: { model: {
-      cost: { input: 2, output: 10, cache_read: 0.2, cache_write: 3,
-        context_over_200k: { input: 4, output: 15 },
-        tiers: [
-          { input: 5, tier: { type: "context", size: 272000 } },
-          { output: 12, tier: { type: "context", size: 32000 } },
-          { input: 99, tier: { type: "other", size: 1000 } },
-          { input: 99, tier: { type: "context", size: -1 } },
-        ],
-      },
+      cost: { text: { input: { price: 2, cache: { read: 0.2, write: 3 }, overrides: [
+        { price: 5, when: { context: { gt: 272000 } } },
+        { price: 99, when: { region: { equals: "us" } } },
+        { price: 99, when: { context: { gte: -1 } } },
+      ] }, output: { price: 10, overrides: [{ price: 12, when: { context: { gte: 32000 } } }] } } },
     } } } })
     expect(model!.contextTiers.map((tier) => [tier.thresholdTokens, tier.inputMicrosPerMillion, tier.outputMicrosPerMillion, tier.cacheCreationMicrosPerMillion])).toEqual([
       [32000, 2_000_000, 12_000_000, 3_000_000],
-      [272000, 5_000_000, 10_000_000, 3_000_000],
+      [272001, 5_000_000, 12_000_000, 3_000_000],
     ])
-    const [fallback] = buildModelsDevCanonicalModels({ provider: { models: { model: { cost: { input: 2, output: 10, context_over_200k: { input: 4 } } } } } })
-    expect(fallback!.contextTiers[0]?.inputMicrosPerMillion).toBe(4_000_000)
-    expect(fallback!.contextTiers[0]?.outputMicrosPerMillion).toBe(10_000_000)
+  })
+
+  test("provider-scoped IDs prevent reseller collisions regardless of catalog order", () => {
+    const providers = { openai: { models: { "gpt-6-astra": { name: "Official", cost: { text: { input: { price: 10 } } } } } }, edenai: { models: { "openai/gpt-6-astra": { name: "Reseller", cost: { text: { input: { price: 99 } } } } } }, openrouter: { models: { "openrouter/auto": { name: "Router" } } } }
+    for (const catalog of [providers, Object.fromEntries(Object.entries(providers).reverse())]) {
+      const models = buildModelsDevCanonicalModels(catalog)
+      expect(models.find(model => model.id === "openai/gpt-6-astra")).toMatchObject({ provider: "openai", pricing: { inputMicrosPerMillion: 10_000_000 } })
+      expect(models.find(model => model.id === "edenai/openai/gpt-6-astra")).toMatchObject({ provider: "edenai", pricing: { inputMicrosPerMillion: 99_000_000 } })
+      expect(models.some(model => model.id === "openrouter/openrouter/auto")).toBe(true)
+    }
+  })
+
+  test("imports Fast, Ultrafast and Flex multipliers across context and cache rates", () => {
+    const [model] = buildModelsDevCanonicalModels({ openai: { models: { astra: {
+      cost: { text: { input: { price: 10, cache: { read: 1, write: 12.5 }, overrides: [{ when: { context: { gt: 272000 } }, price: 20, cache: { read: 2, write: 25 } }] }, output: { price: 50, overrides: [{ when: { context: { gt: 272000 } }, price: 75 }] } }, multipliers: [
+        { when: { service_tier: { equals: "priority" } }, factor: 2 }, { when: { service_tier: { equals: "ultrafast" } }, factor: 6 }, { when: { service_tier: { equals: "flex" } }, factor: 0.5 },
+        { when: { region: { equals: "us" } }, factor: 1.1 },
+      ] },
+    } } } })
+    expect(model!.serviceTiers).toHaveLength(3)
+    expect(model!.serviceTiers?.find(tier => tier.serviceTier === "priority")).toMatchObject({ inputMicrosPerMillion: 20_000_000, outputMicrosPerMillion: 100_000_000, cacheReadMicrosPerMillion: 2_000_000, cacheCreationMicrosPerMillion: 25_000_000, contextTiers: [{ thresholdTokens: 272001, inputMicrosPerMillion: 40_000_000, outputMicrosPerMillion: 150_000_000 }] })
+    expect(model!.serviceTiers?.find(tier => tier.serviceTier === "ultrafast")?.contextTiers[0]).toMatchObject({ inputMicrosPerMillion: 120_000_000, outputMicrosPerMillion: 450_000_000 })
   })
 
   test("ranks multi-token searches by canonical ID and name", () => {

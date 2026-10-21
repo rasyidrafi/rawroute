@@ -1,10 +1,13 @@
 import type { PricingContextTier } from "../contracts/domain"
+import { normalizeServiceTier } from "../contracts/service-tier"
+import { selectServiceTierPricing, type ServiceTierContext, type TieredPricing } from "./service-tier-pricing"
 
 export interface UsageMetrics {
   input?: number
   output?: number
   cached?: number
   cacheCreation?: number
+  effectiveServiceTier?: string
 }
 
 export type UsageCompleteness = "complete" | "partial" | "missing"
@@ -38,6 +41,7 @@ export function mergeUsage(current: UsageMetrics | undefined, next: UsageMetrics
     ...(next.output !== undefined ? { output: next.output } : {}),
     ...(next.cached !== undefined ? { cached: next.cached } : {}),
     ...(next.cacheCreation !== undefined ? { cacheCreation: next.cacheCreation } : {}),
+    ...(next.effectiveServiceTier !== undefined ? { effectiveServiceTier: next.effectiveServiceTier } : {}),
   }
 }
 
@@ -61,7 +65,8 @@ export function extractUsageMetrics(payload: Record<string, unknown>): UsageMetr
     objectValue(payload["amazon-bedrock-invocationMetrics"]),
   ].filter((source): source is Record<string, unknown> => Boolean(source))
 
-  let result: UsageMetrics | undefined
+  const effectiveServiceTier = normalizeServiceTier(response.service_tier ?? payload.service_tier ?? objectValue(response.usage)?.service_tier ?? objectValue(message?.usage)?.service_tier)
+  let result: UsageMetrics | undefined = effectiveServiceTier ? { effectiveServiceTier } : undefined
   for (const source of sources) {
     let input = firstNumber(source, [
       "input_tokens", "prompt_tokens", "inputTokens", "promptTokenCount", "inputTokenCount", "input_token_count",
@@ -124,19 +129,15 @@ export function normalizeUsageMetrics(metrics: UsageMetrics | undefined) {
   return normalized
 }
 
-export function calculateCostMicros(usage: ReturnType<typeof normalizeUsageMetrics>, pricing: {
-  inputMicrosPerMillion: number
-  outputMicrosPerMillion: number
-  cacheReadMicrosPerMillion: number
-  cacheCreationMicrosPerMillion: number
-  contextTiers?: PricingContextTier[]
-} | undefined) {
-  if (!pricing || !usage.usageAvailable) return { costMicros: 0, pricingConfidence: "unpriced" as const }
+export function calculateCostMicros(usage: ReturnType<typeof normalizeUsageMetrics>, pricing: TieredPricing | undefined, context: ServiceTierContext = {}) {
+  const selection = selectServiceTierPricing(pricing, context)
+  const selectedPricing = selection.rates
+  if (!selectedPricing || !usage.usageAvailable) return { costMicros: 0, pricingConfidence: "unpriced" as const }
   let selectedTier: PricingContextTier | undefined
-  for (const tier of pricing.contextTiers || []) {
+  for (const tier of selectedPricing.contextTiers || []) {
     if (Number.isSafeInteger(tier.thresholdTokens) && tier.thresholdTokens >= 0 && usage.inputTokens >= tier.thresholdTokens && (!selectedTier || tier.thresholdTokens > selectedTier.thresholdTokens)) selectedTier = tier
   }
-  const rates = selectedTier || pricing
+  const rates = selectedTier || selectedPricing
   const billableInput = Math.max(usage.inputTokens - usage.cacheReadTokens - usage.cacheCreationTokens, 0)
   const validRate = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0
   if (!validRate(rates.inputMicrosPerMillion) || !validRate(rates.outputMicrosPerMillion) || !validRate(rates.cacheReadMicrosPerMillion) || !validRate(rates.cacheCreationMicrosPerMillion)) {
@@ -159,7 +160,8 @@ export function calculateCostMicros(usage: ReturnType<typeof normalizeUsageMetri
     // A provider response with only one token side is useful for a lower-bound
     // estimate, but it is not an exact bill. Keeping this distinction prevents
     // missing input/output fields from being silently interpreted as zero.
-    pricingConfidence: usage.usageCompleteness === "complete" && cacheReadKnown && cacheCreationKnown ? "exact" as const : "assumed" as const,
+    pricingConfidence: usage.usageCompleteness === "complete" && cacheReadKnown && cacheCreationKnown && !selection.assumed ? "exact" as const : "assumed" as const,
     pricingContextTier: selectedTier ? `context-${selectedTier.thresholdTokens}` : "standard",
+    pricingServiceTier: selection.serviceTier,
   }
 }

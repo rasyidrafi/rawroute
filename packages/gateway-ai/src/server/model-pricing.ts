@@ -3,7 +3,8 @@ import { getSqliteDatabase, type SqliteDatabase } from "@rawroute/platform/serve
 
 import { findModelsDevCanonicalModels } from "./models-dev"
 import { listModels, listProviders } from "./store"
-import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "../contracts/domain"
+import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier, PricingServiceTier } from "../contracts/domain"
+import { normalizeServiceTier } from "../contracts/service-tier"
 import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
 import { appendMemoryAudit } from "@rawroute/platform/server/audit"
 import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/storage-config"
@@ -452,21 +453,36 @@ export async function deletePricingGroup(groupId: string) {
   await writeGroupChanges(writes, [groupId])
 }
 
-export async function savePricingVersion(input: { groupId: string; rates: PricingRates; contextTiers: PricingContextTier[]; mode: "new" | "replace" }) {
+function validateServiceTiers(tiers: PricingServiceTier[]) {
+  if (!Array.isArray(tiers)) throw new Error("Service tier pricing must be an array.")
+  const seen = new Set<string>()
+  return tiers.map(tier => {
+    const name = normalizeServiceTier(tier?.serviceTier)
+    if (!name || name !== tier.serviceTier || ["default", "standard", "auto"].includes(name) || seen.has(name)) throw new Error("Service tiers must have distinct non-default identifiers.")
+    seen.add(name)
+    const rates = { inputMicrosPerMillion: tier.inputMicrosPerMillion, outputMicrosPerMillion: tier.outputMicrosPerMillion, cacheReadMicrosPerMillion: tier.cacheReadMicrosPerMillion, cacheCreationMicrosPerMillion: tier.cacheCreationMicrosPerMillion }
+    validateRates(rates)
+    if (!Array.isArray(tier.contextTiers)) throw new Error("Service tier context pricing must be an array.")
+    return { serviceTier: name, ...rates, contextTiers: validateTiers(tier.contextTiers) }
+  }).sort((a, b) => a.serviceTier.localeCompare(b.serviceTier))
+}
+
+export async function savePricingVersion(input: { groupId: string; rates: PricingRates; contextTiers: PricingContextTier[]; serviceTiers?: PricingServiceTier[]; mode: "new" | "replace" }) {
   const group = (await listPricingGroups()).find((entry) => entry.id === input.groupId)
   if (!group) throw new Error("Pricing group not found.")
   validateRates(input.rates)
   const contextTiers = validateTiers(input.contextTiers)
   const versions = await listPricingVersions(group.id)
   const current = activePricingVersion(versions)
+  const serviceTiers = validateServiceTiers(input.serviceTiers === undefined ? current?.serviceTiers || [] : input.serviceTiers)
   const now = new Date().toISOString()
   if (input.mode === "replace" && current) {
-    const replaced = { ...current, ...input.rates, contextTiers, updatedAt: now }
+    const replaced = { ...current, ...input.rates, contextTiers, serviceTiers, updatedAt: now }
     await writeVersion(replaced)
     const job = await createPricingJob(group.id, replaced.id)
     return { version: replaced, job }
   }
-  const version: ModelPricingVersion = { id: crypto.randomUUID(), groupId: group.id, version: (versions.reduce((max, entry) => Math.max(max, entry.version), 0) || 0) + 1, effectiveAt: now, createdAt: now, updatedAt: now, ...input.rates, contextTiers }
+  const version: ModelPricingVersion = { id: crypto.randomUUID(), groupId: group.id, version: (versions.reduce((max, entry) => Math.max(max, entry.version), 0) || 0) + 1, effectiveAt: now, createdAt: now, updatedAt: now, ...input.rates, contextTiers, serviceTiers }
   await writeVersion(version)
   return { version, job: input.mode === "replace" ? await createPricingJob(group.id, version.id) : null }
 }

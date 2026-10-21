@@ -341,6 +341,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   try {
     const payload = objectValue(parsed) || {}
     const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort, resolvedModel.nativeResponses ? undefined : resolvedModel.customPayload)
+    const forwardedPayload = objectValue(JSON.parse(new TextDecoder().decode(forwardedBody))) || payload
     let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
     let reservation: BudgetReservation | undefined
     try {
@@ -351,7 +352,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             `shared-workspace:${resolvedModel.shared!.consumerWorkspaceId}`,
             resolvedModel.pricingGatewayModelId,
             resolvedModel.providerModelId,
-            parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
+            forwardedPayload,
             forwardedBody.byteLength,
             protocol,
           ))
@@ -359,7 +360,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             apiKey.id,
             resolvedModel.pricingGatewayModelId,
             resolvedModel.providerModelId,
-            parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined,
+            forwardedPayload,
             forwardedBody.byteLength,
             protocol,
             requestedCombo,
@@ -398,6 +399,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     const startedAtMs = Date.now()
     const startedAt = new Date(startedAtMs).toISOString()
     const requestMetadata: RequestLogMetadata = normalizeRequestLogMetadata({
+      requestedServiceTier: forwardedPayload.service_tier,
       reasoningEffort: resolvedModel.reasoningEffort !== undefined
         ? resolvedModel.reasoningEffort
         : extractRequestReasoningEffort(payload, protocol),
@@ -463,6 +465,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
 }
 
 type GatewayUsageRecordingInput = {
+  requestedServiceTier?: string
   requestId?: string
   requestedModel?: string
   attemptIndex?: number
@@ -525,6 +528,7 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     requestedModel: input.requestedModel,
     attemptIndex: input.attemptIndex,
     requestFinal: input.requestFinal,
+    requestedServiceTier: input.requestedServiceTier,
     gatewayKeyId: input.apiKeyId,
     gatewayModelId: input.model,
     providerModelId: input.providerModelId,
@@ -536,6 +540,7 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
     ...(input.toolCount !== undefined ? { toolCount: input.toolCount } : {}),
     metrics: input.response,
+    estimatedUsage: shouldSettleEstimate ? input.budgetState.estimatedUsage : undefined,
     // This estimate is only a settlement fallback when the provider omits
     // usage metadata. It is never used for admission control, and it must not
     // become the historical bill when actual usage is available.
