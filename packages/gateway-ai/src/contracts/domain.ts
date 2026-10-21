@@ -153,6 +153,14 @@ export type ReasoningEffort = "none" | "auto" | "minimal" | "low" | "medium" | "
 
 export interface UsageEvent {
   id: string
+  /** Gateway ingress identity; absent on historical attempts without correlation. */
+  requestId?: string
+  /** Original client payload model, before combo/alias resolution. */
+  requestedModel?: string
+  /** Zero-based router attempt order; never inferred from timestamps. */
+  attemptIndex?: number
+  /** This attempt determines the final request outcome. */
+  requestFinal?: boolean
   gatewayKeyId: string
   providerId?: string
   providerModelId?: string

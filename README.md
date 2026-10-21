@@ -43,6 +43,9 @@ before taking a complete backup, including SQLite WAL files and managed engine
 state. Existing legacy usage data requires offline conversion before upgrading;
 inspect `scripts/migrations/usage-projection.ts` and its stopped-writer checks
 before deployment.
+Existing installations also need `scripts/migrations/request-log-groups.ts --sqlite <file>
+--apply --writers-stopped` run with Bun before upgrading request logs; it creates a backup
+and the grouping index without inventing historical fallback links.
 
 ## Develop and verify
 

@@ -19,7 +19,7 @@ for (const [path, heading] of [
     const markup = renderToStaticMarkup(<MemoryRouter initialEntries={[path!]}><DashboardRouteSkeleton /></MemoryRouter>)
     expect(markup).toContain(heading!)
     if (path === "/dashboard/ai/overview/request-logs") {
-      expect(markup).toMatch(/data-slot="card-description"[^>]*>Workspace history of recorded model attempts\.<\/div>/)
+      expect(markup).toMatch(/data-slot="card-description"[^>]*>Workspace requests with their recorded main and fallback attempts\.<\/div>/)
     }
     if (path === "/dashboard/ai/overview/usage") {
       expect(markup).toContain("Usage Trend")

@@ -3,6 +3,42 @@ import { test } from "./empty-workspace.fixture"
 
 test.use({ timezoneId: "Asia/Tokyo" })
 
+test("fallback request expands in execution order, copies payload ID, and survives refresh", async ({ page, emptyWorkspaceId }) => {
+  expect(emptyWorkspaceId).toBeTruthy()
+  const at = new Date().toISOString()
+  const base = { gatewayKeyId: "key", keyName: "Rizky", modelName: "Astra", gatewayModelId: "provider/astra", startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true, totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costMicros: 12, pricingConfidence: "exact", reasoningEffort: "low", toolCount: 0 }
+  const main = { ...base, id: "attempt-main", requestId: "chain-123", requestedModel: "astra-auto", attemptIndex: 0, requestFinal: false, status: 400, usageAvailable: false, pricingConfidence: "unpriced" }
+  const fallback = { ...base, id: "attempt-fallback", requestId: "chain-123", requestedModel: "astra-auto", attemptIndex: 1, requestFinal: true }
+  await page.route("**/api/admin/request-logs?*", route => {
+    const params = new URL(route.request().url()).searchParams
+    return route.fulfill({ json: { events: [fallback, main, { ...base, id: "historical" }], models: [], keys: [], nextCursor: null, from: params.get("from"), to: params.get("to") } })
+  })
+  await page.goto("/dashboard/ai/overview/request-logs")
+  await expect(page.locator("tbody tr")).toHaveCount(2)
+  await expect(page.getByText("Success via fallback · 200", { exact: true })).toBeVisible()
+  await expect(page.getByText("Partial cost", { exact: true })).toBeVisible()
+  const expand = page.getByRole("button", { name: "Expand request chain-123", exact: true })
+  await expand.focus()
+  await page.keyboard.press("Enter")
+  const children = page.locator('[data-slot="request-attempt-row"]')
+  await expect(children).toHaveCount(2)
+  await expect(children.nth(0)).toContainText("1 · Main")
+  await expect(children.nth(0)).toContainText("Failed · 400")
+  await expect(children.nth(1)).toContainText("2 · Fallback")
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(children).toHaveCount(2)
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+  await page.getByRole("button", { name: "Copy payload model astra-auto", exact: true }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("astra-auto")
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+  }
+  await page.getByRole("button", { name: "Collapse request chain-123", exact: true }).click()
+  await expect(children).toHaveCount(0)
+  await expect(page.getByText("Historical attempt: historic", { exact: true })).toBeVisible()
+})
+
 function observeRequestSettlement(page: Page, expectedRequest: Request): Promise<"finished" | "failed"> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -91,14 +127,14 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(refresh.locator("svg")).toHaveClass(/animate-spin/)
   const controls = refresh.locator("..")
   expect(await controls.evaluate(element => Math.abs(element.getBoundingClientRect().right - element.parentElement!.getBoundingClientRect().right))).toBeLessThanOrEqual(1)
-  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
+  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace requests with their recorded main and fallback attempts.")
   await expect(loading).toHaveAttribute("aria-busy", "true")
   await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Reasoning / tools", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   const placeholderRows = loading.locator('[data-slot="request-log-skeleton-row"]')
   await expect(placeholderRows).toHaveCount(9)
   await expect(placeholderRows.first().getByRole("cell")).toHaveCount(8)
-  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(11)
+  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(12)
   await expect(placeholderRows.first().getByRole("cell").nth(1).locator('[data-slot="skeleton"]')).toHaveCount(2)
   await expect(placeholderRows.first().getByRole("cell").nth(2).locator('[data-slot="skeleton"]')).toHaveCount(1)
   for (const column of [0, 4]) {
@@ -134,9 +170,9 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.locator("tbody tr").first().getByRole("cell").nth(0)).not.toContainText("Demo key")
   await expect(page.locator("tbody tr").first().getByRole("cell").nth(2)).toHaveText("Demo key")
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
-  await expect(page.getByText("Newest first · 25 per page", { exact: true })).toBeVisible()
+  await expect(page.getByText("Newest first · 25 requests per page", { exact: true })).toBeVisible()
   await expect(loading).toHaveCount(0)
-  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace history of recorded model attempts.")
+  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace requests with their recorded main and fallback attempts.")
   await expect(page.locator('[data-slot="request-log-skeleton-row"]')).toHaveCount(0)
   const loadedRowHeight = (await page.getByRole("row").nth(1).boundingBox())!.height
   expect(Math.abs(loadedRowHeight - loadingRowHeight)).toBeLessThanOrEqual(2)

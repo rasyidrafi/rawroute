@@ -1,4 +1,5 @@
 import { Skeleton } from "@rawroute/ui/skeleton"
+import { Badge } from "@rawroute/ui/badge"
 import { useEffect, useState } from "react"
 
 import { TableCell } from "@rawroute/ui/table"
@@ -14,6 +15,13 @@ export type AccountUsage = CodexUsageResult
 
 export type UsageResponse = {
   accounts: Record<string, AccountUsage>
+}
+
+export function CodexPlanBadge({ accountUsage, loading }: { accountUsage?: AccountUsage; loading: boolean }) {
+  if (loading && !accountUsage) return <Skeleton className="h-5 w-12" aria-label="Loading plan" />
+  const plan = accountUsage?.planType
+  const label = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "Unknown"
+  return <Badge variant="secondary" title={plan ? "Plan reported by the latest available Codex usage check." : "The current plan was not reported by Codex."}>{label}{plan && accountUsage?.stale ? " · stale" : ""}</Badge>
 }
 
 function resetCountdown(value?: string) {

@@ -1,7 +1,8 @@
 import { budgetModelOptions } from "./budget-models"
 import { queryLocalRequestLogs, queryLocalUsageRange } from "./local-db"
 import type { OverviewDetails, OverviewPayload } from "../contracts/overview"
-import { matchesRequestLog, requestLogCursor, type RequestLogQuery } from "./request-logs"
+import { selectRequestLogGroups, requestLogLatest, requestLogCursor, type RequestLogQuery } from "./request-logs"
+import { groupRequestLogEvents } from "../contracts/request-logs"
 import { normalizeRequestLogMetadata } from "./request-log-metadata"
 import { createHash } from "node:crypto"
 import { getSqliteDatabase, listLocalDocuments, type SqliteDatabase } from "@rawroute/platform/server/database"
@@ -516,6 +517,10 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
 
 export interface GatewayUsageInput {
   id?: string
+  requestId?: string
+  requestedModel?: string
+  attemptIndex?: number
+  requestFinal?: boolean
   gatewayKeyId: string
   providerId?: string
   providerModelId?: string
@@ -561,6 +566,8 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     : Math.max(calculated.costMicros, suppliedAssumption)
   return {
     id: input.id || crypto.randomUUID(),
+    ...(input.requestId ? { requestId: input.requestId, attemptIndex: input.attemptIndex, requestFinal: input.requestFinal } : {}),
+    ...(input.requestedModel !== undefined ? { requestedModel: input.requestedModel } : {}),
     gatewayKeyId: input.gatewayKeyId,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.providerModelId ? { providerModelId: input.providerModelId } : {}),
@@ -608,10 +615,11 @@ export async function listUsageEvents(from?: string, to?: string): Promise<Usage
 
 export async function listRequestLogs(query: RequestLogQuery) {
   const rows = isMemory()
-    ? [...memoryState().events.values()].filter(event => matchesRequestLog(event, query)).sort((a, b) => a.completedAt === b.completedAt ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.completedAt > b.completedAt ? -1 : 1).slice(0, 26)
+    ? selectRequestLogGroups([...memoryState().events.values()], query)
     : await queryLocalRequestLogs(`${prefix()}_workspaces/${currentWorkspaceId()}/usageEvents`, query)
-  const events = rows.slice(0, 25)
-  return { events, nextCursor: rows.length > 25 ? requestLogCursor(query, currentWorkspaceId(), events[24]!) : null, from: query.from, to: query.to }
+  const groups = groupRequestLogEvents(rows)
+  const events = groups.slice(0, 25).flat()
+  return { events, nextCursor: groups.length > 25 ? requestLogCursor(query, currentWorkspaceId(), requestLogLatest(groups[24]!)) : null, from: query.from, to: query.to }
 }
 
 export async function getPricingForModel(gatewayModelId: string, providerModelId?: string) {

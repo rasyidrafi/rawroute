@@ -3,7 +3,8 @@ import { closeLocalDatabase, getSqliteDatabase } from "../../packages/platform/s
 import { initializeAiPersistence, queryLocalRequestLogs } from "../../packages/gateway-ai/src/server/local-db"
 
 import { listRequestLogs, recordUsageEvent } from "../../packages/gateway-ai/src/server/analytics"
-import { parseRequestLogQuery, requestLogCursor, type RequestLogQuery } from "../../packages/gateway-ai/src/server/request-logs"
+import { parseRequestLogQuery, requestLogCursor, requestLogLatest, selectRequestLogGroups, type RequestLogQuery } from "../../packages/gateway-ai/src/server/request-logs"
+import { groupRequestLogEvents } from "../../packages/gateway-ai/src/contracts/request-logs"
 import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
 import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 import { GET } from "../../packages/gateway-ai/src/server/routes/api/admin/request-logs/index"
@@ -16,6 +17,70 @@ process.env.SQLITE_PATH = ":memory:"
 afterAll(closeLocalDatabase)
 const query = { from: "2026-10-14T00:00:00.000Z", to: "2026-10-16T00:00:00.000Z", status: "all", model: "", key: "" } satisfies RequestLogQuery
 const event = (id: string, changes: Partial<UsageEvent> = {}): UsageEvent => ({ id, gatewayKeyId: "key", gatewayModelId: "model", protocol: "openai-chat", startedAt: query.from, completedAt: "2026-10-15T12:00:00.000Z", status: 200, durationMs: 10, inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 5, costMicros: 10, pricingConfidence: "exact", usageAvailable: true, ...changes })
+
+test("SQLite and memory paginate whole chains and filter final outcomes without hiding failed attempts", async () => {
+  const collection = getSqliteDatabase().collection("history/chains/usageEvents")
+  const events = Array.from({ length: 30 }, (_, index) => {
+    const requestId = `request-${String(index).padStart(2, "0")}`
+    return [
+      event(`${requestId}-main`, { requestId, requestedModel: "client-combo", attemptIndex: 0, requestFinal: false, status: 400, gatewayModelId: "primary" }),
+      event(`${requestId}-fallback`, { requestId, requestedModel: "client-combo", attemptIndex: 1, requestFinal: true, status: index === 29 ? 503 : 200, gatewayModelId: "fallback" }),
+    ]
+  }).flat()
+  for (const row of events) await collection.doc(row.id).set(row)
+  for (const selected of [query, { ...query, status: "recovered" as const }, { ...query, status: "failed" as const }, { ...query, model: "primary" }, { ...query, model: "client-combo" }]) {
+    const sql = await queryLocalRequestLogs(collection.path, selected)
+    expect(sql).toEqual(selectRequestLogGroups(events, selected))
+    expect(groupRequestLogEvents(sql).every(attempts => attempts.length === 2 && attempts[0]!.attemptIndex === 0)).toBe(true)
+  }
+  const first = groupRequestLogEvents(await queryLocalRequestLogs(collection.path, query))
+  expect(first).toHaveLength(26)
+  const last = requestLogLatest(first[24]!)
+  const next = await queryLocalRequestLogs(collection.path, { ...query, after: { at: last.completedAt, id: last.id } })
+  expect(groupRequestLogEvents(next)).toHaveLength(5)
+  expect(new Set([...first.slice(0, 25).flat(), ...next].map(row => row.id)).size).toBe(60)
+})
+
+test("groups cross the lower date bound but not the frozen upper bound, and never cross keys", async () => {
+  const collection = getSqliteDatabase().collection("history/chain-bounds/usageEvents")
+  const events = [
+    event("main", { requestId: "chain", attemptIndex: 0, requestFinal: false, status: 400, completedAt: "2026-10-13T23:59:59.000Z" }),
+    event("fallback", { requestId: "chain", attemptIndex: 1, requestFinal: true }),
+    event("another-key", { requestId: "chain", gatewayKeyId: "other-key", attemptIndex: 0, requestFinal: true }),
+    event("pending", { requestId: "inflight", attemptIndex: 0, requestFinal: false, status: 500 }),
+    event("future", { requestId: "inflight", attemptIndex: 1, requestFinal: true, completedAt: query.to }),
+    event("historical-a", { status: 400 }), event("historical-b"),
+  ]
+  for (const row of events) await collection.doc(row.id).set(row)
+  for (const status of ["all", "failed", "success", "recovered", "incomplete"] as const) {
+    expect(await queryLocalRequestLogs(collection.path, { ...query, status })).toEqual(selectRequestLogGroups(events, { ...query, status }))
+  }
+  const recovered = await queryLocalRequestLogs(collection.path, { ...query, status: "recovered" })
+  expect(recovered.map(row => row.id)).toEqual(["main", "fallback"])
+  expect((await queryLocalRequestLogs(collection.path, { ...query, status: "incomplete" })).map(row => row.id)).toEqual(["pending"])
+  expect(groupRequestLogEvents(await queryLocalRequestLogs(collection.path, query))).toHaveLength(5)
+})
+
+test("request log API limits requests rather than attempts and exposes payload-model filtering", async () => {
+  await runInWorkspace({ id: "grouped-api", storageMode: "scoped" }, async () => {
+    for (let index = 0; index < 27; index++) {
+      const requestId = `chain-${String(index).padStart(2, "0")}`
+      await recordUsageEvent(event(`${requestId}-main`, { requestId, requestedModel: "payload-combo", attemptIndex: 0, requestFinal: false, status: 400 }), null)
+      await recordUsageEvent(event(`${requestId}-fallback`, { requestId, requestedModel: "payload-combo", attemptIndex: 1, requestFinal: true }), null)
+    }
+    const params = new URLSearchParams({ ...query, model: "payload-combo", status: "recovered" })
+    const first = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
+    expect(first.events).toHaveLength(50)
+    expect(groupRequestLogEvents(first.events)).toHaveLength(25)
+    expect(first.models).toContainEqual({ id: "payload-combo", name: "payload-combo" })
+    expect(first.nextCursor).toBeString()
+    params.set("cursor", first.nextCursor!)
+    const second = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
+    expect(second.events).toHaveLength(4)
+    expect(second.nextCursor).toBeNull()
+    expect(new Set([...first.events, ...second.events].map(row => row.id)).size).toBe(54)
+  })
+})
 
 test("request history and filters use resolved group names for gateway, upstream and alias IDs", async () => {
   await runInWorkspace({ id: "resolved-history-names", storageMode: "scoped" }, async () => {

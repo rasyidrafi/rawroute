@@ -1,8 +1,9 @@
 import { z } from "zod"
 import type { UsageEvent } from "../contracts/domain"
+import { groupRequestLogEvents } from "../contracts/request-logs"
 
 const instant = z.string().datetime().refine(value => new Date(value).toISOString() === value)
-const filters = z.object({ from: instant, to: instant, status: z.enum(["all", "success", "failed"]), model: z.string().max(512), key: z.string().max(512) })
+const filters = z.object({ from: instant, to: instant, status: z.enum(["all", "success", "failed", "recovered", "incomplete"]), model: z.string().max(512), key: z.string().max(512) })
 const cursorSchema = filters.extend({ workspace: z.string(), at: instant, id: z.string().min(1).max(512) }).strict()
 export type RequestLogQuery = z.infer<typeof filters> & { after?: { at: string; id: string } }
 
@@ -23,9 +24,23 @@ export function requestLogCursor(query: RequestLogQuery, workspace: string, even
   return Buffer.from(JSON.stringify({ from: query.from, to: query.to, status: query.status, model: query.model, key: query.key, workspace, at: event.completedAt, id: event.id })).toString("base64url")
 }
 
-export function matchesRequestLog(event: UsageEvent, query: RequestLogQuery) {
-  return event.completedAt >= query.from && event.completedAt < query.to && (!query.model || event.gatewayModelId === query.model)
-    && (!query.key || event.gatewayKeyId === query.key)
-    && (query.status === "all" || (query.status === "success" ? event.status >= 200 && event.status < 300 : event.status < 200 || event.status >= 300))
-    && (!query.after || event.completedAt < query.after.at || (event.completedAt === query.after.at && event.id > query.after.id))
+export function requestLogLatest(events: UsageEvent[]) {
+  return [...events].sort((a, b) => b.completedAt.localeCompare(a.completedAt) || a.id.localeCompare(b.id))[0]!
+}
+
+export function selectRequestLogGroups(events: UsageEvent[], query: RequestLogQuery) {
+  return groupRequestLogEvents(events.filter(event => event.completedAt < query.to)).filter(attempts => {
+    const latest = requestLogLatest(attempts)
+    const final = attempts.at(-1)!
+    const complete = final.requestFinal !== false
+    const success = final.status >= 200 && final.status < 300
+    const recovered = complete && success && attempts.some(event => event.status < 200 || event.status >= 300)
+    return latest.completedAt >= query.from && (!query.model || attempts.some(event => event.gatewayModelId === query.model || event.requestedModel === query.model))
+      && (!query.key || latest.gatewayKeyId === query.key)
+      && (query.status === "all" || query.status === "incomplete" && !complete || query.status === "success" && complete && success || query.status === "failed" && complete && !success || query.status === "recovered" && recovered)
+      && (!query.after || latest.completedAt < query.after.at || latest.completedAt === query.after.at && latest.id > query.after.id)
+  }).sort((a, b) => {
+    const left = requestLogLatest(a), right = requestLogLatest(b)
+    return right.completedAt.localeCompare(left.completedAt) || left.id.localeCompare(right.id)
+  }).slice(0, 26).flat()
 }

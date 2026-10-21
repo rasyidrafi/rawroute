@@ -197,6 +197,7 @@ export function parseCodexUsagePayload(payload: unknown): CodexUsageSnapshot {
   const rateLimits = objectValue(data?.rate_limits_by_limit_id)
   const normal = unwrapRateLimit(data?.rate_limit ?? data?.rate_limits ?? rateLimits?.codex ?? data)
   const snapshot: CodexUsageSnapshot = { fiveHour: null, weekly: null }
+  if (typeof data?.plan_type === "string" && data.plan_type.trim()) snapshot.planType = data.plan_type.trim().toLowerCase()
   const windows: Array<["fiveHour" | "weekly", unknown]> = [
     ["fiveHour", getWindow(normal, ["primary_window", "primary"])],
     ["weekly", getWindow(normal, ["secondary_window", "secondary"])],
@@ -255,6 +256,7 @@ function emptyResult(error?: string): CodexUsageResult {
 
 function resultFromCache(cached: CachedCodexUsage, stale: boolean): CodexUsageResult {
   return {
+    ...(cached.snapshot?.planType ? { planType: cached.snapshot.planType } : {}),
     fiveHour: cached.snapshot?.fiveHour || null,
     weekly: cached.snapshot?.weekly || null,
     resetCredits: cached.snapshot?.resetCredits,

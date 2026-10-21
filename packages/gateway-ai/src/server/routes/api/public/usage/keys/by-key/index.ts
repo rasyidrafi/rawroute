@@ -6,6 +6,7 @@ import { normalizeRequestLogMetadata } from "../../../../../../request-log-metad
 import { currentWorkspaceId, runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { DEFAULT_WORKSPACE_ID } from "@rawroute/platform/contracts/workspace"
 import { getPublicWorkspace } from "@rawroute/platform/server/runtime"
+import { groupRequestLogEvents } from "../../../../../../../contracts/request-logs"
 
 export async function GET(request: Request, { keyId }: { keyId: string }) {
   if (!/^[a-f0-9]{64}$/.test(keyId)) return jsonError("Usage detail not found.", 404)
@@ -32,8 +33,13 @@ export async function GET(request: Request, { keyId }: { keyId: string }) {
       return {
         usage: result.payload,
         recent: {
-          events: recent.events.slice(0, 5).map(event => ({
+          events: groupRequestLogEvents(recent.events).slice(0, 5).flat().map(event => ({
             id: event.id,
+            requestId: event.requestId,
+            requestedModel: event.requestedModel,
+            attemptIndex: event.attemptIndex,
+            requestFinal: event.requestFinal,
+            startedAt: event.startedAt,
             gatewayModelId: event.gatewayModelId,
             status: event.status,
             usageAvailable: event.usageAvailable,

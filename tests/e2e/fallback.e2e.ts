@@ -110,6 +110,13 @@ test("combo immediately falls back instead of forwarding model cooldown", async 
     expect(await response.text()).toContain("response.completed")
     const debug = await request.get("http://127.0.0.1:3211/debug")
     expect((await debug.json()).routingAttempts).toBe(2)
+    await expect.poll(async () => {
+      const params = new URLSearchParams({ from: new Date(Date.now() - 60_000).toISOString(), to: new Date().toISOString(), model: comboId, status: "recovered" })
+      const logs = await request.get(`/api/admin/request-logs?${params}`, { headers: { "x-rawroute-workspace-id": "default" } })
+      const { events } = await logs.json() as { events: Array<{ requestId: string; requestedModel: string; attemptIndex: number; requestFinal: boolean }> }
+      return events.length === 2 && events[0]!.requestId === events[1]!.requestId && events.every(event => event.requestedModel === comboId)
+        && events[0]!.attemptIndex === 0 && events[0]!.requestFinal === false && events[1]!.attemptIndex === 1 && events[1]!.requestFinal === true
+    }).toBe(true)
   } finally {
     const deleted = await request.delete(`/api/admin/combos/${combo.id}`, { headers: { "x-rawroute-workspace-id": "default" } })
     expect(deleted.ok()).toBe(true)

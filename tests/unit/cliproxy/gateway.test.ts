@@ -386,6 +386,13 @@ test("falls back after a non-terminal provider error regardless of status class"
 
   expect(response.status).toBe(200)
   expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+  const recorded = mocks.createGatewayUsageEvent.mock.calls.map(call => call[0])
+  expect(recorded).toHaveLength(2)
+  expect(recorded[0]).toMatchObject({ requestedModel: "coding-fallback", gatewayModelId: "p/a", attemptIndex: 0, requestFinal: false, status: 403 })
+  expect(recorded[1]).toMatchObject({ requestedModel: "coding-fallback", gatewayModelId: "p/b", attemptIndex: 1, requestFinal: true, status: 200 })
+  expect(recorded[0].requestId).toBeString()
+  expect(recorded[0].requestId).toBe(recorded[1].requestId)
+  expect(recorded[0].id).not.toBe(recorded[1].id)
 })
 
 test("treats CLIProxy model cooldown as an immediate fallback signal", async () => {
@@ -727,7 +734,7 @@ test("streams native Responses SSE while collecting terminal usage", async () =>
   expect(new TextDecoder().decode(first.value)).toContain("response.output_text.delta")
   while (!(await reader.read()).done) {}
   await drainBackgroundTasks()
-  expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200, reasoningEffort: "xhigh" }), undefined)
+  expect(mocks.createGatewayUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ metrics: { input: 3, output: 1 }, status: 200, reasoningEffort: "xhigh", requestedModel: "r/model-a", requestId: expect.any(String), attemptIndex: 0, requestFinal: true }), undefined)
 })
 
 test("logs the received protocol and the saved provider protocol", async () => {

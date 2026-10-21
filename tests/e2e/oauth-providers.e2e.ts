@@ -24,6 +24,13 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
   const debug = await page.request.get("http://127.0.0.1:3211/debug")
   expect((await debug.json()).pollCount).toBeGreaterThanOrEqual(1)
 
+  const connected = await (await page.request.get("/api/admin/oauth-providers", { headers: { "x-rawroute-workspace-id": "default" } })).json() as { accounts: Array<{ id: string }> }
+  await page.route("**/api/admin/oauth-providers/usage", route => route.fulfill({ json: { accounts: Object.fromEntries(connected.accounts.map(account => [account.id, { planType: "free", fiveHour: null, weekly: null, fetchedAt: new Date().toISOString(), stale: false }])) } }))
+  await page.reload()
+  const accountRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "Work Codex", exact: true }) })
+  await expect(accountRow.getByRole("cell", { name: "Free", exact: true })).toBeVisible()
+  await expect(accountRow.getByRole("cell", { name: "Plus", exact: true })).toHaveCount(0)
+
   await page.getByRole("button", { name: "Disable Work Codex", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Disable account", exact: true }).click()
   await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name: "Work Codex", exact: true }) }).getByRole("cell", { name: "Disabled", exact: true })).toBeVisible()

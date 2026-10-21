@@ -1,6 +1,7 @@
 export interface CodexQuotaWindow { usedPercent: number; remainingPercent: number; resetAt?: string }
 export interface CodexResetCredit { id: string; status: string; grantedAt?: string; expiresAt?: string }
 export interface CodexUsageSnapshot {
+  planType?: string
   resetCredits?: CodexResetCredit[]
   resetCreditsError?: string
   fiveHour: CodexQuotaWindow | null

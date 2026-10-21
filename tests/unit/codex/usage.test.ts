@@ -40,6 +40,34 @@ const account: ProviderApiKey = {
 }
 
 describe("Codex usage", () => {
+  test("reads the current plan even without quota windows and ignores invalid plans", () => {
+    expect(parseCodexUsagePayload({ plan_type: " Free " })).toEqual({ planType: "free", fiveHour: null, weekly: null })
+    for (const plan_type of [undefined, null, "", "   ", 42]) {
+      expect(parseCodexUsagePayload({ plan_type }).planType).toBeUndefined()
+    }
+  })
+
+  workspaceTest("refreshes a Plus plan to Free despite old credential metadata", async () => {
+    const cache = new FakeCache()
+    let current = 1_000_000
+    let plan = "plus"
+    setCodexUsageCacheForTests(cache)
+    setCodexUsageClockForTests(() => current)
+    setCodexUsageApiCallForTests(async (_account, input) => ({ status: 200, body: JSON.stringify(input.url.endsWith("/rate-limit-reset-credits") ? { credits: [] } : { plan_type: plan }) }))
+    try {
+      const oldAccount = { ...account, planType: "plus" }
+      expect((await getCodexUsageForAccount(oldAccount)).planType).toBe("plus")
+      plan = "free"
+      current += CODEX_USAGE_CACHE_TTL_SECONDS * 1000 + 1
+      cache.values.delete("rawroute:codex-usage:v2:lock:default:account-1")
+      expect(await getCodexUsageForAccount(oldAccount)).toMatchObject({ planType: "free", stale: false, fiveHour: null, weekly: null })
+      expect((await getCodexUsageForAccount(oldAccount)).planType).toBe("free")
+    } finally {
+      setCodexUsageCacheForTests()
+      setCodexUsageClockForTests()
+      setCodexUsageApiCallForTests()
+    }
+  })
   test("parses five-hour and weekly windows from the 9router response shape", () => {
     const result = parseCodexUsagePayload({
       rate_limit: {
@@ -151,7 +179,7 @@ describe("Codex usage", () => {
       ] }) }
       calls += 1
       if (calls > 1) throw new Error("upstream unavailable")
-      return { status: 200, body: JSON.stringify({ rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } }, rate_limit_reset_credits: { available_count: 2 } }) }
+      return { status: 200, body: JSON.stringify({ plan_type: "free", rate_limit: { primary_window: { used_percent: 6 }, secondary_window: { used_percent: 20 } }, rate_limit_reset_credits: { available_count: 2 } }) }
     })
 
     const first = await getCodexUsageForAccount(account)
@@ -168,7 +196,7 @@ describe("Codex usage", () => {
     cache.values.delete("rawroute:codex-usage:v2:lock:default:account-1")
     const stale = await getCodexUsageForAccount(account)
     const retained = await getCodexUsageForAccount(account)
-    expect(stale).toMatchObject({ stale: true, fiveHour: { remainingPercent: 94 }, unusedResetCredits: 2 })
+    expect(stale).toMatchObject({ stale: true, planType: "free", fiveHour: { remainingPercent: 94 }, unusedResetCredits: 2 })
     expect(retained.stale).toBe(true)
     expect(retained.resetCredits).toEqual(first.resetCredits)
     expect(calls).toBe(2)

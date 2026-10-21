@@ -51,7 +51,7 @@ function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
   )
 }
 
-function TableRow({ className, variant = "default", ...props }: React.ComponentProps<"tr"> & { variant?: "default" | "error" | "disabled" | "static" }) {
+function TableRow({ className, variant = "default", ...props }: React.ComponentProps<"tr"> & { variant?: "default" | "error" | "disabled" | "static" | "group" }) {
   return (
     <tr
       data-slot="table-row"
@@ -60,6 +60,7 @@ function TableRow({ className, variant = "default", ...props }: React.ComponentP
         variant === "error" && "bg-destructive/5",
         variant === "disabled" && "opacity-60",
         variant === "static" && "hover:bg-transparent",
+        variant === "group" && "bg-muted/40",
         className
       )}
       {...props}

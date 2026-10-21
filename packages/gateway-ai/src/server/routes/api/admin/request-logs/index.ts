@@ -16,6 +16,7 @@ export async function GET(request: Request) {
     const keyOptions = new Map(keyNames)
     // Include historical, alias and shared IDs seen on this bounded page, without scanning history.
     for (const event of page.events) if (!modelOptions.has(event.gatewayModelId)) modelOptions.set(event.gatewayModelId, event.gatewayModelId)
+    for (const event of page.events) if (event.requestedModel && !modelOptions.has(event.requestedModel)) modelOptions.set(event.requestedModel, event.requestedModel)
     for (const event of page.events) if (!keyOptions.has(event.gatewayKeyId)) keyOptions.set(event.gatewayKeyId, `Unknown key (${event.gatewayKeyId.slice(0, 8)})`)
     return Response.json({ ...page, events: page.events.map(event => ({ ...event, keyName: keyNames.get(event.gatewayKeyId) || null, modelName: modelNames.get(event.gatewayModelId) || null })), models: [...modelOptions].map(([id, name]) => ({ id, name })), keys: [...keyOptions].map(([id, name]) => ({ id, name })) })
   } catch { return jsonError("Unable to load request logs.", 500) }

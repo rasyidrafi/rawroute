@@ -12,7 +12,7 @@ import { toast } from "sonner"
 import { ConfirmAction, DetailValue, EmptyTableRow, NotFoundState } from "@rawroute/ui/resource-feedback"
 import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { withPendingAction } from "@rawroute/ui/pending-action"
-import { codexUsageError, CodexQuotaTableCell, type UsageResponse } from "./codex-quota"
+import { codexUsageError, CodexPlanBadge, CodexQuotaTableCell, type UsageResponse } from "./codex-quota"
 import { ModelForm } from "./model-form"
 import { ModelShareButton } from "./model-share-button"
 import { ProviderApiKeyForm } from "./provider-api-key-form"
@@ -326,7 +326,7 @@ function ProviderKeyRow({ apiKey, index, apiKeyCount, provider, isOAuthProvider,
   return <TableRow key={apiKey.id} variant={apiKey.enabled ? "default" : "disabled"}>
       {orderCell}
       <TableCell text="label">{apiKey.name}</TableCell>
-      <ProviderKeyMetadata apiKey={apiKey} isOAuthProvider={isOAuthProvider} />
+      <ProviderKeyMetadata apiKey={apiKey} isOAuthProvider={isOAuthProvider} accountUsage={accountUsage} usageLoading={usageLoading && !usageData} />
       {isOAuthProvider && (showQuota ? <CodexQuotaTableCell accountUsage={accountUsage} loading={usageLoading && !usageData} error={usageError?.message} routingStatus={apiKey.cliProxyStatusMessage} /> : <TableCell tone="muted">N/A</TableCell>)}
       {isOAuthProvider && <AccountResetCell apiKey={apiKey} usageData={usageData} isPending={isPending} setResetAccount={setResetAccount} />}
       <TableCell text="small" tone="muted" className="align-middle">{formatAppDate(apiKey.createdAt)}</TableCell>
@@ -460,8 +460,8 @@ function ProviderCredentialsHeader({ provider, isOAuthProvider, login, onAdd }: 
         </CardHeader>
 }
 
-function ProviderKeyMetadata({ apiKey, isOAuthProvider }: Pick<ProviderKeyRowProps, "apiKey" | "isOAuthProvider">) {
-  return <><TableCell>{isOAuthProvider ? <Badge variant="secondary">{apiKey.planType ? apiKey.planType.charAt(0).toUpperCase() + apiKey.planType.slice(1) : "Codex"}</Badge> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
+function ProviderKeyMetadata({ apiKey, isOAuthProvider, accountUsage, usageLoading }: Pick<ProviderKeyRowProps, "apiKey" | "isOAuthProvider" | "usageLoading"> & { accountUsage?: UsageResponse["accounts"][string] }) {
+  return <><TableCell>{isOAuthProvider ? <CodexPlanBadge accountUsage={accountUsage} loading={usageLoading} /> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"} title={apiKey.cliProxyStatusMessage}>{apiKey.cliProxyStatus === "missing" ? "Reconnect required" : apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell></>
 }
 

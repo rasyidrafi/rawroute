@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@rawr
 import { Progress } from "@rawroute/ui/progress"
 import { Separator } from "@rawroute/ui/separator"
 import type { DashboardKeyBudget, DashboardPayload } from "../../contracts/domain"
-import type { PublicKeyUsageDetail, RequestLogDisplayEvent, RequestLogsPage } from "../../contracts/request-logs"
+import { groupRequestLogEvents, type PublicKeyUsageDetail, type RequestLogDisplayEvent, type RequestLogsPage } from "../../contracts/request-logs"
 import { aiPagePaths as pagePaths, publicWorkspacePagePath } from "../../contracts/pages"
 import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { formatCost, formatRequestCount, formatTokenCount } from "../../contracts/usage-display"
@@ -85,9 +85,9 @@ function KeyUsageContent({ keyId, publicView, workspaceId }: { keyId: string; pu
       <div><h3 className="text-lg font-medium">Budget & spend</h3><p className="mt-1 text-sm text-muted-foreground">{formatAppDateTime(data.range.from)} – {formatAppDateTime(data.range.to)}</p></div>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeySpendChart data={data} unavailable={costUnavailable(data)} /></div>
       <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
-      <Card><CardHeader><CardTitle>Recent requests</CardTitle><CardDescription>Latest recorded attempts for this key</CardDescription></CardHeader><CardContent>
+      <Card><CardHeader><CardTitle>Recent requests</CardTitle><CardDescription>Latest requests and their recorded attempts for this key</CardDescription></CardHeader><CardContent>
         {!!recentError && <Alert variant="destructive"><AlertDescription>Unable to load recent requests. Try refreshing.</AlertDescription></Alert>}
-        <RequestLogResults data={recentData && { events: recentData.events.slice(0, 5) }} loading={!recentData && !recentError} failed={!!recentError} />
+        <RequestLogResults data={recentData && { events: groupRequestLogEvents(recentData.events).slice(0, 5).flat() }} loading={!recentData && !recentError} failed={!!recentError} />
       </CardContent></Card>
     </>}
   </DashboardPage>
