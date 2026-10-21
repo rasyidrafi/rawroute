@@ -115,6 +115,22 @@ test("advertises and routes a discovered model unknown to the bundled catalog", 
   expect(calls.some((call) => call[1]?.body && JSON.parse(String(call[1].body)).model === "rr-codex-default/future-model")).toBe(true)
 })
 
+test("fallback attempts retain client tier, account for each sent override and collect actual served tier", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "none", headers: {}, enabled: true }])
+  mocks.listModels.mockResolvedValue(["a", "b"].map(id => ({ id, providerId: "p", gatewayModelId: `p/${id}`, name: id, upstreamModel: id, enabled: true })))
+  mocks.listCombos.mockResolvedValue([{ id: "c", combo: "combo", members: [{ modelId: "p/a", customPayload: { service_tier: "priority" } }, { modelId: "p/b", customPayload: { service_tier: "ultrafast" } }] }])
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => JSON.parse(String(init?.body)).model === "a"
+    ? Response.json({ error: { message: "Unavailable" } }, { status: 503 })
+    : Response.json({ service_tier: "default", usage: { input_tokens: 10, output_tokens: 1 } })))
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "combo", input: "hello", service_tier: "flex" }) }))
+  expect(response.status).toBe(200)
+  const attempts = mocks.createGatewayUsageEvent.mock.calls.map(call => call[0])
+  expect(attempts).toHaveLength(2)
+  expect(attempts[0]).toMatchObject({ requestedServiceTier: "flex", sentServiceTier: "priority", attemptIndex: 0 })
+  expect(attempts[1]).toMatchObject({ requestedServiceTier: "flex", sentServiceTier: "ultrafast", attemptIndex: 1, metrics: { effectiveServiceTier: "default" } })
+  expect(mocks.getBudgetRequestState.mock.calls.map(call => call[3].service_tier)).toEqual(["priority", "ultrafast"])
+})
+
 test("tests combo member policies with a streaming probe", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true }])
   mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])

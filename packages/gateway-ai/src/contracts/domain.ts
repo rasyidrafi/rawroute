@@ -64,7 +64,14 @@ export interface Model {
   source?: ModelSource
   discovery?: { lastSeenAt?: string; accountIds: string[]; stale: boolean }
   reasoningCapability?: ModelReasoningCapability
+  serviceTierCapability?: ModelServiceTierCapability
   createdAt: string
+}
+
+export interface ModelServiceTierCapability {
+  profile: "openai" | "anthropic"
+  /** Explicitly supported non-standard tiers; empty means Standard only. */
+  supportedTiers: string[]
 }
 
 export interface ModelReasoningCapability {
@@ -178,6 +185,7 @@ export interface UsageEvent {
   /** Number of declared tools/functions, absent when the request did not specify them. */
   toolCount?: number
   requestedServiceTier?: string
+  sentServiceTier?: string
   effectiveServiceTier?: string
   /** Rate schedule actually used; may be assumed when the provider omitted its tier. */
   pricingServiceTier?: string
@@ -223,6 +231,9 @@ export interface PricingContextTier extends PricingRates {
 export interface PricingServiceTier extends PricingRates {
   serviceTier: string
   contextTiers: PricingContextTier[]
+  source?: "catalog" | "custom"
+  /** Recomputed from Standard rates when a new version is saved. */
+  multiplier?: number
 }
 
 export type PricingCanonicalSource = "models.dev" | "custom"

@@ -46,6 +46,11 @@ before deployment.
 Existing installations also need `scripts/migrations/request-log-groups.ts --sqlite <file>
 --apply --writers-stopped` run with Bun before upgrading request logs; it creates a backup
 and the grouping index without inventing historical fallback links.
+Service-tier configuration requires `scripts/migrations/service-tier-pricing.ts
+--sqlite <file> --catalog <models.dev-v2.json> --apply --writers-stopped --backup <new-file>`.
+The v2 upgrade preserves historical usage and treats existing tier rates as user-owned.
+Configure supported tiers in Provider Detail → Edit model, then set catalog, custom,
+or Standard-multiplier rates in Model Pricing. Reported tiers override requested tiers.
 
 ## Develop and verify
 

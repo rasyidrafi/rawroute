@@ -50,6 +50,8 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   const row = page.getByRole("row").filter({ hasText: "Pricing editor test" })
   await row.getByRole("button", { name: "Pricing", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "Pricing for Pricing editor test" })
+  await expect(dialog.getByRole("group", { name: "Service tier pricing", exact: true })).toBeVisible()
+  await expect(dialog.getByText(/No service tiers configured/)).toBeVisible()
   const inputRates = dialog.getByRole("spinbutton", { name: /^Input/ })
   const outputRates = dialog.getByRole("spinbutton", { name: /^Output/ })
   await expect(inputRates.nth(0)).toHaveValue("2.5")

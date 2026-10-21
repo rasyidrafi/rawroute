@@ -1,4 +1,5 @@
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "../usage-metrics"
+import type { ModelServiceTierCapability } from "../../contracts/domain"
 
 function objectValue(value: unknown) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -13,7 +14,7 @@ export function isTerminalStreamEvent(eventName: string, parsed: Record<string, 
   return response?.status === "completed" || response?.status === "complete"
 }
 
-export async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
+export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profile: ModelServiceTierCapability["profile"] = "openai") {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -56,7 +57,7 @@ export async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
     try {
       const parsed = JSON.parse(payload) as Record<string, unknown>
       terminalEventSeen ||= isTerminalStreamEvent(eventName, parsed)
-      usage = mergeUsage(usage, extractUsageMetrics(parsed))
+      usage = mergeUsage(usage, extractUsageMetrics(parsed, profile))
     } catch {
       // A provider may emit non-JSON comments or partial events; keep reading.
     }

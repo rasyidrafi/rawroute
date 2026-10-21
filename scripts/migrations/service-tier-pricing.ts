@@ -67,7 +67,19 @@ export function migrateServiceTierPricing(file: string, catalog: Record<string, 
       database.run("COMMIT")
     }
     const rows = database.query<Row, []>("SELECT path, collection_path, document_id, data FROM rawroute_documents ORDER BY path").all()
-    const planned = plan(rows, catalog, collectionPrefix(database))
+    const previousSchema = database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_service_tier_schema'").get()
+    if (previousSchema && database.query<{ version: number }, []>("SELECT version FROM ai_service_tier_schema WHERE id = 1").get()?.version !== 1) throw new Error("Unsupported service tier schema version")
+    const planned = previousSchema ? { writes: [] as Write[], detachedLinks: [] as string[], addedVersions: 0 } : plan(rows, catalog, collectionPrefix(database))
+    // Preserve existing rates and history. Without provenance, treat old schedules
+    // as user-owned; a catalog refresh must not replace them implicitly.
+    for (const row of rows.filter(row => row.collection_path.endsWith("/modelPricingVersions"))) {
+      const pending = planned.writes.find(write => write.path === row.path)
+      const version = (pending?.data || JSON.parse(row.data)) as ModelPricingVersion
+      if (!version.serviceTiers?.some(tier => !tier.source)) continue
+      const data = { ...version, serviceTiers: version.serviceTiers.map(tier => ({ ...tier, source: tier.source || "custom" as const })) }
+      if (pending) pending.data = data
+      else planned.writes.push({ ...row, data })
+    }
     const report = { applied: false, required: true, changedDocuments: planned.writes.length, addedVersions: planned.addedVersions, detachedLinks: planned.detachedLinks }
     if (!options.apply) return report
     const backup = resolve(options.backup || `${file}.before-service-tier-pricing`)

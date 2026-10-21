@@ -19,6 +19,26 @@ function provider(id: string): Partial<Provider> {
 }
 
 describe("model pricing catalog", () => {
+  test("model-scoped support exposes unconfigured tiers and multiplier versions preserve previous rates", async () => {
+    const upstream = await upsertProvider(provider("tier-editor"))
+    const model = await upsertModel(upstream.id, { name: "Tier editor", gatewayModelId: "tier-editor/model", upstreamModel: "model", serviceTierCapability: { profile: "anthropic", supportedTiers: ["fast"] } })
+    const group = (await syncModelPricingGroups()).find(entry => entry.memberModelIds.includes(model.id))!
+    expect((await getPricingAdminData()).models.find(entry => entry.id === model.id)?.serviceTierCapability).toEqual({ profile: "anthropic", supportedTiers: ["fast"] })
+    await upsertModel(upstream.id, { originalId: model.id, serviceTierCapability: { profile: "anthropic", supportedTiers: [] } })
+    await syncModelPricingGroups()
+    expect((await getPricingAdminData()).models.find(entry => entry.id === model.id)?.serviceTierCapability?.supportedTiers).toEqual([])
+    const rates = { inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 2_000_000, cacheReadMicrosPerMillion: 0, cacheCreationMicrosPerMillion: 0 }
+    const first = await savePricingVersion({ groupId: group.id, rates, contextTiers: [{ ...rates, id: "long", thresholdTokens: 100, inputMicrosPerMillion: 3_000_000 }], serviceTiers: [{ ...rates, serviceTier: "fast", source: "custom", multiplier: 6, contextTiers: [] }], mode: "new" })
+    expect(first.version.serviceTiers?.[0]).toMatchObject({ inputMicrosPerMillion: 6_000_000, contextTiers: [{ inputMicrosPerMillion: 18_000_000 }] })
+    const second = await savePricingVersion({ groupId: group.id, rates: { ...rates, inputMicrosPerMillion: 2_000_000 }, contextTiers: [], mode: "new" })
+    expect(second.version.serviceTiers?.[0]).toMatchObject({ source: "custom", multiplier: 6, inputMicrosPerMillion: 12_000_000 })
+    expect(first.version.inputMicrosPerMillion).toBe(1_000_000)
+    const key = await createApiKey("Anthropic tier")
+    const standard = await getBudgetRequestState(key.id, model.gatewayModelId, model.id, { max_tokens: 10 }, 100, "anthropic-messages")
+    const fast = await getBudgetRequestState(key.id, model.gatewayModelId, model.id, { max_tokens: 10, speed: "fast" }, 100, "anthropic-messages")
+    expect(fast.estimatedCostMicros).toBe(standard.estimatedCostMicros! * 6)
+    await expect(savePricingVersion({ groupId: group.id, rates, contextTiers: [], serviceTiers: [{ ...rates, serviceTier: "fast", multiplier: -1, contextTiers: [] }], mode: "new" })).rejects.toThrow("multiplier")
+  })
   test("reserves requested tier rates and settles a reported downgrade at served rates", async () => {
     const upstream = await upsertProvider(provider("tiers"))
     const model = await upsertModel(upstream.id, { id: "astra", name: "Astra", gatewayModelId: "tiers/astra", upstreamModel: "astra" })

@@ -45,3 +45,32 @@ test("offline migration repairs reseller links, preserves history, validates bac
   } finally { converted.close(); copy.close() }
   expect(migrateServiceTierPricing(file, catalog, { apply: true, writersStopped: true })).toEqual({ applied: false, required: false })
 })
+
+test("v1 upgrade preserves provider-scoped catalog links, custom schedules and historical usage", () => {
+  directory = mkdtempSync(join(tmpdir(), "service-tier-v2-"))
+  const file = join(directory, "test.sqlite")
+  const db = new Database(file)
+  db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY, collection_path TEXT, document_id TEXT, data TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+  db.run("CREATE TABLE ai_service_tier_schema(id INTEGER PRIMARY KEY, version INTEGER)")
+  db.run("INSERT INTO ai_service_tier_schema VALUES (1,1)")
+  const group = { id: "g", canonicalSource: "models.dev", canonicalProvider: "edenai", canonicalModelId: "edenai/openai/astra" }
+  const version = { id: "v", groupId: "g", serviceTiers: [{ serviceTier: "priority", inputMicrosPerMillion: 123, contextTiers: [] }] }
+  for (const [collection, id, value] of [["modelPricingGroups", "g", group], ["modelPricingVersions", "v", version], ["usageEvents", "event", { costMicros: 100, requestedServiceTier: "priority" }]] as const) {
+    db.run("INSERT INTO rawroute_documents(path,collection_path,document_id,data) VALUES(?,?,?,?)", [`rawroute_workspaces/w/${collection}/${id}`, `rawroute_workspaces/w/${collection}`, id, JSON.stringify(value)])
+  }
+  db.close()
+  const before = readFileSync(file)
+  expect(migrateServiceTierPricing(file, catalog)).toMatchObject({ required: true, addedVersions: 0, detachedLinks: [] })
+  expect(readFileSync(file)).toEqual(before)
+  expect(migrateServiceTierPricing(file, catalog, { apply: true, writersStopped: true, backup: join(directory, "backup") })).toMatchObject({ applied: true })
+  const result = new Database(file)
+  try {
+    const rows = result.query<{ document_id: string; data: string }, []>("SELECT document_id,data FROM rawroute_documents").all()
+    const get = (id: string) => JSON.parse(rows.find(row => row.document_id === id)!.data)
+    expect(get("g")).toEqual(group)
+    expect(get("v").serviceTiers).toEqual([{ ...version.serviceTiers[0], source: "custom" }])
+    expect(get("event")).toEqual({ costMicros: 100, requestedServiceTier: "priority" })
+    expect(hasServiceTierSchema(result)).toBe(true)
+  } finally { result.close() }
+  expect(migrateServiceTierPricing(file, catalog)).toEqual({ applied: false, required: false })
+})

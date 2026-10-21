@@ -293,7 +293,10 @@ async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models
 
 export async function syncModelPricingGroups() {
   const [models, providers, existing] = await Promise.all([listPricingModels(), listProviders(), readGroups()])
-  return reconcileModelPricingGroups(existing, models, providers)
+  const groups = await reconcileModelPricingGroups(existing, models, providers)
+  // Model capabilities can change without changing any group membership.
+  invalidatePricingCatalog()
+  return groups
 }
 
 export async function listPricingGroups() { return (await readGroups()).sort((a, b) => a.name.localeCompare(b.name)) }
@@ -332,7 +335,7 @@ async function buildPricingAdminData() {
     if (canonicalIds.has(model.id)) canonicalById.set(model.id, model)
   }
 
-  const modelRows = catalog.models.map((model) => ({ id: model.id, name: model.name, groupKey: modelGroupKey(model, providerPrefixes), gatewayModelId: model.gatewayModelId, upstreamModel: model.upstreamModel, providerId: model.providerId, enabled: model.enabled }))
+  const modelRows = catalog.models.map((model) => ({ id: model.id, name: model.name, groupKey: modelGroupKey(model, providerPrefixes), gatewayModelId: model.gatewayModelId, upstreamModel: model.upstreamModel, providerId: model.providerId, enabled: model.enabled, serviceTierCapability: model.serviceTierCapability }))
   return {
     groups: catalog.groups.map((group) => {
       const versions = catalog.versionsByGroup.get(group.id) || []
@@ -453,17 +456,21 @@ export async function deletePricingGroup(groupId: string) {
   await writeGroupChanges(writes, [groupId])
 }
 
-function validateServiceTiers(tiers: PricingServiceTier[]) {
+function validateServiceTiers(tiers: PricingServiceTier[], standard: PricingRates, contexts: PricingContextTier[]) {
   if (!Array.isArray(tiers)) throw new Error("Service tier pricing must be an array.")
   const seen = new Set<string>()
   return tiers.map(tier => {
     const name = normalizeServiceTier(tier?.serviceTier)
     if (!name || name !== tier.serviceTier || ["default", "standard", "auto"].includes(name) || seen.has(name)) throw new Error("Service tiers must have distinct non-default identifiers.")
     seen.add(name)
-    const rates = { inputMicrosPerMillion: tier.inputMicrosPerMillion, outputMicrosPerMillion: tier.outputMicrosPerMillion, cacheReadMicrosPerMillion: tier.cacheReadMicrosPerMillion, cacheCreationMicrosPerMillion: tier.cacheCreationMicrosPerMillion }
+    if (tier.source !== undefined && !["catalog", "custom"].includes(tier.source)) throw new Error("Invalid tier pricing source.")
+    const multiplier = tier.multiplier
+    if (multiplier !== undefined && (typeof multiplier !== "number" || !Number.isFinite(multiplier) || multiplier < 0)) throw new Error("Invalid service tier multiplier.")
+    const scale = (rates: PricingRates): PricingRates => ({ inputMicrosPerMillion: Math.round(rates.inputMicrosPerMillion * multiplier!), outputMicrosPerMillion: Math.round(rates.outputMicrosPerMillion * multiplier!), cacheReadMicrosPerMillion: Math.round(rates.cacheReadMicrosPerMillion * multiplier!), cacheCreationMicrosPerMillion: Math.round(rates.cacheCreationMicrosPerMillion * multiplier!) })
+    const rates = multiplier !== undefined ? scale(standard) : { inputMicrosPerMillion: tier.inputMicrosPerMillion, outputMicrosPerMillion: tier.outputMicrosPerMillion, cacheReadMicrosPerMillion: tier.cacheReadMicrosPerMillion, cacheCreationMicrosPerMillion: tier.cacheCreationMicrosPerMillion }
     validateRates(rates)
     if (!Array.isArray(tier.contextTiers)) throw new Error("Service tier context pricing must be an array.")
-    return { serviceTier: name, ...rates, contextTiers: validateTiers(tier.contextTiers) }
+    return { serviceTier: name, ...rates, source: tier.source || "custom" as const, ...(multiplier !== undefined ? { multiplier } : {}), contextTiers: validateTiers(multiplier !== undefined ? contexts.map(context => ({ ...context, ...scale(context) })) : tier.contextTiers) }
   }).sort((a, b) => a.serviceTier.localeCompare(b.serviceTier))
 }
 
@@ -474,7 +481,7 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
   const contextTiers = validateTiers(input.contextTiers)
   const versions = await listPricingVersions(group.id)
   const current = activePricingVersion(versions)
-  const serviceTiers = validateServiceTiers(input.serviceTiers === undefined ? current?.serviceTiers || [] : input.serviceTiers)
+  const serviceTiers = validateServiceTiers(input.serviceTiers === undefined ? current?.serviceTiers || [] : input.serviceTiers, input.rates, contextTiers)
   const now = new Date().toISOString()
   if (input.mode === "replace" && current) {
     const replaced = { ...current, ...input.rates, contextTiers, serviceTiers, updatedAt: now }

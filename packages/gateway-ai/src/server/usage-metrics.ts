@@ -1,4 +1,4 @@
-import type { PricingContextTier } from "../contracts/domain"
+import type { ModelServiceTierCapability, PricingContextTier } from "../contracts/domain"
 import { normalizeServiceTier } from "../contracts/service-tier"
 import { selectServiceTierPricing, type ServiceTierContext, type TieredPricing } from "./service-tier-pricing"
 
@@ -45,7 +45,7 @@ export function mergeUsage(current: UsageMetrics | undefined, next: UsageMetrics
   }
 }
 
-export function extractUsageMetrics(payload: Record<string, unknown>): UsageMetrics | undefined {
+export function extractUsageMetrics(payload: Record<string, unknown>, profile: ModelServiceTierCapability["profile"] = "openai"): UsageMetrics | undefined {
   const response = objectValue(payload.response) || payload
   const message = objectValue(payload.message)
   const meta = objectValue(payload.meta)
@@ -65,7 +65,10 @@ export function extractUsageMetrics(payload: Record<string, unknown>): UsageMetr
     objectValue(payload["amazon-bedrock-invocationMetrics"]),
   ].filter((source): source is Record<string, unknown> => Boolean(source))
 
-  const effectiveServiceTier = normalizeServiceTier(response.service_tier ?? payload.service_tier ?? objectValue(response.usage)?.service_tier ?? objectValue(message?.usage)?.service_tier)
+  const reported = normalizeServiceTier(profile === "anthropic"
+    ? objectValue(response.usage)?.speed ?? objectValue(payload.usage)?.speed ?? objectValue(message?.usage)?.speed
+    : response.service_tier ?? payload.service_tier ?? objectValue(response.usage)?.service_tier)
+  const effectiveServiceTier = reported === "standard" ? "default" : profile === "openai" && reported === "fast" ? "priority" : reported
   let result: UsageMetrics | undefined = effectiveServiceTier ? { effectiveServiceTier } : undefined
   for (const source of sources) {
     let input = firstNumber(source, [

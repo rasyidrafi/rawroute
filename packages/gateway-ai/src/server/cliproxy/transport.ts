@@ -106,7 +106,7 @@ function anthropicToResponses(payload: Record<string, unknown>) {
   return normalizeResponsesRequest(translated)
 }
 
-function nativeResponsesBody(body: Uint8Array, model: string, ingress: Protocol, reasoningEffort?: string, customPayload?: Record<string, unknown>) {
+export function nativeResponsesBody(body: Uint8Array, model: string, ingress: Protocol, reasoningEffort?: string, customPayload?: Record<string, unknown>) {
   const payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown>
   payload.model = model
   const translated = ingress === "openai-chat"

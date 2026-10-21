@@ -14,7 +14,7 @@ import { getCodexUsageForAccount } from "./codex/usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "./model-pricing"
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "./usage-metrics"
 import { selectServiceTierPricing } from "./service-tier-pricing"
-import { normalizeServiceTier } from "../contracts/service-tier"
+import { requestServiceTier, serviceTierProfile } from "../contracts/service-tier"
 import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "./usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, getAppTimeZone, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@rawroute/platform/server/timezone"
 import { recordLog } from "./logging"
@@ -538,6 +538,7 @@ export interface GatewayUsageInput {
   reasoningEffort?: string
   toolCount?: number
   requestedServiceTier?: string
+  sentServiceTier?: string
   metrics?: UsageMetrics
   estimatedUsage?: UsageMetrics
   assumedCostMicros?: number
@@ -1285,6 +1286,7 @@ export async function getBudgetRequestState(
   requestBodyBytes?: number,
   protocol: UsageEvent["protocol"] = "openai-chat",
   requestedCombo?: string,
+  tierProfile = serviceTierProfile(protocol),
 ): Promise<BudgetRequestState> {
   await warmUsagePredictionSamples()
   const budget = await budgetConfig(apiKeyId)
@@ -1293,7 +1295,7 @@ export async function getBudgetRequestState(
   let pricing: ResolvedModelPricing | undefined
   try { pricing = await getPricingForModel(gatewayModelId, providerModelId) }
   catch { pricing = undefined }
-  const requestedServiceTier = normalizeServiceTier(payload?.service_tier)
+  const requestedServiceTier = requestServiceTier(payload || {}, tierProfile)
   const selectedPricing = selectServiceTierPricing(pricing, { requestedServiceTier }).rates
   const estimatedCost = selectedPricing
     ? estimateExpectedCostMicros(payload, selectedPricing, apiKeyId, gatewayModelId, providerModelId, requestBodyBytes, protocol, !requestedServiceTier && !pricing?.serviceTiers?.length)

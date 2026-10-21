@@ -6,6 +6,7 @@ export type RequestLogMetadata = {
   reasoningEffort?: ReasoningEffort
   toolCount?: number
   requestedServiceTier?: string
+  sentServiceTier?: string
   effectiveServiceTier?: string
   pricingServiceTier?: string
 }
@@ -38,16 +39,18 @@ export function normalizeRequestToolCount(value: unknown): number | undefined {
 }
 
 /** Validate stored metadata again at public/API projection boundaries. */
-export function normalizeRequestLogMetadata(value: { reasoningEffort?: unknown; toolCount?: unknown; requestedServiceTier?: unknown; effectiveServiceTier?: unknown; pricingServiceTier?: unknown }): RequestLogMetadata {
+export function normalizeRequestLogMetadata(value: { reasoningEffort?: unknown; toolCount?: unknown; requestedServiceTier?: unknown; sentServiceTier?: unknown; effectiveServiceTier?: unknown; pricingServiceTier?: unknown }): RequestLogMetadata {
   const reasoningEffort = normalizeRequestReasoningEffort(value.reasoningEffort)
   const toolCount = normalizeRequestToolCount(value.toolCount)
   const requestedServiceTier = normalizeServiceTier(value.requestedServiceTier)
+  const sentServiceTier = normalizeServiceTier(value.sentServiceTier)
   const effectiveServiceTier = normalizeServiceTier(value.effectiveServiceTier)
   const pricingServiceTier = normalizeServiceTier(value.pricingServiceTier)
   return {
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(toolCount !== undefined ? { toolCount } : {}),
     ...(requestedServiceTier ? { requestedServiceTier } : {}),
+    ...(sentServiceTier ? { sentServiceTier } : {}),
     ...(effectiveServiceTier ? { effectiveServiceTier } : {}),
     ...(pricingServiceTier ? { pricingServiceTier } : {}),
   }

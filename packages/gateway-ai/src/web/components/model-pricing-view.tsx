@@ -21,12 +21,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@rawroute/ui/popover"
 import { Skeleton } from "@rawroute/ui/skeleton"
 import { TableColumns, Table, TableBody, TableCell, TableRow } from "@rawroute/ui/table"
 import { formatAppDate } from "@rawroute/observability/contracts/timezone"
-import type { CanonicalModelSummary, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingContextTier, PricingJob, PricingRates, PricingServiceTier } from "../../contracts/domain"
+import type { CanonicalModelSummary, ModelServiceTierCapability, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingContextTier, PricingJob, PricingRates, PricingServiceTier } from "../../contracts/domain"
 import { ServiceTierRates } from "./service-tier-rates"
+import { ServiceTierEditor } from "./service-tier-editor"
+import { mergeCatalogServiceTiers } from "../../contracts/service-tier"
 
 import { Panel, sanitizeNonNegativeDraft } from "./management-panel"
 
-type PricingModelRow = { id: string; name: string; groupKey: string; gatewayModelId: string; upstreamModel: string; providerId: string; enabled: boolean }
+type PricingModelRow = { id: string; name: string; groupKey: string; gatewayModelId: string; upstreamModel: string; providerId: string; enabled: boolean; serviceTierCapability?: ModelServiceTierCapability }
 type PricingGroupRow = ModelPricingGroup & { canonicalModel: CanonicalModelSummary | null; versions: ModelPricingVersion[]; currentVersion: ModelPricingVersion | null }
 type PricingAdminData = { groups: PricingGroupRow[]; models: PricingModelRow[]; ungroupedModels: PricingModelRow[]; jobs: PricingJob[] }
 type ModelSelectionRow =
@@ -65,10 +67,11 @@ function comparableServiceTiers(tiers: PricingServiceTier[] = []) {
 function groupPricingPayload(groupId: string, canonical: CanonicalModelSummary | null, current: ModelPricingVersion | null | undefined, reprice: boolean) {
   const catalogRates = canonical?.pricing
   const tiers = canonical?.contextTiers || []
-  const changed = catalogRates && (!current || rateFields.some(([field]) => current[field] !== catalogRates[field]) || comparableTiers(current.contextTiers) !== comparableTiers(tiers) || comparableServiceTiers(current.serviceTiers) !== comparableServiceTiers(canonical?.serviceTiers))
+  const serviceTiers = mergeCatalogServiceTiers(current?.serviceTiers, canonical?.serviceTiers)
+  const changed = catalogRates && (!current || rateFields.some(([field]) => current[field] !== catalogRates[field]) || comparableTiers(current.contextTiers) !== comparableTiers(tiers) || comparableServiceTiers(current.serviceTiers) !== comparableServiceTiers(serviceTiers))
   const rates = catalogRates || current
   if (!rates || (!reprice && !changed)) return null
-  return { action: "save-version", ...rates, groupId, mode: reprice ? "replace" : "new", contextTiers: catalogRates ? tiers : current?.contextTiers || [], serviceTiers: catalogRates ? canonical.serviceTiers || [] : current?.serviceTiers || [] }
+  return { action: "save-version", ...rates, groupId, mode: reprice ? "replace" : "new", contextTiers: catalogRates ? tiers : current?.contextTiers || [], serviceTiers }
 }
 
 export function ModelPricingView() {
@@ -175,7 +178,7 @@ export function ModelPricingView() {
       </DialogContent>
     </Dialog>
     <Dialog open={repriceGroupOpen} onOpenChange={(open) => { if (!pending) setRepriceGroupOpen(open) }}><DialogContent><DialogHeader><DialogTitle>Reprice historical usage?</DialogTitle><DialogDescription>This saves the group, replaces its active pricing with the selected canonical rates and context tiers, and applies those rates to every stored request in this group. Without a canonical model, the current rates are used. Requests without recorded token usage remain unpriced.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRepriceGroupOpen(false)} disabled={pending}>Cancel</Button><Button variant="destructive" onClick={() => void saveGroup(true)} disabled={pending}>{pending && <LoadingSpinner />}Save and reprice</Button></DialogFooter></DialogContent></Dialog>
-    {pricingGroup && <PricingVersionDialog key={pricingGroup.id} group={pricingGroup} onClose={() => setPricingDialog(undefined)} onSaved={mutate} />}
+    {pricingGroup && <PricingVersionDialog key={pricingGroup.id} group={pricingGroup} supportedTiers={modelsForGroup(pricingGroup).flatMap(model => model.serviceTierCapability?.supportedTiers || [])} onClose={() => setPricingDialog(undefined)} onSaved={mutate} />}
   </Panel>
 }
 
@@ -343,7 +346,7 @@ async function refreshPricingAfterSave(refresh: () => Promise<unknown>) {
   catch { toast.error("Saved, but unable to refresh pricing. Reload the page to see the latest status.") }
 }
 
-function PricingVersionDialog({ group, onClose, onSaved }: { group: PricingGroupRow; onClose: () => void; onSaved: () => Promise<unknown> }) {
+function PricingVersionDialog({ group, supportedTiers, onClose, onSaved }: { group: PricingGroupRow; supportedTiers: string[]; onClose: () => void; onSaved: () => Promise<unknown> }) {
   const { apiPost } = useDashboardApi()
   const [pending, setPending] = useState(false)
   const [rateDrafts, setRateDrafts] = useState<Record<keyof PricingRates, string>>(() => {
@@ -357,11 +360,12 @@ function PricingVersionDialog({ group, onClose, onSaved }: { group: PricingGroup
     cacheCreationMicrosPerMillion: parseDollarInput(rateDrafts.cacheCreationMicrosPerMillion),
   }
   const [contextTiers, setContextTiers] = useState<PricingContextTier[]>(() => Array.isArray(group.currentVersion?.contextTiers) ? group.currentVersion.contextTiers : [])
+  const [serviceTiers, setServiceTiers] = useState<PricingServiceTier[]>(group.currentVersion?.serviceTiers || [])
   const [tierRateDrafts, setTierRateDrafts] = useState<Record<string, Partial<Record<keyof PricingRates, string>>>>({})
   const [replaceOpen, setReplaceOpen] = useState(false)
   async function saveVersion(mode: "new" | "replace") {
     setPending(true)
-    try { await apiPost("/api/admin/model-pricing", { action: "save-version", groupId: group.id, mode, ...rates, contextTiers, serviceTiers: group.currentVersion?.serviceTiers || [] }); onClose(); setReplaceOpen(false); toast.success(mode === "replace" ? "Pricing replaced; historical usage is being repriced." : "New pricing version saved."); void refreshPricingAfterSave(onSaved) }
+    try { await apiPost("/api/admin/model-pricing", { action: "save-version", groupId: group.id, mode, ...rates, contextTiers, serviceTiers }); onClose(); setReplaceOpen(false); toast.success(mode === "replace" ? "Pricing replaced; historical usage is being repriced." : "New pricing version saved."); void refreshPricingAfterSave(onSaved) }
     catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save pricing version") }
     finally { setPending(false) }
   }
@@ -382,7 +386,7 @@ function PricingVersionDialog({ group, onClose, onSaved }: { group: PricingGroup
           </div>
           {contextTiers.length ? <div className="overflow-x-auto pb-1">{contextTiers.map((tier, index) => <div key={tier.id} className="grid min-w-[48rem] gap-3 rounded-md bg-muted/30 p-3 md:grid-cols-[minmax(7rem,1.1fr)_repeat(4,minmax(7rem,1fr))_auto]"><label className="flex min-w-0 flex-col gap-2 text-xs font-medium"><span className="flex min-h-8 items-end leading-4">Threshold</span><Input type="number" min="1" step="1" value={tier.thresholdTokens} onChange={(event) => setContextTiers((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, thresholdTokens: Number(event.target.value) } : entry))} /></label>{rateFields.map(([field, label]) => <label key={field} className="flex min-w-0 flex-col gap-2 text-xs font-medium"><span className="flex min-h-8 items-end leading-4">{label}</span><div className="flex h-10 items-center rounded-md border bg-background"><span className="flex h-full items-center border-r px-2 text-muted-foreground">$</span><Input type="number" min="0" step="any" inputMode="decimal" value={tierRateDrafts[tier.id]?.[field] ?? formatDollarInput(tier[field])} onChange={(event) => { const value = event.target.value; setTierRateDrafts((current) => ({ ...current, [tier.id]: { ...current[tier.id], [field]: sanitizeNonNegativeDraft(value) } })); setContextTiers((current) => current.map((entry, entryIndex) => entryIndex === index ? { ...entry, [field]: parseDollarInput(sanitizeNonNegativeDraft(value)) } : entry)) }} variant="inline" inset="compact" className="h-full min-w-0" /></div></label>)}<Button variant="ghost" size="sm" className="h-10 self-end" onClick={() => { setContextTiers((current) => current.filter((_, entryIndex) => entryIndex !== index)); setTierRateDrafts((current) => { const next = { ...current }; delete next[tier.id]; return next }) }}>Remove</Button></div>)}</div> : <EmptyState title="No context tiers configured" description="Standard rates apply until you add a higher-context threshold." icon={DollarSignIcon} variant="compact" treatment="embedded" />}
         </div>
-        <ServiceTierRates tiers={group.currentVersion?.serviceTiers} />
+        <ServiceTierEditor tiers={serviceTiers} supported={supportedTiers} catalog={group.canonicalModel?.serviceTiers} standard={rates} contexts={contextTiers} onChange={setServiceTiers} disabled={pending} />
         <DialogFooter>
           <Button variant="outline" onClick={() => onClose()} disabled={pending}>Cancel</Button>
           <Button variant="outline" onClick={() => setReplaceOpen(true)} disabled={pending || !group.currentVersion}>{pending && <LoadingSpinner />}Replace current version</Button>

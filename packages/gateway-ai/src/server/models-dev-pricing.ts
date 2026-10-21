@@ -65,16 +65,19 @@ export function modelsDevPricing(detail: Record<string, unknown>) {
   for (const raw of Array.isArray(cost.multipliers) ? cost.multipliers : []) {
     const multiplier = record(raw)
     const when = record(multiplier.when)
-    const serviceTier = normalizeServiceTier(record(when.service_tier).equals)
+    const rawTier = normalizeServiceTier(record(when.speed).equals ?? record(when.service_tier).equals)
+    const serviceTier = when.speed === undefined && rawTier === "fast" ? "priority" : rawTier
     const factor = multiplier.factor
     if (Object.keys(when).length !== 1 || !serviceTier || typeof factor !== "number" || !Number.isFinite(factor) || factor < 0) continue
-    tiers.set(serviceTier, { serviceTier, ...scaledRates(pricing, factor), contextTiers: contextTiers.map(tier => ({ ...tier, ...scaledRates(tier, factor) })) })
+    tiers.set(serviceTier, { serviceTier, source: "catalog", ...scaledRates(pricing, factor), contextTiers: contextTiers.map(tier => ({ ...tier, ...scaledRates(tier, factor) })) })
   }
   const modes = record(record(detail.experimental).modes)
   for (const mode of Object.values(modes)) {
     const value = record(mode)
-    const serviceTier = normalizeServiceTier(value.service_tier ?? record(value.body).service_tier)
-    if (serviceTier && record(value.cost).text) tiers.set(serviceTier, { serviceTier, ...schedule(record(value.cost)) })
+    const speed = value.speed ?? record(value.body).speed
+    const rawTier = normalizeServiceTier(speed ?? value.service_tier ?? record(value.body).service_tier)
+    const serviceTier = speed === undefined && rawTier === "fast" ? "priority" : rawTier
+    if (serviceTier && record(value.cost).text) tiers.set(serviceTier, { serviceTier, source: "catalog", ...schedule(record(value.cost)) })
   }
   return { pricing, contextTiers, serviceTiers: [...tiers.values()].sort((a, b) => a.serviceTier.localeCompare(b.serviceTier)) }
 }

@@ -1,7 +1,7 @@
 import type { DashboardPayload, UsageEvent } from "./domain"
 
 export type RequestLogsPage = { events: (UsageEvent & { keyName: string | null; modelName: string | null })[]; nextCursor: string | null; from: string; to: string; models: { id: string; name: string }[]; keys: { id: string; name: string }[] }
-export type RequestLogDisplayEvent = Pick<UsageEvent, "id" | "requestId" | "requestedModel" | "attemptIndex" | "requestFinal" | "gatewayModelId" | "status" | "usageAvailable" | "usageCompleteness" | "totalTokens" | "inputTokens" | "cacheReadTokens" | "cacheCreationTokens" | "outputTokens" | "pricingConfidence" | "costMicros" | "durationMs" | "completedAt" | "reasoningEffort" | "toolCount" | "requestedServiceTier" | "effectiveServiceTier" | "pricingServiceTier"> & { keyName: string | null; modelName: string | null; gatewayKeyId?: string; startedAt?: string }
+export type RequestLogDisplayEvent = Pick<UsageEvent, "id" | "requestId" | "requestedModel" | "attemptIndex" | "requestFinal" | "gatewayModelId" | "status" | "usageAvailable" | "usageCompleteness" | "totalTokens" | "inputTokens" | "cacheReadTokens" | "cacheCreationTokens" | "outputTokens" | "pricingConfidence" | "costMicros" | "durationMs" | "completedAt" | "reasoningEffort" | "toolCount" | "requestedServiceTier" | "sentServiceTier" | "effectiveServiceTier" | "pricingServiceTier"> & { keyName: string | null; modelName: string | null; gatewayKeyId?: string; startedAt?: string }
 export type PublicKeyUsageDetail = { usage: DashboardPayload; recent: { events: RequestLogDisplayEvent[] } }
 
 type GroupableEvent = Pick<UsageEvent, "id" | "requestId" | "attemptIndex" | "completedAt"> & { gatewayKeyId?: string }

@@ -4,6 +4,7 @@ import { gatewayModelId } from "../../../../../../model-identifiers"
 import { recordLog } from "../../../../../../logging"
 import { getProvider, listProviderModels, upsertModel } from "../../../../../../store"
 import type { Model } from "../../../../../../../contracts/domain"
+import { validateServiceTierCapability } from "../../../../../../../contracts/service-tier"
 
 export async function POST(request: Request, params: { providerId: string }) {
   const { providerId } = params
@@ -16,9 +17,10 @@ export async function POST(request: Request, params: { providerId: string }) {
     const provider = await getProvider(providerId)
     if (!provider) throw new Error("Provider is missing.")
     const existing = input.originalId ? (await listProviderModels(providerId)).find((model) => model.id === input.originalId) : undefined
+    const serviceTierCapability = validateServiceTierCapability(input.serviceTierCapability)
     if (existing?.source === "discovered") {
-      if (typeof input.enabled !== "boolean" || Object.keys(input).some((key) => !["originalId", "enabled"].includes(key))) throw new Error("Only enabled state can be changed for discovered models.")
-      await upsertModel(providerId, { originalId: existing.id, enabled: input.enabled })
+      if (input.enabled !== undefined && typeof input.enabled !== "boolean" || Object.keys(input).some((key) => !["originalId", "enabled", "serviceTierCapability"].includes(key))) throw new Error("Only enabled state and service tiers can be changed for discovered models.")
+      await upsertModel(providerId, { originalId: existing.id, enabled: input.enabled, serviceTierCapability })
       return Response.json({ ok: true })
     }
     const name = typeof input.name === "string" ? input.name.trim() : ""
@@ -42,6 +44,7 @@ export async function POST(request: Request, params: { providerId: string }) {
       upstreamModel,
       enabled: input.enabled,
       source: existing?.source || "custom",
+      serviceTierCapability,
       reasoningCapability: reasoningCapability ? { mode: reasoningCapability.mode, supportedEfforts: [...new Set(reasoningCapability.supportedEfforts?.map((effort) => effort.trim().toLowerCase()) || [])] } : undefined,
     }
     await upsertModel(providerId, modelInput)

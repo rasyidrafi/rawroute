@@ -20,7 +20,8 @@ import { upstreamFailure } from "../upstream-failure"
 import { GatewayModelResolutionError, resolveGatewayModel } from "./model-resolution"
 import type { ResolvedGatewayModel } from "./model-resolution"
 import { collectStreamUsage } from "./stream-usage"
-import { protocolForPath, proxyToCliProxy, proxyToNativeResponses, responseHeaders, rewriteForwardedBody } from "./transport"
+import { nativeResponsesBody, protocolForPath, proxyToCliProxy, proxyToNativeResponses, responseHeaders, rewriteForwardedBody } from "./transport"
+import { requestServiceTier, serviceTierProfile } from "../../contracts/service-tier"
 
 function estimateRequest(body: unknown) {
   const value = body && typeof body === "object" ? body as Record<string, unknown> : {}
@@ -85,11 +86,11 @@ function protocolForLogPath(path: string): Protocol | "catalog" {
   return protocolForPath(path)
 }
 
-function actualResponseUsage(body: Uint8Array, contentType: string | null) {
+function actualResponseUsage(body: Uint8Array, contentType: string | null, profile: "openai" | "anthropic") {
   if (!contentType?.toLowerCase().includes("json")) return undefined
   let payload: Record<string, unknown> | undefined
   try { payload = JSON.parse(new TextDecoder().decode(body)) as Record<string, unknown> } catch { return undefined }
-  return payload ? extractUsageMetrics(payload) : undefined
+  return payload ? extractUsageMetrics(payload, profile) : undefined
 }
 
 export interface ComboMemberTestResult {
@@ -247,7 +248,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>
   } catch {}
   const requestedModel = typeof payload?.model === "string" ? payload.model.trim() : ""
-  const attempt: RequestAttempt = { requestId: crypto.randomUUID(), requestedModel: typeof payload?.model === "string" ? payload.model : undefined, attemptIndex: 0, last: true }
+  const attempt: RequestAttempt = { requestId: crypto.randomUUID(), requestedModel: typeof payload?.model === "string" ? payload.model : undefined, requestedServiceTier: requestServiceTier(payload || {}, serviceTierProfile(protocolForPath(path))), attemptIndex: 0, last: true }
   if (!requestedModel) return proxyGatewaySingleRequest(request, path, apiKey, undefined, undefined, attempt)
   const combo = (await listCombos()).find((entry) => entry.combo === requestedModel)
   if (!combo) return proxyGatewaySingleRequest(request, path, apiKey, undefined, undefined, attempt)
@@ -291,7 +292,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
 }
 
-type RequestAttempt = { requestId: string; requestedModel?: string; attemptIndex: number; last: boolean }
+type RequestAttempt = { requestId: string; requestedModel?: string; requestedServiceTier?: string; attemptIndex: number; last: boolean }
 
 function attemptMetadata(attempt: RequestAttempt | undefined, response?: Response) {
   if (!attempt) return {}
@@ -340,7 +341,10 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   let deferredRelease = false
   try {
     const payload = objectValue(parsed) || {}
-    const forwardedBody = await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.nativeResponses ? undefined : resolvedModel.reasoningEffort, resolvedModel.nativeResponses ? undefined : resolvedModel.customPayload)
+    const tierProfile = resolvedModel.serviceTierCapability?.profile || serviceTierProfile(resolvedModel.upstreamProtocol)
+    const forwardedBody = resolvedModel.nativeResponses
+      ? new TextEncoder().encode(nativeResponsesBody(body, resolvedModel.upstreamModel, protocol, resolvedModel.reasoningEffort, resolvedModel.customPayload))
+      : await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.reasoningEffort, resolvedModel.customPayload)
     const forwardedPayload = objectValue(JSON.parse(new TextDecoder().decode(forwardedBody))) || payload
     let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
     let reservation: BudgetReservation | undefined
@@ -355,6 +359,8 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             forwardedPayload,
             forwardedBody.byteLength,
             protocol,
+            undefined,
+            tierProfile,
           ))
         : await getBudgetRequestState(
             apiKey.id,
@@ -364,6 +370,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             forwardedBody.byteLength,
             protocol,
             requestedCombo,
+            tierProfile,
           )
     } catch (error) {
       if (error instanceof BudgetModelExcludedError) {
@@ -399,7 +406,8 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     const startedAtMs = Date.now()
     const startedAt = new Date(startedAtMs).toISOString()
     const requestMetadata: RequestLogMetadata = normalizeRequestLogMetadata({
-      requestedServiceTier: forwardedPayload.service_tier,
+      requestedServiceTier: attempt ? attempt.requestedServiceTier : requestServiceTier(payload, serviceTierProfile(protocol)),
+      sentServiceTier: requestServiceTier(forwardedPayload, tierProfile) || "auto",
       reasoningEffort: resolvedModel.reasoningEffort !== undefined
         ? resolvedModel.reasoningEffort
         : extractRequestReasoningEffort(payload, protocol),
@@ -432,7 +440,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       deferredRelease = true
       void trackBackgroundTask((async () => {
         try {
-          const collected = await collectStreamUsage(monitor)
+          const collected = await collectStreamUsage(monitor, tierProfile)
           const streamStatus = collected.terminalEventSeen ? response.status : 502
           await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt, response) })
             .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
@@ -450,7 +458,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       return trackedResponse
     }
     const responseBody = new Uint8Array(await response.arrayBuffer())
-    const usage = actualResponseUsage(responseBody, response.headers.get("content-type"))
+    const usage = actualResponseUsage(responseBody, response.headers.get("content-type"), tierProfile)
     await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt, response) })
       .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
     if (response.ok) recordLog("gateway.request.completed", { status: response.status, ...completionDetails(Date.now() - startedAtMs, undefined, usage), streaming: false })
@@ -466,6 +474,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
 
 type GatewayUsageRecordingInput = {
   requestedServiceTier?: string
+  sentServiceTier?: string
   requestId?: string
   requestedModel?: string
   attemptIndex?: number
@@ -529,6 +538,7 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     attemptIndex: input.attemptIndex,
     requestFinal: input.requestFinal,
     requestedServiceTier: input.requestedServiceTier,
+    sentServiceTier: input.sentServiceTier,
     gatewayKeyId: input.apiKeyId,
     gatewayModelId: input.model,
     providerModelId: input.providerModelId,
