@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { Readable } from "node:stream"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, appendFileSync } from "node:fs"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { S3Client, CreateBucketCommand, DeleteBucketCommand, ListBucketsCommand, HeadBucketCommand, GetBucketLocationCommand, ListObjectsV2Command, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, ListPartsCommand, ListMultipartUploadsCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { Sha256 } from "@aws-crypto/sha256-js"
@@ -280,7 +281,7 @@ integration("lost remote initiation and abort faults retain recovery mappings un
 })
 
 integration("installed AWS CLI and independent curl client use the live gateway", async () => {
-  const directory = mkdtempSync("/tmp/opencode/storage-clients-")
+  const directory = mkdtempSync(join(tmpdir(), "storage-clients-"))
   try {
     const config = join(directory, "config")
     writeFileSync(config, "[default]\nregion = us-east-1\ns3 =\n    addressing_style = path\n    signature_version = s3v4\n    multipart_threshold = 5MB\n    multipart_chunksize = 5MB\n")

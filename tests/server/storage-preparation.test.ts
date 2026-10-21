@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { tmpdir } from "node:os"
 import { prepareStoragePersistence, publishStorageFile } from "../../packages/gateway-storage/src/server/preparation"
 import { storageDatabasePath, storageEnabled, storageEncryptionKey, storageKeyPath } from "../../packages/gateway-storage/src/server/config"
 import { decryptStorageSecret, encryptStorageSecret, type EncryptedStorageSecret } from "../../packages/gateway-storage/src/server/security"
@@ -14,7 +15,7 @@ let path: string
 beforeEach(() => {
   saved = Object.fromEntries(names.map(name => [name, process.env[name]]))
   for (const name of names) delete process.env[name]
-  directory = mkdtempSync("/tmp/opencode/storage-preparation-")
+  directory = mkdtempSync(join(tmpdir(), "storage-preparation-"))
   path = join(directory, "source.sqlite")
   Object.assign(process.env, { STORAGE_ENABLED: "true", STORAGE_BACKEND: "sqlite", SQLITE_PATH: path })
 })

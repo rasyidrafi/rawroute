@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { migrateAliasesToCombos } from "../../scripts/migrations/aliases-to-combos"
 
-mkdirSync("/tmp/opencode", { recursive: true })
-
 test("offline alias migration preserves IDs, grants, fallback policies and a restorable backup", () => {
-  const root = mkdtempSync("/tmp/opencode/routing-migration-")
+  const root = mkdtempSync(join(tmpdir(), "routing-migration-"))
   const file = join(root, "test.sqlite")
   const db = new Database(file)
   try {
@@ -33,7 +32,7 @@ test("offline alias migration preserves IDs, grants, fallback policies and a res
 })
 
 test("a conflicting workspace aborts the entire migration before any data changes", () => {
-  const root = mkdtempSync("/tmp/opencode/routing-migration-")
+  const root = mkdtempSync(join(tmpdir(), "routing-migration-"))
   const file = join(root, "test.sqlite")
   const db = new Database(file)
   try {

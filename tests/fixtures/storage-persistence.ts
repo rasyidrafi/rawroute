@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { prepareStoragePersistence } from "../../packages/gateway-storage/src/server/preparation"
 
 export function storagePersistenceFixture() {
-  const directory = mkdtempSync("/tmp/opencode/storage-fixture-")
+  const directory = mkdtempSync(join(tmpdir(), "storage-fixture-"))
   let prepared = false
   return {
     configure() {

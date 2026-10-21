@@ -2,10 +2,11 @@ import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { migrateStorage } from "../../scripts/migrations/storage"
 
 test("Storage stopped-writer migration dry-run, backup, apply and idempotency preserve existing documents", () => {
-  const directory = mkdtempSync("/tmp/opencode/storage-migration-")
+  const directory = mkdtempSync(join(tmpdir(), "storage-migration-"))
   const path = join(directory, "source.sqlite")
   const backup = join(directory, "backup.sqlite")
   const source = new Database(path)

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { tmpdir } from "node:os"
 import { collectionPrefix } from "../../packages/platform/src/server/storage-config"
 
 const modules = (path: string) => JSON.stringify(resolve(path))
@@ -46,7 +47,7 @@ async function boot(file: string, input: { create?: boolean; cookie?: string }) 
 }
 
 test.each([false, true])("production bootstrap generates once and preserves passwords, sessions and provider/gateway keys on process restart (existing namespace: %s)", async legacy => {
-  const directory = mkdtempSync("/tmp/opencode/automatic-bootstrap-")
+  const directory = mkdtempSync(join(tmpdir(), "automatic-bootstrap-"))
   const file = join(directory, "rawroute.sqlite")
   try {
     const first = await boot(file, { create: true })
