@@ -1,6 +1,7 @@
 // Console-only static composition. Owners declare canonical metadata in contracts.
 import { aiPages, publicUsageRoutes } from "@rawroute/gateway-ai/contracts/pages"
 import { toolPages } from "@rawroute/gateway-tools/contracts/pages"
+import { storagePages } from "@rawroute/gateway-storage/contracts/pages"
 import { observabilityPages } from "@rawroute/platform/contracts/operational-log-pages"
 import { matchesPagePath, pagePathsFor, platformPages, platformPagePaths } from "@rawroute/platform/contracts/dashboard"
 import { validatePageContributions } from "./validate"
@@ -10,12 +11,13 @@ export type { DashboardAppId, DashboardPageMeta } from "@rawroute/platform/contr
 export const pageContributions = [
   { owner: "ai", pages: aiPages },
   { owner: "tools", pages: toolPages },
+  { owner: "storage", pages: storagePages },
   { owner: "observability", pages: observabilityPages },
   { owner: "platform", pages: platformPages },
 ] as const
 validatePageContributions(pageContributions)
 
-export const dashboardPages = { ...aiPages, ...observabilityPages, ...platformPages, ...toolPages }
+export const dashboardPages = { ...aiPages, ...observabilityPages, ...platformPages, ...toolPages, ...storagePages }
 export type DashboardPage = keyof typeof dashboardPages
 export type DashboardSkeletonVariant = typeof dashboardPages[DashboardPage]["skeleton"]
 

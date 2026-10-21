@@ -1,5 +1,4 @@
 export const serverEvents = {
-  "dashboard.performance": { message: "Dashboard performance measurement", source: "admin" },
   "cliproxy.lifecycle": { message: "CLIProxy lifecycle event", source: "cliproxy" },
   "admin.model.pricing.groups.synced": { message: "Model pricing groups synced", source: "admin" },
   "admin.model.pricing.group.created": { message: "Model pricing group created", source: "admin" },

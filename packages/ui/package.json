@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./empty": "./src/empty.tsx",
     "./alert": "./src/alert.tsx",
     "./alert-dialog": "./src/alert-dialog.tsx",
     "./badge": "./src/badge.tsx",

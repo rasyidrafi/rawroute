@@ -1,5 +1,5 @@
-import { assertGatewayBootstrap, initializeGatewayIdentity, identitySigningChanged } from "./store"
-import { initializeAiPersistence } from "./local-db"
+import { initializeGatewayIdentity, identitySigningChanged } from "./store"
+import { aiDocumentIntegration, initializeAiPersistence } from "./local-db"
 import { cleanupAiWorkspaceResources } from "./workspace-cleanup"
 import { authenticateProxyKey } from "./auth"
 import { initializeInstance, shutdownInstance } from "./cliproxy/runtime"
@@ -8,10 +8,10 @@ import type { GatewayAuthentication } from "@rawroute/platform/contracts/request
 
 /** Explicit integration surface: no mutable repository or transport secrets escape. */
 export const aiServer = {
+  documentIntegration: aiDocumentIntegration,
   initializePersistence: initializeAiPersistence,
-  identity: { validateBootstrap: assertGatewayBootstrap, initialize: initializeGatewayIdentity, changed: identitySigningChanged },
+  identity: { initialize: initializeGatewayIdentity, changed: identitySigningChanged },
   deletionParticipant: { id: "ai", cleanup: cleanupAiWorkspaceResources },
-  assertBootstrap: assertGatewayBootstrap,
   start: initializeInstance,
   stop: shutdownInstance,
   health: cliProxyHealth,

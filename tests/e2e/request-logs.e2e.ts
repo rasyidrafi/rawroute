@@ -40,7 +40,7 @@ async function flushBrowserNetworkEvents(page: Page) {
 }
 
 test("request log filters, pagination, refresh and feedback states", async ({ page, emptyWorkspaceId }) => {
-  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  let login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
@@ -195,7 +195,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
 test("live snapshots roll, pause safely for history, retain rows on failure and recover", async ({ page, emptyWorkspaceId }) => {
   test.setTimeout(60_000)
   let login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
-  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   expect(login.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)
   const requests: URLSearchParams[] = []

@@ -3,7 +3,7 @@ import type { Model, ProviderSummary } from "../../packages/gateway-ai/src/contr
 import type { LogSnapshot } from "../../packages/observability/src/contracts/types"
 
 async function authenticate(page: Page) {
-  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  let login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) {

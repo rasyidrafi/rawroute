@@ -1,5 +1,6 @@
 import { aiBrowserModule } from "@rawroute/gateway-ai/web"
 import { toolsBrowserModule } from "@rawroute/gateway-tools/web"
+import { storageBrowserModule } from "@rawroute/gateway-storage/web"
 import { observabilityBrowserModule } from "@rawroute/platform/web/operational-logs"
 import { platformBrowserModule } from "@rawroute/platform/web"
 import type { BrowserModule } from "@rawroute/platform/web/browser-module"
@@ -7,7 +8,7 @@ import type { DashboardApp, DashboardNavigationItem } from "@rawroute/platform/w
 import { isNavigationItemActive } from "@rawroute/platform/web/shell-composition"
 import { validateBrowserModules } from "./contracts/dashboard/validate-browser"
 
-export const browserModules: readonly BrowserModule[] = [aiBrowserModule, toolsBrowserModule, observabilityBrowserModule, platformBrowserModule]
+export const browserModules: readonly BrowserModule[] = [aiBrowserModule, toolsBrowserModule, storageBrowserModule, observabilityBrowserModule, platformBrowserModule]
 validateBrowserModules(browserModules)
 
 const sharedNavigation = [

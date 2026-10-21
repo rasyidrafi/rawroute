@@ -9,16 +9,15 @@ import { currentWorkspaceId, runInWorkspace } from "../../packages/platform/src/
 import { createWorkspace, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
 import { apiRoute } from "../../packages/platform/src/server/http"
 import { apiRoutes } from "../../apps/console/src/server/routes"
+import { hashPassword } from "../../packages/platform/src/server/identity"
 
 let server: Server<undefined> | undefined
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
-  process.env.SESSION_SECRET = "rawroute-http-tests-session-secret"
-  process.env.DEFAULT_ADMIN_PASSWORD = "http-test-password"
   _resetMemoryBackend()
   identity.reset()
-  await updateMeta(meta => { meta.admin.mustChangePassword = false })
+  await updateMeta(meta => { meta.admin.passwordHash = hashPassword("http-test-password"); meta.admin.mustChangePassword = false })
   await resetWorkspacesForTests()
 })
 

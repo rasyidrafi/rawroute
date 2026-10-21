@@ -10,7 +10,7 @@ const page: DashboardPageMeta = { ...aiPages.overview }
 
 test("production contributions preserve separate owner, navigation placement and access scope", () => {
   expect(() => validatePageContributions(pageContributions)).not.toThrow()
-  expect(Object.keys(dashboardPages)).toHaveLength(24)
+  expect(Object.keys(dashboardPages)).toHaveLength(28)
   expect(aiPages.cliproxy).toMatchObject({ owner: "ai", app: "shared", scope: "global" })
   expect(observabilityPages.logs).toMatchObject({ owner: "observability", app: "shared", scope: "workspace" })
   expect(observabilityPages.systemLogs).toMatchObject({ owner: "observability", app: "shared", scope: "global" })

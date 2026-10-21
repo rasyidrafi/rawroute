@@ -14,7 +14,7 @@ import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForM
 import { calculateCostMicros, normalizeUsageMetrics, type UsageMetrics } from "./usage-metrics"
 import { isOpenAiCodexModel, predictPayloadCalibratedCost, type PayloadUsageSample } from "./usage-prediction"
 import { addZonedDays, addZonedMonths, formatAppTrendBucket, getAppTimeZone, mondayInAppTimeZone, startOfZonedDay, startOfZonedMonth, startOfZonedYear, startOfZonedHour, zonedDateStringToDate } from "@rawroute/platform/server/timezone"
-import { recordLog, safeDetails } from "./logging"
+import { recordLog } from "./logging"
 import { listSharedModelsForRecipient } from "./model-shares"
 import type { BudgetBeyondLimitsSettings, BudgetBypassSession, BudgetUnlimitedSettings, BudgetWindow, BudgetWindowAnchor, DashboardPayload, DashboardQuery, GatewayKeyBudget, ModelPricingVersion, UsageEvent } from "../contracts/domain"
 import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
@@ -26,6 +26,7 @@ function auditMemoryBudgetMutation() {
 import { projectMemoryUsage, usageCalendarBucket, type UsageBucket } from "./usage-projection"
 import { readMemoryUsageRange, type UsageRangeResult } from "./usage-range"
 import { listWorkspaces } from "@rawroute/platform/server/runtime"
+import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/storage-config"
 
 let localDatabase: SqliteDatabase | undefined
 interface AnalyticsMemoryState {
@@ -61,24 +62,23 @@ function memoryState() {
 export type ResolvedModelPricing = Exclude<Awaited<ReturnType<typeof getModernPricingForModelAt>>, undefined>
 const pricingCache = new Map<string, { value: ResolvedModelPricing | undefined; expiresAt: number; modelPricingGeneration: number }>()
 const pricingInflight = new Map<string, Promise<ResolvedModelPricing | undefined>>()
-const pricingCacheTtlMs = positiveDuration(process.env.PRICING_CATALOG_CACHE_TTL_MS, 60_000)
+const pricingCacheTtlMs = 60_000
 
 interface TimedValue<T> { value: T; expiresAt: number }
 
-const budgetCacheTtlMs = positiveDuration(process.env.BUDGET_CACHE_TTL_MS, 60_000)
-const dashboardCacheTtlMs = positiveDuration(process.env.DASHBOARD_CACHE_TTL_MS, 30_000)
-const defaultBudgetOutputTokens = positiveInteger(process.env.BUDGET_DEFAULT_OUTPUT_TOKENS, 4_096)
-const defaultPredictedOutputTokens = positiveInteger(process.env.BUDGET_PREDICTED_OUTPUT_TOKENS, Math.min(defaultBudgetOutputTokens, 1_024))
-const budgetInputBytesPerToken = positiveNumber(process.env.BUDGET_INPUT_BYTES_PER_TOKEN, 3)
-const estimatedCacheReadRatio = boundedRatio(process.env.BUDGET_ESTIMATED_CACHE_READ_RATIO, 0.5)
-const missingUsageEstimateMaxCostMicros = positiveInteger(process.env.BUDGET_MISSING_USAGE_MAX_COST_MICROS, 2_000_000)
-const missingUsageQuantile = boundedRatio(process.env.BUDGET_MISSING_USAGE_QUANTILE, 0.25)
-const predictionPriorStrength = positiveInteger(process.env.BUDGET_PREDICTION_PRIOR_STRENGTH, 500)
-const predictionBaselineMinimumSamples = positiveInteger(process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES, 30)
-const usagePredictionSampleLimit = positiveInteger(process.env.BUDGET_PREDICTION_SAMPLE_LIMIT, 2_048)
-const payloadPredictionEnabled = process.env.BUDGET_PAYLOAD_PREDICTION_ENABLED !== "0"
-const payloadPredictionMinimumSamples = positiveInteger(process.env.BUDGET_PAYLOAD_PREDICTION_MIN_SAMPLES, 3)
-const payloadPredictionMaximumNeighbors = positiveInteger(process.env.BUDGET_PAYLOAD_PREDICTION_MAX_NEIGHBORS, 31)
+const budgetCacheTtlMs = 60_000
+const dashboardCacheTtlMs = 30_000
+const defaultBudgetOutputTokens = 4_096
+const defaultPredictedOutputTokens = 1_024
+const budgetInputBytesPerToken = 3
+const estimatedCacheReadRatio = 0.5
+const missingUsageEstimateMaxCostMicros = 2_000_000
+const missingUsageQuantile = 0.25
+const predictionPriorStrength = 500
+const predictionBaselineMinimumSamples = 30
+const usagePredictionSampleLimit = 2_048
+const payloadPredictionMinimumSamples = 3
+const payloadPredictionMaximumNeighbors = 31
 
 interface UsagePredictionSamples {
   outputs: number[]
@@ -119,50 +119,9 @@ const budgetWindowCaches = new Map<string, TimedValue<BudgetWindow>>()
 const budgetWindowInflights = new Map<string, Promise<BudgetWindow>>()
 const codexBudgetWindowSyncAttempts = new Map<string, number>()
 const codexBudgetWindowSyncInflights = new Map<string, Promise<BudgetWindow>>()
-const codexBudgetWindowSyncIntervalMs = positiveDuration(process.env.CODEX_BUDGET_WINDOW_SYNC_INTERVAL_MS, 5 * 60_000)
+const codexBudgetWindowSyncIntervalMs = 5 * 60_000
 const codexBudgetWindowSyncLockTtlMs = codexBudgetWindowSyncIntervalMs + 60_000
 const budgetCacheGenerations = new Map<string, number>()
-
-const dashboardPerformanceLogging = process.env.DASHBOARD_PERF_LOG === "1"
-
-function dashboardPerf(action: string, details: Record<string, unknown> = {}) {
-  if (!dashboardPerformanceLogging) return
-  const metadata = safeDetails({ action, ...details })
-  recordLog("dashboard.performance", metadata)
-  console.info(`[dashboard-perf] ${JSON.stringify(metadata)}`)
-}
-
-function dashboardTimed<T>(label: string, promise: Promise<T>) {
-  if (!dashboardPerformanceLogging) return promise
-  const startedAt = performance.now()
-  return promise.then((value) => {
-    dashboardPerf(label, { durationMs: performance.now() - startedAt, succeeded: true })
-    return value
-  }, (error) => {
-    dashboardPerf(label, { durationMs: performance.now() - startedAt, succeeded: false })
-    throw error
-  })
-}
-
-function positiveDuration(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
-}
-
-function positiveInteger(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
-}
-
-function positiveNumber(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
-}
-
-function boundedRatio(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback
-}
 
 function canonicalPredictionModel(gatewayModelId: string) {
   return gatewayModelId.trim().toLowerCase().replace(/^(?:codex|cx)\//, "")
@@ -370,8 +329,8 @@ export function invalidateDashboardPresentation() {
   dashboardModelLabelInflight.delete(workspaceId)
 }
 
-function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
-function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
+function isMemory() { return isMemoryBackend() }
+function prefix() { return collectionPrefix() }
 function db() {
   return localDatabase ||= getSqliteDatabase()
 }
@@ -1130,7 +1089,6 @@ async function canonicalUsageRange(from: string, to: string, hourly = false, key
   const result = isMemory()
     ? readMemoryUsageRange(currentWorkspaceId(), memoryState().projection, memoryState().events, memoryState().eventsByHour, from, to, hourly, keyId)
     : await queryLocalUsageRange(currentWorkspaceId(), from, to, hourly, keyId)
-  dashboardPerf("range.rows", { rollupRows: result.stages.bucketRows, boundaryRows: result.stages.rawRows, count: result.stages.historyRows })
   return result
 }
 
@@ -1140,13 +1098,12 @@ async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promis
   const cacheId = scopedKey(`${from}:${window.end}`)
   if (!bypassCache) {
     const cached = budgetUsageCache.get(cacheId)
-    if (cached && cached.expiresAt > Date.now()) { dashboardPerf("budget.cache.hit"); return cached.value }
+    if (cached && cached.expiresAt > Date.now()) return cached.value
     const existing = budgetUsageInflight.get(cacheId)
-    if (existing) { dashboardPerf("budget.cache.inflight"); return existing }
+    if (existing) return existing
   }
-  dashboardPerf("budget.cache.miss")
   const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
-  const promise = dashboardTimed("budget.range", canonicalUsageRange(from, window.end)).then(range => {
+  const promise = canonicalUsageRange(from, window.end).then(range => {
     const result = new Map<string, BudgetUsageValue>()
     for (const row of range.rows) {
       const previous = result.get(row.gatewayKeyId)
@@ -1197,7 +1154,7 @@ function calibratedPayloadPrediction(
   requestBodyBytes: number | undefined,
   reservation = false,
 ) {
-  if (!payloadPredictionEnabled || !isOpenAiCodexModel(gatewayModelId)) return undefined
+  if (!isOpenAiCodexModel(gatewayModelId)) return undefined
   const inputBytes = requestBodyBytes ?? (payload ? Buffer.byteLength(JSON.stringify(payload)) : 0)
   if (!Number.isSafeInteger(inputBytes) || inputBytes <= 0) return undefined
   const samples = payloadPredictionSamples(gatewayKeyId, gatewayModelId)
@@ -1469,9 +1426,9 @@ export async function getBudgetRows() {
   return (await loadBudgetRows(keys, window, undefined, { freshUsage: true })).rows
 }
 
-const maximumHourlyDashboardSpanMs = positiveDuration(process.env.DASHBOARD_MAX_HOURLY_RANGE_DAYS, 31) * 86_400_000
-const maximumDailyDashboardSpanMs = positiveDuration(process.env.DASHBOARD_MAX_DAILY_RANGE_DAYS, 730) * 86_400_000
-const maximumWeeklyDashboardSpanMs = positiveDuration(process.env.DASHBOARD_MAX_WEEKLY_RANGE_DAYS, 7_300) * 86_400_000
+const maximumHourlyDashboardSpanMs = 31 * 86_400_000
+const maximumDailyDashboardSpanMs = 730 * 86_400_000
+const maximumWeeklyDashboardSpanMs = 7_300 * 86_400_000
 
 function effectiveDashboardGranularity(requested: DashboardQuery["granularity"], spanMs: number): Exclude<DashboardQuery["granularity"], "auto" | undefined> {
   if (!requested || requested === "auto") return spanMs <= 2 * 86_400_000 ? "hourly" : spanMs <= 45 * 86_400_000 ? "daily" : "monthly"
@@ -1518,10 +1475,10 @@ export async function loadDashboardModelLabels() {
 
   const promise = (async () => {
     const [groups, models, aliases, sharedModels] = await Promise.all([
-      dashboardTimed("labels.groups", listPricingGroups()),
-      dashboardTimed("labels.models", listModels()),
-      dashboardTimed("labels.aliases", listAliases()),
-      dashboardTimed("labels.shared-models", listSharedModelsForRecipient()),
+      listPricingGroups(),
+      listModels(),
+      listAliases(),
+      listSharedModelsForRecipient(),
     ])
     const allModels = new Map<string, typeof models[number]>()
     for (const model of models) {
@@ -1568,17 +1525,15 @@ export async function loadDashboardModelLabels() {
 }
 
 async function buildDashboardPayload(query: DashboardQuery, publicView: boolean, exactRange?: { from: string; to: string }, keyId?: string): Promise<DashboardPayload & { overview?: OverviewDetails }> {
-  const startedAt = performance.now()
-  dashboardPerf("builder.start", { workspaceId: currentWorkspaceId() })
-  const budgetsPromise = dashboardTimed("budgets", listBudgets()).then(budgets => keyId ? budgets.filter(budget => budget.apiKeyId === keyId) : budgets)
-  const windowPromise = query.preset === "budget" ? dashboardTimed("budget-window", getBudgetWindow()) : undefined
+  const budgetsPromise = listBudgets().then(budgets => keyId ? budgets.filter(budget => budget.apiKeyId === keyId) : budgets)
+  const windowPromise = query.preset === "budget" ? getBudgetWindow() : undefined
   const range = exactRange ? { label: "Rolling range", from: new Date(exactRange.from), to: new Date(Date.parse(exactRange.to) - 1) } : await resolveRange(query, windowPromise ? await windowPromise : undefined)
   const trendGranularity = effectiveDashboardGranularity(query.granularity, range.to.getTime() - range.from.getTime())
   const toExclusive = exactRange ? exactRange.to : new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1)).toISOString()
   const from = range.from.toISOString()
   const [usage, keys, indexedNames, labels, budgetData] = await Promise.all([
-    dashboardTimed("usage.range", canonicalUsageRange(from, toExclusive, trendGranularity === "hourly", keyId)),
-    dashboardTimed("keys", budgetSelectableKeys()),
+    canonicalUsageRange(from, toExclusive, trendGranularity === "hourly", keyId),
+    budgetSelectableKeys(),
     publicView ? listIndexedApiKeyNames() : Promise.resolve(new Map<string, string>()),
     loadDashboardModelLabels(),
     budgetsPromise.then(async budgets => {
@@ -1715,7 +1670,6 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
     pricingConfidence: { pricedRequests: totals.pricedRequests, unpricedRequests: totals.unpricedRequests },
     coverage: usage.coverage,
   }
-  dashboardPerf("builder.completed", { count: totals.requests, keys: keyRows.size, models: models.size, durationMs: performance.now() - startedAt })
   return payload
 }
 
@@ -1765,10 +1719,9 @@ export async function getDashboardPayload(query: DashboardQuery, publicView = fa
   const workspaceId = currentWorkspaceId()
   const cacheKey = scopedKey(JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto"]))
   const cached = dashboardCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) { dashboardPerf("usage.cache.hit"); return cached.value }
+  if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = dashboardInflight.get(cacheKey)
-  if (existing) { dashboardPerf("usage.cache.inflight"); return existing }
-  dashboardPerf("usage.cache.miss")
+  if (existing) return existing
 
   const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
   const promise = buildDashboardPayload(query, publicView).then((payload) => {

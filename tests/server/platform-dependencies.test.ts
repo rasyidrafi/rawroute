@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { assertBrowserBuildGraph, checkArchitecture, repository } from "../../scripts/check-architecture"
 
 test("all workspace exports, declared dependencies, source layers and actual browser roots obey the resolved DAG", () => {
-  expect(checkArchitecture().workspaces).toBe(6)
+  expect(checkArchitecture().workspaces).toBe(7)
 })
 
 test("resolved negative fixtures reject relative, alias, type, export, dynamic and transitive browser/server bypasses", () => {
@@ -13,6 +13,7 @@ test("resolved negative fixtures reject relative, alias, type, export, dynamic a
     ["packages/platform/src/server/runtime.ts", 'export * from "../../../gateway-ai/src/server/store"', /relative bypass/],
     ["packages/ui/src/utils.ts", 'export * from "@rawroute/platform/web"', /Undeclared/],
     ["packages/gateway-tools/src/server/runtime.ts", 'void import("@rawroute/gateway-ai/server")', /Undeclared/],
+    ["packages/gateway-storage/src/server/security.ts", 'void import("@rawroute/gateway-ai/server")', /Undeclared/],
     ["packages/gateway-ai/src/contracts/pages.ts", 'type Secret = import("../server/store")', /server-only/],
     ["packages/platform/src/web/api.ts", 'export * from "../server/runtime"', /server-only/],
     ["packages/observability/src/contracts/timezone.ts", 'void process.env.SESSION_SECRET', /Server-only global/],

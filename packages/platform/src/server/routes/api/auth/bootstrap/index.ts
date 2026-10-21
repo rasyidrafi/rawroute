@@ -1,12 +1,11 @@
-import { DEFAULT_ADMIN_PASSWORD, isLocalLoginHost, type BootstrapStatus } from "../../../../../contracts/auth-defaults"
+import { DEFAULT_ADMIN_PASSWORD, type BootstrapStatus } from "../../../../../contracts/auth-defaults"
 import { readMeta } from "../../../../runtime"
 import { verifyPassword } from "../../../../identity"
 
-export async function GET(request: Request) {
+export async function GET() {
   const { admin } = await readMeta()
-  // Only the documented, public default may be disclosed, never an environment secret.
-  const showHint = admin.mustChangePassword && isLocalLoginHost(new URL(request.url).hostname)
-    && process.env.AUTH_SHOW_DEFAULT_PASSWORD_HINT !== "false"
+  // Only the public default may be disclosed, never a saved private password.
+  const showHint = admin.mustChangePassword
     && verifyPassword(DEFAULT_ADMIN_PASSWORD, admin.passwordHash)
   return Response.json({ isDefaultPassword: admin.mustChangePassword, defaultPasswordHint: showHint ? DEFAULT_ADMIN_PASSWORD : null } satisfies BootstrapStatus, {
     headers: { "cache-control": "private, no-store" },

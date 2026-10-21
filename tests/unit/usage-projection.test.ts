@@ -26,7 +26,7 @@ beforeEach(async () => {
   file = join(directory, "test.sqlite")
   process.env.SQLITE_PATH = file
   process.env.STORAGE_BACKEND = "sqlite"
-  process.env.NODE_ENV = "development"
+  process.env.NODE_ENV = "test"
   process.env.TIMEZONE = "UTC"
   _resetMemoryBackend()
   resetAnalyticsForTests()

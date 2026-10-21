@@ -7,6 +7,7 @@ COPY apps/console/package.json apps/console/
 COPY packages/platform/package.json packages/platform/
 COPY packages/gateway-ai/package.json packages/gateway-ai/
 COPY packages/gateway-tools/package.json packages/gateway-tools/
+COPY packages/gateway-storage/package.json packages/gateway-storage/
 COPY packages/observability/package.json packages/observability/
 COPY packages/ui/package.json packages/ui/
 RUN bun install --frozen-lockfile
@@ -32,6 +33,6 @@ COPY --from=cliproxy-binary /CLIProxyAPI/CLIProxyAPI /opt/cliproxy/cli-proxy-api
 RUN mkdir -p /data && chown bun:bun /data
 WORKDIR /app/dist
 USER bun
-EXPOSE 8080
+EXPOSE 8080 9000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=6 CMD ["bun", "-e", "fetch('http://127.0.0.1:8080/api/live').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
 CMD ["bun", "--smol", "index.js"]

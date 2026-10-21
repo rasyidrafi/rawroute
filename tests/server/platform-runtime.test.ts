@@ -3,10 +3,9 @@ import { createPlatformServer } from "../../packages/platform/src/server/runtime
 
 test("platform's actual service factory works with injected hooks and no gateway initialization", async () => {
   process.env.STORAGE_BACKEND = "memory"
-  process.env.DEFAULT_ADMIN_PASSWORD = "factory-private-password"
   let changes = 0
   const create = () => createPlatformServer({
-    identity: { validateBootstrap() {}, initialize() {}, changed() { changes++ } },
+    identity: { initialize() {}, changed() { changes++ } },
     participants: [],
   })
   const a = create(), b = create()

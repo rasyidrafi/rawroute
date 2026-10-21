@@ -4,7 +4,7 @@ import { test } from "./empty-workspace.fixture"
 test.use({ timezoneId: "America/New_York" })
 
 test("Overview loads scoped aggregates and four compact recent attempts with retry and rolling controls", async ({ page, emptyWorkspaceId }, testInfo) => {
-  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  let login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) expect((await page.request.post("/api/admin/account/password", { data: { password: "private-password" } })).ok()).toBe(true)

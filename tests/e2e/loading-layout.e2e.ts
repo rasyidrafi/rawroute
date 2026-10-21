@@ -38,7 +38,7 @@ function sameGeometry(before: Awaited<ReturnType<typeof geometry>>, after: Await
 }
 
 async function authenticate(page: Page) {
-  let response = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  let response = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   if (!response.ok()) response = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(response.ok()).toBe(true)
   if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) {

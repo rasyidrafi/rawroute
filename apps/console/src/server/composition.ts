@@ -7,11 +7,13 @@ import { logs } from "@rawroute/observability/server/store"
 import { getWorkspace } from "@rawroute/platform/server/runtime"
 import { runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { browserEventScope } from "../frontend/contracts/logging/browser-events"
+import { installDocumentIntegrations } from "@rawroute/platform/server/database"
+import { storageServer } from "@rawroute/gateway-storage/server/integration"
 
-aiServer.initializePersistence()
+installDocumentIntegrations([aiServer.documentIntegration, storageServer.documentIntegration])
 configurePlatformServer({
   identity: aiServer.identity,
-  participants: [aiServer.deletionParticipant, { id: "operational-logs", cleanup: async workspaceId => { logs.deleteWorkspace(workspaceId) } }],
+  participants: [aiServer.deletionParticipant, storageServer.deletionParticipant, { id: "operational-logs", cleanup: async workspaceId => { logs.deleteWorkspace(workspaceId) } }],
 })
 configureToolsServer({ authenticate: authenticateGatewayIdentity, recordLog: toolsRecordLog })
 configureObservabilityServer({ getWorkspace, runInWorkspace, browserEventScope })

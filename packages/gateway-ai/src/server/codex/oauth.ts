@@ -8,7 +8,7 @@ const CODEX_PROVIDER_NAME = "Codex OAuth"
 const codexProviderEnsureInflight = new Map<string, Promise<Provider>>()
 
 function codexBaseUrl() {
-  return (process.env.CODEX_BASE_URL || "https://chatgpt.com/backend-api/codex").replace(/\/$/, "")
+  return "https://chatgpt.com/backend-api/codex"
 }
 
 export async function ensureCodexProvider(): Promise<Provider> {

@@ -33,9 +33,9 @@ export function maintainCanonicalUsage(file: string, options: MaintenanceOptions
       db.run("BEGIN EXCLUSIVE"); db.run("COMMIT")
     }
     assertUsageProjection(db)
-    const documents = db.query<{ path: string; collection_path: string; data: string }, [string]>("SELECT path,collection_path,data FROM usage_projection_raw_events WHERE substr(collection_path,1,length(?1)) = ?1 AND substr(collection_path,-12) = '/usageEvents' ORDER BY path").all(`${usagePrefix()}_workspaces/`)
+    const documents = db.query<{ path: string; collection_path: string; data: string }, [string]>("SELECT path,collection_path,data FROM usage_projection_raw_events WHERE substr(collection_path,1,length(?1)) = ?1 AND substr(collection_path,-12) = '/usageEvents' ORDER BY path").all(`${usagePrefix(db)}_workspaces/`)
     const events = documents.flatMap(row => {
-      const workspaceId = usageWorkspace(row.collection_path, "usageEvents")
+      const workspaceId = usageWorkspace(row.collection_path, "usageEvents", db)
       return workspaceId === undefined ? [] : [{ path: row.path, workspaceId, event: JSON.parse(row.data) as UsageEvent }]
     })
     const repairs = plan(events)

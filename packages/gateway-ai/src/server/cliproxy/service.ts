@@ -626,7 +626,7 @@ async function startCurrentVersion(): Promise<void> {
 
   const executablePath = fs.realpathSync(path.join(paths.current, CLIPROXY_EXECUTABLE_NAME));
   const manager = getSelfIdentity();
-  const child = Bun.spawn([executablePath, "-config", paths.config, ...(process.env.CLIPROXY_LOCAL_MODELS === "true" ? ["-local-model"] : [])], {
+  const child = Bun.spawn([executablePath, "-config", paths.config], {
     cwd: paths.root,
     env: childEnvironment(paths.root),
     stdin: "ignore",

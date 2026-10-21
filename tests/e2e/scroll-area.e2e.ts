@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 
 async function authenticate(page: Page) {
   let login = await page.request.post("/api/auth/login", {
-    data: { password: "e2e-initial-password" },
+    data: { password: "123456" },
   })
   if (!login.ok()) {
     login = await page.request.post("/api/auth/login", {

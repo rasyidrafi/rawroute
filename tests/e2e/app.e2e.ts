@@ -34,7 +34,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
   await expect(page).toHaveURL(/\/login$/)
   await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible()
 
-  let password = "e2e-initial-password"
+  let password = "123456"
   let login = await page.request.post("/api/auth/login", { data: { password } })
   if (!login.ok()) {
     password = "private-password"

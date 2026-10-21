@@ -5,7 +5,6 @@ const methods = new Set(["same-key-model-p25", "pooled-model-p25", "default-mode
 const modelKey = (value: string) => value.trim().toLowerCase().replace(/^(?:codex|cx)\//, "")
 const localKey = (workspace: string, event: UsageEvent) => `${workspace}\u0000${event.gatewayKeyId}\u0000${modelKey(event.gatewayModelId)}`
 const numeric = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0
-const positive = (value: string | undefined, fallback: number) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : fallback
 
 function quantile(values: number[], probability: number) {
   const sorted = values.filter(value => Number.isSafeInteger(value) && value > 0).sort((a,b) => a-b)
@@ -18,9 +17,9 @@ function quantile(values: number[], probability: number) {
 /** Same empirical quantile/prior policy; canonical raw events are the sole input. */
 export function predictMissingUsageCosts(documents: CanonicalEventDocument[], from: string, to: string): UsageRepair[] {
   if (!Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to)) || to <= from) throw new Error("Invalid --from/--to range")
-  const probability = Number.isFinite(Number(process.env.BUDGET_MISSING_USAGE_QUANTILE)) ? Math.min(1, Math.max(0, Number(process.env.BUDGET_MISSING_USAGE_QUANTILE))) : 0.25
-  const strength = positive(process.env.BUDGET_PREDICTION_PRIOR_STRENGTH, 500)
-  const minimum = positive(process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES, 30)
+  const probability = 0.25
+  const strength = 500
+  const minimum = 30
   const local = new Map<string, number[]>()
   const defaults = new Map<string, number[]>()
   const global = new Map<string, number[]>()

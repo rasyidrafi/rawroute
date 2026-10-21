@@ -13,11 +13,20 @@ export interface DocumentIntegration {
   deletingTree(database: Database, prefix: string, client: DatabaseClient, deleteDocument: (path: string) => Promise<void>): Promise<void>
 }
 
-let integration: DocumentIntegration | undefined
+const integrations = new Set<DocumentIntegration>()
 export function installDocumentIntegration(value: DocumentIntegration) {
-  if (integration === value) return
+  if (integrations.has(value)) return
   if (database || schemaReady) throw new Error("Install document integration before opening the database.")
-  integration = value
+  integrations.add(value)
+}
+
+/** Explicit startup composition; all owners share the same queue/transaction.
+ * Installation is additive and identity-idempotent so an owner's standalone
+ * tools can initialize it again without replacing another owner's callbacks.
+ */
+export function installDocumentIntegrations(values: readonly DocumentIntegration[]) {
+  if ((database || schemaReady) && values.some(value => !integrations.has(value))) throw new Error("Install document integration before opening the database.")
+  for (const value of values) integrations.add(value)
 }
 
 // Accept arbitrary object-shaped documents so domain interfaces do not need
@@ -72,6 +81,10 @@ type Ordering = { field: string | FieldPathToken; direction: OrderDirection }
 
 let database: Database | undefined
 let schemaReady: Promise<void> | undefined
+/** Offline owner preparation must finish before this process opens its runtime DB. */
+export function assertLocalDatabaseClosed() {
+  if (database || schemaReady) throw new Error("Offline persistence preparation requires the runtime database to be closed.")
+}
 export function getDatabase() {
   if (database) return database
   const path = process.env.SQLITE_PATH || join(process.env.RAWROUTE_DATA_DIR || "data", "rawroute.sqlite")
@@ -116,7 +129,7 @@ async function ensureSchema() {
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_idx ON rawroute_documents (collection_path)")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_document_idx ON rawroute_documents (collection_path, document_id)")
     await executeQuery("CREATE INDEX IF NOT EXISTS rawroute_documents_updated_idx ON rawroute_documents (updated_at)")
-    integration?.initialize(getDatabase(), true)
+    for (const integration of integrations) integration.initialize(getDatabase(), true)
   })().catch((error) => {
     schemaReady = undefined
     throw error
@@ -539,9 +552,9 @@ async function writeDocument(client: DatabaseClient, reference: LocalDocumentRef
   const queryClient = client
   await ensureSchema()
   const collection = collectionPathForDocument(reference.path)
-  integration?.validateCollection(collection)
-  const tracked = integration?.tracks(collection)
-  const existing = merge || createOnly || tracked ? await readDocument(queryClient, reference) : undefined
+  for (const integration of integrations) integration.validateCollection(collection)
+  const tracked = [...integrations].filter(integration => integration.tracks(collection))
+  const existing = merge || createOnly || tracked.length ? await readDocument(queryClient, reference) : undefined
   if (createOnly && existing?.exists) throw conflictError(`Document ${reference.path} already exists.`)
   const before = existing?.data()
   const next = applyData(before, data, merge)
@@ -550,16 +563,16 @@ async function writeDocument(client: DatabaseClient, reference: LocalDocumentRef
     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
     ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
   `, [reference.path, collectionPathForDocument(reference.path), reference.id, jsonValue(next)])
-  if (tracked) integration?.changed(getDatabase(), collection, reference.path, before, next)
+  for (const integration of tracked) integration.changed(getDatabase(), collection, reference.path, before, next)
 }
 
 async function deleteDocument(client: DatabaseClient, reference: LocalDocumentReference) {
   const collection = collectionPathForDocument(reference.path)
-  integration?.validateCollection(collection)
-  const tracked = integration?.tracks(collection)
-  const before = tracked ? (await readDocument(client, reference)).data() : undefined
+  for (const integration of integrations) integration.validateCollection(collection)
+  const tracked = [...integrations].filter(integration => integration.tracks(collection))
+  const before = tracked.length ? (await readDocument(client, reference)).data() : undefined
   await client.query("DELETE FROM rawroute_documents WHERE path = $1", [reference.path])
-  if (tracked && before) integration?.changed(getDatabase(), collection, reference.path, before, undefined)
+  if (before) for (const integration of tracked) integration.changed(getDatabase(), collection, reference.path, before, undefined)
 }
 
 // Async document callbacks must hold the connection exclusively across awaits.
@@ -574,7 +587,7 @@ export async function withTransaction<T>(callback: (client: DatabaseClient) => P
   try {
     await ensureSchema()
     const connection = getDatabase()
-    integration?.initialize(connection)
+    for (const integration of integrations) integration.initialize(connection)
     connection.run("BEGIN IMMEDIATE")
     try {
       const result = await callback({ query: executeQuery })
@@ -611,7 +624,7 @@ export class SqliteDatabase {
     await withTransaction(async (client) => {
       await ensureSchema()
       const prefix = reference instanceof LocalCollectionReference ? reference.path : reference.path
-      await integration?.deletingTree(getDatabase(), prefix, client, (path) => deleteDocument(client, new LocalDocumentReference(path)))
+      await mapConcurrent([...integrations], 1, integration => integration.deletingTree(getDatabase(), prefix, client, (path) => deleteDocument(client, new LocalDocumentReference(path))))
       // `LIKE` treats `%` and `_` in a document path as wildcards. Use a
       // literal prefix test so deleting one collection/document cannot touch a
       // similarly named sibling path.
@@ -628,7 +641,7 @@ export function getSqliteDatabase() {
 
 export async function ensureLocalDatabase() {
   await ensureSchema()
-  integration?.initialize(getDatabase())
+  for (const integration of integrations) integration.initialize(getDatabase())
 }
 
 export async function localDatabaseHealth() {

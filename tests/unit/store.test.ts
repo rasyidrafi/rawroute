@@ -1,6 +1,7 @@
 import "../../apps/console/src/server/composition"
 import { beforeEach, describe, expect, test } from "bun:test"
 import { testsInWorkspace } from "../helpers/workspace-test"
+import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
 // Explicitly exercise the seeded Default workspace's key rules.
 const workspaceTest = testsInWorkspace("default")
 
@@ -24,7 +25,6 @@ import {
 } from "../../packages/gateway-ai/src/server/store"
 import { hashPassword, validatePasswordUpdate, verifyPassword } from "../../packages/platform/src/server/identity"
 import { identity, readMeta, updateMeta } from "../../packages/platform/src/server/runtime"
-import { assertProductionBootstrap } from "../../apps/console/src/server/bootstrap"
 
 import type { Model, Provider } from "../../packages/gateway-ai/src/contracts/domain"
 
@@ -284,25 +284,17 @@ describe("configuration storage", () => {
   })
 })
 
-describe("production bootstrap", () => {
-  test("rejects missing or documented default infrastructure secrets", () => {
-    expect(() => assertProductionBootstrap({})).toThrow()
-    expect(() => assertProductionBootstrap({
-      DEFAULT_ADMIN_PASSWORD: "change-me-now",
-      DEFAULT_PROXY_API_KEY: "sk-local-change-me",
-      SESSION_SECRET: "01234567890123456789012345678901",
-    })).toThrow()
-  })
-
-  test("allows the built-in password with mandatory rotation and private infrastructure secrets", () => {
-    expect(() => assertProductionBootstrap({ DEFAULT_PROXY_API_KEY: "sk-private-gateway-key", SESSION_SECRET: "01234567890123456789012345678901" })).not.toThrow()
-  })
-
-  test("accepts explicitly configured non-default secrets", () => {
-    expect(() => assertProductionBootstrap({
-      DEFAULT_ADMIN_PASSWORD: "a-private-admin-password",
-      DEFAULT_PROXY_API_KEY: "sk-private-gateway-key",
-      SESSION_SECRET: "01234567890123456789012345678901",
-    })).not.toThrow()
+describe("automatic bootstrap", () => {
+  test("ignores retired secret overrides and generates independent private values", async () => {
+    process.env.DEFAULT_ADMIN_PASSWORD = "ignored-private-password"
+    process.env.DEFAULT_PROXY_API_KEY = "ignored-gateway-key"
+    process.env.SESSION_SECRET = "ignored-session-secret"
+    const meta = await readMeta()
+    expect(verifyPassword("123456", meta.admin.passwordHash)).toBe(true)
+    expect(meta.admin.mustChangePassword).toBe(true)
+    expect(meta.sessionSecret).toMatch(/^[a-f0-9]{64}$/)
+    const keys = await runInWorkspace({ id: "default" }, () => listApiKeys())
+    expect(keys[0]?.key).toMatch(/^sk-[a-f0-9]{64}$/)
+    expect(meta.sessionSecret).not.toBe(keys[0]?.key.slice(3))
   })
 })

@@ -20,8 +20,7 @@ export async function collectStreamUsage(body: ReadableStream<Uint8Array>) {
   let usage: UsageMetrics | undefined
   let terminalEventSeen = false
   let firstByteAt: number | undefined
-  const configuredTimeout = Number(process.env.ROUTING_MAX_STREAM_DURATION_SECONDS || 290) * 1_000 + 10_000
-  const readTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 300_000
+  const readTimeoutMs = 300_000
   const deadline = Date.now() + readTimeoutMs
   const readWithTimeout = async () => {
     let timer: ReturnType<typeof setTimeout> | undefined

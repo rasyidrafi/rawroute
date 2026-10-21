@@ -1,0 +1,12 @@
+# Optional overlay: docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+# Also works with docker-compose.external.yml as the base. Existing deployments
+# gain no S3 listener/host port unless this overlay is selected explicitly.
+services:
+  rawroute:
+    environment:
+      STORAGE_ENABLED: "true"
+      STORAGE_S3_PORT: "9000"
+      STORAGE_S3_HOST: "0.0.0.0"
+      STORAGE_S3_ALLOWED_ORIGINS: ${STORAGE_S3_ALLOWED_ORIGINS:-}
+    ports:
+      - "${STORAGE_S3_BIND:-127.0.0.1}:${STORAGE_S3_HOST_PORT:-9000}:9000"

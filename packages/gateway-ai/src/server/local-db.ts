@@ -10,7 +10,7 @@ import { assertWorkspaceActivity } from "@rawroute/platform/server/workspace-act
 
 // Application persistence composition. All callbacks execute on the platform's
 // single connection, inside its existing transaction/queue boundary.
-const usageIntegration: DocumentIntegration = {
+export const aiDocumentIntegration: DocumentIntegration = {
   initialize(database, initial) {
     if (initial) {
       database.run("CREATE INDEX IF NOT EXISTS rawroute_documents_collection_completed_idx ON rawroute_documents (collection_path, json_extract(data, '$.completedAt'))")
@@ -47,7 +47,7 @@ const usageIntegration: DocumentIntegration = {
 }
 
 export function initializeAiPersistence() {
-  installDocumentIntegration(usageIntegration)
+  installDocumentIntegration(aiDocumentIntegration)
 }
 
 export async function queryLocalUsageRange(workspaceId: string, from: string, to: string, hourly = false, keyId?: string) {

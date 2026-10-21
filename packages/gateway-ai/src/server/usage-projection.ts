@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite"
+import { collectionPrefix } from "@rawroute/platform/server/storage-config"
 import { addZonedDays, getAppTimeZone, getZonedParts, startOfZonedDay, startOfZonedMonth } from "@rawroute/platform/server/timezone"
 
 export const usageProjectionVersion = 2
@@ -18,11 +19,11 @@ export interface UsageHistory {
   financialState: "known" | "unknown"; sourceJson: string; sourceHash: string; measuresJson: string | null
 }
 
-export function usagePrefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
+export function usagePrefix(database?: Database) { return collectionPrefix(database) }
 
-export function usageWorkspace(collection: string, kind: "usageEvents" | "usageRollups") {
+export function usageWorkspace(collection: string, kind: "usageEvents" | "usageRollups", database?: Database) {
   const parts = collection.split("/")
-  return parts.length === 3 && parts[0] === `${usagePrefix()}_workspaces` && parts[2] === kind ? parts[1] : undefined
+  return parts.length === 3 && parts[0] === `${usagePrefix(database)}_workspaces` && parts[2] === kind ? parts[1] : undefined
 }
 
 export function emptyUsageMeasures(): UsageMeasures { return Object.fromEntries(usageMeasures.map(key => [key, 0])) as UsageMeasures }
@@ -230,15 +231,15 @@ export function createUsageProjectionSchema(db: Database) {
 export function assertUsageProjection(db: Database, initializeEmpty = false) {
   const exists = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_projection_meta'").get()
   if (!exists) {
-    const legacy = db.query<{ collection_path: string }, []>("SELECT DISTINCT collection_path FROM rawroute_documents").all().some(row => usageWorkspace(row.collection_path, "usageEvents") !== undefined || usageWorkspace(row.collection_path, "usageRollups") !== undefined || row.collection_path === `${usagePrefix()}_usage_events` || row.collection_path === `${usagePrefix()}_usage_rollups`)
+    const legacy = db.query<{ collection_path: string }, []>("SELECT DISTINCT collection_path FROM rawroute_documents").all().some(row => usageWorkspace(row.collection_path, "usageEvents", db) !== undefined || usageWorkspace(row.collection_path, "usageRollups", db) !== undefined || row.collection_path === `${usagePrefix(db)}_usage_events` || row.collection_path === `${usagePrefix(db)}_usage_rollups`)
     if (!initializeEmpty || legacy) throw new Error("Usage projection migration required; stop writers and run the offline usage-projection CLI with --sqlite and --timezone (source: scripts/migrations/usage-projection.ts; image: migrations/usage-projection.js)")
     db.transaction(() => {
       createUsageProjectionSchema(db)
-      db.run("INSERT INTO usage_projection_meta VALUES (1, ?, ?, ?)", [usageProjectionVersion, getAppTimeZone(), usagePrefix()])
+      db.run("INSERT INTO usage_projection_meta VALUES (1, ?, ?, ?)", [usageProjectionVersion, getAppTimeZone(), usagePrefix(db)])
     })()
   }
   const meta = db.query<{ version: number; timeZone: string; documentPrefix: string }, []>("SELECT version, timeZone, documentPrefix FROM usage_projection_meta WHERE id = 1").get()
-  if (!meta || meta.version !== usageProjectionVersion || meta.timeZone !== getAppTimeZone() || meta.documentPrefix !== usagePrefix()) throw new Error("Usage projection version/timezone/prefix mismatch; offline rebuild required")
+  if (!meta || meta.version !== usageProjectionVersion || meta.timeZone !== getAppTimeZone() || meta.documentPrefix !== usagePrefix(db)) throw new Error("Usage projection version/timezone/prefix mismatch; offline rebuild required")
 }
 
 const bucketIdentity = "workspaceId = ? AND granularity = ? AND bucketStart = ? AND gatewayKeyId = ? AND gatewayModelId = ?"

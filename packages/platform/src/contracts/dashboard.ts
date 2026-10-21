@@ -1,5 +1,5 @@
-export type DashboardOwner = "platform" | "ai" | "tools" | "observability"
-export type DashboardAppId = "ai-gateway" | "tool-gateway"
+export type DashboardOwner = "platform" | "ai" | "tools" | "storage" | "observability"
+export type DashboardAppId = "ai-gateway" | "tool-gateway" | "storage-gateway"
 export type DashboardPageMeta = {
   path: string
   title: string

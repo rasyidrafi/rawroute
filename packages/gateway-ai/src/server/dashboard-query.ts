@@ -11,12 +11,7 @@ export interface DashboardQueryOptions {
   maxCustomRangeDays?: number
 }
 
-function configuredPositiveInteger(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
-}
-
-const defaultMaximumCustomRangeDays = configuredPositiveInteger(process.env.DASHBOARD_MAX_CUSTOM_RANGE_DAYS, 3_650)
+const defaultMaximumCustomRangeDays = 3_650
 
 function parseCalendarDate(value: string | null) {
   const match = value?.match(calendarDatePattern)

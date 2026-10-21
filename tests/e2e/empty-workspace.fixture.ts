@@ -3,7 +3,7 @@ import { expect, test as base } from "@playwright/test"
 // Real API emptiness checks must not depend on traffic from earlier browser tests.
 export const test = base.extend<{ emptyWorkspaceId: string }>({
   emptyWorkspaceId: async ({ page }, provide) => {
-    let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+    let login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
     if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
     expect(login.ok()).toBe(true)
     if ((await (await page.request.get("/api/admin/account")).json()).mustChangePassword) {

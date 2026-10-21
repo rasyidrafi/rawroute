@@ -36,7 +36,8 @@ export function checkArchitecture(options: { root?: string; overrides?: Map<stri
     "@rawroute/platform": ["@rawroute/ui", "@rawroute/observability"],
     "@rawroute/gateway-ai": ["@rawroute/platform", "@rawroute/ui", "@rawroute/observability"],
     "@rawroute/gateway-tools": ["@rawroute/platform", "@rawroute/ui", "@rawroute/observability"],
-    "@rawroute/console": ["@rawroute/platform", "@rawroute/ui", "@rawroute/observability", "@rawroute/gateway-ai", "@rawroute/gateway-tools"],
+    "@rawroute/gateway-storage": ["@rawroute/platform", "@rawroute/ui", "@rawroute/observability"],
+    "@rawroute/console": ["@rawroute/platform", "@rawroute/ui", "@rawroute/observability", "@rawroute/gateway-ai", "@rawroute/gateway-tools", "@rawroute/gateway-storage"],
   }
   function fail(message: string): never { throw new Error(message) }
   for (const { directory, manifest } of workspaces) {

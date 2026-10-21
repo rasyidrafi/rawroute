@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { closeLocalDatabase, getDatabase, getSqliteDatabase, installDocumentIntegration } from "../../packages/platform/src/server/database"
+import { closeLocalDatabase, getDatabase, getSqliteDatabase, installDocumentIntegration, installDocumentIntegrations, type DocumentIntegration } from "../../packages/platform/src/server/database"
 
 process.env.SQLITE_PATH = ":memory:"
 afterEach(closeLocalDatabase)
@@ -34,4 +34,49 @@ test("contributed persistence writes share document commit and rollback", async 
   await expect(batch.commit()).rejects.toThrow("projection failed")
   expect((await event.get()).data()).toEqual({ value: 1 })
   expect(getDatabase().query<{ value: number }, []>("SELECT value FROM test_projection").all()).toEqual([{ value: 1 }])
+})
+
+test("explicit multi-owner composition preserves both hooks and rolls back all owners", async () => {
+  const calls: string[] = []
+  const owner = (name: string): DocumentIntegration => ({
+    initialize(database) { database.run(`CREATE TABLE IF NOT EXISTS composition_${name} (path TEXT PRIMARY KEY, value INTEGER)`) },
+    validateCollection(collection) {
+      if (collection === "composition" && name === "storage") calls.push("validate-storage")
+    },
+    tracks: collection => collection === "composition",
+    changed(database, _collection, path, before, after) {
+      calls.push(`${name}:${String(before?.value)}:${String(after?.value)}`)
+      if (after) database.run(`INSERT OR REPLACE INTO composition_${name} VALUES (?, ?)`, [path, Number(after.value)])
+      else database.run(`DELETE FROM composition_${name} WHERE path = ?`, [path])
+      if (name === "storage" && after?.reject) throw new Error("storage rejected")
+    },
+    async deletingTree(_database, prefix) { if (prefix === "composition") calls.push(`delete-${name}`) },
+  })
+  const ai = owner("ai")
+  const storage = owner("storage")
+  installDocumentIntegrations([ai, storage, ai])
+  const document = getSqliteDatabase().collection("composition").doc("one")
+  await document.set({ value: 1 })
+  expect(calls).toEqual(["validate-storage", "ai:undefined:1", "storage:undefined:1"])
+  // Reinstallation by standalone AI facilities must be harmless after open.
+  installDocumentIntegration(ai)
+  installDocumentIntegrations([storage, ai])
+  await expect(document.set({ value: 2, reject: true })).rejects.toThrow("storage rejected")
+  expect((await document.get()).data()).toEqual({ value: 1 })
+  for (const name of ["ai", "storage"]) expect(getDatabase().query(`SELECT value FROM composition_${name}`).all()).toEqual([{ value: 1 }])
+  await document.delete()
+  expect(calls.slice(-3)).toEqual(["validate-storage", "ai:1:undefined", "storage:1:undefined"])
+  await getSqliteDatabase().recursiveDelete(getSqliteDatabase().collection("composition"))
+  expect(calls.slice(-2)).toEqual(["delete-ai", "delete-storage"])
+})
+
+test("composition cannot partially install a new owner after the database opens", async () => {
+  await getSqliteDatabase().collection("late").doc("one").set({ value: 1 })
+  const late: DocumentIntegration = {
+    initialize() { throw new Error("late owner must not be installed") },
+    validateCollection() {}, tracks: () => false, changed() {}, async deletingTree() {},
+  }
+  expect(() => installDocumentIntegrations([late])).toThrow("before opening")
+  expect(() => installDocumentIntegration(late)).toThrow("before opening")
+  await getSqliteDatabase().collection("late").doc("two").set({ value: 2 })
 })

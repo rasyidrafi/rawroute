@@ -20,8 +20,7 @@ function event(id:string,costMicros:number):UsageEvent {
 beforeEach(()=>{
   directory=""
   directory=mkdtempSync(join(tmpdir(),"usage-maintenance-"));file=join(directory,"test.sqlite")
-  process.env.DATABASE_COLLECTION_PREFIX="rawroute";process.env.TIMEZONE="UTC"
-  process.env.BUDGET_MISSING_USAGE_QUANTILE="0.25";process.env.BUDGET_PREDICTION_PRIOR_STRENGTH="500";process.env.BUDGET_PREDICTION_BASELINE_MIN_SAMPLES="30"
+  process.env.TIMEZONE="UTC"
   const db=new Database(file)
   db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY,collection_path TEXT NOT NULL,document_id TEXT NOT NULL,data TEXT NOT NULL,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
   const put=(collection:string,id:string,data:object)=>db.run("INSERT INTO rawroute_documents(path,collection_path,document_id,data)VALUES(?,?,?,?)",[`${collection}/${id}`,collection,id,JSON.stringify(data)])

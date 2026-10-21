@@ -36,7 +36,7 @@ test("matches contextual navigation without treating an app overview as every ch
 test("uses exact app switcher labels without an Executor suffix", () => {
   const labels = dashboardApps.map((app) => app.title)
 
-  expect(labels).toEqual(["AI Gateway", "Tool Gateway"])
+  expect(labels).toEqual(["AI Gateway", "Tool Gateway", "Storage Gateway"])
   expect(labels.join(" ")).not.toContain("(Executor)")
 })
 

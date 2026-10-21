@@ -34,8 +34,7 @@ export async function redeemCodexReset(account: ProviderApiKey, confirmation: st
   try {
     const headers: Record<string, string> = { authorization: "Bearer $TOKEN$", accept: "application/json" }
     if (account.accountId) headers["chatgpt-account-id"] = account.accountId
-    if (process.env.CODEX_FEDRAMP === "true") headers["chatgpt-federated"] = "true"
-    const usageResponse = await cliProxyCodexApiCall(account, { method: "GET", url: process.env.CODEX_USAGE_URL || "https://chatgpt.com/backend-api/wham/usage", headers })
+    const usageResponse = await cliProxyCodexApiCall(account, { method: "GET", url: "https://chatgpt.com/backend-api/wham/usage", headers })
     if (usageResponse.status < 200 || usageResponse.status >= 300) throw new Error(`Codex usage request failed (${usageResponse.status})`)
     const usage = objectValue(JSON.parse(usageResponse.body) as unknown)
     if ((parseUnusedCodexResetCredits(usage) ?? 0) < 1) throw new Error("No unused Codex reset credits are available.")

@@ -1,5 +1,5 @@
 import { mapConcurrent } from "@rawroute/platform/server/concurrency"
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { type DocumentSnapshot, FieldValue, getSqliteDatabase, type SqliteDatabase, type Transaction } from "@rawroute/platform/server/database"
 import { initializeAiPersistence } from "./local-db"
 import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/storage-config"
@@ -18,22 +18,13 @@ function memorySecurityMutation<T>(resource: AuditResource, action: AuditAction,
   return result
 }
 
-const configuredCacheTtlMs = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
-const cacheTtlMs = Number.isFinite(configuredCacheTtlMs) && configuredCacheTtlMs >= 0 ? configuredCacheTtlMs : 60_000
-const configuredApiKeyCacheTtlMs = Number(process.env.API_KEY_CACHE_TTL_MS || 60_000)
-const apiKeyCacheTtlMs = Number.isFinite(configuredApiKeyCacheTtlMs) && configuredApiKeyCacheTtlMs >= 0 ? configuredApiKeyCacheTtlMs : 60_000
-const configuredApiKeyNegativeCacheTtlMs = Number(process.env.API_KEY_NEGATIVE_CACHE_TTL_MS || 10_000)
-const apiKeyNegativeCacheTtlMs = Number.isFinite(configuredApiKeyNegativeCacheTtlMs) && configuredApiKeyNegativeCacheTtlMs >= 0 ? configuredApiKeyNegativeCacheTtlMs : 10_000
-const configuredDatabaseReadConcurrency = Number(process.env.DATABASE_CHILD_READ_CONCURRENCY || 16)
-const databaseChildReadConcurrency = Number.isSafeInteger(configuredDatabaseReadConcurrency) && configuredDatabaseReadConcurrency > 0 ? configuredDatabaseReadConcurrency : 16
-const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
-const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
-const configuredMaximumProviderCacheEntries = Number(process.env.MAX_PROVIDER_SCOPED_CACHE_ENTRIES || 256)
-const maximumProviderScopedCacheEntries = Number.isSafeInteger(configuredMaximumProviderCacheEntries) && configuredMaximumProviderCacheEntries > 0 ? configuredMaximumProviderCacheEntries : 256
-const configuredRoutingFullRefreshIntervalMs = Number(process.env.ROUTING_FULL_REFRESH_INTERVAL_MS || 15 * 60_000)
-const routingFullRefreshIntervalMs = Number.isFinite(configuredRoutingFullRefreshIntervalMs) && configuredRoutingFullRefreshIntervalMs >= 0
-  ? Math.max(cacheTtlMs, configuredRoutingFullRefreshIntervalMs)
-  : 15 * 60_000
+const cacheTtlMs = 60_000
+const apiKeyCacheTtlMs = 60_000
+const apiKeyNegativeCacheTtlMs = 10_000
+const databaseChildReadConcurrency = 16
+const maximumWorkspaceCacheEntries = 256
+const maximumProviderScopedCacheEntries = 256
+const routingFullRefreshIntervalMs = 15 * 60_000
 
 interface ReadCache<T> {
   value?: T
@@ -101,7 +92,6 @@ const maximumApiKeyLookupEntries = 512
 const apiKeyCachePrefix = "rawroute:api-key-lookup:v1:"
 const apiKeyCacheMiss = "__rawroute_missing__"
 let apiKeyLookupGeneration = 0
-const documentedProxyKey = "sk-local-change-me"
 
 export function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -111,13 +101,6 @@ export function stripUndefined<T>(value: T): T {
     return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, stripUndefined(item)])) as T
   }
   return value
-}
-
-export function assertGatewayBootstrap(environment: Record<string, string | undefined>) {
-  const proxyKey = environment.DEFAULT_PROXY_API_KEY
-  if (!proxyKey || proxyKey === documentedProxyKey) {
-    throw new Error("DEFAULT_PROXY_API_KEY must be set to a non-default value before production initialization.")
-  }
 }
 
 export class ApiKeyConflictError extends Error {
@@ -144,11 +127,10 @@ function validateGatewayApiKeyValue(value: unknown) {
 }
 
 function initialGatewayApiKey(): ApiKey {
-  if (process.env.NODE_ENV === "production") assertGatewayBootstrap(process.env)
   return {
     id: crypto.randomUUID(),
-    name: "Default local key",
-    key: process.env.DEFAULT_PROXY_API_KEY || documentedProxyKey,
+    name: "Default gateway key",
+    key: `sk-${randomBytes(32).toString("hex")}`,
     createdAt: new Date().toISOString(),
   }
 }

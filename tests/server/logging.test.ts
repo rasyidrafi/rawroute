@@ -17,7 +17,6 @@ let cookie: string
 let base: URL
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
-  process.env.DEFAULT_ADMIN_PASSWORD = "logging-test-password"
   _resetMemoryBackend()
   identity.reset()
   await updateMeta(meta => { meta.admin.mustChangePassword = false })
@@ -34,7 +33,7 @@ function call(path: string, workspaceId?: string, method = "GET", body?: unknown
 }
 
 test("global activity never appears in Default and global APIs ignore workspace headers", async () => {
-  const login = await call("/api/auth/login", undefined, "POST", { password: "logging-test-password" })
+  const login = await call("/api/auth/login", undefined, "POST", { password: "123456" })
   expect(login.status).toBe(200)
   await login.body?.cancel()
   const global = await (await call("/api/admin/logs/global", "nonexistent")).json()

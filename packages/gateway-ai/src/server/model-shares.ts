@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 
 import { getSqliteDatabase, type SqliteDatabase } from "@rawroute/platform/server/database"
 import { listModels, listProviders } from "./store"
-import { isMemoryBackend } from "@rawroute/platform/server/storage-config"
+import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/storage-config"
 import type { ModelShare, SharedModelView } from "../contracts/domain"
 import { currentWorkspaceId, runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { getWorkspace, listWorkspaces } from "@rawroute/platform/server/runtime"
@@ -13,7 +13,7 @@ let localDatabase: SqliteDatabase | undefined
 declare global { var __rawrouteModelShares: Map<string, ModelShare> | undefined }
 
 function db() { return localDatabase ||= getSqliteDatabase() }
-function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
+function prefix() { return collectionPrefix() }
 function sharesRef() { return db().collection(`${prefix()}_model_shares`) }
 function memoryShares() { return globalThis.__rawrouteModelShares ||= new Map<string, ModelShare>() }
 function shareId(ownerWorkspaceId: string, sourceModelId: string, recipientWorkspaceId: string) {

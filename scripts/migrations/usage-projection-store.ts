@@ -100,7 +100,7 @@ function history(row: Source, workspaceId: string, data: Record<string, unknown>
 }
 
 /** Pure planning: neither source documents nor the SQLite schema are changed. */
-function planProjection(rows: Source[], previousHistory?: UsageHistory[]) {
+function planProjection(db: Database, rows: Source[], previousHistory?: UsageHistory[]) {
   const buckets = new Map<string, UsageBucket>()
   const rawDerived = new Map<string, UsageBucket>()
   const rawNumericRequests = new Map<string, number>()
@@ -110,7 +110,7 @@ function planProjection(rows: Source[], previousHistory?: UsageHistory[]) {
     return { ...entry }
   })
   const copies: Source[] = []
-  const canonicalRows = rows.filter(row => usageWorkspace(row.collection_path, "usageEvents") !== undefined)
+  const canonicalRows = rows.filter(row => usageWorkspace(row.collection_path, "usageEvents", db) !== undefined)
   const byPath = new Map(rows.map(row => [row.path, row]))
   // Preserve flat legacy source documents and copy into the sole canonical raw namespace offline.
   // canonical-copy-deleted tombstones intentionally have no required target. In rebuild
@@ -118,8 +118,8 @@ function planProjection(rows: Source[], previousHistory?: UsageHistory[]) {
   for (const entry of histories.filter(entry => entry.reason.startsWith("canonical-copy:"))) {
     if (!byPath.has(entry.reason.slice("canonical-copy:".length))) throw new Error(`Imported canonical raw event missing: ${entry.sourcePath}`)
   }
-  for (const row of previousHistory ? [] : rows.filter(row => row.collection_path === `${usagePrefix()}_usage_events`)) {
-    const collection = `${usagePrefix()}_workspaces/default/usageEvents`
+  for (const row of previousHistory ? [] : rows.filter(row => row.collection_path === `${usagePrefix(db)}_usage_events`)) {
+    const collection = `${usagePrefix(db)}_workspaces/default/usageEvents`
     const path = `${collection}/${row.document_id}`
     const existing = byPath.get(path)
     if (existing && canonicalJson(JSON.parse(existing.data)) !== canonicalJson(JSON.parse(row.data))) throw new Error(`Conflicting legacy/canonical event identity: ${path}`)
@@ -127,7 +127,7 @@ function planProjection(rows: Source[], previousHistory?: UsageHistory[]) {
     histories.push({ ...history(row, "default", {}), disposition: "duplicate", reason: `canonical-copy:${path}`, financialState: "known" })
   }
   for (const row of canonicalRows) {
-    const workspaceId = usageWorkspace(row.collection_path, "usageEvents")!
+    const workspaceId = usageWorkspace(row.collection_path, "usageEvents", db)!
     const data = sourceData(row)
     if (typeof data.completedAt !== "string" || !Number.isFinite(Date.parse(data.completedAt))) {
       const entry = { ...history(row, workspaceId, data), reason: "invalid-raw-completion" }
@@ -179,7 +179,7 @@ function planProjection(rows: Source[], previousHistory?: UsageHistory[]) {
     return { buckets: [...buckets.values()].sort((a,b) => compareText(usageBucketKey(a), usageBucketKey(b))), histories: histories.sort((a,b) => compareText(a.sourcePath, b.sourcePath)), copies, rawDocuments: canonicalRows.length }
   }
   const candidates = rows.flatMap(row => {
-    const workspaceId = usageWorkspace(row.collection_path, "usageRollups") ?? (row.collection_path === `${usagePrefix()}_usage_rollups` ? "default" : undefined)
+    const workspaceId = usageWorkspace(row.collection_path, "usageRollups", db) ?? (row.collection_path === `${usagePrefix(db)}_usage_rollups` ? "default" : undefined)
     if (workspaceId === undefined) return []
     const data = sourceData(row)
     return [{ row, data, entry: history(row, workspaceId, data) }]
@@ -237,7 +237,7 @@ function applyProjectionPlan(db: Database, plan: ReturnType<typeof planProjectio
   db.run("DELETE FROM usage_buckets")
   db.run("DELETE FROM usage_projection_history")
   db.run("DELETE FROM usage_projection_meta")
-  db.run("INSERT INTO usage_projection_meta VALUES (1, ?, ?, ?)", [usageProjectionVersion, getAppTimeZone(), usagePrefix()])
+  db.run("INSERT INTO usage_projection_meta VALUES (1, ?, ?, ?)", [usageProjectionVersion, getAppTimeZone(), usagePrefix(db)])
   for (const row of plan.copies) db.run("INSERT INTO rawroute_documents(path,collection_path,document_id,data) VALUES(?,?,?,?)", [row.path, row.collection_path, row.document_id, row.data])
   for (const bucket of plan.buckets) putUsageBucket(db, bucket)
   for (const entry of plan.histories) db.run("INSERT INTO usage_projection_history VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", [entry.sourcePath, entry.workspaceId, entry.gatewayKeyId, entry.gatewayModelId, entry.bucketStart, entry.bucketEnd, entry.granularity, entry.disposition, entry.reason, entry.financialState, entry.sourceJson, entry.sourceHash, entry.measuresJson])
@@ -251,7 +251,7 @@ export function rebuildCanonicalUsageProjection(db: Database) {
   assertUsageProjection(db)
   const rows = db.query<Source, []>("SELECT * FROM rawroute_documents ORDER BY path").all()
   const histories = db.query<UsageHistory, []>("SELECT * FROM usage_projection_history ORDER BY sourcePath").all()
-  const plan = planProjection(rows, histories)
+  const plan = planProjection(db, rows, histories)
   applyProjectionPlan(db, plan, rows)
   return { rawDocuments: plan.rawDocuments, buckets: plan.buckets.length, histories: plan.histories.length }
 }
@@ -276,7 +276,7 @@ export function migrateUsageProjection(file: string, options: Options) {
     const rows = db.query<Source, []>("SELECT * FROM rawroute_documents ORDER BY path").all()
     const table = db.query("SELECT 1 FROM sqlite_master WHERE name = 'usage_projection_meta'").get()
     const meta = table ? db.query<{ version: number; timeZone: string; documentPrefix: string }, []>("SELECT * FROM usage_projection_meta WHERE id = 1").get() : null
-    if (table && (!meta || ![1, usageProjectionVersion].includes(meta.version) || meta.documentPrefix !== usagePrefix())) throw new Error("Unsupported projection version/prefix; use an explicit versioned conversion")
+    if (table && (!meta || ![1, usageProjectionVersion].includes(meta.version) || meta.documentPrefix !== usagePrefix(db))) throw new Error("Unsupported projection version/prefix; use an explicit versioned conversion")
     const previousHistory = table ? db.query<UsageHistory, []>("SELECT * FROM usage_projection_history ORDER BY sourcePath").all() : undefined
     if (meta?.version === 1) for (const entry of previousHistory || []) {
       if (!entry.measuresJson) continue
@@ -287,14 +287,14 @@ export function migrateUsageProjection(file: string, options: Options) {
       for (const key of ["cacheUsageInputTokens", "cacheUsageReadTokens", "cacheUsageCoveredRequests"] as const) measures[key] = recovered[key]
       entry.measuresJson = JSON.stringify(measures)
     }
-    const plan = planProjection(rows, previousHistory)
+    const plan = planProjection(db, rows, previousHistory)
     const sourceDigest = digest(JSON.stringify(rows))
     const plannedDigest = projectionDigest(plan.buckets, plan.histories)
     let unchanged = false
     if (table && !plan.copies.length) {
       const buckets = db.query<UsageBucket, []>("SELECT * FROM usage_buckets").all()
       const histories = db.query<UsageHistory, []>("SELECT * FROM usage_projection_history ORDER BY sourcePath").all()
-      unchanged = meta?.version === usageProjectionVersion && meta.timeZone === getAppTimeZone() && meta.documentPrefix === usagePrefix() && projectionDigest(buckets, histories) === plannedDigest
+      unchanged = meta?.version === usageProjectionVersion && meta.timeZone === getAppTimeZone() && meta.documentPrefix === usagePrefix(db) && projectionDigest(buckets, histories) === plannedDigest
     }
     const workspaceSums = Object.fromEntries([...new Set(plan.buckets.map(bucket => bucket.workspaceId))].map(workspace => [workspace, Object.fromEntries(usageMeasures.map(measure => [measure, plan.buckets.filter(bucket => bucket.workspaceId === workspace && bucket.granularity === "daily").reduce((sum, bucket) => sum + bucket[measure], 0)]))]))
     const workspaceTotals = Object.fromEntries([...new Set(plan.buckets.map(bucket => bucket.workspaceId))].map(workspace => {

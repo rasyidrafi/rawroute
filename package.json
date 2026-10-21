@@ -47,6 +47,7 @@
     "@rawroute/platform": "workspace:*",
     "@rawroute/gateway-ai": "workspace:*",
     "@rawroute/gateway-tools": "workspace:*",
+    "@rawroute/gateway-storage": "workspace:*",
     "@rawroute/observability": "workspace:*",
     "@rawroute/ui": "workspace:*",
     "@rawroute/console": "workspace:*"

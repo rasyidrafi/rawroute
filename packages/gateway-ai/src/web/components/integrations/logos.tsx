@@ -1,7 +1,7 @@
 import type { SVGProps } from "react"
 
 // LobeHub mono logos (MIT); Continue's official IntelliJ icon (Apache-2.0).
-// See THIRD_PARTY_NOTICES.md for sources and licenses. Inline SVG keeps logos
+// See THIRD_PARTY_NOTICES for sources and licenses. Inline SVG keeps logos
 // theme-aware and available without requests to a third-party image host.
 function logo(path: string, viewBox = "0 0 24 24") {
   return function IntegrationLogo(props: SVGProps<SVGSVGElement>) {

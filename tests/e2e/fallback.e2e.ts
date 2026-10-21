@@ -1,7 +1,15 @@
 import { expect, test, type APIRequestContext } from "@playwright/test"
 
+async function gatewayHeaders(request: APIRequestContext) {
+  const response = await request.get("/api/admin/endpoint-key", { headers: { "x-rawroute-workspace-id": "default" } })
+  expect(response.ok()).toBe(true)
+  const { apiKeys } = await response.json()
+  expect(apiKeys[0].key).toMatch(/^sk-/)
+  return { authorization: `Bearer ${apiKeys[0].key}` }
+}
+
 async function authenticate(request: APIRequestContext) {
-  let login = await request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  let login = await request.post("/api/auth/login", { data: { password: "123456" } })
   if (!login.ok()) login = await request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   const account = await request.get("/api/admin/account")
@@ -32,7 +40,7 @@ async function codexModels(request: APIRequestContext) {
   const { provider } = await catalog.json()
   const refresh = await request.post(`/api/admin/providers/${provider.id}/models/refresh`, { headers: { "x-rawroute-workspace-id": "default" } })
   expect(refresh.ok(), await refresh.text()).toBe(true)
-  const response = await request.get("/v1/models", { headers: { authorization: "Bearer sk-e2e-gateway" } })
+  const response = await request.get("/v1/models", { headers: await gatewayHeaders(request) })
   expect(response.ok()).toBe(true)
   return ((await response.json()).data as Array<{ id: string }>).map((model) => model.id).filter((id) => id.startsWith("codex/"))
 }
@@ -43,7 +51,7 @@ test("synthetic CLIProxy cooldown never exposes a long retry delay", async ({ re
   expect(model).toBeTruthy()
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-e2e-gateway" },
+    headers: await gatewayHeaders(request),
     data: { model, input: "hello", stream: true },
   })
 
@@ -57,7 +65,7 @@ test("Codex cooldown never reaches OpenCode as a retry instruction", async ({ re
   const [model] = await codexModels(request)
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-e2e-gateway" },
+    headers: await gatewayHeaders(request),
     data: { model, input: "hello", stream: true },
   })
 
@@ -71,7 +79,7 @@ test("ambiguous upstream 429 cannot impose a retry deadline", async ({ request }
   const [model] = await codexModels(request)
 
   const response = await request.post("/v1/responses", {
-    headers: { authorization: "Bearer sk-e2e-gateway" },
+    headers: await gatewayHeaders(request),
     data: { model, input: "hello", stream: true },
   })
 
@@ -93,7 +101,7 @@ test("combo immediately falls back instead of forwarding model cooldown", async 
   const { combo } = await saved.json() as { combo: { id: string } }
   try {
     const response = await request.post("/v1/responses", {
-      headers: { authorization: "Bearer sk-e2e-gateway" },
+      headers: await gatewayHeaders(request),
       data: { model: comboId, input: "hello", stream: true },
     })
 

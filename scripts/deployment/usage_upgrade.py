@@ -12,7 +12,7 @@ def convert(deployment, volume, prefix, timezone, report_name="usage"):
     def invoke(name, apply=False):
         args = ["docker", "run", "--rm", "--name", d.m["helper"], "--label",
                 f"local.rawroute.redeploy={d.m['transaction']}", "--network", "none",
-                "--env", f"DATABASE_COLLECTION_PREFIX={prefix}", "--env", f"TIMEZONE={timezone}",
+                "--env", f"TIMEZONE={timezone}",
                 "--mount", f"type=volume,src={volume},dst=/data,volume-nocopy",
                 "--entrypoint", "bun", d.m["new_image"], "run", "--no-env-file",
                 "migrations/usage-projection.js", "--sqlite", from_path, "--timezone", timezone]

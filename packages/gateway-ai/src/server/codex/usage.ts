@@ -10,11 +10,9 @@ const CACHE_RETENTION_SECONDS = 24 * 60 * 60
 const REFRESH_LOCK_TTL_SECONDS = 30
 const CACHE_PREFIX = "rawroute:codex-usage:v2"
 const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
-const configuredLocalCacheTtlMs = Number(process.env.CODEX_USAGE_LOCAL_CACHE_TTL_MS || CODEX_USAGE_CACHE_TTL_SECONDS * 1000)
-const localCacheTtlMs = Number.isFinite(configuredLocalCacheTtlMs) && configuredLocalCacheTtlMs >= 0 ? configuredLocalCacheTtlMs : CODEX_USAGE_CACHE_TTL_SECONDS * 1000
+const localCacheTtlMs = CODEX_USAGE_CACHE_TTL_SECONDS * 1000
 const maximumLocalCacheEntries = 128
-const configuredMaximumWorkspaceEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
-const maximumWorkspaceEntries = Number.isSafeInteger(configuredMaximumWorkspaceEntries) && configuredMaximumWorkspaceEntries > 0 ? configuredMaximumWorkspaceEntries : 256
+const maximumWorkspaceEntries = 256
 
 export function parseCodexResetCredits(payload: unknown): CodexResetCredit[] {
   const data = objectValue(payload)
@@ -91,7 +89,7 @@ function resetLocalUsageCache() {
 }
 
 function getUsageUrl() {
-  return process.env.CODEX_USAGE_URL || DEFAULT_USAGE_URL
+  return DEFAULT_USAGE_URL
 }
 
 function getCache(): UsageCache {

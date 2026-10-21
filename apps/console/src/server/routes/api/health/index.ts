@@ -1,15 +1,18 @@
 import { aiServer } from "@rawroute/gateway-ai/server/integration"
+import { storageServer } from "@rawroute/gateway-storage/server/integration"
 import { localDatabaseHealth } from "@rawroute/platform/server/database"
+import { isMemoryBackend } from "@rawroute/platform/server/storage-config"
 
 export async function GET() {
   const [cliproxy, database] = await Promise.all([
     aiServer.health(),
-    process.env.STORAGE_BACKEND === "memory" ? Promise.resolve(true) : localDatabaseHealth(),
+    isMemoryBackend() ? Promise.resolve(true) : localDatabaseHealth(),
   ])
-  const ok = cliproxy && database
+  const storage = storageServer.health()
+  const ok = cliproxy && database && (!storage.enabled || storage.listening)
   return Response.json({
     status: ok ? "ok" : "degraded",
     service: "rawroute",
-    dependencies: { cliproxy, database },
+    dependencies: { cliproxy, database, storage },
   }, { status: ok ? 200 : 503 })
 }

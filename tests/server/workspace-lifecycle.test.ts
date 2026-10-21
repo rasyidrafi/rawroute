@@ -37,11 +37,7 @@ beforeEach(async () => {
   await closeLocalCache()
   directory = mkdtempSync(join(tmpdir(), "rawroute-lifecycle-"))
   process.env.SQLITE_PATH = join(directory, "test.sqlite")
-  process.env.DATABASE_COLLECTION_PREFIX = "lifecycle_test"
-  process.env.NODE_ENV = "development"
-  process.env.DEFAULT_ADMIN_PASSWORD = "lifecycle-initial-password"
-  process.env.SESSION_SECRET = "lifecycle-isolated-session-secret-for-tests"
-  process.env.DEFAULT_PROXY_API_KEY = "lifecycle-isolated-bootstrap-key"
+  process.env.NODE_ENV = "test"
   process.env.CLIPROXY_MODE = "external"
   delete process.env.CLIPROXY_MANAGEMENT_KEY
   delete process.env.CLIPROXY_URL
@@ -181,7 +177,7 @@ for (const backend of ["memory", "sqlite"] as const) {
     expect(await findIndexedApiKeyByValue("settlement-secret")).toBeUndefined()
     expect(process.env.EXECUTOR_UPSTREAM_URL).toBe("https://global-tools.invalid")
     expect(process.env.EXECUTOR_UPSTREAM_API_KEY).toBe("global-tool-secret-not-a-workspace-resource")
-    if (backend === "sqlite") expect((await getSqliteDatabase().collection(`lifecycle_test_workspaces/${selected.id}/apiKeys`).get()).docs).toHaveLength(0)
+    if (backend === "sqlite") expect((await getSqliteDatabase().collection(`rawroute_workspaces/${selected.id}/apiKeys`).get()).docs).toHaveLength(0)
   })
 
   test(`${backend}: shared owner admission survives consumer stream monitoring until owner accounting settles`, async () => {
@@ -269,7 +265,7 @@ for (const backend of ["memory", "sqlite"] as const) {
     process.env.STORAGE_BACKEND = backend
     const request = (body: object, cookie?: string) => new Request("https://console.test/api", { method: "POST", headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) })
     expect((await runInRequest(() => login(request({ password: "wrong-sensitive-password" })))).status).toBe(401)
-    const authenticated = await runInRequest(() => login(request({ password: "lifecycle-initial-password" })))
+    const authenticated = await runInRequest(() => login(request({ password: "123456" })))
     expect(authenticated.status).toBe(200)
     const cookie = authenticated.headers.get("set-cookie")!.split(";", 1)[0]!
     expect((await runWithAuditIdentity("administrator", "password-failure", () => password(request({ password: "short" })))).status).toBe(400)
@@ -301,7 +297,7 @@ test("SQLite audit failure rolls back credentials, workspace creation, and ident
   await repo.listWorkspaces()
   await identity.readMeta()
   const before = await identity.readMeta()
-  getDatabase().run("CREATE TRIGGER reject_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'lifecycle_test_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+  getDatabase().run("CREATE TRIGGER reject_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
   await expect(runInWorkspace(selected, () => createApiKey("Rejected", "rollback-key-secret"))).rejects.toThrow("audit unavailable")
   expect(await runInWorkspace(selected, listApiKeys)).toEqual([])
   expect(await findIndexedApiKeyByValue("rollback-key-secret")).toBeUndefined()
@@ -320,7 +316,7 @@ test("SQLite rejects captured late writes and restored tombstones prevent new ad
   process.env.STORAGE_BACKEND = "sqlite"
   const repo = repository()
   const selected = await workspace(repo, "Late writes")
-  const ref = getSqliteDatabase().collection(`lifecycle_test_workspaces/${selected.id}/providers`).doc("late")
+  const ref = getSqliteDatabase().collection(`rawroute_workspaces/${selected.id}/providers`).doc("late")
   const gate = deferred()
   let late!: Promise<void>
   runInWorkspace(selected, () => { late = gate.promise.then(() => ref.set({ name: "must-not-recreate" })) })
@@ -351,7 +347,7 @@ test("remote mutation boundaries persist intent and redacted outcomes, including
   expect(events.every(event => event.actor === "administrator" && event.correlationId === "remote-security")).toBe(true)
   expect(JSON.stringify(events)).not.toContain("remote-secret")
   expect(JSON.stringify(events)).not.toContain("private response")
-  getDatabase().run("CREATE TRIGGER reject_remote_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'lifecycle_test_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+  getDatabase().run("CREATE TRIGGER reject_remote_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
   let mutated = false
   await expect(withManagementMutation(async () => { mutated = true })).rejects.toThrow("audit unavailable")
   expect(mutated).toBe(false)
@@ -378,7 +374,7 @@ test("canonical upstream OAuth callbacks audit intent/outcome without code, stat
     expect(events.filter(event => event.action === "oauth.remote" && event.result === "success")).toHaveLength(3)
     expect(events.every(event => event.actor === "anonymous" && event.workspaceId === undefined)).toBe(true)
     expect(JSON.stringify(events)).not.toContain("private-")
-    getDatabase().run("CREATE TRIGGER reject_callback_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'lifecycle_test_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+    getDatabase().run("CREATE TRIGGER reject_callback_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
     await expect(proxyAiOAuthCallback(new Request("https://console.test/codex/callback?code=private-code"), "/codex/callback")).rejects.toThrow("audit unavailable")
     expect(upstream).toHaveBeenCalledTimes(3)
   } finally { upstream.mockRestore() }
@@ -407,7 +403,7 @@ test("Codex reset-credit consumption is audited before the remote financial muta
     expect(events.some(event => event.action === "oauth.remote" && event.resource === "oauth" && event.result === "started")).toBe(true)
     expect(events.some(event => event.action === "oauth.remote" && event.result === "success" && event.correlationId === "reset-credit")).toBe(true)
     expect(JSON.stringify(events)).not.toContain("private-")
-    getDatabase().run("CREATE TRIGGER reject_reset_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'lifecycle_test_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+    getDatabase().run("CREATE TRIGGER reject_reset_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
     await expect(runInWorkspace(selected, () => redeemCodexReset(account, "use my codex reset"))).rejects.toThrow("audit unavailable")
     expect(consumed).toBe(1)
   } finally { upstream.mockRestore() }
@@ -467,7 +463,7 @@ test("SQLite retries idempotently when participant side effects succeed but its 
   const repo = repository([{ id: "ai", cleanup: async id => { calls += 1; await cleanupAiWorkspaceResources(id) } }])
   const selected = await workspace(repo, "Checkpoint failure")
   await runInWorkspace(selected, () => createApiKey("Revoke", "checkpoint-key"))
-  getDatabase().run("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'lifecycle_test_workspace_deletions' AND json_array_length(NEW.data, '$.completed') > 0 BEGIN SELECT RAISE(ABORT, 'checkpoint failed'); END")
+  getDatabase().run("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_workspace_deletions' AND json_array_length(NEW.data, '$.completed') > 0 BEGIN SELECT RAISE(ABORT, 'checkpoint failed'); END")
   await expect(repo.deleteWorkspace(selected.id, selected.name)).rejects.toThrow("checkpoint failed")
   expect((await repo.getWorkspace(selected.id))?.status).toBe("deleting")
   expect(await findIndexedApiKeyByValue("checkpoint-key")).toBeUndefined()
@@ -512,7 +508,7 @@ test("real shared native SSE settles both usage copies before owner deletion and
     await drainBackgroundTasks()
     await deletion
     expect(await repo.getWorkspace(owner.id)).toBeUndefined()
-    expect((await getSqliteDatabase().collection(`lifecycle_test_workspaces/${owner.id}/usageEvents`).get()).docs).toHaveLength(0)
+    expect((await getSqliteDatabase().collection(`rawroute_workspaces/${owner.id}/usageEvents`).get()).docs).toHaveLength(0)
     const consumerUsage = await runInWorkspace(consumer, () => getDashboardPayload({ preset: "all" }))
     expect(consumerUsage.summary.requests).toBe(1)
     expect(consumerUsage.summary.tokens).toBe(4)
@@ -555,7 +551,7 @@ test("SQLite recovery retries attributed OAuth cancellation after interaction ex
     await localCacheSetIfAbsent(cacheKey, JSON.stringify(cached), 60_000)
     expect(await takePendingCliProxyCodexLogin(loginId)).toBeUndefined()
     expect(await hasPendingCodexLogin()).toBe(false) // Existing five-minute interaction/lock semantics.
-    const ref = getSqliteDatabase().collection("lifecycle_test_codex_login_cancellations").doc(loginId)
+    const ref = getSqliteDatabase().collection("rawroute_codex_login_cancellations").doc(loginId)
     expect((await ref.get()).data()).toMatchObject({ workspaceId: selected.id, state: "private-durable-oauth-state" })
     await expect(repo.deleteWorkspace(selected.id, selected.name)).rejects.toThrow("503")
     expect(cancellations).toBe(1)
@@ -598,7 +594,7 @@ test("authenticated canonical password endpoint audits malformed JSON/null and f
     expect(new Set(failures.map(event => event.correlationId))).toEqual(new Set(requests))
     expect(JSON.stringify(failures)).not.toContain("private-malformed-password")
     expect(await identity.readMeta()).toEqual(before)
-    getDatabase().run("CREATE TRIGGER reject_malformed_password_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'lifecycle_test_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
+    getDatabase().run("CREATE TRIGGER reject_malformed_password_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
     for (const body of ["{", "null"]) {
       const response = await fetch(new URL("/api/admin/account/password", server.url), { method: "POST", headers: { cookie, "content-type": "application/json" }, body })
       expect(response.status).toBe(500)

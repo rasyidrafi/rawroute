@@ -11,6 +11,7 @@
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@rawroute/gateway-ai": "workspace:*",
     "@rawroute/gateway-tools": "workspace:*",
+    "@rawroute/gateway-storage": "workspace:*",
     "@rawroute/observability": "workspace:*",
     "@rawroute/platform": "workspace:*",
     "@rawroute/ui": "workspace:*",

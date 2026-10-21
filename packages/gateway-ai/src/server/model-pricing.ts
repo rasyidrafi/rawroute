@@ -6,6 +6,7 @@ import { listModels, listProviders } from "./store"
 import type { CanonicalModelSummary, Model, ModelPricingGroup, ModelPricingVersion, PricingCanonicalSource, PricingJob, PricingRates, PricingContextTier } from "../contracts/domain"
 import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
 import { appendMemoryAudit } from "@rawroute/platform/server/audit"
+import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/storage-config"
 
 let localDatabase: SqliteDatabase | undefined
 type ProviderRows = Awaited<ReturnType<typeof listProviders>>
@@ -37,8 +38,7 @@ interface PricingWorkspaceState {
   pricingJobsGeneration: number
 }
 declare global { var __rawroutePricingMemory: Map<string, PricingWorkspaceState> | undefined }
-const configuredMaximumPricingWorkspaceEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
-const maximumPricingWorkspaceEntries = Number.isSafeInteger(configuredMaximumPricingWorkspaceEntries) && configuredMaximumPricingWorkspaceEntries > 0 ? configuredMaximumPricingWorkspaceEntries : 256
+const maximumPricingWorkspaceEntries = 256
 function workspaceStates() { return globalThis.__rawroutePricingMemory ||= new Map<string, PricingWorkspaceState>() }
 function workspaceState() {
   const workspaceId = currentWorkspaceId()
@@ -66,15 +66,15 @@ function workspaceState() {
   return state
 }
 
-const pricingCatalogTtlMs = positiveDuration(process.env.PRICING_CATALOG_CACHE_TTL_MS, 60_000)
-const pricingAdminTtlMs = positiveDuration(process.env.PRICING_ADMIN_CACHE_TTL_MS, 5_000)
-const pricingJobsTtlMs = positiveDuration(process.env.PRICING_JOBS_CACHE_TTL_MS, 2_000)
+const pricingCatalogTtlMs = 60_000
+const pricingAdminTtlMs = 5_000
+const pricingJobsTtlMs = 2_000
 
 export function getModelPricingGeneration() { return workspaceState().pricingCacheGeneration }
 export function cleanupWorkspacePricing(workspaceId: string) { workspaceStates().delete(workspaceId) }
 
-function isMemory() { return process.env.STORAGE_BACKEND === "memory" || process.env.NODE_ENV === "test" }
-function prefix() { return (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_") }
+function isMemory() { return isMemoryBackend() }
+function prefix() { return collectionPrefix() }
 function db() {
   return localDatabase ||= getSqliteDatabase()
 }
@@ -83,10 +83,6 @@ function groupsRef() { return workspaceRef().collection("modelPricingGroups") }
 function versionsRef() { return workspaceRef().collection("modelPricingVersions") }
 function jobsRef() { return workspaceRef().collection("modelPricingJobs") }
 function stableGroupId(key: string) { return `fixed-${createHash("sha1").update(key).digest("hex").slice(0, 20)}` }
-function positiveDuration(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
-}
 function invalidatePricingAdmin() {
   const state = workspaceState()
   state.pricingAdminGeneration += 1

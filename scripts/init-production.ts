@@ -1,4 +1,3 @@
-import { DEFAULT_ADMIN_PASSWORD } from "@rawroute/platform/contracts/auth-defaults"
 import { randomBytes } from "node:crypto"
 import { mkdirSync, writeFileSync, existsSync } from "node:fs"
 import { resolve, join } from "node:path"
@@ -14,16 +13,9 @@ const managementKey = secret()
 const apiKey = secret()
 const executorAdminPassword = secret()
 const files: Record<string, string> = {
-  "app.env": `STORAGE_BACKEND=sqlite
-DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
-DEFAULT_PROXY_API_KEY=sk-${secret()}
-SESSION_SECRET=${secret()}
-TIMEZONE=UTC
-SQLITE_PATH=/data/rawroute.sqlite
-DATABASE_CHILD_READ_CONCURRENCY=2
-MAX_WORKSPACE_CACHE_ENTRIES=32
-MAX_PROVIDER_SCOPED_CACHE_ENTRIES=32
-RAWROUTE_PUBLIC_URL=http://localhost:8080
+  "app.env": `SQLITE_PATH=/data/rawroute.sqlite
+RAWROUTE_DATA_DIR=/data
+CLIPROXY_MODE=external
 CLIPROXY_URL=http://cli-proxy-api:8317
 CLIPROXY_MANAGEMENT_KEY=${managementKey}
 CLIPROXY_API_KEY=${apiKey}

@@ -24,7 +24,7 @@ beforeEach(async () => {
   await closeLocalDatabase()
   directory = mkdtempSync(join(tmpdir(), "usage-range-"))
   file = join(directory, "test.sqlite")
-  Object.assign(process.env, { SQLITE_PATH: file, RAWROUTE_DATA_DIR: directory, DATABASE_COLLECTION_PREFIX: "rawroute", STORAGE_BACKEND: "sqlite", NODE_ENV: "development", TIMEZONE: "UTC" })
+  Object.assign(process.env, { SQLITE_PATH: file, RAWROUTE_DATA_DIR: directory, STORAGE_BACKEND: "sqlite", NODE_ENV: "test", TIMEZONE: "UTC" })
   _resetMemoryBackend(); resetAnalyticsForTests()
 })
 afterEach(async () => { jest.useRealTimers(); await closeLocalDatabase(); if (directory) rmSync(directory, { recursive: true, force: true }) })

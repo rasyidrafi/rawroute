@@ -67,7 +67,7 @@ test("budget controls and loading layout fit mobile, medium, and desktop widths"
 })
 
 async function authenticate(page: Page) {
-  let login = await page.request.post("/api/auth/login", { data: { password: "e2e-initial-password" } })
+  let login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
   const account = await page.request.get("/api/admin/account")

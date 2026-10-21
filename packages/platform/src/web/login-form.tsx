@@ -1,7 +1,7 @@
 import { useShellComposition } from "./shell-composition"
 import useSWR from "swr"
-import { isLocalLoginHost, type BootstrapStatus } from "../contracts/auth-defaults"
-import { useState, useSyncExternalStore, type FormEvent } from "react"
+import type { BootstrapStatus } from "../contracts/auth-defaults"
+import { useState, type FormEvent } from "react"
 import { useNavigate } from "react-router"
 import { KeyRoundIcon, RouteIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -13,9 +13,6 @@ import { Input } from "@rawroute/ui/input"
 import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
 import { useSession } from "./use-session"
 
-const subscribe = () => () => undefined
-const localHost = () => isLocalLoginHost(window.location.hostname)
-const serverHost = () => false
 async function bootstrapFetcher(url: string): Promise<BootstrapStatus> {
   const response = await fetch(url, { cache: "no-store" })
   if (!response.ok) throw new Error("Unable to check initial password status")
@@ -25,8 +22,7 @@ async function bootstrapFetcher(url: string): Promise<BootstrapStatus> {
 export function LoginForm({ checkingSession = false, sessionUnavailable = false }: { checkingSession?: boolean; sessionUnavailable?: boolean }) {
   const navigate = useNavigate()
   const { defaultLanding } = useShellComposition()
-  const local = useSyncExternalStore(subscribe, localHost, serverHost)
-  const { data: bootstrap } = useSWR<BootstrapStatus>(local ? "/api/auth/bootstrap" : null, bootstrapFetcher, { revalidateOnMount: true, dedupingInterval: 0 })
+  const { data: bootstrap } = useSWR<BootstrapStatus>("/api/auth/bootstrap", bootstrapFetcher, { revalidateOnMount: true, dedupingInterval: 0 })
   const { mutate: refreshSession } = useSession()
   const [loading, setLoading] = useState(false)
 
@@ -78,7 +74,7 @@ export function LoginForm({ checkingSession = false, sessionUnavailable = false 
             <Button aria-busy={loading || checkingSession} disabled={loading || checkingSession || sessionUnavailable} type="submit" className="w-full">
               {loading || checkingSession ? <LoadingSpinner /> : <KeyRoundIcon />} <span aria-live="polite">{checkingSession ? "Checking session…" : loading ? "Signing in..." : "Sign in"}</span>
             </Button>
-            {local && bootstrap?.isDefaultPassword && <p className="text-center text-xs text-muted-foreground">{bootstrap.defaultPasswordHint ? <>Initial password: <code>{bootstrap.defaultPasswordHint}</code></> : <>Use the initial password configured in <code>DEFAULT_ADMIN_PASSWORD</code>.</>} You must change it after signing in.</p>}
+            {bootstrap?.defaultPasswordHint && <p className="text-center text-xs text-muted-foreground">Initial password: <code>{bootstrap.defaultPasswordHint}</code>. You must change it after signing in.</p>}
           </FieldGroup>
         </form>
       </CardContent>

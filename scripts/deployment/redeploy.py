@@ -126,7 +126,7 @@ def deployment_environment(container, old_image, revision):
 def validate_runtime(container, old_image):
     config, host = container["Config"], container["HostConfig"]
     env = environment(config)
-    expected = {"CLIPROXY_MODE": "managed", "STORAGE_BACKEND": "sqlite", "SQLITE_PATH": "/data/rawroute.sqlite",
+    expected = {"CLIPROXY_MODE": "managed", "SQLITE_PATH": "/data/rawroute.sqlite",
                 "RAWROUTE_DATA_DIR": "/data", "PORT": "8080", "HOSTNAME": "0.0.0.0"}
     if any(env.get(key) != value for key, value in expected.items()):
         raise Failure("Unsupported live data paths, backend, mode, or listener; explicit migration required.")
@@ -326,18 +326,16 @@ db.run('INSERT INTO rawroute_documents(path,collection_path,document_id,data) VA
                         self.m["new_image"], "-e", fixture)
         convert(self, self.m["smoke_volume"], prefix, timezone, "smoke-usage")
         self.runner.run("docker", "run", "--rm", "--name", self.m["helper"], "--label", f"{LABEL}={self.m['transaction']}",
-                        "--network", "none", "--env", f"DATABASE_COLLECTION_PREFIX={prefix}", "--env", f"TIMEZONE={timezone}",
+                        "--network", "none", "--env", f"TIMEZONE={timezone}",
                         "--mount", f"type=volume,src={self.m['smoke_volume']},dst=/data", "--entrypoint", "bun",
                         self.m["new_image"], "run", "--no-env-file", "predict-missing-usage-cost.js",
                         "--sqlite", "/data/rawroute.sqlite", "--timezone", timezone,
                         "--from=2026-10-01T00:00:00.000Z", "--to=2026-10-02T00:00:00.000Z")
         args = ["docker", "create", "--name", self.m["smoke"], "--label", f"{LABEL}={self.m['transaction']}",
                 "--init", "--network", "none", "--mount", f"type=volume,src={self.m['smoke_volume']},dst=/data",
-                "--env", "STORAGE_BACKEND=sqlite", "--env", "SQLITE_PATH=/data/rawroute.sqlite", "--env", "CLIPROXY_MODE=managed",
-                "--env", f"TIMEZONE={timezone}", "--env", f"DATABASE_COLLECTION_PREFIX={prefix}"]
-        smoke_env = self.directory / "smoke.env"
-        atomic_write(smoke_env, "".join(f"{key}={secrets.token_urlsafe(36)}\n" for key in ("SESSION_SECRET", "DEFAULT_ADMIN_PASSWORD", "DEFAULT_PROXY_API_KEY")).encode())
-        args += ["--env-file", str(smoke_env), self.m["new_image"]]
+                "--env", "SQLITE_PATH=/data/rawroute.sqlite", "--env", "CLIPROXY_MODE=managed",
+                "--env", f"TIMEZONE={timezone}"]
+        args += [self.m["new_image"]]
         self.runner.run(*args)
         self.runner.run("docker", "start", self.m["smoke"])
         self.wait_ready(self.m["smoke"], 60)

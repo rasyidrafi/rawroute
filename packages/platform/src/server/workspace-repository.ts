@@ -36,15 +36,9 @@ interface WorkspaceCacheEntry {
   expiresAt: number
 }
 
-function configuredDuration(value: string | undefined, fallback: number) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
-}
-
-const workspaceCacheTtlMs = configuredDuration(process.env.WORKSPACE_CACHE_TTL_MS, 60_000)
-const workspaceNegativeCacheTtlMs = configuredDuration(process.env.WORKSPACE_NEGATIVE_CACHE_TTL_MS, 10_000)
-const configuredMaximumWorkspaceCacheEntries = Number(process.env.MAX_WORKSPACE_CACHE_ENTRIES || 256)
-const maximumWorkspaceCacheEntries = Number.isSafeInteger(configuredMaximumWorkspaceCacheEntries) && configuredMaximumWorkspaceCacheEntries > 0 ? configuredMaximumWorkspaceCacheEntries : 256
+const workspaceCacheTtlMs = 60_000
+const workspaceNegativeCacheTtlMs = 10_000
+const maximumWorkspaceCacheEntries = 256
 const workspaceCachePrefix = "rawroute:workspace:v1:"
 const workspaceCache = new Map<string, WorkspaceCacheEntry>()
 const workspaceReadInflight = new Map<string, Promise<Workspace | undefined>>()

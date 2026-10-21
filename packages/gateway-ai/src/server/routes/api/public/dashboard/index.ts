@@ -4,10 +4,7 @@ import { runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { DEFAULT_WORKSPACE_ID } from "@rawroute/platform/contracts/workspace"
 import { getPublicWorkspace } from "@rawroute/platform/server/runtime"
 
-const configuredPublicDashboardRangeDays = Number(process.env.PUBLIC_DASHBOARD_MAX_CUSTOM_RANGE_DAYS || 366)
-const publicDashboardRangeDays = Number.isSafeInteger(configuredPublicDashboardRangeDays) && configuredPublicDashboardRangeDays > 0
-  ? configuredPublicDashboardRangeDays
-  : 366
+const publicDashboardRangeDays = 366
 
 export async function GET(request: Request) {
   try {

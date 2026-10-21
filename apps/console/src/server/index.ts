@@ -1,4 +1,5 @@
 import { aiServer } from "@rawroute/gateway-ai/server/integration"
+import { storageServer } from "@rawroute/gateway-storage/server/integration"
 import { recordLog } from "@rawroute/observability/server/recorder"
 import { serve } from "bun"
 import index from "../frontend/index.html"
@@ -9,19 +10,18 @@ import { closeLocalDatabase, ensureLocalDatabase } from "@rawroute/platform/serv
 import { closeLocalCache } from "@rawroute/platform/server/local-cache"
 import { isPagePath, pagePaths } from "../frontend/contracts/dashboard/routes"
 import { apiRoutes } from "./routes"
-import { assertProductionBootstrap } from "./bootstrap"
 import { recoverWorkspaceDeletions } from "@rawroute/platform/server/runtime"
 import { drainWorkspaceDeletions } from "@rawroute/platform/server/workspace-repository"
+import { isMemoryBackend } from "@rawroute/platform/server/storage-config"
 
 const port = Number(process.env.PORT || 3000)
 aiServer.initializePersistence()
-// A volatile production store is always a fresh bootstrap. Validate before an
-// API-key request can seed AI state without first opening an admin session.
-if (process.env.NODE_ENV === "production" && process.env.STORAGE_BACKEND === "memory") assertProductionBootstrap(process.env)
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT must be an integer between 0 and 65535.")
-if (process.env.STORAGE_BACKEND !== "memory" && process.env.NODE_ENV !== "test") await ensureLocalDatabase()
+storageServer.preparePersistence()
+if (!isMemoryBackend()) await ensureLocalDatabase()
 // Resume AI cleanup only after its shared engine has had a chance to recover.
 await aiServer.start()
+try { await storageServer.start() } catch (error) { await aiServer.stop(); throw error }
 await recoverWorkspaceDeletions()
 
 const server = serve({
@@ -53,7 +53,7 @@ function stop() {
     recordLog("system.stopping")
     const force = setTimeout(() => { void server.stop(true) }, 30_000)
     try {
-      await server.stop(false)
+      await Promise.all([server.stop(false), storageServer.stop()])
       // Stream monitoring must settle budgets before storage and cache close.
       await drainBackgroundTasks()
       await drainWorkspaceDeletions()

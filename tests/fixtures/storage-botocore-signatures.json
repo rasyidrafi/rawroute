@@ -1,0 +1,22 @@
+{
+  "generator": "botocore 1.43.116; S3SigV4Auth and S3SigV4QueryAuth; get_current_datetime fixed at 2026-10-21T12:00:00Z; disposable credentials",
+  "cases": [
+    {
+      "method": "PUT",
+      "url": "https://storage.example/logical-bucket/folder/a/../b//%2e/%2F%25%20?prefix=a%2Bb&empty=",
+      "headers": {
+        "Host": "storage.example",
+        "X-Amz-Date": "20261021T120000Z",
+        "X-Amz-Content-SHA256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        "Authorization": "AWS4-HMAC-SHA256 Credential=RAWROUTETESTKEY00001/20261021/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=aa2b07a0778a0252b9e26d33d9a2128337876b79233c666655742e8f1a5fb8d4"
+      },
+      "body": "hello"
+    },
+    {
+      "method": "GET",
+      "url": "https://storage.example/logical-bucket/folder/a/../b//%2e/%2F%25%20?prefix=a%2Bb&empty=&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=RAWROUTETESTKEY00001%2F20261021%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261021T120000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=0da184f810a6230e8859d4e174c82de1f9086b3d3a5e55092ed6bd471664aab7",
+      "headers": { "Host": "storage.example" },
+      "body": null
+    }
+  ]
+}

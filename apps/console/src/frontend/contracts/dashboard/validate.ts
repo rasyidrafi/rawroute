@@ -21,10 +21,10 @@ export function validatePageContributions(contributions: readonly PageContributi
       paths.set(equivalent, id)
       if (!page.title || !page.skeleton) throw new Error(`Dashboard page ${id} requires title and skeleton`)
       if (page.scope !== "workspace" && page.scope !== "global") throw new Error(`Invalid dashboard scope for ${id}`)
-      const app = contribution.owner === "ai" ? "ai-gateway" : contribution.owner === "tools" ? "tool-gateway" : "shared"
+      const app = contribution.owner === "ai" ? "ai-gateway" : contribution.owner === "tools" ? "tool-gateway" : contribution.owner === "storage" ? "storage-gateway" : "shared"
       if (page.app !== app && !(contribution.owner === "ai" && page.app === "shared")) throw new Error(`Invalid app placement for ${contribution.owner} page ${id}: ${page.app}`)
       if (contribution.owner === "tools" && page.scope !== "global") throw new Error(`Tools page ${id} must have global scope`)
-      if (page.app !== "shared" && !page.path.startsWith(contribution.owner === "ai" ? "/dashboard/ai/" : "/dashboard/tools/")) throw new Error(`Dashboard page ${id} path does not match its app`)
+      if (page.app !== "shared" && !page.path.startsWith(`/dashboard/${contribution.owner}/`)) throw new Error(`Dashboard page ${id} path does not match its app`)
     }
   }
 }

@@ -11,12 +11,6 @@ export interface Meta {
   sessionSecret: string
 }
 
-export function assertIdentityBootstrap(environment: Record<string, string | undefined>) {
-  const password = environment.DEFAULT_ADMIN_PASSWORD
-  if (password && password.length < 10) throw new Error("DEFAULT_ADMIN_PASSWORD must be at least 10 characters.")
-  if (!environment.SESSION_SECRET || environment.SESSION_SECRET.length < 32) throw new Error("SESSION_SECRET must be set to at least 32 characters before production initialization.")
-}
-
 export function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex")
   return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`
@@ -40,7 +34,6 @@ export function validatePasswordUpdate(currentPassword: string, newPassword: str
 
 export function createIdentityRepository(dependencies: {
   memory?: { value?: Meta }
-  validateBootstrap(environment: Record<string, string | undefined>): void
   initialize(transaction: Transaction): void
   changed(transaction?: Transaction): void
 }) {
@@ -48,15 +41,10 @@ export function createIdentityRepository(dependencies: {
   let cache: { value: Meta; expiresAt: number } | undefined
   let inflight: Promise<Meta> | undefined
   let generation = 0
-  const configured = Number(process.env.ROUTING_CACHE_TTL_MS || 60_000)
-  const ttl = Number.isFinite(configured) && configured >= 0 ? configured : 60_000
+  const ttl = 60_000
   const ref = () => getSqliteDatabase().collection(`${collectionPrefix()}_system`).doc("meta")
   function initial(): Meta {
-    if (process.env.NODE_ENV === "production") {
-      assertIdentityBootstrap(process.env)
-      dependencies.validateBootstrap(process.env)
-    }
-    return { version: 4, admin: { passwordHash: hashPassword(process.env.DEFAULT_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD), mustChangePassword: true }, sessionSecret: process.env.SESSION_SECRET || randomBytes(32).toString("hex") }
+    return { version: 4, admin: { passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD), mustChangePassword: true }, sessionSecret: randomBytes(32).toString("hex") }
   }
   function invalidate() {
     generation += 1

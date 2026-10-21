@@ -4,13 +4,14 @@ import { initializeAiPersistence, queryLocalUsageRange } from "../../packages/ga
 import { recordUsageEvent } from "../../packages/gateway-ai/src/server/analytics"
 import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
+import { collectionPrefix } from "../../packages/platform/src/server/storage-config"
 
 initializeAiPersistence()
 const collection = `rawroute_local_smoke_${process.pid}`
 const db = getSqliteDatabase()
 const documents = db.collection(collection)
 const counter = documents.doc("counter")
-const prefix = (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
+const prefix = collectionPrefix()
 const usageWorkspace = db.collection(`${prefix}_workspaces`).doc(collection)
 
 async function verifyDuplicateUsage() {

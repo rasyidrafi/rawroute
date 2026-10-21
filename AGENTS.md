@@ -1,73 +1,60 @@
-# Bun workspace modular monolith
+# Coding rules
 
-One Bun 1.4.2 process, one SQLite connection/transaction queue, one deployment.
-Bun workspaces only; no root application exports or retired `src/` tree.
+- Keep things simple; no overengineering.
+- Omakase: avoid user choices and configuration unless genuinely necessary or required.
+  Implementation details use fixed owner defaults, not deployment knobs. Generate
+  and persist internal secrets automatically; only external credentials and genuine
+  deployment boundaries may require configuration. Fresh administrator password is
+  always `123456`, shown on every login hostname until mandatory password change.
+- Code and tests are the sole source of truth for behavior; read them to understand it.
+  No docs folders or additional documentation files. Only `README.md` (concise
+  repository overview/setup) and `AGENTS.md` (coding rules) are permitted Markdown
+  filenames in owned code. Do not relocate documentation into README dumps.
+- Preserve unrelated work. Never edit real environment files, credentials or data.
 
-- `apps/console/src/server/index.ts`: native Bun serve/start/drain/stop.
-- `apps/console/src/frontend/index.html` loads `frontend.tsx` and `App.tsx`.
-- `packages/{platform,gateway-ai,gateway-tools,observability}/src/` owns contracts,
-  server and web implementations. `packages/ui/src/` contains neutral primitives.
-- Import other owners through explicit `@rawroute/<owner>/contracts`, `/server`,
-  `/web` or manifest-listed subpaths. Relative imports stay within one package.
-  Tests alone may use explicit relative internal paths. Never add wildcard exports,
-  mixed root barrels, source aliases, or console singleton dependencies.
+## Boundaries
 
-The DAG is console → gateways → platform → observability/UI. Both gateways may
-also use observability/UI directly; neither gateway imports the other. Platform
-cannot import gateways/console. Observability and UI are neutral independent
-leaves. Observability owns recording/storage/context/client/formatting; platform
-owns operational-log page metadata/UI and authenticated HTTP adapters. Existing
-`observability` contribution IDs, shared menus, URLs and scopes are unchanged.
+- One Bun 1.4.2 process, one SQLite connection/serialized transaction queue, one
+  deployment. Use Bun workspaces; no root application exports or retired `src/` tree.
+- Owners are console, gateway-ai, gateway-tools, gateway-storage, platform,
+  observability and UI. Dependency DAG: console → gateways → platform →
+  observability/UI. Gateways may use the neutral leaves directly, never each other;
+  platform cannot import gateways/console; UI and observability are independent.
+- Import owners only through manifest-listed contracts/server/web or explicit
+  subpaths. Relative imports stay within a package (tests may inspect internals).
+  No wildcard exports, mixed root barrels, source aliases or console singletons.
+- Console constructs integrations before opening the database and composes owner
+  routes through platform's HTTP wrapper. Import gateway public integration,
+  routes and logging APIs, not raw stores/tables. Owners retain schema/projections.
+- Declare access policy in owner `server/routes.ts`. Workspace handlers must run
+  inside `runInWorkspace`; missing scope fails, never defaults. Tools deployment
+  and pages stay global. Preserve canonical URLs, contribution IDs and scopes.
+- Declare page metadata/scope in owner contracts and views/navigation in owner
+  `web/module.ts`. Console validates browser modules before merging and injects
+  shell composition; owners never import composition roots. Links use owner metadata.
+- Browser code cannot reach server modules, environment, native APIs or secrets.
+  Browser types/helpers belong in owner contracts. Workspace UI uses platform's
+  `useDashboardApi()`; standalone clients are global. UI imports no domain packages.
+- UI primitives need explicit package subpath exports; `@rawroute/ui` is only a
+  shadcn tsconfig marker, not an importable root. Theme CSS stays in console.
+- Use platform shared persistence and durable audit; authoritative audit is
+  separate from bounded operational logs/browser reports. Observability owns
+  recording/storage/context/client/formatting; platform owns log pages and HTTP
+  adapters. Use `createRecorder` with owner event catalogs/normalizers.
+- CLIProxy lifecycle belongs to gateway-ai's `server/cliproxy/`. Use its shared
+  connection and audited mutations; feature handlers must not read transport
+  secrets or spawn children. Preserve deletion admission/drain, durable participant
+  checkpoints/recovery and shutdown ordering, including Storage drain boundaries.
+- Keep only current features/canonical routes, not compatibility aliases,
+  redirects, unused pages or request-time data conversion. Persisted schema changes
+  require a tested stopped-writer CLI in `scripts/migrations/`, backup and offline
+  conversion before deployment. Code moves alone do not require migration.
 
-API routes declare access policy in owner `server/routes.ts`; log adapters are
-`platform/src/server/operational-logs/routes.ts`. Console `server/routes.ts`
-statically validates and composes contributions through platform's native Bun
-HTTP wrapper. Workspace handlers execute inside `runInWorkspace`; missing scope
-must fail rather than silently select Default. Tools deployment/pages stay global.
+## Verification
 
-Declare canonical page metadata/scope in owner `contracts/pages.ts` (platform
-uses `dashboard.ts` and `operational-log-pages.ts`). Console's browser-safe
-`frontend/contracts/dashboard/routes.ts` composes metadata for browser and server.
-Domain links use owner metadata, not console lookup. Owner `web/module.ts`
-contributes views, skeletons and navigation. Console `frontend/browser-modules.ts`
-registers/validates modules BEFORE merging. `frontend/web-composition.tsx` injects
-platform's `ShellComposition`: landing paths, lookup, loading/events and runtime
-callbacks. Owners never import these composition roots. Browser code must not
-reach server modules, environment variables, native APIs or secrets.
-
-Workspace UI uses `useDashboardApi()` from platform web; standalone API clients
-are global. Browser types/display helpers belong to owner contracts, never
-server or console implementation modules. UI imports no domain packages. The
-exact `@rawroute/ui` tsconfig directory marker exists only for shadcn generation;
-it is NOT an exported/importable package root. Add each new primitive's explicit
-subpath to `packages/ui/package.json`. Theme CSS is console `frontend/index.css`.
-
-Console `server/composition.ts` constructs integrations explicitly, before DB
-open. Console imports gateway public integration/routes/logging APIs only, never
-raw stores/tables. Gateways use platform's shared persistence and durable audit;
-domain schema/projection callbacks stay with their owner. Persistent authoritative
-audit is separate from bounded operational logs and browser reports. Use
-observability's `createRecorder` with owner event catalogs/normalizers.
-
-CLIProxy lifecycle belongs to `packages/gateway-ai/src/server/cliproxy/`. Use its
-shared connection and audited mutation boundaries; never read transport secrets
-or spawn children from feature handlers. Preserve deletion admission/drain,
-durable participant checkpoints/recovery, and shutdown ordering.
-
-See `docs/architecture/005-workspaces.md` for exports, DAG and adding a gateway;
-001–004 retain historical reviewed slice results. Scope/logging and managed
-CLIProxy deployment guides remain in `docs/`. Consult
-`.agents/skills/ask-bun/SKILL.md` and its script for Bun-specific guidance.
-
-After changes, run `bun run lint` and fix ALL errors/warnings in source: do not
-disable rules, add suppressions or broaden allowances. Architecture checking is
-part of lint and unit tests. `bun run typecheck` is separate from `bun run build`.
-Full acceptance: `TMPDIR=/tmp/opencode bun run verify` (no external timeout).
-Docker copies every workspace manifest before frozen install, then bundles all
-runtime dependencies into `dist/`; runner needs neither source nor workspace links.
-
-Keep only current features and canonical routes. No retired URL aliases,
-redirect compatibility layers, unused pages or request-time data conversion.
-Persisted schema changes require a tested stopped-writer CLI under
-`scripts/migrations/`, backup and offline conversion before deployment. Code
-moves alone do not require a data migration. Never edit real environment/data.
+- Run `bun run lint`; fix all source errors/warnings without suppressions,
+  disabled rules or broader allowances. Architecture checks are part of lint/tests.
+- Run `bun run typecheck` separately from build. Full acceptance:
+  `TMPDIR=/tmp/opencode bun run verify` with no external timeout.
+- Docker copies all workspace manifests before frozen install and bundles runtime
+  dependencies into `dist/`; the runner needs neither source nor workspace links.

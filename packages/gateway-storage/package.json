@@ -1,0 +1,36 @@
+{
+  "name": "@rawroute/gateway-storage",
+  "version": "1.1.9",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts/index.ts",
+    "./contracts/pages": "./src/contracts/pages.ts",
+    "./web": "./src/web/index.tsx",
+    "./server": "./src/server/integration.ts",
+    "./server/integration": "./src/server/integration.ts",
+    "./server/routes": "./src/server/routes.ts",
+    "./server/maintenance/schema": "./src/server/schema.ts",
+    "./server/security": "./src/server/security.ts",
+    "./server/signature": "./src/server/signature.ts",
+    "./server/protocol": "./src/server/protocol.ts",
+    "./server/streams": "./src/server/streams.ts",
+    "./server/upstream": "./src/server/upstream.ts"
+  },
+  "dependencies": {
+    "@aws-crypto/sha256-js": "5.2.0",
+    "@aws-sdk/client-s3": "3.1154.0",
+    "@aws-sdk/s3-request-presigner": "3.1154.0",
+    "@rawroute/observability": "workspace:*",
+    "@rawroute/platform": "workspace:*",
+    "@rawroute/ui": "workspace:*",
+    "react": "19.2.7",
+    "lucide-react": "^1.27.0",
+    "swr": "^2.4.2",
+    "@smithy/node-http-handler": "4.12.1",
+    "@smithy/protocol-http": "5.6.2",
+    "@smithy/signature-v4": "5.7.4",
+    "fast-xml-parser": "5.11.2",
+    "ipaddr.js": "2.5.0"
+  }
+}

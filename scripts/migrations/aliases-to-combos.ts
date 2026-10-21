@@ -3,6 +3,7 @@ import { chmodSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { cleanAliasId } from "@rawroute/gateway-ai/server/maintenance/identifiers"
 import type { ComboMember, ModelAlias, ModelCombo } from "@rawroute/gateway-ai/contracts"
+import { collectionPrefix } from "@rawroute/platform/server/storage-config"
 
 type StoredRow = { path: string; collection_path: string; document_id: string; data: string }
 type Write = { path: string; collection: string; id: string; data: object }
@@ -12,7 +13,7 @@ export function migrateAliasesToCombos(file: string, apply = false) {
   if (!existsSync(file)) throw new Error(`Database does not exist: ${file}`)
   const db = new Database(file, apply ? { readwrite: true } : { readonly: true })
   try {
-    const prefix = (process.env.DATABASE_COLLECTION_PREFIX || "rawroute").replace(/[^a-zA-Z0-9_-]/g, "_")
+    const prefix = collectionPrefix(db)
     const rows = db.query<StoredRow, []>("SELECT path, collection_path, document_id, data FROM rawroute_documents").all()
     const byPath = new Map(rows.map((row) => [row.path, row]))
     const aliasRows = rows.filter((row) => row.collection_path.startsWith(`${prefix}_workspaces/`) && row.collection_path.split("/").length === 3 && row.collection_path.endsWith("/aliases"))

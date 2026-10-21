@@ -3,7 +3,7 @@ name: Production image
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**", "**/*.md"]
+    paths-ignore: ["**/*.md"]
   workflow_dispatch:
 
 permissions:

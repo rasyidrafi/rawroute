@@ -32,15 +32,15 @@ if (!worker) {
   const environment = {
     PATH: process.env.PATH || "/usr/bin:/bin", HOME: directory, TMPDIR: directory,
     SQLITE_PATH: join(directory, "synthetic.sqlite"), RAWROUTE_DATA_DIR: directory,
-    STORAGE_BACKEND: "sqlite", NODE_ENV: "development", TIMEZONE: "UTC", DATABASE_COLLECTION_PREFIX: "perf",
+    STORAGE_BACKEND: "sqlite", NODE_ENV: "development", TIMEZONE: "UTC",
   }
   let sequence = 0
   const measurements = new Map<string, { durations: number[]; bytes: number[] }>()
-  async function run(mode: string, extra: string[] = [], logging = true) {
+  async function run(mode: string, extra: string[] = []) {
     const path = mode === "read" || mode === "writes" ? join(directory, `trial-${sequence}.sqlite`) : environment.SQLITE_PATH
     if (path !== environment.SQLITE_PATH) copyFileSync(environment.SQLITE_PATH, path)
     const child = Bun.spawn([process.execPath, "run", "--no-env-file", import.meta.path, mode, String(count), String(trials), ...extra], {
-      env: { ...environment, SQLITE_PATH: path, DASHBOARD_PERF_LOG: logging ? "1" : "0" }, stdout: "pipe", stderr: "pipe",
+      env: { ...environment, SQLITE_PATH: path }, stdout: "pipe", stderr: "pipe",
     })
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
     writeFileSync(join(directory, `${sequence++}-${mode}.log`), stdout + stderr)
@@ -58,15 +58,14 @@ if (!worker) {
     }
   }
   console.log(JSON.stringify({ benchmark: "metadata", directory, bun: Bun.version, count, trials, workspaces: 2, keysPerWorkspace: 4, modelsPerWorkspace: 3, from: new Date(start), to: new Date(end), cold: "fresh process/application caches; NOT filesystem cold" }))
-  await run("seed", [], false)
+  await run("seed")
   for (const budget of [false, true]) {
-    if (budget) await run("budgets", [], false)
+    if (budget) await run("budgets")
     for (const scenario of ["overview-1-aligned", "overview-7-aligned", "overview-30-aligned", "overview-1-partial", "overview-7-partial", "overview-30-partial", "private-all", "public-all", "private-budget", "public-budget"]) {
       for (let trial = 0; trial < trials; trial++) await run("read", [scenario, String(budget), String(trial)])
     }
   }
-  await run("writes", [], false)
-  await run("writes", [], true)
+  await run("writes")
   for (const [scenario, { durations, bytes }] of measurements) {
     durations.sort((a, b) => a - b)
     const middle = Math.floor(durations.length / 2)
@@ -91,7 +90,7 @@ if (!worker) {
   if (worker === "seed") {
     for (const workspace of workspaces) {
       // Deterministic, synthetic metadata only; these are not live gateway credentials.
-      const root = getSqliteDatabase().collection("perf_workspaces").doc(workspace)
+      const root = getSqliteDatabase().collection("rawroute_workspaces").doc(workspace)
       for (let key = 0; key < 4; key++) await root.collection("apiKeys").doc(`key-${key}`).set({ name: `Synthetic ${key}`, key: `offline-${workspace}-${key}`, createdAt: context.usageStartAt })
       await scoped(workspace, () => analytics.updateBudgetWindow({ anchor: "custom", start: context.usageStartAt, end: context.windowEnd }))
     }
@@ -135,11 +134,11 @@ if (!worker) {
     const timings: number[] = []
     for (let i = 0; i < 100; i++) await scoped("perf-b", async () => {
       const began = performance.now()
-      await analytics.recordUsageEvent({ ...event(i), id: `overhead-${process.env.DASHBOARD_PERF_LOG}-${i}` }, context)
+      await analytics.recordUsageEvent({ ...event(i), id: `overhead-${i}` }, context)
       timings.push(performance.now() - began)
     })
     timings.sort((a, b) => a - b)
-    report({ logging: process.env.DASHBOARD_PERF_LOG, medianMs: timings[50], minMs: timings[0], maxMs: timings.at(-1) })
+    report({ medianMs: timings[50], minMs: timings[0], maxMs: timings.at(-1) })
   } else throw new Error("Unknown worker mode")
   const { Database } = await import("bun:sqlite")
   const database = new Database(process.env.SQLITE_PATH!, { readonly: true })
