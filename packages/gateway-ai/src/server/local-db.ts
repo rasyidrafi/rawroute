@@ -62,6 +62,8 @@ export async function queryLocalUsageRange(workspaceId: string, from: string, to
 export async function queryLocalRequestLogs(collectionPath: string, query: RequestLogQuery) {
   initializeAiPersistence()
   return withTransaction(async client => {
+    // Probe each chain by its identity, not by rescanning its entire date range.
+    // Carry the latest cursor through ranking to avoid a quadratic ranked self-join.
     const result = await client.query(`
       WITH candidates AS (
         SELECT DISTINCT COALESCE(json_extract(data, '$.requestId'), document_id) AS request_id,
@@ -73,20 +75,20 @@ export async function queryLocalRequestLogs(collectionPath: string, query: Reque
         SELECT d.document_id, d.data, c.request_id, c.key_id,
           json_extract(d.data, '$.completedAt') AS at,
           COALESCE(json_extract(d.data, '$.attemptIndex'), 0) AS attempt_index
-        FROM candidates c JOIN rawroute_documents d ON d.collection_path = $1
+        FROM candidates c JOIN rawroute_documents d INDEXED BY rawroute_documents_request_chain_idx ON d.collection_path = $1
           AND COALESCE(json_extract(d.data, '$.requestId'), d.document_id) = c.request_id
           AND COALESCE(json_extract(d.data, '$.gatewayKeyId'), '') = c.key_id
         WHERE json_extract(d.data, '$.completedAt') < $3
       ), ranked AS (
         SELECT *,
           ROW_NUMBER() OVER (PARTITION BY request_id, key_id ORDER BY attempt_index DESC, at DESC, document_id DESC) AS final_rank,
-          ROW_NUMBER() OVER (PARTITION BY request_id, key_id ORDER BY at DESC, document_id ASC) AS time_rank,
+          FIRST_VALUE(document_id) OVER (PARTITION BY request_id, key_id ORDER BY at DESC, document_id ASC) AS latest_id,
+          MAX(at) OVER (PARTITION BY request_id, key_id) AS latest_at,
           MAX(CASE WHEN json_extract(data, '$.status') < 200 OR json_extract(data, '$.status') >= 300 THEN 1 ELSE 0 END) OVER (PARTITION BY request_id, key_id) AS has_failure,
           MAX(CASE WHEN $4 = '' OR json_extract(data, '$.gatewayModelId') = $4 OR json_extract(data, '$.requestedModel') = $4 THEN 1 ELSE 0 END) OVER (PARTITION BY request_id, key_id) AS model_match
         FROM attempts
       ), selected AS (
-        SELECT f.request_id, f.key_id, t.at, t.document_id FROM ranked f JOIN ranked t
-          ON f.request_id = t.request_id AND f.key_id = t.key_id AND t.time_rank = 1
+        SELECT f.request_id, f.key_id, f.latest_at AS at, f.latest_id AS document_id FROM ranked f
         WHERE f.final_rank = 1 AND f.model_match = 1
           AND ($6 = 'all'
             OR ($6 = 'incomplete' AND json_extract(f.data, '$.requestFinal') = 0)
@@ -94,12 +96,16 @@ export async function queryLocalRequestLogs(collectionPath: string, query: Reque
               ($6 = 'success' AND json_extract(f.data, '$.status') BETWEEN 200 AND 299)
               OR ($6 = 'failed' AND json_extract(f.data, '$.status') NOT BETWEEN 200 AND 299)
               OR ($6 = 'recovered' AND json_extract(f.data, '$.status') BETWEEN 200 AND 299 AND f.has_failure = 1))))
-          AND ($7 IS NULL OR t.at < $7 OR (t.at = $7 AND t.document_id > $8))
-        ORDER BY t.at DESC, t.document_id ASC LIMIT 26
+          AND ($7 IS NULL OR f.latest_at < $7 OR (f.latest_at = $7 AND f.latest_id > $8))
+        ORDER BY f.latest_at DESC, f.latest_id ASC LIMIT 26
       )
-      SELECT a.document_id, a.data FROM selected s JOIN attempts a
-        ON a.request_id = s.request_id AND a.key_id = s.key_id
-      ORDER BY s.at DESC, s.document_id ASC, a.attempt_index ASC, a.at ASC, a.document_id ASC
+      SELECT d.document_id, d.data FROM selected s
+        JOIN rawroute_documents d INDEXED BY rawroute_documents_request_chain_idx ON d.collection_path = $1
+          AND COALESCE(json_extract(d.data, '$.requestId'), d.document_id) = s.request_id
+          AND COALESCE(json_extract(d.data, '$.gatewayKeyId'), '') = s.key_id
+      WHERE json_extract(d.data, '$.completedAt') < $3
+      ORDER BY s.at DESC, s.document_id ASC, COALESCE(json_extract(d.data, '$.attemptIndex'), 0) ASC,
+        json_extract(d.data, '$.completedAt') ASC, d.document_id ASC
     `, [collectionPath, query.from, query.to, query.model || "", query.key || "", query.status, query.after?.at ?? null, query.after?.id ?? null])
     return result.rows.map(row => ({ ...row.data, id: row.document_id }) as unknown as UsageEvent)
   })

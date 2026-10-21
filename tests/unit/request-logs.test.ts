@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
-import { closeLocalDatabase, getSqliteDatabase } from "../../packages/platform/src/server/database"
+import { closeLocalDatabase, getDatabase, getSqliteDatabase } from "../../packages/platform/src/server/database"
 import { initializeAiPersistence, queryLocalRequestLogs } from "../../packages/gateway-ai/src/server/local-db"
 
 import { listRequestLogs, recordUsageEvent } from "../../packages/gateway-ai/src/server/analytics"
@@ -60,6 +60,51 @@ test("groups cross the lower date bound but not the frozen upper bound, and neve
   expect((await queryLocalRequestLogs(collection.path, { ...query, status: "incomplete" })).map(row => row.id)).toEqual(["pending"])
   expect(groupRequestLogEvents(await queryLocalRequestLogs(collection.path, query))).toHaveLength(5)
 })
+
+test("request ordering and cursors use the latest timestamp even when the final attempt finishes earlier", async () => {
+  const collection = getSqliteDatabase().collection("history/out-of-order-chains/usageEvents")
+  const events = [
+    event("latest-a", { requestId: "out-of-order", attemptIndex: 0, requestFinal: false, status: 400, gatewayModelId: "primary" }),
+    event("latest-b", { requestId: "out-of-order", attemptIndex: 1, requestFinal: false, status: 400 }),
+    event("final-earlier", { requestId: "out-of-order", attemptIndex: 2, requestFinal: true, completedAt: "2026-10-15T11:00:00.000Z" }),
+    event("between", { completedAt: "2026-10-15T11:30:00.000Z" }),
+    event("other-key", { requestId: "out-of-order", gatewayKeyId: "other", attemptIndex: 0, requestFinal: false }),
+  ]
+  for (const row of events) await collection.doc(row.id).set(row)
+  for (const selected of [query, { ...query, status: "recovered" as const }, { ...query, model: "primary" }, { ...query, after: { at: events[0]!.completedAt, id: "latest-a" } }]) {
+    expect(await queryLocalRequestLogs(collection.path, selected)).toEqual(selectRequestLogGroups(events, selected))
+  }
+  const groups = groupRequestLogEvents(await queryLocalRequestLogs(collection.path, query))
+  expect(requestLogLatest(groups[0]!).id).toBe("latest-a")
+  expect(groups[0]!.at(-1)!.id).toBe("final-earlier")
+})
+
+test("recent requests remain responsive with thousands of historical groups and preserve pagination", async () => {
+  const collection = getSqliteDatabase().collection("history/scaled-request-chains/usageEvents")
+  const seed = event("scale-seed")
+  await collection.doc(seed.id).set(seed)
+  const events = [seed, ...Array.from({ length: 4_000 }, (_, index) => event(`scale-${String(index).padStart(5, "0")}`, {
+    gatewayKeyId: `key-${index % 4}`,
+    completedAt: new Date(Date.parse(query.from) + index * 20_000).toISOString(),
+    ...(index >= 3_900 ? { requestId: `chain-${Math.floor(index / 2)}`, gatewayKeyId: "chain-key", attemptIndex: index % 2, requestFinal: index % 2 === 1, status: index % 2 ? 200 : 500 } : {}),
+  }))]
+  const insert = getDatabase().query("INSERT INTO rawroute_documents(path, collection_path, document_id, data) VALUES (?, ?, ?, ?)")
+  getDatabase().transaction(() => {
+    for (const row of events.slice(1)) insert.run(`${collection.path}/${row.id}`, collection.path, row.id, JSON.stringify(row))
+  })()
+  const started = performance.now()
+  const rows = await queryLocalRequestLogs(collection.path, query)
+  // This guards the synchronous SQLite/event-loop regression, with headroom for slow CI.
+  expect(performance.now() - started).toBeLessThan(2_000)
+  expect(rows).toEqual(selectRequestLogGroups(events, query))
+  const first = groupRequestLogEvents(rows)
+  expect(first).toHaveLength(26)
+  const last = requestLogLatest(first[24]!)
+  const nextQuery = { ...query, after: { at: last.completedAt, id: last.id } }
+  const next = await queryLocalRequestLogs(collection.path, nextQuery)
+  expect(next).toEqual(selectRequestLogGroups(events, nextQuery))
+  expect(new Set([...first.slice(0, 25).flat(), ...next].map(row => row.id)).size).toBe(first.slice(0, 25).flat().length + next.length)
+}, 10_000)
 
 test("request log API limits requests rather than attempts and exposes payload-model filtering", async () => {
   await runInWorkspace({ id: "grouped-api", storageMode: "scoped" }, async () => {
