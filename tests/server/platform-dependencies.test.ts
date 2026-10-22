@@ -7,24 +7,23 @@ test("all workspace exports, declared dependencies, source layers and actual bro
   expect(checkArchitecture().workspaces).toBe(7)
 })
 
-test("resolved negative fixtures reject relative, alias, type, export, dynamic and transitive browser/server bypasses", () => {
-  const fixtures = [
-    ["packages/platform/src/server/runtime.ts", 'export * from "@rawroute/gateway-ai/server"', /Undeclared/],
-    ["packages/platform/src/server/runtime.ts", 'export * from "../../../gateway-ai/src/server/store"', /relative bypass/],
-    ["packages/ui/src/utils.ts", 'export * from "@rawroute/platform/web"', /Undeclared/],
-    ["packages/gateway-tools/src/server/runtime.ts", 'void import("@rawroute/gateway-ai/server")', /Undeclared/],
-    ["packages/gateway-storage/src/server/security.ts", 'void import("@rawroute/gateway-ai/server")', /Undeclared/],
-    ["packages/gateway-ai/src/contracts/pages.ts", 'type Secret = import("../server/store")', /server-only/],
-    ["packages/platform/src/web/api.ts", 'export * from "../server/runtime"', /server-only/],
-    ["packages/observability/src/contracts/timezone.ts", 'void process.env.SESSION_SECRET', /Server-only global/],
-    ["packages/observability/src/contracts/timezone.ts", 'export * from "node:crypto"', /server-only external/],
-    ["apps/console/src/server/composition.ts", 'export * from "@rawroute/gateway-ai/server/store"', /Private package/],
-    ["packages/platform/src/server/runtime.ts", 'export * from "@/gateways/ai/server/store"', /Alias/],
-    ["packages/ui/src/utils.ts", 'export * from "@rawroute/ui"', /Private package/],
-    ["apps/console/src/server/composition.ts", 'export * from "@rawroute/gateway-ai/server/maintenance/identifiers"', /Console raw domain/],
-    ["packages/platform/src/web/api.ts", 'void import("#private-server")', /Alias/],
-  ] as const
-  for (const [file, source, error] of fixtures) expect(() => checkArchitecture({ overrides: new Map([[join(repository, file), source]]) })).toThrow(error)
+test.each([
+  ["packages/platform/src/server/runtime.ts", 'export * from "@rawroute/gateway-ai/server"', /Undeclared/],
+  ["packages/platform/src/server/runtime.ts", 'export * from "../../../gateway-ai/src/server/store"', /relative bypass/],
+  ["packages/ui/src/utils.ts", 'export * from "@rawroute/platform/web"', /Undeclared/],
+  ["packages/gateway-tools/src/server/runtime.ts", 'void import("@rawroute/gateway-ai/server")', /Undeclared/],
+  ["packages/gateway-storage/src/server/security.ts", 'void import("@rawroute/gateway-ai/server")', /Undeclared/],
+  ["packages/gateway-ai/src/contracts/pages.ts", 'type Secret = import("../server/store")', /server-only/],
+  ["packages/platform/src/web/api.ts", 'export * from "../server/runtime"', /server-only/],
+  ["packages/observability/src/contracts/timezone.ts", 'void process.env.SESSION_SECRET', /Server-only global/],
+  ["packages/observability/src/contracts/timezone.ts", 'export * from "node:crypto"', /server-only external/],
+  ["apps/console/src/server/composition.ts", 'export * from "@rawroute/gateway-ai/server/store"', /Private package/],
+  ["packages/platform/src/server/runtime.ts", 'export * from "@/gateways/ai/server/store"', /Alias/],
+  ["packages/ui/src/utils.ts", 'export * from "@rawroute/ui"', /Private package/],
+  ["apps/console/src/server/composition.ts", 'export * from "@rawroute/gateway-ai/server/maintenance/identifiers"', /Console raw domain/],
+  ["packages/platform/src/web/api.ts", 'void import("#private-server")', /Alias/],
+] as const)("resolved negative fixture %s rejects %s", (file, source, error) => {
+  expect(() => checkArchitecture({ overrides: new Map([[join(repository, file), source]]) })).toThrow(error)
 })
 
 test("root package cannot expose mixed application exports", () => {

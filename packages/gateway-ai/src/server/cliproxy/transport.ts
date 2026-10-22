@@ -117,7 +117,7 @@ export function nativeResponsesBody(body: Uint8Array, model: string, ingress: Pr
   return JSON.stringify(normalized)
 }
 
-export async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewayModel, body: Uint8Array, ingress: Protocol) {
+export async function proxyToNativeResponses(request: Request, resolved: ResolvedGatewayModel, body: Uint8Array) {
   const config = resolved.nativeResponses!
   const keys = config.authType === "none" ? [undefined] : config.apiKeys.filter((key) => key.enabled && key.key.trim())
   if (!keys.length) return Response.json({ error: { message: "No enabled provider credentials are available." } }, { status: 503 })
@@ -128,7 +128,7 @@ export async function proxyToNativeResponses(request: Request, resolved: Resolve
     headers.set("accept", request.headers.get("accept") || "application/json")
     if (config.authType === "bearer" && key) headers.set("authorization", `Bearer ${key.key}`)
     const response = await fetch(providerResponsesUrl(config.baseUrl), {
-      method: "POST", headers, body: nativeResponsesBody(body, resolved.upstreamModel, ingress, resolved.reasoningEffort, resolved.customPayload), signal: request.signal, cache: "no-store",
+      method: "POST", headers, body: Buffer.from(body), signal: request.signal, cache: "no-store",
     })
     if (response.ok || keys.length === 1) return passthroughResponse(response)
     if (last) await last.body?.cancel().catch(() => undefined)

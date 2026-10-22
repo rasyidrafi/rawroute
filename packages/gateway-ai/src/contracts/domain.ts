@@ -14,7 +14,7 @@ export interface Provider {
   protocol: Protocol
   authType: AuthType
   headers: Record<string, string>
-  /** Opt in to CLIProxy's prompt_cache_key projection for OpenAI-compatible providers. */
+  /** Derive session prompt cache keys for OpenAI-compatible providers. Codex enables this automatically. */
   supportPromptCacheKey?: boolean
   enabled: boolean
   createdAt: string

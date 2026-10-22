@@ -443,7 +443,7 @@ function ProviderDetailsCard({ data, isOAuthProvider, mutate }: { data: Provider
             <DetailValue label="Gateway prefix" value={`${provider.prefix}/`} mono />
             <DetailValue label="Authentication" value={provider.authType === "none" ? "None" : provider.authType} />
             <DetailValue label="Protocol" value={protocolLabels[provider.protocol]} />
-            {provider.protocol !== "anthropic-messages" && <DetailValue label="Prompt cache key" value={provider.supportPromptCacheKey === true ? "Enabled" : "Disabled"} />}
+            {provider.protocol !== "anthropic-messages" && <DetailValue label="Prompt cache key" value={provider.prefix === "codex" || provider.supportPromptCacheKey === true ? "Enabled" : "Disabled"} />}
             <DetailValue label={isOAuthProvider ? "Configured accounts" : "Configured keys"} value={String(apiKeyCounts.configured)} />
             <DetailValue label="Configured models" value={String(models.length)} />
           </div>

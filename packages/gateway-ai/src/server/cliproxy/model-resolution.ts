@@ -90,7 +90,7 @@ export async function resolveGatewayModel(model: string, sharedModelId?: string)
         providerModelId: target.id,
         providerId: target.providerId,
         providerName: provider.name,
-        promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
+        promptCacheKey: provider.prefix === "codex" || provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
         reasoningCapability: target.reasoningCapability,
         nativeResponses,
         shared: {
@@ -147,7 +147,7 @@ export async function resolveGatewayModel(model: string, sharedModelId?: string)
     providerModelId: target.id,
     providerId: target.providerId,
     providerName: provider.name,
-    promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
+    promptCacheKey: provider.prefix === "codex" || provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
     reasoningCapability: target.reasoningCapability,
     ...(provider.prefix !== "codex" && provider.protocol === "openai-responses" ? {
       nativeResponses: { baseUrl: provider.baseUrl, authType: provider.authType, headers: provider.headers || {}, apiKeys: await listProviderApiKeys(provider.id) },

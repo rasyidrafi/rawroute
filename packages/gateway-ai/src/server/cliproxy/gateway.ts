@@ -11,7 +11,7 @@ import { recordLog } from "../logging"
 import { extractUsageMetrics, type UsageMetrics } from "../usage-metrics"
 import { listAliases, listCombos, listModels, listProviders } from "../store"
 import type { ComboMember, Protocol, UsageEvent } from "../../contracts/domain"
-import { runInWorkspace } from "@rawroute/platform/server/workspace-context"
+import { currentWorkspaceId, runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { runWithGatewayAuditIdentity } from "@rawroute/observability/server/audit-context"
 
 import { listSharedModelsForRecipient } from "../model-shares"
@@ -20,6 +20,7 @@ import { upstreamFailure } from "../upstream-failure"
 import { GatewayModelResolutionError, resolveGatewayModel } from "./model-resolution"
 import type { ResolvedGatewayModel } from "./model-resolution"
 import { collectStreamUsage } from "./stream-usage"
+import { withSessionPromptCacheKey } from "./prompt-cache"
 import { nativeResponsesBody, protocolForPath, proxyToCliProxy, proxyToNativeResponses, responseHeaders, rewriteForwardedBody } from "./transport"
 import { requestServiceTier, serviceTierProfile } from "../../contracts/service-tier"
 
@@ -132,7 +133,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
     const request = new Request("http://rawroute.internal/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body, signal: AbortSignal.timeout(20_000) })
     const tested = { ...resolved, reasoningEffort: applied.effort, customPayload: applied.customPayload }
     let response: Response
-    if (tested.nativeResponses) response = await proxyToNativeResponses(request, tested, body, "openai-chat")
+    if (tested.nativeResponses) response = await proxyToNativeResponses(request, tested, new TextEncoder().encode(nativeResponsesBody(body, tested.upstreamModel, "openai-chat", tested.reasoningEffort, tested.customPayload)))
     else {
       const internalKey = cliproxySecret("apiKey")
       if (!internalKey) return { modelId: member.modelId, status: "unverified", message: "CLIProxy internal key is unavailable.", latencyMs: Date.now() - started }
@@ -348,10 +349,17 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   try {
     const payload = objectValue(parsed) || {}
     const tierProfile = serviceTierProfile(resolvedModel.upstreamProtocol)
-    const forwardedBody = resolvedModel.nativeResponses
+    let forwardedBody = resolvedModel.nativeResponses
       ? new TextEncoder().encode(nativeResponsesBody(body, resolvedModel.upstreamModel, protocol, resolvedModel.reasoningEffort, resolvedModel.customPayload))
       : await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.reasoningEffort, resolvedModel.customPayload)
-    const forwardedPayload = objectValue(JSON.parse(new TextDecoder().decode(forwardedBody))) || payload
+    let forwardedPayload = objectValue(JSON.parse(new TextDecoder().decode(forwardedBody))) || payload
+    if (resolvedModel.promptCacheKey && protocol !== "anthropic-messages") {
+      const cachedPayload = withSessionPromptCacheKey(forwardedPayload, request.headers, currentWorkspaceId(), apiKey.id)
+      if (cachedPayload !== forwardedPayload) {
+        forwardedPayload = cachedPayload
+        forwardedBody = new TextEncoder().encode(JSON.stringify(forwardedPayload))
+      }
+    }
     let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
     let reservation: BudgetReservation | undefined
     try {
@@ -428,7 +436,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     let response: Response
     try {
       response = resolvedModel.nativeResponses
-        ? await proxyToNativeResponses(request, resolvedModel, body, protocol)
+        ? await proxyToNativeResponses(request, resolvedModel, forwardedBody)
         : await proxyToCliProxy(request, path, {
             body: Buffer.from(forwardedBody),
             admitted: true,

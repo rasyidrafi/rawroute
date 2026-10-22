@@ -105,6 +105,41 @@ afterEach(async () => {
   mock.restore()
 })
 
+test("Codex forwards stable scoped cache keys through real gateway normalization and combo fallback", async () => {
+  mocks.listModels.mockResolvedValue(["a", "b"].map(id => ({ id, providerId: "codex", gatewayModelId: `codex/${id}`, upstreamModel: id, name: id, enabled: true })))
+  mocks.listCombos.mockResolvedValue([{ id: "combo", combo: "coding", name: "Coding", members: [{ modelId: "codex/a" }, { modelId: "codex/b" }] }])
+  const sent: Record<string, unknown>[] = []
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => {
+    const body = JSON.parse(String(init?.body))
+    sent.push(body)
+    return body.model.endsWith("/a") ? Response.json({ error: { message: "Unavailable" } }, { status: 503 }) : Response.json({ id: "ok" })
+  }))
+  for (const input of ["first", "first and second"]) {
+    const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer secret", "x-session-id": "conversation" }, body: JSON.stringify({ model: "coding", input, max_tokens: 10 }) }))
+    expect(response.status).toBe(200)
+  }
+  expect(sent).toHaveLength(4)
+  expect(sent[0]?.prompt_cache_key).toMatch(/^[a-f0-9]{64}$/)
+  expect(new Set(sent.map(body => body.prompt_cache_key)).size).toBe(1)
+  expect(sent[3]).toMatchObject({ input: "first and second", max_output_tokens: 10 })
+})
+
+test("custom native Responses honors the cache setting and preserves client keys in the sent body", async () => {
+  const sent: Record<string, unknown>[] = []
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ id: "ok" }) }))
+  mocks.listModels.mockResolvedValue([{ id: "m", providerId: "p", gatewayModelId: "p/model", upstreamModel: "model", name: "Model", enabled: true }])
+  for (const enabled of [false, true]) {
+    mocks.listProviders.mockResolvedValue([{ id: "p", prefix: "p", name: "Provider", baseUrl: "https://provider.test", protocol: "openai-responses", authType: "none", supportPromptCacheKey: enabled, enabled: true }])
+    await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer secret", "x-session-id": "conversation" }, body: JSON.stringify({ model: "p/model", messages: [{ role: "user", content: "hello" }] }) }))
+  }
+  expect(sent[0]).not.toHaveProperty("prompt_cache_key")
+  expect(sent[1]?.prompt_cache_key).toMatch(/^[a-f0-9]{64}$/)
+  expect(sent[1]).toMatchObject({ input: [{ role: "user", content: "hello" }] })
+  expect(sent[1]).not.toHaveProperty("messages")
+  await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer secret", "x-session-id": "conversation" }, body: JSON.stringify({ model: "p/model", input: "hello", prompt_cache_key: "client-owned" }) }))
+  expect(sent[2]?.prompt_cache_key).toBe("client-owned")
+})
+
 test("advertises and routes a discovered model unknown to the bundled catalog", async () => {
   mocks.listModels.mockResolvedValue([{ id: "discovered", providerId: "codex", gatewayModelId: "codex/future-model", upstreamModel: "future-model", name: "Future", source: "discovered", enabled: true, createdAt: new Date().toISOString() }])
   const catalog = await proxyGatewayRequest(new Request("http://gateway/v1/models", { headers: { authorization: "Bearer gateway-secret" } }))
