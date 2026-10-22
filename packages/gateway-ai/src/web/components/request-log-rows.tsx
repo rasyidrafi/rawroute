@@ -20,17 +20,21 @@ export function RequestModelId({ label, value }: { label: string; value?: string
   </div>
 }
 
+function TokenCell({ event }: { event: RequestLogDisplayEvent }) {
+  return <TableCell>{event.usageAvailable ? formatTokenCount(event.totalTokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${formatTokenCount(event.inputTokens)} in · ${formatTokenCount(event.cacheReadTokens + event.cacheCreationTokens)} cache · ${formatTokenCount(event.outputTokens)} out` : "Provider usage not recorded"}</div></TableCell>
+}
+
 function UsageCells({ event }: { event: RequestLogDisplayEvent }) {
   return <>
-    <TableCell>{event.usageAvailable ? formatTokenCount(event.totalTokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{event.usageAvailable ? `${event.usageCompleteness === "partial" ? "Partial · " : ""}${formatTokenCount(event.inputTokens)} in · ${formatTokenCount(event.cacheReadTokens + event.cacheCreationTokens)} cache · ${formatTokenCount(event.outputTokens)} out` : "Provider usage not recorded"}</div></TableCell>
+    <TokenCell event={event} />
     <TableCell>{event.pricingConfidence === "unpriced" ? "Unpriced" : formatCost(event.costMicros)}{event.pricingConfidence === "assumed" && <div className="text-xs text-muted-foreground">Estimated</div>}</TableCell>
   </>
 }
 
-function Status({ event, fallback = false, parent = false }: { event: RequestLogDisplayEvent; fallback?: boolean; parent?: boolean }) {
+function Status({ event, parent = false }: { event: RequestLogDisplayEvent; parent?: boolean }) {
   if (parent && !requestLogComplete(event)) return <Badge variant="outline" title="The final attempt has not been recorded. This request may still be running or its history may be incomplete.">Outcome pending / unavailable</Badge>
   const success = event.status >= 200 && event.status < 300
-  return <Badge variant={success ? "secondary" : "destructive"}>{success ? fallback ? "Success via fallback" : "Success" : "Failed"} · {event.status}</Badge>
+  return <Badge variant={success ? "secondary" : "destructive"}>{success ? "Success" : "Failed"} · {event.status}</Badge>
 }
 
 function ModelTitle({ event }: { event: RequestLogDisplayEvent }) {
@@ -42,9 +46,13 @@ function ModelTitle({ event }: { event: RequestLogDisplayEvent }) {
 }
 
 function ModelIds({ event }: { event: RequestLogDisplayEvent }) {
+  const shared = event.sharedUsage
+  const resolved = shared?.role === "consumer"
+    ? `${shared.peerWorkspaceId}/${shared.sourceGatewayModelId}`
+    : event.routing?.modelId || shared?.sourceGatewayModelId
   return <>
     <RequestModelId label="Payload" value={event.requestedModel} />
-    <RequestModelId label="Resolved" value={event.routing?.modelId || event.sharedUsage?.sourceGatewayModelId} />
+    <RequestModelId label="Resolved" value={resolved} />
   </>
 }
 
@@ -70,6 +78,7 @@ export function requestGroupSummary(attempts: RequestLogDisplayEvent[]) {
   const priced = attempts.filter(event => event.pricingConfidence !== "unpriced")
   const starts = attempts.map(event => event.startedAt ? Date.parse(event.startedAt) : Date.parse(event.completedAt) - event.durationMs)
   return {
+    singleUsage: knownUsage.length === 1 ? knownUsage[0] : undefined,
     tokens: knownUsage.reduce((sum, event) => sum + event.totalTokens, 0),
     hasUsage: knownUsage.length > 0,
     partialUsage: knownUsage.length !== attempts.length || attempts.some(event => event.usageCompleteness === "partial" || event.usageCompleteness === "missing"),
@@ -83,7 +92,7 @@ export function requestGroupSummary(attempts: RequestLogDisplayEvent[]) {
 
 function GroupUsageCells({ summary }: { summary: ReturnType<typeof requestGroupSummary> }) {
   return <>
-    <TableCell>{summary.hasUsage ? formatTokenCount(summary.tokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{summary.partialUsage ? "Known usage · partial" : "All attempts"}</div></TableCell>
+    {summary.singleUsage ? <TokenCell event={summary.singleUsage} /> : <TableCell>{summary.hasUsage ? formatTokenCount(summary.tokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{!summary.hasUsage ? "Provider usage not recorded" : summary.partialUsage ? "Known usage · partial" : "All attempts"}</div></TableCell>}
     <TableCell>{summary.hasCost ? formatCost(summary.cost) : "Unpriced"}<div className="text-xs text-muted-foreground">{[summary.partialCost ? "Partial cost" : "All attempts", summary.estimated ? "Estimated" : ""].filter(Boolean).join(" · ")}</div></TableCell>
   </>
 }
@@ -112,7 +121,7 @@ export function RequestLogGroup({ attempts }: { attempts: RequestLogDisplayEvent
       <GroupIdentity final={final} count={attempts.length} expanded={expanded} id={id} toggle={() => setExpanded(!expanded)} />
       <TableCell>{variedMetadata ? <span className="text-xs text-muted-foreground">Varies by attempt</span> : <RequestLogMetadata event={final} />}</TableCell>
       <TableCell>{requestLogKeyLabel(final)}</TableCell>
-      <TableCell><Status event={final} fallback={(final.attemptIndex ?? 0) > 0} parent /></TableCell>
+      <TableCell><Status event={final} parent /></TableCell>
       <GroupUsageCells summary={summary} />
       <TableCell>{formatDuration(summary.duration)}<div className="text-xs text-muted-foreground">Recorded span</div></TableCell>
       <TableCell>{formatAppDateTime(final.completedAt)}</TableCell>

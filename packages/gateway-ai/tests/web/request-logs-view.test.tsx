@@ -44,23 +44,41 @@ test("request log results place reasoning and tools next to the model and preser
   expect(markup).toContain('data-slot="table-container"')
 })
 
-test("groups explicit fallback attempts into a collapsed parent with honest partial totals", () => {
+test("groups fallback attempts and directly displays the only recorded usage", () => {
   const main = { ...event("failed"), requestId: "request-chain", requestedModel: "astra-auto", attemptIndex: 0, requestFinal: false, status: 400, usageAvailable: false, pricingConfidence: "unpriced" as const }
   const fallback = { ...event("success"), requestId: "request-chain", requestedModel: "astra-auto", attemptIndex: 1, requestFinal: true }
   const markup = renderToStaticMarkup(<RequestLogResults data={{ events: [fallback, main] }} loading={false} failed={false} />)
   expect(markup).toContain('aria-expanded="false"')
   expect(markup).toContain("Expand request request-chain")
   expect(markup).toContain("astra-auto")
-  expect(markup).toContain("Success via fallback")
-  expect(markup).toContain("Known usage · partial")
+  expect(markup).toContain("Success")
+  expect(markup).not.toContain("via fallback")
+  expect(markup).not.toContain("Known usage · partial")
+  expect(markup).toContain("2 in · 0 cache · 1 out")
   expect(markup).toContain("Partial cost")
   expect(markup).not.toContain('data-slot="request-attempt-row"')
-  expect(requestGroupSummary([main, fallback])).toMatchObject({ tokens: 3, cost: 0, partialCost: true, partialUsage: true })
+  expect(requestGroupSummary([main, fallback])).toMatchObject({ tokens: 3, cost: 0, partialCost: true, partialUsage: true, singleUsage: fallback })
   const child = renderToStaticMarkup(<table><tbody><RequestAttemptRow event={main} nested /></tbody></table>)
   expect(child).toContain("Main")
   expect(child).toContain("Failed")
   expect(child).toContain("provider/model")
   expect(child).not.toContain("Outcome pending")
+})
+
+test("multiple recorded usages retain complete or partial aggregate totals", () => {
+  const main = { ...event("main"), requestId: "chain", attemptIndex: 0, requestFinal: false, status: 503 }
+  const fallback = { ...event("fallback"), requestId: "chain", attemptIndex: 1, requestFinal: true }
+  const missing = { ...main, id: "missing", attemptIndex: 2, usageAvailable: false }
+  const complete = renderToStaticMarkup(<RequestLogResults data={{ events: [main, fallback] }} loading={false} failed={false} />)
+  expect(complete).toContain("All attempts")
+  expect(complete).not.toContain("Known usage · partial")
+  expect(requestGroupSummary([main, fallback])).toMatchObject({ tokens: 6, partialUsage: false, singleUsage: undefined })
+  const partial = renderToStaticMarkup(<RequestLogResults data={{ events: [main, fallback, missing] }} loading={false} failed={false} />)
+  expect(partial).toContain("Known usage · partial")
+  expect(requestGroupSummary([main, fallback, missing])).toMatchObject({ tokens: 6, partialUsage: true, singleUsage: undefined })
+  const unavailable = renderToStaticMarkup(<RequestLogResults data={{ events: [missing] }} loading={false} failed={false} />)
+  expect(unavailable).toContain("Provider usage not recorded")
+  expect(unavailable).not.toContain("Known usage · partial")
 })
 
 test("historical attempts stay separate and incomplete chains do not claim final failure", () => {

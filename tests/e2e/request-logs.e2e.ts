@@ -15,7 +15,10 @@ test("fallback request expands in execution order, copies payload ID, and surviv
   })
   await page.goto("/dashboard/ai/overview/request-logs")
   await expect(page.locator("tbody tr")).toHaveCount(2)
-  await expect(page.getByText("Success via fallback · 200", { exact: true })).toBeVisible()
+  const group = page.locator('[data-slot="request-group-row"]')
+  await expect(group.getByText("Success · 200", { exact: true })).toBeVisible()
+  await expect(group).toContainText("80 in · 0 cache · 20 out")
+  await expect(group.getByText("Known usage · partial", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Partial cost", { exact: true })).toBeVisible()
   const expand = page.getByRole("button", { name: "Expand request chain-123", exact: true })
   await expand.focus()
@@ -42,6 +45,40 @@ test("fallback request expands in execution order, copies payload ID, and surviv
   await page.getByRole("button", { name: "Collapse request chain-123", exact: true }).click()
   await expect(children).toHaveCount(0)
   await expect(page.getByText("Historical attempt: historic", { exact: true })).toBeVisible()
+})
+
+test("shared fallback with multiple recorded usages keeps the aggregate and copies the source workspace model", async ({ page, emptyWorkspaceId }) => {
+  expect(emptyWorkspaceId).toBeTruthy()
+  const at = new Date().toISOString()
+  const base = {
+    requestId: "shared-chain", requestedModel: "auto", gatewayKeyId: "key", keyName: "Rizky",
+    modelName: "Luna", gatewayModelId: "shared-model", routing: { modelId: "codex/gpt-5.6-luna", modelName: "Luna" },
+    sharedUsage: { shareId: "share", role: "consumer", peerWorkspaceId: "default", sourceGatewayModelId: "codex/gpt-5.6-luna" },
+    startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true, usageCompleteness: "complete",
+    totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 50, cacheCreationTokens: 0,
+    costMicros: 12, pricingConfidence: "exact",
+  }
+  await page.route("**/api/admin/request-logs?*", route => route.fulfill({ json: {
+    events: [
+      { ...base, id: "main", attemptIndex: 0, requestFinal: false, status: 503, usageAvailable: false },
+      { ...base, id: "fallback-one", attemptIndex: 1, requestFinal: false, status: 503 },
+      { ...base, id: "fallback-two", attemptIndex: 2, requestFinal: true },
+    ], models: [], keys: [], nextCursor: null,
+  } }))
+  await page.goto("/dashboard/ai/overview/request-logs")
+  const group = page.locator('[data-slot="request-group-row"]')
+  await expect(group.getByText("Success · 200", { exact: true })).toBeVisible()
+  await expect(group.locator("td").nth(4)).toContainText("200")
+  await expect(group.getByText("Known usage · partial", { exact: true })).toBeVisible()
+  await expect(group).toContainText("Resolved:default/codex/gpt-5.6-luna")
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+  await group.getByRole("button", { name: "Copy resolved model default/codex/gpt-5.6-luna", exact: true }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("default/codex/gpt-5.6-luna")
+  await page.getByRole("button", { name: "Expand request shared-chain", exact: true }).click()
+  const attempts = page.locator('[data-slot="request-attempt-row"]')
+  await expect(attempts).toHaveCount(3)
+  await expect(attempts.nth(2)).toContainText("Resolved:default/codex/gpt-5.6-luna")
+  await expect(attempts.nth(2)).toContainText("80 in · 50 cache · 20 out")
 })
 
 test("shared owner usage stays flat and identifies the consumer despite inherited attempt numbers", async ({ page, emptyWorkspaceId }) => {
