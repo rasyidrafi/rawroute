@@ -21,7 +21,7 @@ export function RequestLogsTable({ loading = false, children }: { loading?: bool
   return <div className="min-w-0 max-w-full" role={loading ? "status" : undefined} aria-label={loading ? "Loading request logs" : undefined} aria-busy={loading || undefined}>
     <Table className="min-w-max">
       <TableHeader><TableRow>
-        <TableHead className="min-w-56">Request / model</TableHead>
+        <TableHead className="min-w-96">Request / model</TableHead>
         <TableHead className="min-w-36" title={requestLogMetadataDescription}>Reasoning / tools</TableHead>
         <TableHead className="min-w-32">Key</TableHead>
         <TableHead className="min-w-32">Status</TableHead>

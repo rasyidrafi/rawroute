@@ -11,7 +11,7 @@ import { RequestLogMetadata } from "./request-logs-table"
 import { ServiceTierBadge } from "./service-tier-badge"
 
 export function RequestModelId({ label, value }: { label: string; value?: string }) {
-  return <div className="flex min-h-6 max-w-64 items-center gap-1 text-xs text-muted-foreground">
+  return <div className="flex min-h-6 max-w-96 items-center gap-1 text-xs text-muted-foreground">
     <span className="shrink-0">{label}:</span><span className="min-w-0 whitespace-normal break-all font-mono" title={value === undefined ? "Not recorded" : undefined}>{value ?? "—"}</span>
     {value !== undefined && <Button variant="ghost" size="icon-xs" aria-label={`Copy ${label.toLowerCase()} model ${value}`} onClick={async () => {
       try { await navigator.clipboard.writeText(value); toast.success("Model ID copied") }
@@ -60,7 +60,7 @@ export function RequestAttemptRow({ event, nested = false, id }: { event: Reques
   return <TableRow id={id} data-slot={nested ? "request-attempt-row" : "request-log-row"}>
     <TableCell><div className={nested ? "ml-3 border-l-2 border-border pl-4" : undefined}>
       {nested && <div className="text-xs text-muted-foreground">{(event.attemptIndex ?? 0) + 1} · {event.attemptIndex === 0 ? "Main" : "Fallback"}</div>}
-      <div className="flex max-w-72 flex-wrap items-center gap-1"><ModelTitle event={event} /><ServiceTierBadge event={event} /></div>
+      <div className="flex max-w-96 flex-wrap items-center gap-1"><ModelTitle event={event} /><ServiceTierBadge event={event} /></div>
       <ModelIds event={event} />
       <div className="text-xs text-muted-foreground" title={nested ? event.id : event.requestId || event.id}>{nested ? "Attempt" : event.requestId ? "Request" : "Historical attempt"}: {(nested ? event.id : event.requestId || event.id).slice(0, 8)}</div>
     </div></TableCell>
@@ -100,12 +100,12 @@ function GroupUsageCells({ summary }: { summary: ReturnType<typeof requestGroupS
 function GroupIdentity({ final, count, expanded, id, toggle }: { final: RequestLogDisplayEvent; count: number; expanded: boolean; id: string; toggle: () => void }) {
   const requestId = final.requestId || final.id
   return <TableCell>
-    <Button variant="ghost" size="sm" className="max-w-64 justify-start whitespace-normal text-left" aria-label={`${expanded ? "Collapse" : "Expand"} request ${requestId}`} aria-expanded={expanded} aria-controls={expanded ? id : undefined} onClick={toggle}>
+    <Button variant="ghost" size="sm" className="max-w-96 justify-start whitespace-normal text-left" aria-label={`${expanded ? "Collapse" : "Expand"} request ${requestId}`} aria-expanded={expanded} aria-controls={expanded ? id : undefined} onClick={toggle}>
       {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}<ModelTitle event={final} />
     </Button>
     <ServiceTierBadge event={final} />
     <ModelIds event={final} />
-    <div className="max-w-64 whitespace-normal text-xs text-muted-foreground" title={requestId}>Request: {requestId.slice(0, 8)} · {count} recorded {count === 1 ? "attempt" : "attempts"}</div>
+    <div className="max-w-96 whitespace-normal text-xs text-muted-foreground" title={requestId}>Request: {requestId.slice(0, 8)} · {count} recorded {count === 1 ? "attempt" : "attempts"}</div>
   </TableCell>
 }
 

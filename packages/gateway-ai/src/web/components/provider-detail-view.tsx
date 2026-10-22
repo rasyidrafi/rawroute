@@ -3,6 +3,7 @@ import { DashboardPage } from "@rawroute/ui/page-layout"
 import { useDashboardClipboard } from "@rawroute/platform/web/use-dashboard-clipboard"
 import { useCodexLogin } from "../use-codex-login"
 import { CodexLoginDialog } from "./codex-login-dialog"
+import { CodexResetCreditsInfo } from "./codex-reset-credits"
 import { useCallback, useState } from "react"
 import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LogInIcon, PencilIcon, PlusIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
 import { Link, useNavigate } from "react-router"
@@ -377,7 +378,7 @@ function CodexAccountActions({ apiKey, isPending, setToggleAccount, deleteCodexA
 
 function AccountResetCell({ apiKey, usageData, isPending, setResetAccount }: Pick<ProviderKeyRowProps, "apiKey" | "usageData" | "isPending" | "setResetAccount">) {
   const accountUsage = usageData?.accounts[apiKey.id]
-  return <TableCell className="align-middle">{(accountUsage?.unusedResetCredits ?? 0) > 0 ? <div className="flex items-center gap-2"><span className="tabular-nums">{accountUsage?.unusedResetCredits}</span>{apiKey.credentialKind === "codex-cli-proxy" && <Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={accountUsage?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}</div> : <span className="text-muted-foreground">Not Available</span>}</TableCell>
+  return <TableCell className="align-middle">{(accountUsage?.unusedResetCredits ?? 0) > 0 ? <div className="flex items-center gap-2"><span className="tabular-nums">{accountUsage?.unusedResetCredits}</span>{accountUsage && <CodexResetCreditsInfo usage={accountUsage} />}{apiKey.credentialKind === "codex-cli-proxy" && <Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={accountUsage?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}</div> : <span className="text-muted-foreground">Not Available</span>}</TableCell>
 }
 
 function ProviderDetailsCard({ data, isOAuthProvider, mutate }: { data: ProviderDetailResponse; isOAuthProvider: boolean; mutate: KeyedMutator<ProviderDetailResponse> }) {
