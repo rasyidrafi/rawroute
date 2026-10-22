@@ -74,3 +74,37 @@ test("v1 upgrade preserves provider-scoped catalog links, custom schedules and h
   } finally { result.close() }
   expect(migrateServiceTierPricing(file, catalog)).toEqual({ applied: false, required: false })
 })
+
+test("v2 upgrade removes only obsolete model settings and preserves rates, history and backup", () => {
+  directory = mkdtempSync(join(tmpdir(), "service-tier-v3-"))
+  const file = join(directory, "test.sqlite")
+  const backup = join(directory, "backup.sqlite")
+  const db = new Database(file)
+  db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY, collection_path TEXT, document_id TEXT, data TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+  db.run("CREATE TABLE ai_service_tier_schema(id INTEGER PRIMARY KEY, version INTEGER)")
+  db.run("INSERT INTO ai_service_tier_schema VALUES (1,2)")
+  const oldModel = { id: "m", name: "Model", enabled: false, reasoningCapability: { mode: "auto" }, serviceTierCapability: { profile: "anthropic", supportedTiers: ["fast"] } }
+  const rows = [
+    ["providers/p/models", "m", oldModel],
+    ["modelPricingVersions", "v", { id: "v", serviceTiers: [{ serviceTier: "fast", source: "custom", multiplier: 6, inputMicrosPerMillion: 123, contextTiers: [] }] }],
+    ["usageEvents", "e", { costMicros: 100, effectiveServiceTier: "fast" }],
+  ] as const
+  for (const [collection, id, value] of rows) db.run("INSERT INTO rawroute_documents(path,collection_path,document_id,data) VALUES(?,?,?,?)", [`rawroute_workspaces/w/${collection}/${id}`, `rawroute_workspaces/w/${collection}`, id, JSON.stringify(value)])
+  db.close()
+  const before = readFileSync(file)
+  expect(migrateServiceTierPricing(file, {})).toMatchObject({ required: true, changedDocuments: 1, addedVersions: 0 })
+  expect(readFileSync(file)).toEqual(before)
+  expect(() => migrateServiceTierPricing(file, {}, { apply: true })).toThrow("Stop all writers")
+  expect(migrateServiceTierPricing(file, {}, { apply: true, writersStopped: true, backup })).toMatchObject({ applied: true, changedDocuments: 1 })
+  const converted = new Database(file)
+  const copy = new Database(backup)
+  try {
+    const read = (database: Database, id: string) => JSON.parse(database.query<{ data: string }, [string]>("SELECT data FROM rawroute_documents WHERE document_id = ?").get(id)!.data)
+    expect(read(converted, "m")).toEqual({ id: "m", name: "Model", enabled: false, reasoningCapability: { mode: "auto" } })
+    expect(read(copy, "m")).toEqual(oldModel)
+    for (const [, id, value] of rows.slice(1)) expect(read(converted, id)).toEqual(value)
+    expect(hasServiceTierSchema(converted)).toBe(true)
+    expect(hasServiceTierSchema(copy)).toBe(false)
+  } finally { converted.close(); copy.close() }
+  expect(migrateServiceTierPricing(file, {})).toEqual({ applied: false, required: false })
+})

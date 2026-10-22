@@ -2,7 +2,7 @@ import { codexWorkspacePrefix } from "../codex/cliproxy"
 import { ensureNonCodexProviderProjection, nonCodexProviderPrefix } from "./provider-sync"
 import { resolveSharedModelForRecipient } from "../model-shares"
 import { listAliases, listModels, listProviderApiKeys, listProviders } from "../store"
-import type { AuthType, ModelReasoningCapability, ModelServiceTierCapability, Protocol, ProviderApiKey } from "../../contracts/domain"
+import type { AuthType, ModelReasoningCapability, Protocol, ProviderApiKey } from "../../contracts/domain"
 import { currentWorkspaceId, runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { attachWorkspaceActivity } from "@rawroute/platform/server/workspace-activity"
 import { getWorkspace } from "@rawroute/platform/server/runtime"
@@ -21,7 +21,6 @@ export interface ResolvedGatewayModel {
   reasoningEffort?: string
   customPayload?: Record<string, unknown>
   reasoningCapability?: ModelReasoningCapability
-  serviceTierCapability?: ModelServiceTierCapability
   nativeResponses?: { baseUrl: string; authType: AuthType; headers: Record<string, string>; apiKeys: ProviderApiKey[] }
   shared?: { id: string; ownerWorkspaceId: string; ownerWorkspaceName: string; consumerWorkspaceId: string; consumerWorkspaceName: string; sourceGatewayModelId: string; sourceModelId: string }
 }
@@ -93,7 +92,6 @@ export async function resolveGatewayModel(model: string, sharedModelId?: string)
         providerName: provider.name,
         promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
         reasoningCapability: target.reasoningCapability,
-        serviceTierCapability: target.serviceTierCapability,
         nativeResponses,
         shared: {
           id: shared.share.id,
@@ -151,7 +149,6 @@ export async function resolveGatewayModel(model: string, sharedModelId?: string)
     providerName: provider.name,
     promptCacheKey: provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
     reasoningCapability: target.reasoningCapability,
-    serviceTierCapability: target.serviceTierCapability,
     ...(provider.prefix !== "codex" && provider.protocol === "openai-responses" ? {
       nativeResponses: { baseUrl: provider.baseUrl, authType: provider.authType, headers: provider.headers || {}, apiKeys: await listProviderApiKeys(provider.id) },
     } : {}),

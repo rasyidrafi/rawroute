@@ -49,11 +49,12 @@ and the workspace-scoped grouping index without inventing historical fallback li
 Rerun it when upgrading from the old request-chain index, using a fresh explicit
 `--backup <new-file>`. Routing names/IDs are captured on new requests; historical
 records are preserved without guessing missing snapshots.
-Service-tier configuration requires `scripts/migrations/service-tier-pricing.ts
+Automatic service-tier detection requires `scripts/migrations/service-tier-pricing.ts
 --sqlite <file> --catalog <models.dev-v2.json> --apply --writers-stopped --backup <new-file>`.
-The v2 upgrade preserves historical usage and treats existing tier rates as user-owned.
-Configure supported tiers in Provider Detail → Edit model, then set catalog, custom,
-or Standard-multiplier rates in Model Pricing. Reported tiers override requested tiers.
+The v3 upgrade removes obsolete per-model tier settings while preserving pricing and
+historical usage. Tiers are detected automatically using the upstream protocol. Every
+model can use catalog, custom, or Standard-multiplier rates in Model Pricing; catalog
+imports preserve custom tier prices. Reported tiers override requested tiers.
 
 ## Develop and verify
 

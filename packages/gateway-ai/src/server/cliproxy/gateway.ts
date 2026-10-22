@@ -347,7 +347,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
   let deferredRelease = false
   try {
     const payload = objectValue(parsed) || {}
-    const tierProfile = resolvedModel.serviceTierCapability?.profile || serviceTierProfile(resolvedModel.upstreamProtocol)
+    const tierProfile = serviceTierProfile(resolvedModel.upstreamProtocol)
     const forwardedBody = resolvedModel.nativeResponses
       ? new TextEncoder().encode(nativeResponsesBody(body, resolvedModel.upstreamModel, protocol, resolvedModel.reasoningEffort, resolvedModel.customPayload))
       : await rewriteForwardedBody(body, resolvedModel.forwardedModel, estimate.model, path, resolvedModel.reasoningEffort, resolvedModel.customPayload)

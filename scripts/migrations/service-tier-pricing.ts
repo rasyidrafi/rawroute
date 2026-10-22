@@ -2,12 +2,12 @@ import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { chmodSync, existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import type { ModelPricingGroup, ModelPricingVersion } from "@rawroute/gateway-ai/contracts"
+import type { Model, ModelPricingGroup, ModelPricingVersion } from "@rawroute/gateway-ai/contracts"
 import { buildModelsDevCanonicalModels, createServiceTierSchema, hasServiceTierSchema, MODELS_DEV_URL } from "@rawroute/gateway-ai/server/maintenance/service-tier-pricing"
 import { collectionPrefix } from "@rawroute/platform/server/storage-config"
 
 type Row = { path: string; collection_path: string; document_id: string; data: string }
-type Write = Omit<Row, "data"> & { data: ModelPricingGroup | ModelPricingVersion }
+type Write = Omit<Row, "data"> & { data: Model | ModelPricingGroup | ModelPricingVersion }
 type Options = { apply?: boolean; writersStopped?: boolean; backup?: string }
 
 function plan(rows: Row[], catalog: Record<string, unknown>, prefix: string) {
@@ -68,7 +68,8 @@ export function migrateServiceTierPricing(file: string, catalog: Record<string, 
     }
     const rows = database.query<Row, []>("SELECT path, collection_path, document_id, data FROM rawroute_documents ORDER BY path").all()
     const previousSchema = database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_service_tier_schema'").get()
-    if (previousSchema && database.query<{ version: number }, []>("SELECT version FROM ai_service_tier_schema WHERE id = 1").get()?.version !== 1) throw new Error("Unsupported service tier schema version")
+    const previousVersion = previousSchema ? database.query<{ version: number }, []>("SELECT version FROM ai_service_tier_schema WHERE id = 1").get()?.version : undefined
+    if (previousSchema && previousVersion !== 1 && previousVersion !== 2) throw new Error("Unsupported service tier schema version")
     const planned = previousSchema ? { writes: [] as Write[], detachedLinks: [] as string[], addedVersions: 0 } : plan(rows, catalog, collectionPrefix(database))
     // Preserve existing rates and history. Without provenance, treat old schedules
     // as user-owned; a catalog refresh must not replace them implicitly.
@@ -79,6 +80,14 @@ export function migrateServiceTierPricing(file: string, catalog: Record<string, 
       const data = { ...version, serviceTiers: version.serviceTiers.map(tier => ({ ...tier, source: tier.source || "custom" as const })) }
       if (pending) pending.data = data
       else planned.writes.push({ ...row, data })
+    }
+    // Retire per-model detection settings without touching pricing or request history.
+    const workspacePrefix = `${collectionPrefix(database)}_workspaces/`
+    for (const row of rows.filter(row => row.collection_path.startsWith(workspacePrefix) && /\/providers\/[^/]+\/models$/.test(row.collection_path))) {
+      const data = JSON.parse(row.data) as Model & { serviceTierCapability?: unknown }
+      if (!Object.hasOwn(data, "serviceTierCapability")) continue
+      delete data.serviceTierCapability
+      planned.writes.push({ ...row, data })
     }
     const report = { applied: false, required: true, changedDocuments: planned.writes.length, addedVersions: planned.addedVersions, detachedLinks: planned.detachedLinks }
     if (!options.apply) return report

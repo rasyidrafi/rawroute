@@ -1,5 +1,5 @@
-import type { ModelServiceTierCapability, PricingContextTier } from "../contracts/domain"
-import { normalizeServiceTier } from "../contracts/service-tier"
+import type { PricingContextTier } from "../contracts/domain"
+import { normalizeServiceTier, type ServiceTierProfile } from "../contracts/service-tier"
 import { selectServiceTierPricing, type ServiceTierContext, type TieredPricing } from "./service-tier-pricing"
 
 export interface UsageMetrics {
@@ -45,7 +45,7 @@ export function mergeUsage(current: UsageMetrics | undefined, next: UsageMetrics
   }
 }
 
-export function extractUsageMetrics(payload: Record<string, unknown>, profile: ModelServiceTierCapability["profile"] = "openai"): UsageMetrics | undefined {
+export function extractUsageMetrics(payload: Record<string, unknown>, profile: ServiceTierProfile = "openai"): UsageMetrics | undefined {
   const response = objectValue(payload.response) || payload
   const message = objectValue(payload.message)
   const meta = objectValue(payload.meta)

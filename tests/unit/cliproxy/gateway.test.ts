@@ -131,6 +131,23 @@ test("fallback attempts retain client tier, account for each sent override and c
   expect(mocks.getBudgetRequestState.mock.calls.map(call => call[3].service_tier)).toEqual(["priority", "ultrafast"])
 })
 
+for (const [protocol, path, reported, expected] of [
+  ["openai-responses", "/v1/responses", { service_tier: "fast" }, "priority"],
+  ["openai-responses", "/v1/responses", { service_tier: "ultrafast" }, "ultrafast"],
+  ["anthropic-messages", "/v1/messages", { usage: { speed: "fast", input_tokens: 10, output_tokens: 1 } }, "fast"],
+] as const) {
+  test(`automatically records ${expected} from ${protocol} without model tier settings`, async () => {
+    mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol, authType: "none", headers: {}, enabled: true }])
+    mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true }])
+    spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ usage: { input_tokens: 10, output_tokens: 1 }, ...reported })))
+    const response = await proxyGatewayRequest(new Request(`http://gateway${path}`, { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "p/a", input: "hello", messages: [{ role: "user", content: "hello" }], max_tokens: 10 }) }))
+    expect(response.status).toBe(200)
+    await response.text()
+    await drainBackgroundTasks()
+    expect(mocks.createGatewayUsageEvent.mock.calls.at(-1)?.[0]).toMatchObject({ requestedServiceTier: undefined, metrics: { effectiveServiceTier: expected, input: 10, output: 1 } })
+  })
+}
+
 test("tests combo member policies with a streaming probe", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true }])
   mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])

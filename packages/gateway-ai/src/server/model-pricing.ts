@@ -335,7 +335,7 @@ async function buildPricingAdminData() {
     if (canonicalIds.has(model.id)) canonicalById.set(model.id, model)
   }
 
-  const modelRows = catalog.models.map((model) => ({ id: model.id, name: model.name, groupKey: modelGroupKey(model, providerPrefixes), gatewayModelId: model.gatewayModelId, upstreamModel: model.upstreamModel, providerId: model.providerId, enabled: model.enabled, serviceTierCapability: model.serviceTierCapability }))
+  const modelRows = catalog.models.map((model) => ({ id: model.id, name: model.name, groupKey: modelGroupKey(model, providerPrefixes), gatewayModelId: model.gatewayModelId, upstreamModel: model.upstreamModel, providerId: model.providerId, enabled: model.enabled }))
   return {
     groups: catalog.groups.map((group) => {
       const versions = catalog.versionsByGroup.get(group.id) || []

@@ -172,7 +172,6 @@ function modelFromSnapshot(snapshot: DocumentSnapshot, providerId: string): Mode
     source: data.source || "custom",
     discovery: data.discovery,
     reasoningCapability: data.reasoningCapability,
-    serviceTierCapability: data.serviceTierCapability,
     createdAt: data.createdAt || "",
   }
 }
@@ -232,7 +231,6 @@ function storedModel(model: Model) {
     source: model.source,
     discovery: model.discovery,
     reasoningCapability: model.reasoningCapability,
-    serviceTierCapability: model.serviceTierCapability,
     createdAt: model.createdAt,
   })
 }
@@ -484,7 +482,7 @@ function validateComboInput(input: Partial<ModelCombo> & { originalId?: string }
 function managedModelInput(existing: Model | undefined, input: Partial<Model>, discover: boolean) {
   if (discover) {
     if (existing && existing.source !== "discovered") throw new Error("Custom model owns this gateway ID.")
-    return { ...input, source: "discovered" as const, enabled: existing?.enabled ?? true, reasoningCapability: existing?.reasoningCapability, serviceTierCapability: existing?.serviceTierCapability }
+    return { ...input, source: "discovered" as const, enabled: existing?.enabled ?? true, reasoningCapability: existing?.reasoningCapability }
   }
   if (existing?.source === "discovered") {
     if (input.gatewayModelId && input.gatewayModelId !== existing.gatewayModelId || input.upstreamModel && input.upstreamModel !== existing.upstreamModel || input.name && input.name !== existing.name || input.reasoningCapability || input.source && input.source !== existing.source || input.discovery) throw new Error("Discovered model identity is managed automatically.")
@@ -1509,7 +1507,6 @@ async function sqliteUpsertModel(providerId: string, input: Partial<Model> & { o
       source: input.source,
       discovery: input.discovery,
       reasoningCapability: input.reasoningCapability,
-      serviceTierCapability: input.serviceTierCapability,
     }) as Partial<Model>
     const model: Model = {
       ...(existing || {}),
@@ -1906,7 +1903,6 @@ function memoryUpsertModel(providerId: string, input: Partial<Model> & { origina
     source: input.source,
     discovery: input.discovery,
     reasoningCapability: input.reasoningCapability,
-    serviceTierCapability: input.serviceTierCapability,
   }) as Partial<Model>
   const model: Model = {
     ...(existing || {}),

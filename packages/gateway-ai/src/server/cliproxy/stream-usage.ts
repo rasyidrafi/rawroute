@@ -1,5 +1,5 @@
 import { extractUsageMetrics, mergeUsage, type UsageMetrics } from "../usage-metrics"
-import type { ModelServiceTierCapability } from "../../contracts/domain"
+import type { ServiceTierProfile } from "../../contracts/service-tier"
 
 function objectValue(value: unknown) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -14,7 +14,7 @@ export function isTerminalStreamEvent(eventName: string, parsed: Record<string, 
   return response?.status === "completed" || response?.status === "complete"
 }
 
-export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profile: ModelServiceTierCapability["profile"] = "openai") {
+export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profile: ServiceTierProfile = "openai") {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""

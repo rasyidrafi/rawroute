@@ -10,13 +10,12 @@ function RateInputs({ rates, onChange, label }: { rates: PricingRates; onChange:
   return <div className="grid gap-3 sm:grid-cols-2">{fields.map(([field, name]) => <label key={field} className="grid gap-1 text-xs">{name} · USD / 1M<Input aria-label={`${label} ${name}`} type="number" min="0" step="any" value={Number.isFinite(rates[field]) ? rates[field] / 1_000_000 : ""} onChange={event => onChange({ ...rates, [field]: event.target.value === "" ? NaN : Math.round(Number(event.target.value) * 1_000_000) })} /></label>)}</div>
 }
 
-export function ServiceTierEditor({ tiers, supported, catalog = [], standard, contexts, onChange, disabled }: { tiers: PricingServiceTier[]; supported: string[]; catalog?: PricingServiceTier[]; standard: PricingRates; contexts: PricingContextTier[]; onChange: (tiers: PricingServiceTier[]) => void; disabled: boolean }) {
-  const names = [...new Set([...supported, ...tiers.map(tier => tier.serviceTier), ...catalog.map(tier => tier.serviceTier)])]
+export function ServiceTierEditor({ tiers, catalog = [], standard, contexts, onChange, disabled }: { tiers: PricingServiceTier[]; catalog?: PricingServiceTier[]; standard: PricingRates; contexts: PricingContextTier[]; onChange: (tiers: PricingServiceTier[]) => void; disabled: boolean }) {
+  const names = [...new Set(["priority", "ultrafast", "flex", "fast", ...tiers.map(tier => tier.serviceTier), ...catalog.map(tier => tier.serviceTier)])]
   function update(tier: PricingServiceTier) { onChange([...tiers.filter(entry => entry.serviceTier !== tier.serviceTier), tier]) }
   return <fieldset disabled={disabled} className="grid min-w-0 gap-3 rounded-lg border p-3">
     <legend className="px-1 text-sm font-medium">Service tier pricing</legend>
-    <p className="text-xs text-muted-foreground">Standard uses the rates above. Enable supported tiers in Provider Detail → Edit model. These prices are shared by every model in this pricing group; use separate groups for different provider rates. Unconfigured tiers remain unpriced.</p>
-    {!names.length && <p className="text-sm text-muted-foreground">No service tiers configured. Select supported tiers on the provider model to configure their prices here. A catalog link is optional.</p>}
+    <p className="text-xs text-muted-foreground">Standard uses the rates above. Tiers are detected automatically from upstream responses. These prices are shared by every model in this pricing group; use separate groups for different provider rates. Unconfigured tiers remain unpriced.</p>
     {names.map(name => {
       const tier = tiers.find(entry => entry.serviceTier === name)
       const imported = catalog.find(entry => entry.serviceTier === name)

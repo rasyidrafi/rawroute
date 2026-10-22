@@ -51,7 +51,7 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await row.getByRole("button", { name: "Pricing", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "Pricing for Pricing editor test" })
   await expect(dialog.getByRole("group", { name: "Service tier pricing", exact: true })).toBeVisible()
-  await expect(dialog.getByText(/No service tiers configured/)).toBeVisible()
+  await expect(dialog.getByRole("button", { name: "Configure rates", exact: true })).toHaveCount(4)
   const inputRates = dialog.getByRole("spinbutton", { name: /^Input/ })
   const outputRates = dialog.getByRole("spinbutton", { name: /^Output/ })
   await expect(inputRates.nth(0)).toHaveValue("2.5")
@@ -88,7 +88,8 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await pricingRefresh.finished
   await page.unroute("**/api/admin/model-pricing")
 
-  const canonical = { id: "test/canonical", name: "Canonical tier test", provider: "test", family: null, source: "models.dev", contextLimit: 1000000, pricing: rates, contextTiers: [tier] }
+  const serviceTiers = [{ serviceTier: "priority", source: "catalog", ...rates, inputMicrosPerMillion: 5_000_000, contextTiers: [{ ...tier, inputMicrosPerMillion: 10_000_000 }] }]
+  const canonical = { id: "test/canonical", name: "Canonical tier test", provider: "test", family: null, source: "models.dev", contextLimit: 1000000, pricing: rates, contextTiers: [tier], serviceTiers }
   await page.route("**/api/admin/model-pricing?*", async route => {
     if (new URL(route.request().url()).searchParams.has("catalog")) await route.fulfill({ json: { models: [canonical] } })
     else await route.continue()
@@ -96,11 +97,11 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
   await row.getByRole("button", { name: "Models", exact: true }).click()
   await page.getByRole("button", { name: /Select canonical model/ }).click()
   await page.getByRole("option", { name: /Canonical tier test/ }).click()
-  await expect(page.getByText("From 32,000 input tokens")).toBeVisible()
+  await expect(page.getByText("From 32,000 input tokens").first()).toBeVisible()
   await page.getByRole("button", { name: "Save", exact: true }).click()
   await expect(page.getByRole("dialog", { name: "Edit Pricing editor test", exact: true })).toBeHidden()
   const imported = await (await page.request.get("/api/admin/model-pricing", { headers: { "x-rawroute-workspace-id": "default" } })).json()
-  expect(imported.groups.find((entry: { id: string }) => entry.id === group.id).currentVersion).toMatchObject({ ...rates, contextTiers: [tier] })
+  expect(imported.groups.find((entry: { id: string }) => entry.id === group.id).currentVersion).toMatchObject({ ...rates, contextTiers: [tier], serviceTiers })
   expect(imported.jobs).toHaveLength(1)
 
   const canonicalRow = page.getByRole("row").filter({ hasText: "Canonical tier test" })

@@ -64,14 +64,7 @@ export interface Model {
   source?: ModelSource
   discovery?: { lastSeenAt?: string; accountIds: string[]; stale: boolean }
   reasoningCapability?: ModelReasoningCapability
-  serviceTierCapability?: ModelServiceTierCapability
   createdAt: string
-}
-
-export interface ModelServiceTierCapability {
-  profile: "openai" | "anthropic"
-  /** Explicitly supported non-standard tiers; empty means Standard only. */
-  supportedTiers: string[]
 }
 
 export interface ModelReasoningCapability {

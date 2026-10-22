@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-test("provider model tiers configure pricing without a catalog and persist multiplier and custom rates", async ({ page }) => {
+test("any model can configure tier pricing without capability settings or a catalog and persist multiplier and custom rates", async ({ page }) => {
   let login = await page.request.post("/api/auth/login", { data: { password: "123456" } })
   if (!login.ok()) login = await page.request.post("/api/auth/login", { data: { password: "private-password" } })
   expect(login.ok()).toBe(true)
@@ -11,19 +11,6 @@ test("provider model tiers configure pricing without a catalog and persist multi
   const { providerId } = await providerResponse.json()
   try {
     expect((await page.request.post(`/api/admin/providers/${providerId}/models`, { headers, data: { model: { gatewayModelId: "tier-e2e/tier-test", name: "Tier model E2E", upstreamModel: "tier-test" } } })).ok()).toBe(true)
-    await page.goto(`/dashboard/ai/providers/${providerId}`)
-    await page.getByRole("button", { name: "Edit Tier model E2E", exact: true }).click()
-    const modelDialog = page.getByRole("dialog", { name: "Edit model", exact: true })
-    await expect(modelDialog.getByRole("region", { name: "Service tiers", exact: true })).toBeVisible()
-    await modelDialog.getByRole("checkbox", { name: "Fast (OpenAI)", exact: true }).check()
-    await modelDialog.getByRole("checkbox", { name: "Ultrafast", exact: true }).check()
-    await modelDialog.getByRole("button", { name: "Update model", exact: true }).click()
-    await expect(modelDialog).toBeHidden()
-    await page.reload()
-    await page.getByRole("button", { name: "Edit Tier model E2E", exact: true }).click()
-    await expect(modelDialog.getByRole("checkbox", { name: "Fast (OpenAI)", exact: true })).toBeChecked()
-    await page.keyboard.press("Escape")
-
     await page.goto("/dashboard/ai/pricing")
     const row = page.getByRole("row").filter({ hasText: "Tier model E2E" })
     await row.getByRole("button", { name: "Pricing", exact: true }).click()

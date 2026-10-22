@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { calculateCostMicros, extractUsageMetrics, normalizeUsageMetrics } from "../../packages/gateway-ai/src/server/usage-metrics"
 import { collectStreamUsage } from "../../packages/gateway-ai/src/server/cliproxy/stream-usage"
-import { mergeCatalogServiceTiers, requestServiceTier, validateServiceTierCapability } from "../../packages/gateway-ai/src/contracts/service-tier"
+import { mergeCatalogServiceTiers, requestServiceTier } from "../../packages/gateway-ai/src/contracts/service-tier"
 import { modelsDevPricing } from "../../packages/gateway-ai/src/server/models-dev-pricing"
 
 const rates = (factor: number) => ({ inputMicrosPerMillion: 10_000_000 * factor, outputMicrosPerMillion: 50_000_000 * factor, cacheReadMicrosPerMillion: 1_000_000 * factor, cacheCreationMicrosPerMillion: 0 })
@@ -38,14 +38,12 @@ test("provider profiles distinguish Fast aliases from Anthropic Priority capacit
   expect(calculateCostMicros(usage, pricing, { requestedServiceTier: "ultrafast", sentServiceTier: "auto" })).toMatchObject({ costMicros: 150000, pricingConfidence: "assumed" })
 })
 
-test("catalog refresh preserves user-owned schedules and model capability rejects mismatched presets", () => {
+test("catalog refresh imports available tiers and preserves user-owned schedules", () => {
   const custom = { ...pricing.serviceTiers[0]!, source: "custom" as const, inputMicrosPerMillion: 123 }
   const merged = mergeCatalogServiceTiers([custom], pricing.serviceTiers)
   expect(merged.find(tier => tier.serviceTier === "priority")).toEqual(custom)
   expect(merged.find(tier => tier.serviceTier === "ultrafast")?.source).toBe("catalog")
   expect(mergeCatalogServiceTiers([custom], [])).toEqual([custom])
-  expect(validateServiceTierCapability({ profile: "anthropic", supportedTiers: ["fast", "fast"] })).toEqual({ profile: "anthropic", supportedTiers: ["fast"] })
-  for (const invalid of [null, {}, { profile: "openai", supportedTiers: ["fast"] }, { profile: "anthropic", supportedTiers: ["priority"] }, { profile: "openai", supportedTiers: "priority" }]) expect(() => validateServiceTierCapability(invalid)).toThrow()
 })
 
 test("catalog speed multipliers remain separate from OpenAI fast aliases", () => {
