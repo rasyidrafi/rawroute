@@ -118,7 +118,7 @@ test("advertises and routes a discovered model unknown to the bundled catalog", 
 test("fallback attempts retain client tier, account for each sent override and collect actual served tier", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "none", headers: {}, enabled: true }])
   mocks.listModels.mockResolvedValue(["a", "b"].map(id => ({ id, providerId: "p", gatewayModelId: `p/${id}`, name: id, upstreamModel: id, enabled: true })))
-  mocks.listCombos.mockResolvedValue([{ id: "c", combo: "combo", members: [{ modelId: "p/a", customPayload: { service_tier: "priority" } }, { modelId: "p/b", customPayload: { service_tier: "ultrafast" } }] }])
+  mocks.listCombos.mockResolvedValue([{ id: "c", combo: "combo", name: "Combo", members: [{ modelId: "p/a", customPayload: { service_tier: "priority" } }, { modelId: "p/b", customPayload: { service_tier: "ultrafast" } }] }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => JSON.parse(String(init?.body)).model === "a"
     ? Response.json({ error: { message: "Unavailable" } }, { status: 503 })
     : Response.json({ service_tier: "default", usage: { input_tokens: 10, output_tokens: 1 } })))

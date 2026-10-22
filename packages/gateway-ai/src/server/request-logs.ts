@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { UsageEvent } from "../contracts/domain"
-import { groupRequestLogEvents } from "../contracts/request-logs"
+import { groupRequestLogEvents, requestLogComplete } from "../contracts/request-logs"
 
 const instant = z.string().datetime().refine(value => new Date(value).toISOString() === value)
 const filters = z.object({ from: instant, to: instant, status: z.enum(["all", "success", "failed", "recovered", "incomplete"]), model: z.string().max(512), key: z.string().max(512) })
@@ -32,10 +32,10 @@ export function selectRequestLogGroups(events: UsageEvent[], query: RequestLogQu
   return groupRequestLogEvents(events.filter(event => event.completedAt < query.to)).filter(attempts => {
     const latest = requestLogLatest(attempts)
     const final = attempts.at(-1)!
-    const complete = final.requestFinal !== false
+    const complete = requestLogComplete(final)
     const success = final.status >= 200 && final.status < 300
     const recovered = complete && success && attempts.some(event => event.status < 200 || event.status >= 300)
-    return latest.completedAt >= query.from && (!query.model || attempts.some(event => event.gatewayModelId === query.model || event.requestedModel === query.model))
+    return latest.completedAt >= query.from && (!query.model || attempts.some(event => event.gatewayModelId === query.model || event.requestedModel === query.model || event.routing?.modelId === query.model))
       && (!query.key || latest.gatewayKeyId === query.key)
       && (query.status === "all" || query.status === "incomplete" && !complete || query.status === "success" && complete && success || query.status === "failed" && complete && !success || query.status === "recovered" && recovered)
       && (!query.after || latest.completedAt < query.after.at || latest.completedAt === query.after.at && latest.id > query.after.id)

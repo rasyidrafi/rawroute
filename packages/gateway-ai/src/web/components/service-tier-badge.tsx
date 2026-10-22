@@ -11,12 +11,12 @@ function tierDisplay(event: TierEvent) {
   const effective = reported === "auto" ? undefined : reported
   const evidence = effective ? "confirmed" : sent && sent !== "auto" || requested && requested !== "auto" && !sent ? "assumed" : "unknown"
   const detail = `Requested: ${requested || "not specified"}; sent by gateway: ${sent || "not recorded"}; served: ${effective || "unreported"}; evidence: ${evidence}; pricing: ${event.pricingConfidence}`
-  if (!effective) return { effective, detail, label: (sent || requested) && (sent || requested) !== "auto" ? `${serviceTierLabel((sent || requested)!)} · ${evidence}` : "Tier unknown" }
-  const changed = requested && requested !== "auto" && serviceTierLabel(requested) !== serviceTierLabel(effective)
-  return { effective, detail, label: `${changed ? `${serviceTierLabel(requested)} → ${serviceTierLabel(effective)}` : serviceTierLabel(effective)} · confirmed` }
+  const selected = effective || sent || requested
+  const source = effective ? "upstream response" : sent ? "gateway payload" : requested ? "user payload" : "not recorded"
+  return { effective, detail: `${detail}; source: ${source}`, label: selected ? serviceTierLabel(selected) : "Tier unknown" }
 }
 
 export function ServiceTierBadge({ event }: { event: TierEvent }) {
   const display = tierDisplay(event)
-  return <Badge variant={display.effective ? "secondary" : "outline"} title={display.detail}>{display.label}{event.pricingConfidence === "unpriced" ? " · unpriced" : ""}</Badge>
+  return <Badge variant={display.effective ? "secondary" : "outline"} title={display.detail}>{display.label}</Badge>
 }

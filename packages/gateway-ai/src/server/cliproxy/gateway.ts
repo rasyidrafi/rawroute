@@ -252,6 +252,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   if (!requestedModel) return proxyGatewaySingleRequest(request, path, apiKey, undefined, undefined, attempt)
   const combo = (await listCombos()).find((entry) => entry.combo === requestedModel)
   if (!combo) return proxyGatewaySingleRequest(request, path, apiKey, undefined, undefined, attempt)
+  attempt.routeName = combo.name.trim() || combo.combo
   try { await assertUnlimitedModelsAllowed([requestedModel]) }
   catch (error) { if (error instanceof BudgetModelExcludedError) return excludedModelResponse(error); throw error }
 
@@ -292,7 +293,7 @@ async function proxyGatewayRequestInWorkspace(request: Request, path: string, ap
   return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
 }
 
-type RequestAttempt = { requestId: string; requestedModel?: string; requestedServiceTier?: string; attemptIndex: number; last: boolean }
+type RequestAttempt = { routeName?: string; requestId: string; requestedModel?: string; requestedServiceTier?: string; attemptIndex: number; last: boolean }
 
 function attemptMetadata(attempt: RequestAttempt | undefined, response?: Response) {
   if (!attempt) return {}
@@ -334,6 +335,11 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
         ...(resolution.code === "model_not_found" ? { "x-rawroute-combo-member-unavailable": "1" } : {}),
       },
     })
+  }
+  const routing: NonNullable<UsageEvent["routing"]> = {
+    modelId: resolvedModel.pricingGatewayModelId,
+    modelName: resolvedModel.modelName,
+    routeName: attempt?.routeName || resolvedModel.aliasName,
   }
   let releaseExecution: (() => void) | undefined
   try { if (!resolvedModel.nativeResponses) releaseExecution = admitExecution() }
@@ -430,7 +436,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
           })
     } catch {
       await releaseBudgetReservationWithLog(reservation)
-      await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt) }).catch(() => undefined)
+      await recordGatewayUsageWithRetry({ routing, apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: 502, response: undefined, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt) }).catch(() => undefined)
       recordLog("gateway.upstream.request.failed", { providerId: resolvedModel.providerId, model: resolvedModel.pricingGatewayModelId, status: 502 }, { level: "error" })
       return new Response(JSON.stringify({ error: { message: "Upstream request failed." } }), { status: 502, headers: { "content-type": "application/json" } })
     }
@@ -442,7 +448,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
         try {
           const collected = await collectStreamUsage(monitor, tierProfile)
           const streamStatus = collected.terminalEventSeen ? response.status : 502
-          await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt, response) })
+          await recordGatewayUsageWithRetry({ routing, apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: streamStatus, response: collected.usage, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt, response) })
             .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
           const details = { status: streamStatus, terminalEvent: collected.terminalEventSeen, usageKnown: collected.usage !== undefined }
           recordLog(streamStatus < 400 ? "gateway.request.completed" : "gateway.request.failed", {
@@ -459,7 +465,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     }
     const responseBody = new Uint8Array(await response.arrayBuffer())
     const usage = actualResponseUsage(responseBody, response.headers.get("content-type"), tierProfile)
-    await recordGatewayUsageWithRetry({ apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt, response) })
+    await recordGatewayUsageWithRetry({ routing, apiKeyId: apiKey.id, model: estimate.model, providerModelId: resolvedModel.providerModelId, protocol, startedAt, status: response.status, response: usage, budgetState, shared: resolvedModel.shared, ...requestMetadata, ...attemptMetadata(attempt, response) })
       .catch((recordingError) => recordLog("gateway.unable.to.persist.usage.event", { error: recordingError instanceof Error ? recordingError.message : "Unknown error" }, { level: "warn" }))
     if (response.ok) recordLog("gateway.request.completed", { status: response.status, ...completionDetails(Date.now() - startedAtMs, undefined, usage), streaming: false })
     else {
@@ -473,6 +479,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
 }
 
 type GatewayUsageRecordingInput = {
+  routing: NonNullable<UsageEvent["routing"]>
   requestedServiceTier?: string
   sentServiceTier?: string
   requestId?: string
@@ -535,6 +542,7 @@ async function recordGatewayUsage(input: GatewayUsageRecordingInput) {
     id: input.id,
     requestId: input.requestId,
     requestedModel: input.requestedModel,
+    routing: input.routing,
     attemptIndex: input.attemptIndex,
     requestFinal: input.requestFinal,
     requestedServiceTier: input.requestedServiceTier,

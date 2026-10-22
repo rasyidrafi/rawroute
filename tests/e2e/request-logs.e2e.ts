@@ -6,7 +6,7 @@ test.use({ timezoneId: "Asia/Tokyo" })
 test("fallback request expands in execution order, copies payload ID, and survives refresh", async ({ page, emptyWorkspaceId }) => {
   expect(emptyWorkspaceId).toBeTruthy()
   const at = new Date().toISOString()
-  const base = { gatewayKeyId: "key", keyName: "Rizky", modelName: "Astra", gatewayModelId: "provider/astra", startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true, totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costMicros: 12, pricingConfidence: "exact", reasoningEffort: "low", toolCount: 0 }
+  const base = { gatewayKeyId: "key", keyName: "Rizky", modelName: "Astra", gatewayModelId: "provider/astra", routing: { modelId: "provider/astra", modelName: "Astra", routeName: "Clever" }, startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true, totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costMicros: 12, pricingConfidence: "exact", reasoningEffort: "low", toolCount: 0 }
   const main = { ...base, id: "attempt-main", requestId: "chain-123", requestedModel: "astra-auto", attemptIndex: 0, requestFinal: false, status: 400, usageAvailable: false, pricingConfidence: "unpriced" }
   const fallback = { ...base, id: "attempt-fallback", requestId: "chain-123", requestedModel: "astra-auto", attemptIndex: 1, requestFinal: true }
   await page.route("**/api/admin/request-logs?*", route => {
@@ -25,11 +25,16 @@ test("fallback request expands in execution order, copies payload ID, and surviv
   await expect(children.nth(0)).toContainText("1 · Main")
   await expect(children.nth(0)).toContainText("Failed · 400")
   await expect(children.nth(1)).toContainText("2 · Fallback")
+  await expect(children.nth(1)).toContainText("Astra (as Clever)")
+  await expect(children.nth(1)).toContainText("Payload:astra-auto")
+  await expect(children.nth(1)).toContainText("Resolved:provider/astra")
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(children).toHaveCount(2)
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
-  await page.getByRole("button", { name: "Copy payload model astra-auto", exact: true }).click()
+  await page.locator('[data-slot="request-group-row"]').getByRole("button", { name: "Copy payload model astra-auto", exact: true }).click()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("astra-auto")
+  await children.nth(1).getByRole("button", { name: "Copy resolved model provider/astra", exact: true }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("provider/astra")
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 900 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -37,6 +42,42 @@ test("fallback request expands in execution order, copies payload ID, and surviv
   await page.getByRole("button", { name: "Collapse request chain-123", exact: true }).click()
   await expect(children).toHaveCount(0)
   await expect(page.getByText("Historical attempt: historic", { exact: true })).toBeVisible()
+})
+
+test("shared owner usage stays flat and identifies the consumer despite inherited attempt numbers", async ({ page, emptyWorkspaceId }) => {
+  expect(emptyWorkspaceId).toBeTruthy()
+  const at = new Date().toISOString()
+  const base = {
+    requestId: "consumer-request", requestedModel: "luna", gatewayModelId: "codex/luna",
+    gatewayKeyId: "shared-workspace:consumer", keyName: null, modelName: "Renamed catalog label",
+    routing: { modelId: "codex/luna", modelName: "GPT-6 Luna", routeName: "Clever" },
+    sharedUsage: { shareId: "share", role: "owner", peerWorkspaceId: "consumer", peerWorkspaceName: "HT Non SHI", sourceGatewayModelId: "codex/luna" },
+    startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true,
+    totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0,
+    costMicros: 2343, pricingConfidence: "exact", effectiveServiceTier: "default",
+  }
+  await page.route("**/api/admin/request-logs?*", route => {
+    const params = new URL(route.request().url()).searchParams
+    return route.fulfill({ json: { events: [
+      { ...base, id: "owner-first", attemptIndex: 1, requestFinal: false, status: 503 },
+      { ...base, id: "owner-second", attemptIndex: 2, requestFinal: true },
+    ], models: [], keys: [], nextCursor: null, from: params.get("from"), to: params.get("to") } })
+  })
+  await page.goto("/dashboard/ai/overview/request-logs")
+  const rows = page.locator('[data-slot="request-log-row"]')
+  await expect(rows).toHaveCount(2)
+  await expect(page.locator('[data-slot="request-group-row"]')).toHaveCount(0)
+  await expect(rows.nth(0)).toContainText("Failed · 503")
+  await expect(rows.nth(1)).toContainText("Success · 200")
+  for (const row of [rows.nth(0), rows.nth(1)]) {
+    await expect(row).toContainText("GPT-6 Luna (as Clever)")
+    await expect(row).toContainText("Shared usage · HT Non SHI")
+    await expect(row).toContainText("Payload:luna")
+    await expect(row).toContainText("Resolved:codex/luna")
+    await expect(row.getByText("Standard", { exact: true })).toBeVisible()
+  }
+  await expect(page.getByText("Success via fallback · 200", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("Unknown key", { exact: false })).toHaveCount(0)
 })
 
 function observeRequestSettlement(page: Page, expectedRequest: Request): Promise<"finished" | "failed"> {
@@ -134,7 +175,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   const placeholderRows = loading.locator('[data-slot="request-log-skeleton-row"]')
   await expect(placeholderRows).toHaveCount(9)
   await expect(placeholderRows.first().getByRole("cell")).toHaveCount(8)
-  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(12)
+  await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(13)
   await expect(placeholderRows.first().getByRole("cell").nth(1).locator('[data-slot="skeleton"]')).toHaveCount(2)
   await expect(placeholderRows.first().getByRole("cell").nth(2).locator('[data-slot="skeleton"]')).toHaveCount(1)
   for (const column of [0, 4]) {

@@ -1,16 +1,16 @@
 import { Database } from "bun:sqlite"
 import { chmodSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
-import { createRequestLogSchema } from "@rawroute/gateway-ai/server/maintenance/request-logs"
+import { createRequestLogSchema, hasRequestLogSchema } from "@rawroute/gateway-ai/server/maintenance/request-logs"
 
-/** Historical attempts have no trustworthy correlation or payload model to backfill. */
+/** Replace the grouping index offline; never invent historical routing snapshots or rewrite usage. */
 export function migrateRequestLogGroups(file: string, options: { apply?: boolean; writersStopped?: boolean; backup?: string } = {}) {
   if (!file || !existsSync(file)) throw new Error("An explicit existing --sqlite path is required")
   if (options.apply && !options.writersStopped) throw new Error("Stop all writers and pass --writers-stopped before --apply")
   const database = new Database(file, options.apply ? { readwrite: true } : { readonly: true })
   try {
     if (!database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'rawroute_documents'").get()) throw new Error("RawRoute document table is missing")
-    const migrated = Boolean(database.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'rawroute_documents_request_chain_idx'").get())
+    const migrated = hasRequestLogSchema(database)
     if (migrated || !options.apply) return { applied: false, required: !migrated }
     database.run("PRAGMA busy_timeout = 0")
     database.run("PRAGMA locking_mode = EXCLUSIVE")

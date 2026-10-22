@@ -31,7 +31,7 @@ export function RequestLogsTable({ loading = false, children }: { loading?: bool
         <TableHead className="min-w-48">Time</TableHead>
       </TableRow></TableHeader>
       {loading ? <TableBody>{Array.from({ length: 9 }, (_, index) => <TableRow key={index} variant="static" data-slot="request-log-skeleton-row">
-        <TableCell><div aria-hidden="true" className="flex flex-col gap-2"><Skeleton motion="respect-preference" className="h-4 w-40" /><Skeleton motion="respect-preference" className="h-4 w-48" /><Skeleton motion="respect-preference" className="h-3 w-32" /></div></TableCell>
+        <TableCell><div aria-hidden="true" className="flex flex-col gap-2"><Skeleton motion="respect-preference" className="h-4 w-40" /><Skeleton motion="respect-preference" className="h-4 w-48" /><Skeleton motion="respect-preference" className="h-4 w-48" /><Skeleton motion="respect-preference" className="h-3 w-32" /></div></TableCell>
         <TableCell><RequestLogMetadataSkeleton /></TableCell>
         <TableCell><Skeleton aria-hidden="true" motion="respect-preference" className="h-4 w-24" /></TableCell>
         <TableCell><Skeleton aria-hidden="true" motion="respect-preference" shape="pill" className="h-5 w-24" /></TableCell>

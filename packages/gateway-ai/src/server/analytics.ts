@@ -520,6 +520,7 @@ export async function recordUsageEvent(event: UsageEvent, budgetUsageContext?: B
 
 
 export interface GatewayUsageInput {
+  routing?: UsageEvent["routing"]
   id?: string
   requestId?: string
   requestedModel?: string
@@ -577,6 +578,7 @@ export async function createGatewayUsageEvent(input: GatewayUsageInput, resolved
     id: input.id || crypto.randomUUID(),
     ...(input.requestId ? { requestId: input.requestId, attemptIndex: input.attemptIndex, requestFinal: input.requestFinal } : {}),
     ...(input.requestedModel !== undefined ? { requestedModel: input.requestedModel } : {}),
+    ...(input.routing ? { routing: { ...input.routing } } : {}),
     gatewayKeyId: input.gatewayKeyId,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.providerModelId ? { providerModelId: input.providerModelId } : {}),

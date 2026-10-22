@@ -274,3 +274,46 @@ test("memory history is scoped and returns a cursor with the same frozen range",
   })
   await runInWorkspace({ id: "history-empty", storageMode: "scoped" }, async () => { expect((await listRequestLogs(query)).events).toEqual([]) })
 })
+
+test("owner executions stay separate with their own outcomes, pagination and resolved-model filters", async () => {
+  const collection = getSqliteDatabase().collection("history/shared-owner/usageEvents")
+  const sharedUsage = { shareId: "share", role: "owner" as const, peerWorkspaceId: "consumer", peerWorkspaceName: "HT Non SHI", sourceGatewayModelId: "codex/luna" }
+  const events = Array.from({ length: 30 }, (_, index) => event(`owner-${String(index).padStart(2, "0")}`, {
+    requestId: "consumer-chain", gatewayKeyId: "shared-workspace:consumer",
+    attemptIndex: index, requestFinal: index === 29, status: index % 2 ? 200 : 503, sharedUsage,
+    requestedModel: "luna-alias", gatewayModelId: "codex/luna",
+    routing: { modelId: "codex/luna", modelName: "Luna", routeName: "Clever" },
+  }))
+  for (const row of events) await collection.doc(row.id).set(row)
+  for (const status of ["all", "failed", "success", "recovered", "incomplete"] as const) {
+    const selected = { ...query, status, model: "codex/luna" }
+    expect(await queryLocalRequestLogs(collection.path, selected)).toEqual(selectRequestLogGroups(events, selected))
+  }
+  expect(await queryLocalRequestLogs(collection.path, { ...query, status: "recovered" })).toEqual([])
+  expect(await queryLocalRequestLogs(collection.path, { ...query, status: "incomplete" })).toEqual([])
+  const first = await queryLocalRequestLogs(collection.path, query)
+  expect(first).toHaveLength(26)
+  expect(groupRequestLogEvents(first)).toHaveLength(26)
+  const last = first[24]!
+  const next = await queryLocalRequestLogs(collection.path, { ...query, after: { at: last.completedAt, id: last.id } })
+  expect(next).toHaveLength(5)
+  expect(new Set([...first.slice(0, 25), ...next].map(row => row.id)).size).toBe(30)
+  expect(first[0]).toMatchObject({ requestId: "consumer-chain", attemptIndex: 0, requestFinal: false, sharedUsage })
+  const target = event("snapshot-target", { gatewayModelId: "old-alias", routing: { modelId: "provider/actual", modelName: "Actual" } })
+  await collection.doc(target.id).set(target)
+  expect(await queryLocalRequestLogs(collection.path, { ...query, model: "provider/actual" })).toEqual([target])
+})
+
+test("shared source is named in request-log keys and snapshots survive current catalog labels", async () => {
+  await runInWorkspace({ id: "shared-log-labels", storageMode: "scoped" }, async () => {
+    await recordUsageEvent(event("owner", {
+      gatewayKeyId: "shared-workspace:consumer", requestId: "ingress", attemptIndex: 1, requestFinal: true,
+      routing: { modelId: "codex/luna", modelName: "Original Luna", routeName: "Clever" },
+      sharedUsage: { shareId: "share", role: "owner", peerWorkspaceId: "consumer", peerWorkspaceName: "HT Non SHI", sourceGatewayModelId: "codex/luna" },
+    }), null)
+    const page = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
+    expect(page.events[0]).toMatchObject({ modelName: "Original Luna", routing: { routeName: "Clever" }, requestId: "ingress" })
+    expect(page.keys).toContainEqual({ id: "shared-workspace:consumer", name: "Shared usage · HT Non SHI" })
+    expect(page.models).toContainEqual({ id: "codex/luna", name: "Original Luna" })
+  })
+})

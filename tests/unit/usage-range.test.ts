@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test"
 import { Database } from "bun:sqlite"
+import { createRequestLogSchema } from "../../packages/gateway-ai/src/server/request-log-schema"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -38,6 +39,8 @@ function source(db: Database, collection: string, id: string, data: object) {
 function historicalFixture() {
   const db = new Database(file)
   db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY,collection_path TEXT NOT NULL,document_id TEXT NOT NULL,data TEXT NOT NULL,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+  // These fixtures exercise legacy usage projection, with request-log migration already applied.
+  createRequestLogSchema(db)
   return db
 }
 

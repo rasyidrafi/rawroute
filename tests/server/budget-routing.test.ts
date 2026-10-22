@@ -2,12 +2,13 @@ import "../../apps/console/src/server/composition"
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { testsInWorkspace } from "../helpers/workspace-test"
 const workspaceTest = testsInWorkspace("default")
-import { _resetMemoryBackend, createApiKey, upsertCombo, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
-import { getBudgetRequestState, getBudgetRows, recordGatewayUsage, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, setBudgetUnlimitedSettings, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
+import { _resetMemoryBackend, createApiKey, upsertAlias, upsertCombo, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
+import { getBudgetRequestState, getBudgetRows, listRequestLogs, recordGatewayUsage, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, setBudgetUnlimitedSettings, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
 import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/cliproxy/gateway"
 import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "../../packages/gateway-ai/src/server/model-pricing"
 import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
 import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "../../packages/gateway-ai/src/server/model-shares"
+import { groupRequestLogEvents } from "../../packages/gateway-ai/src/contracts/request-logs"
 import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
 
 const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
@@ -92,4 +93,43 @@ test("a recipient combo exception cannot bypass the shared owner's budget or Unl
   })
   expect((await proxyGatewayRequest(request(key.key, "coding"))).status).toBe(403)
   expect(upstream).toHaveBeenCalledTimes(1)
+})
+
+const logQuery = () => ({ from: "2020-01-01T00:00:00.000Z", to: new Date(Date.now() + 60_000).toISOString(), status: "all" as const, model: "", key: "" })
+
+workspaceTest("alias routing records the actual model and names before later configuration changes", async () => {
+  const target = await pricedModel("astra")
+  const alias = await upsertAlias({ alias: "A", name: "Clever", targetModelId: target.gatewayModelId })
+  const key = await createApiKey("Alias key")
+  expect((await proxyGatewayRequest(request(key.key, alias.alias))).status).toBe(200)
+  await upsertAlias({ ...alias, originalId: alias.id, name: "Renamed alias" })
+  await upsertModel(target.providerId, { ...target, originalId: target.id, name: "Renamed model" })
+  const page = await listRequestLogs(logQuery())
+  expect(page.events).toHaveLength(1)
+  expect(page.events[0]).toMatchObject({ requestedModel: alias.alias, routing: { modelId: "astra/model", modelName: "astra", routeName: "Clever" } })
+})
+
+test("consumer fallback remains grouped while shared owner sees only its execution and unchanged cost", async () => {
+  const owner = (await listWorkspaces())[0]!
+  const consumer = await createWorkspace("HT Non SHI")
+  const sharedTarget = await runInWorkspace(owner, () => pricedModel("owner-luna"))
+  await runInWorkspace(owner, () => setModelShareTargets(sharedTarget.id, [consumer.id]))
+  const key = await runInWorkspace(consumer, async () => {
+    const local = await pricedModel("local-luna")
+    const [share] = await listSharedModelsForRecipient()
+    await upsertCombo({ combo: "gpt-6-luna", name: "Clever", members: [{ modelId: local.gatewayModelId }, { modelId: share!.qualifiedModelId, sharedModelId: share!.id }] })
+    return createApiKey("Consumer key")
+  })
+  upstream.mockImplementationOnce(async () => Response.json({ error: { message: "Temporarily unavailable" } }, { status: 503 }))
+  expect((await proxyGatewayRequest(request(key.key, "gpt-6-luna"))).status).toBe(200)
+  expect(upstream).toHaveBeenCalledTimes(2)
+  const consumerLogs = await runInWorkspace(consumer, () => listRequestLogs(logQuery()))
+  expect(consumerLogs.events).toHaveLength(2)
+  expect(groupRequestLogEvents(consumerLogs.events)).toHaveLength(1)
+  expect(consumerLogs.events[1]).toMatchObject({ attemptIndex: 1, requestedModel: "gpt-6-luna", costMicros: 0, routing: { modelId: sharedTarget.gatewayModelId, modelName: "owner-luna", routeName: "Clever" }, sharedUsage: { role: "consumer" } })
+  const ownerLogs = await runInWorkspace(owner, () => listRequestLogs(logQuery()))
+  expect(ownerLogs.events).toHaveLength(1)
+  expect(ownerLogs.events[0]).toMatchObject({ requestId: consumerLogs.events[1]!.requestId, attemptIndex: 1, status: 200, costMicros: 3, totalTokens: 3, sharedUsage: { role: "owner", peerWorkspaceName: "HT Non SHI" } })
+  expect(await runInWorkspace(owner, () => listRequestLogs({ ...logQuery(), status: "recovered" }))).toMatchObject({ events: [] })
+  expect((await runInWorkspace(consumer, () => listRequestLogs({ ...logQuery(), status: "recovered" }))).events).toHaveLength(2)
 })

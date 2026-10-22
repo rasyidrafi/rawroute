@@ -37,6 +37,8 @@ export async function GET(request: Request, { keyId }: { keyId: string }) {
             id: event.id,
             requestId: event.requestId,
             requestedModel: event.requestedModel,
+            routing: event.routing,
+            sharedUsage: event.sharedUsage,
             attemptIndex: event.attemptIndex,
             requestFinal: event.requestFinal,
             startedAt: event.startedAt,
@@ -55,7 +57,7 @@ export async function GET(request: Request, { keyId }: { keyId: string }) {
             completedAt: event.completedAt,
             ...normalizeRequestLogMetadata(event),
             keyName,
-            modelName: modelLabels.get(event.gatewayModelId) || null,
+            modelName: event.routing?.modelName || modelLabels.get(event.gatewayModelId) || null,
           })),
         },
       }

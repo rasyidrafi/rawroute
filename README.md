@@ -45,7 +45,10 @@ inspect `scripts/migrations/usage-projection.ts` and its stopped-writer checks
 before deployment.
 Existing installations also need `scripts/migrations/request-log-groups.ts --sqlite <file>
 --apply --writers-stopped` run with Bun before upgrading request logs; it creates a backup
-and the grouping index without inventing historical fallback links.
+and the workspace-scoped grouping index without inventing historical fallback links.
+Rerun it when upgrading from the old request-chain index, using a fresh explicit
+`--backup <new-file>`. Routing names/IDs are captured on new requests; historical
+records are preserved without guessing missing snapshots.
 Service-tier configuration requires `scripts/migrations/service-tier-pricing.ts
 --sqlite <file> --catalog <models.dev-v2.json> --apply --writers-stopped --backup <new-file>`.
 The v2 upgrade preserves historical usage and treats existing tier rates as user-owned.

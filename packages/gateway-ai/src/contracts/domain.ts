@@ -158,13 +158,22 @@ export type PricingConfidence = "exact" | "unpriced" | "assumed"
 export type UsageCompleteness = "complete" | "partial" | "missing"
 export type ReasoningEffort = "none" | "auto" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
 
+/** Immutable routing identity captured before forwarding; absent on older logs. */
+export interface UsageRoutingSnapshot {
+  modelId: string
+  modelName: string
+  /** Display name of the client-selected alias/combo, not an internal member alias. */
+  routeName?: string
+}
+
 export interface UsageEvent {
   id: string
   /** Gateway ingress identity; absent on historical attempts without correlation. */
   requestId?: string
   /** Original client payload model, before combo/alias resolution. */
   requestedModel?: string
-  /** Zero-based router attempt order; never inferred from timestamps. */
+  routing?: UsageRoutingSnapshot
+  /** Zero-based router attempt order in the consumer workspace; retained on owner copies for correlation. */
   attemptIndex?: number
   /** This attempt determines the final request outcome. */
   requestFinal?: boolean

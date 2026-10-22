@@ -7,6 +7,7 @@ import { RequestAttemptRow, requestGroupSummary } from "../../src/web/components
 const event = (id: string, metadata: Pick<RequestLogDisplayEvent, "reasoningEffort" | "toolCount"> = {}): RequestLogDisplayEvent => ({
   id,
   gatewayModelId: "provider/model",
+  routing: { modelId: "provider/model", modelName: "Model" },
   modelName: "Model",
   keyName: "Key",
   status: 200,
@@ -69,4 +70,40 @@ test("historical attempts stay separate and incomplete chains do not claim final
   const pending = renderToStaticMarkup(<RequestLogResults data={{ events: [{ ...event("pending"), requestId: "inflight", attemptIndex: 0, requestFinal: false, status: 400 }] }} loading={false} failed={false} />)
   expect(pending).toContain("Outcome pending / unavailable")
   expect(pending).not.toContain(">Failed")
+})
+
+test("shared owner renders one execution with consumer identity, not an inherited fallback group", () => {
+  const owner = { ...event("owner"), requestId: "consumer-chain", requestedModel: "luna", attemptIndex: 1, requestFinal: false,
+    keyName: null, gatewayKeyId: "shared-workspace:consumer",
+    sharedUsage: { shareId: "share", role: "owner" as const, peerWorkspaceId: "consumer", peerWorkspaceName: "HT Non SHI", sourceGatewayModelId: "codex/luna" },
+    routing: { modelId: "codex/luna", modelName: "GPT-6 Luna", routeName: "Clever" },
+  }
+  const markup = renderToStaticMarkup(<RequestLogResults data={{ events: [owner] }} loading={false} failed={false} />)
+  expect(markup).toContain("GPT-6 Luna")
+  expect(markup).toContain("(as Clever)")
+  expect(markup).toContain("Shared usage · HT Non SHI")
+  expect(markup).toContain("Payload:")
+  expect(markup).toContain("Resolved:")
+  expect(markup).toContain("codex/luna")
+  expect(markup).toContain("Success")
+  expect(markup).not.toContain("Fallback")
+  expect(markup).not.toContain("via fallback")
+  expect(markup).not.toContain("Unknown key")
+  expect(markup).not.toContain("Outcome pending")
+  expect(markup).not.toContain("Expand request")
+  expect(markup.match(/data-slot="request-log-row"/g)).toHaveLength(1)
+})
+
+test("recorded names win over renamed catalog labels and historical routing is not invented", () => {
+  const recorded = { ...event("snapshot"), requestedModel: "A", modelName: "Renamed pricing group", routing: { modelId: "provider/astra", modelName: "GPT-6 Astra", routeName: "Clever" } }
+  const markup = renderToStaticMarkup(<table><tbody><RequestAttemptRow event={recorded} /></tbody></table>)
+  expect(markup).toContain("GPT-6 Astra")
+  expect(markup).toContain("(as Clever)")
+  expect(markup).not.toContain("Renamed pricing group")
+  expect(markup).toContain("Copy payload model A")
+  expect(markup).toContain("Copy resolved model provider/astra")
+  const historical = renderToStaticMarkup(<table><tbody><RequestAttemptRow event={{ ...event("historical"), routing: undefined }} /></tbody></table>)
+  expect(historical).toContain("Not recorded")
+  expect(historical).not.toContain("Copy resolved")
+  expect(historical).not.toContain("(as ")
 })

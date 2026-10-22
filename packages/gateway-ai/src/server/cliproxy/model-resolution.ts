@@ -12,6 +12,8 @@ export interface ResolvedGatewayModel {
   upstreamModel: string
   upstreamProtocol: Protocol
   pricingGatewayModelId: string
+  modelName: string
+  aliasName?: string
   providerModelId?: string
   providerId?: string
   providerName?: string
@@ -84,6 +86,8 @@ export async function resolveGatewayModel(model: string, sharedModelId?: string)
         upstreamModel,
         upstreamProtocol: provider.protocol || (provider.prefix === "codex" ? "openai-responses" : "openai-chat"),
         pricingGatewayModelId: modelGatewayId(target),
+        modelName: target.name.trim() || modelGatewayId(target),
+        aliasName: alias ? alias.name.trim() || alias.alias : undefined,
         providerModelId: target.id,
         providerId: target.providerId,
         providerName: provider.name,
@@ -140,6 +144,8 @@ export async function resolveGatewayModel(model: string, sharedModelId?: string)
     upstreamModel,
     upstreamProtocol: provider.protocol || (provider.prefix === "codex" ? "openai-responses" : "openai-chat"),
     pricingGatewayModelId: modelGatewayId(target),
+    modelName: target.name.trim() || modelGatewayId(target),
+    aliasName: alias ? alias.name.trim() || alias.alias : undefined,
     providerModelId: target.id,
     providerId: target.providerId,
     providerName: provider.name,
