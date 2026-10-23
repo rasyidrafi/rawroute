@@ -67,7 +67,7 @@ export function modelsDevPricing(detail: Record<string, unknown>) {
     const when = record(multiplier.when)
     const rawTier = normalizeServiceTier(record(when.speed).equals ?? record(when.service_tier).equals)
     const serviceTier = when.speed === undefined && rawTier === "fast" ? "priority" : rawTier
-    const factor = multiplier.factor
+    const factor = typeof multiplier.factor === "number" ? multiplier.factor : record(multiplier.factor).text
     if (Object.keys(when).length !== 1 || !serviceTier || typeof factor !== "number" || !Number.isFinite(factor) || factor < 0) continue
     tiers.set(serviceTier, { serviceTier, source: "catalog", ...scaledRates(pricing, factor), contextTiers: contextTiers.map(tier => ({ ...tier, ...scaledRates(tier, factor) })) })
   }

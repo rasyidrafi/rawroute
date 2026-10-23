@@ -65,6 +65,40 @@ describe("models.dev canonical catalog", () => {
     expect(model!.serviceTiers?.find(tier => tier.serviceTier === "ultrafast")?.contextTiers[0]).toMatchObject({ inputMicrosPerMillion: 120_000_000, outputMicrosPerMillion: 450_000_000 })
   })
 
+  test("imports text-scoped catalog multipliers for GPT-6 Luna including context and cache rates", () => {
+    const [model] = buildModelsDevCanonicalModels({ openai: { models: { "gpt-6-luna": {
+      cost: { text: { input: { price: 0.1, cache: { read: 0.01, write: 0.125 }, overrides: [{ when: { context: { gt: 272000 } }, price: 0.2, cache: { read: 0.02, write: 0.25 } }] }, output: { price: 0.5, overrides: [{ when: { context: { gt: 272000 } }, price: 0.75 }] } }, multipliers: [
+        { when: { service_tier: { equals: "priority" } }, factor: { text: 2 } },
+        { when: { service_tier: { equals: "flex" } }, factor: { text: 0.5 } },
+        { when: { region: { equals: "us" } }, factor: { text: 1.1 } },
+      ] },
+    } } } })
+    expect(model!.serviceTiers).toEqual([
+      { serviceTier: "flex", source: "catalog", inputMicrosPerMillion: 50_000, outputMicrosPerMillion: 250_000, cacheReadMicrosPerMillion: 5_000, cacheCreationMicrosPerMillion: 62_500, contextTiers: [{ id: "models-dev-context-272001", thresholdTokens: 272001, inputMicrosPerMillion: 100_000, outputMicrosPerMillion: 375_000, cacheReadMicrosPerMillion: 10_000, cacheCreationMicrosPerMillion: 125_000 }] },
+      { serviceTier: "priority", source: "catalog", inputMicrosPerMillion: 200_000, outputMicrosPerMillion: 1_000_000, cacheReadMicrosPerMillion: 20_000, cacheCreationMicrosPerMillion: 250_000, contextTiers: [{ id: "models-dev-context-272001", thresholdTokens: 272001, inputMicrosPerMillion: 400_000, outputMicrosPerMillion: 1_500_000, cacheReadMicrosPerMillion: 40_000, cacheCreationMicrosPerMillion: 500_000 }] },
+    ])
+  })
+
+  test("rejects invalid or non-text multipliers without inventing rates", () => {
+    for (const factor of [undefined, null, {}, { image: 2 }, { text: "2" }, { text: -1 }, { text: NaN }, { text: Infinity }, { text: null }, [], "2", -1, NaN, Infinity]) {
+      const [model] = buildModelsDevCanonicalModels({ openai: { models: { model: {
+        cost: { text: { input: { price: 1 }, output: { price: 2 } }, multipliers: [{ when: { service_tier: { equals: "priority" } }, factor }] },
+      } } } })
+      expect(model!.serviceTiers).toEqual([])
+    }
+  })
+
+  test("accepts zero text multipliers but skips compound conditions", () => {
+    const [model] = buildModelsDevCanonicalModels({ openai: { models: { model: {
+      cost: { text: { input: { price: 1 }, output: { price: 2 } }, multipliers: [
+        { when: { service_tier: { equals: "flex" } }, factor: { text: 0 } },
+        { when: { service_tier: { equals: "priority" }, region: { equals: "us" } }, factor: { text: 2 } },
+      ] },
+    } } } })
+    expect(model!.serviceTiers).toMatchObject([{ serviceTier: "flex", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0 }])
+    expect(model!.serviceTiers).toHaveLength(1)
+  })
+
   test("ranks multi-token searches by canonical ID and name", () => {
     const models = buildModelsDevCanonicalModels({
       openai: { models: { "gpt-5": { name: "GPT-5" }, "gpt-4o": { name: "GPT-4o" } } },
