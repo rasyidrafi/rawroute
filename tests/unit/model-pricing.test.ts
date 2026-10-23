@@ -35,7 +35,7 @@ describe("model pricing catalog", () => {
     expect(fast.estimatedCostMicros).toBe(standard.estimatedCostMicros! * 6)
     await expect(savePricingVersion({ groupId: group.id, rates, contextTiers: [], serviceTiers: [{ ...rates, serviceTier: "fast", multiplier: -1, contextTiers: [] }], mode: "new" })).rejects.toThrow("multiplier")
   })
-  test("reserves requested tier rates and settles a reported downgrade at served rates", async () => {
+  test("reserves and settles requested tier rates when upstream reports Standard", async () => {
     const upstream = await upsertProvider(provider("tiers"))
     const model = await upsertModel(upstream.id, { id: "astra", name: "Astra", gatewayModelId: "tiers/astra", upstreamModel: "astra" })
     const group = (await syncModelPricingGroups()).find(entry => entry.memberModelIds.includes(model.id))!
@@ -50,7 +50,10 @@ describe("model pricing catalog", () => {
     expect(fast.estimatedCostMicros).toBe(standard.estimatedCostMicros! * 2)
     await expect(getBudgetRequestState(key.id, model.gatewayModelId, model.id, { ...payload, service_tier: "ultrafast" })).rejects.toThrow("without configured pricing")
     await recordGatewayUsage({ gatewayKeyId: key.id, gatewayModelId: model.gatewayModelId, providerModelId: model.id, protocol: "openai-chat", startedAt: new Date().toISOString(), status: 200, durationMs: 1, requestedServiceTier: "priority", metrics: { input: 10000, output: 1000, effectiveServiceTier: "default" } })
-    expect((await listUsageEvents()).at(-1)).toMatchObject({ requestedServiceTier: "priority", effectiveServiceTier: "default", pricingServiceTier: "default", costMicros: 150000, pricingConfidence: "exact" })
+    expect((await listUsageEvents()).at(-1)).toMatchObject({ requestedServiceTier: "priority", effectiveServiceTier: "default", pricingServiceTier: "priority", costMicros: 300000, pricingConfidence: "assumed" })
+    const version = await savePricingVersion({ groupId: group.id, rates, contextTiers: [], serviceTiers: [{ serviceTier: "priority", ...rates, inputMicrosPerMillion: 30_000_000, outputMicrosPerMillion: 150_000_000, contextTiers: [] }], mode: "replace" })
+    await repriceUsageForGroup(version.job!.id)
+    expect((await listUsageEvents()).at(-1)).toMatchObject({ requestedServiceTier: "priority", effectiveServiceTier: "default", pricingServiceTier: "priority", costMicros: 450000, pricingConfidence: "assumed" })
   })
   test("repricing a group without a current version still queues historical repricing", async () => {
     const entry = await upsertProvider(provider("cx"))

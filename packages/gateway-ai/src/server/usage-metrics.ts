@@ -1,6 +1,6 @@
 import type { PricingContextTier } from "../contracts/domain"
-import { normalizeServiceTier, type ServiceTierProfile } from "../contracts/service-tier"
-import { selectServiceTierPricing, type ServiceTierContext, type TieredPricing } from "./service-tier-pricing"
+import { normalizeServiceTier, type ServiceTierContext, type ServiceTierProfile } from "../contracts/service-tier"
+import { selectServiceTierPricing, type TieredPricing } from "./service-tier-pricing"
 
 export interface UsageMetrics {
   input?: number

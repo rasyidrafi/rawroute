@@ -8,14 +8,33 @@ const rates = (factor: number) => ({ inputMicrosPerMillion: 10_000_000 * factor,
 const pricing = { ...rates(1), serviceTiers: [{ serviceTier: "priority", ...rates(2), contextTiers: [] }, { serviceTier: "ultrafast", ...rates(6), contextTiers: [] }] }
 const usage = normalizeUsageMetrics({ input: 10000, output: 1000, cached: 0 })
 
-test("served tier controls settlement, while unreported requested tiers remain assumed", () => {
-  for (const [tier, cost] of [["default", 150000], ["priority", 300000], ["ultrafast", 900000]] as const) {
+test("non-Standard served tiers control settlement, while Standard preserves the requested tier", () => {
+  for (const [tier, cost] of [["priority", 300000], ["ultrafast", 900000]] as const) {
     expect(calculateCostMicros(usage, pricing, { requestedServiceTier: "ultrafast", effectiveServiceTier: tier })).toMatchObject({ costMicros: cost, pricingConfidence: "exact", pricingServiceTier: tier })
   }
+  for (const effectiveServiceTier of ["default", "standard"]) {
+    for (const [requestedServiceTier, costMicros] of [["priority", 300000], ["ultrafast", 900000]] as const) {
+      expect(calculateCostMicros(usage, pricing, { requestedServiceTier, sentServiceTier: "default", effectiveServiceTier })).toMatchObject({ costMicros, pricingConfidence: "assumed", pricingServiceTier: requestedServiceTier })
+    }
+    for (const requestedServiceTier of [undefined, "auto", "default", "standard"]) {
+      expect(calculateCostMicros(usage, pricing, { requestedServiceTier, effectiveServiceTier })).toMatchObject({ costMicros: 150000, pricingConfidence: "exact" })
+    }
+  }
+  expect(calculateCostMicros(usage, pricing, { requestedServiceTier: "default", effectiveServiceTier: "priority" })).toMatchObject({ costMicros: 300000, pricingConfidence: "exact", pricingServiceTier: "priority" })
   expect(calculateCostMicros(usage, pricing, { requestedServiceTier: "ultrafast" })).toMatchObject({ costMicros: 900000, pricingConfidence: "assumed" })
   expect(calculateCostMicros(usage, pricing)).toMatchObject({ costMicros: 150000, pricingConfidence: "assumed" })
   expect(calculateCostMicros(usage, pricing, { effectiveServiceTier: "unknown" })).toMatchObject({ costMicros: 0, pricingConfidence: "unpriced" })
   expect(calculateCostMicros(usage, rates(1), { requestedServiceTier: "priority" })).toMatchObject({ costMicros: 0, pricingConfidence: "unpriced" })
+  expect(calculateCostMicros(usage, rates(1), { requestedServiceTier: "priority", effectiveServiceTier: "default" })).toMatchObject({ costMicros: 0, pricingConfidence: "unpriced" })
+})
+
+test("Standard responses preserve protocol-normalized Fast and custom tier schedules", () => {
+  const requestedServiceTier = requestServiceTier({ service_tier: "fast" }, "openai")
+  expect(calculateCostMicros(usage, pricing, { requestedServiceTier, effectiveServiceTier: "default" })).toMatchObject({ costMicros: 300000, pricingServiceTier: "priority" })
+  for (const tier of ["fast", "flex", "custom-tier"]) {
+    const customPricing = { ...rates(1), serviceTiers: [{ serviceTier: tier, ...rates(3), contextTiers: [] }] }
+    expect(calculateCostMicros(usage, customPricing, { requestedServiceTier: tier, effectiveServiceTier: "standard" })).toMatchObject({ costMicros: 450000, pricingConfidence: "assumed", pricingServiceTier: tier })
+  }
 })
 
 test("JSON and fragmented SSE preserve reported tiers independently of token fields", async () => {

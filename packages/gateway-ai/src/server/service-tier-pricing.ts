@@ -1,20 +1,17 @@
 import type { PricingContextTier, PricingRates, PricingServiceTier } from "../contracts/domain"
-import { normalizeServiceTier } from "../contracts/service-tier"
+import { selectServiceTier, type ServiceTierContext } from "../contracts/service-tier"
 
 export type TieredPricing = PricingRates & { contextTiers?: PricingContextTier[]; serviceTiers?: PricingServiceTier[] }
-export type ServiceTierContext = { requestedServiceTier?: string; sentServiceTier?: string; effectiveServiceTier?: string }
 
-/** Reported tier wins. Unknown schedules never silently fall back to Standard. */
+/** Apply the shared tier policy. Unknown schedules never silently fall back to Standard. */
 export function selectServiceTierPricing(pricing: TieredPricing | undefined, context: ServiceTierContext = {}) {
-  const requested = normalizeServiceTier(context.sentServiceTier ?? context.requestedServiceTier)
-  const reported = normalizeServiceTier(context.effectiveServiceTier)
-  const effective = reported === "auto" ? undefined : reported
-  const selected = effective || (requested === "auto" ? undefined : requested) || "default"
+  const selection = selectServiceTier(context)
+  const selected = selection.tier && selection.tier !== "auto" ? selection.tier : "default"
   const standard = selected === "default" || selected === "standard"
   const rates = standard ? pricing : pricing?.serviceTiers?.find(tier => tier.serviceTier === selected)
   return {
     rates,
     serviceTier: selected,
-    assumed: !effective && (requested !== undefined || Boolean(pricing?.serviceTiers?.length)),
+    assumed: selection.source !== "upstream response" && (selection.tier !== undefined || Boolean(pricing?.serviceTiers?.length)),
   }
 }
