@@ -1,5 +1,10 @@
 import type { Model, ModelAlias, ModelCombo, Provider, SharedModelView } from "./domain"
 
+/** Partial discovery failures retain known account IDs; confirmed removals do not. */
+export function modelUnavailable(model: Pick<Model, "source" | "discovery">) {
+  return model.source === "discovered" && model.discovery?.stale === true && model.discovery.accountIds.length === 0
+}
+
 function enabledProviderIndex(providers: Provider[]) {
   const index = new Map<string, Provider>()
   for (const provider of providers) if (provider.enabled) index.set(provider.id, provider)
@@ -24,7 +29,7 @@ export function routingModelCatalog(providers: Provider[], models: Model[], alia
   const providerIndex = new Map(providers.map((provider) => [provider.id, provider]))
   const modelIndex = new Map(models.flatMap((model) => [[model.id, model], [modelGatewayId(model), model]] as const))
   const shares = new Map(sharedModels.map((share) => [share.id, share]))
-  const modelAvailable = (model: Model | undefined) => Boolean(model?.enabled && providerIndex.get(model.providerId)?.enabled)
+  const modelAvailable = (model: Model | undefined) => Boolean(model?.enabled && !modelUnavailable(model) && providerIndex.get(model.providerId)?.enabled)
   const aliasAvailable = (alias: ModelAlias) => alias.sharedModelId
     ? shares.get(alias.sharedModelId)?.status === "active"
     : modelAvailable(modelIndex.get(alias.targetModelId))
@@ -35,7 +40,7 @@ export function routingModelCatalog(providers: Provider[], models: Model[], alia
     const available = modelAvailable(model)
     entries.push({
       id: modelGatewayId(model), name: model.name || modelGatewayId(model), provider: provider?.name || "Unknown provider", kind: "model", available,
-      ...(!available ? { unavailableReason: !model.enabled ? "Model disabled" : "Provider unavailable" } : {}), members: [],
+      ...(!available ? { unavailableReason: !model.enabled ? "Model disabled" : modelUnavailable(model) ? "Model no longer available in the upstream catalog" : "Provider unavailable" } : {}), members: [],
       created: Math.floor(Date.parse(model.createdAt) / 1000), owned_by: provider?.prefix || "rawroute", protocol: provider?.protocol || "openai-chat",
     })
   }
@@ -82,7 +87,7 @@ export function catalogLiteLlmModelInfo(providers: Provider[], models: Model[], 
   }> = []
 
   for (const model of models) {
-    if (!model.enabled) continue
+    if (!model.enabled || modelUnavailable(model)) continue
     const provider = enabledProviders.get(model.providerId)
     if (!provider) continue
     const gatewayModelId = modelGatewayId(model)

@@ -22,6 +22,15 @@ CLIProxyAPI remains private; configure providers from the dashboard. Container
 images include a tested engine; native development can install it from
 **Global → CLIProxyAPI**.
 
+CLIProxyAPI uses V8 (`8.0.43`). Before upgrading an existing managed installation,
+stop RawRoute and its engine, then run `bun --no-env-file scripts/migrations/cliproxy.ts
+--data-dir <data-directory> --apply --writers-stopped` from this checkout. It upgrades
+the persisted binary and config, preserving a complete `cliproxy.before-migration` backup.
+Use `--binary <8.0.43-executable>` for an offline install. External deployments use
+`--config <yaml-file>` instead of `--data-dir`, and upgrade their engine separately.
+Omit `--apply` for a preview. To roll back, stop writers, restore the backup and
+the previous RawRoute release together.
+
 AI-only is the default. Enable Storage with one optional overlay:
 
 ```sh

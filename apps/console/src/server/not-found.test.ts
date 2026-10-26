@@ -14,7 +14,7 @@ for (const path of ["/missing-page", "/dashboard/ai/usage", "/dashboard/missing"
   })
 }
 
-for (const path of ["/api/missing", "/v0/management/missing", "/v1/missing", "/v1beta/missing", "/openai/missing", "/backend-api/missing", "/executor/missing", "/model/missing"]) {
+for (const path of ["/api/missing", "/v8/management/missing", "/v1/missing", "/v1beta/missing", "/openai/missing", "/backend-api/missing", "/executor/missing", "/model/missing"]) {
   test(`missing API ${path} stays JSON even in a browser`, async () => {
     const response = notFoundResponse(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }))
     expect(response.status).toBe(404)

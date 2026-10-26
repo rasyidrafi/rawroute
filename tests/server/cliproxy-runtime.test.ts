@@ -7,7 +7,7 @@ const origin = "http://localhost:3000"
 process.env.CLIPROXY_MODE = "managed"
 process.env.RAWROUTE_PUBLIC_URL = origin
 const stopped: CliproxyStatus = {
-  installed: true, version: "7.3.4", pinnedVersion: "7.3.4", desiredRunning: false,
+  installed: true, version: "8.0.43", pinnedVersion: "8.0.43", desiredRunning: false,
   processRunning: false, healthy: false, conflict: false, operation: null, restartAttempts: 0, lastError: null,
 }
 const state = { ...stopped }
@@ -28,6 +28,8 @@ const reconcile = mock(async (providerId: string) => {
 })
 mock.module("../../packages/gateway-ai/src/server/cliproxy/service-module", () => ({ managedService: async () => service }))
 mock.module("../../packages/gateway-ai/src/server/codex/cli-login", () => ({ hasPendingCodexLogin: async () => false }))
+const refreshModels = mock(async () => ({ attemptedAt: new Date().toISOString(), added: 0, skipped: 0 }))
+mock.module("../../packages/gateway-ai/src/server/codex/model-discovery", () => ({ refreshCodexModels: refreshModels }))
 mock.module("../../packages/gateway-ai/src/server/cliproxy/transport", () => ({ cliProxyHealth: async () => false }))
 mock.module("../../packages/gateway-ai/src/server/logging", () => ({ recordLog: () => undefined }))
 mock.module("../../packages/platform/src/server/runtime", () => ({
@@ -52,11 +54,11 @@ beforeEach(() => {
 
 test("installing a release on a stopped instance succeeds without contacting its management API", async () => {
   const response = await lifecycle(new Request(`${origin}/api/admin/cliproxy/service/install`, {
-    method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ version: "7.3.5" }),
+    method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ version: "8.0.44" }),
   }), { action: "install" })
   expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ ok: true, version: "7.3.5" })
-  expect(state).toMatchObject({ version: "7.3.5", desiredRunning: false, processRunning: false })
+  expect(await response.json()).toEqual({ ok: true, version: "8.0.44" })
+  expect(state).toMatchObject({ version: "8.0.44", desiredRunning: false, processRunning: false })
   expect(reconcile).not.toHaveBeenCalled()
   expect(start).not.toHaveBeenCalled()
   const release = admitExecution()
@@ -67,10 +69,19 @@ test("installing a release on a stopped instance succeeds without contacting its
 for (const action of ["start", "restart", "install"] as const) {
   test(`${action} reconciles the providers of each workspace when the resulting instance is healthy`, async () => {
     if (action === "install") Object.assign(state, { healthy: true, processRunning: true, desiredRunning: true })
-    await runInstanceAction(action, action === "install" ? "7.3.5" : undefined)
+    await runInstanceAction(action, action === "install" ? "8.0.44" : undefined)
     expect(synced).toEqual([
       { providerId: "provider-a", workspaceId: "workspace-a" },
       { providerId: "provider-a", workspaceId: "workspace-b" },
     ])
+    expect(refreshModels).toHaveBeenCalledTimes(2)
   })
 }
+
+test("V7 installs are rejected before lifecycle mutation", async () => {
+  const response = await lifecycle(new Request(`${origin}/api/admin/cliproxy/service/install`, {
+    method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ version: "7.3.4" }),
+  }), { action: "install" })
+  expect(response.status).toBe(400)
+  expect(service.install).not.toHaveBeenCalled()
+})

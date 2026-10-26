@@ -108,7 +108,7 @@ async function refresh(force: boolean, workspaceId: string): Promise<CodexDiscov
     await mapConcurrent(accounts, 4, async (account) => {
         try {
           if (Date.now() >= deadline) throw new Error("Model discovery deadline exceeded.")
-          const response = await cliproxyManagement(`/v0/management/auth-files/models?name=${encodeURIComponent(account.cliProxyAuthFile!)}`, { signal: AbortSignal.timeout(Math.min(10_000, deadline - Date.now())) })
+          const response = await cliproxyManagement(`/v8/management/credentials/models?name=${encodeURIComponent(account.cliProxyAuthFile!)}`, { signal: AbortSignal.timeout(Math.min(10_000, deadline - Date.now())) })
           if (!response.ok) throw new Error(`CLIProxy model discovery failed (${response.status}).`)
           for (const [id, name] of parseCodexModels(await response.json(), prefix)) {
             const entry = observations.get(id) || { name, accountIds: [] }

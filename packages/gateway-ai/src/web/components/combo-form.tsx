@@ -18,6 +18,7 @@ import { Textarea } from "@rawroute/ui/textarea"
 import { comboMembers, memberPolicyConfigHash, normalizeComboCustomPayload, protectedComboPayloadFields, standardReasoningEfforts, supportedReasoningEfforts } from "../../contracts/combo-reasoning"
 import { cn } from "@rawroute/ui/utils"
 import type { ComboMember, Model, ModelCombo, SharedModelView } from "../../contracts/domain"
+import { modelUnavailable } from "../../contracts/catalog"
 
 type TestResult = { status: "verified" | "unverified" | "invalid"; message: string; latencyMs: number }
 
@@ -84,7 +85,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
   const targets = useMemo(() => {
-    const enabledModels = models.filter((model) => model.enabled).map((model) => ({ id: model.gatewayModelId || model.id, label: model.gatewayModelId || model.id, detail: model.name, shared: false, efforts: supportedReasoningEfforts(model) }))
+    const enabledModels = models.filter((model) => model.enabled && !modelUnavailable(model)).map((model) => ({ id: model.gatewayModelId || model.id, label: model.gatewayModelId || model.id, detail: model.name, shared: false, efforts: supportedReasoningEfforts(model) }))
     const shared = sharedModels.filter((model) => model.status === "active").map((model) => ({ id: model.qualifiedModelId, label: model.qualifiedModelId, detail: model.sourceModelName, shared: true, efforts: [...standardReasoningEfforts] }))
     return [...enabledModels, ...shared].sort((left, right) => left.label.localeCompare(right.label))
   }, [models, sharedModels])

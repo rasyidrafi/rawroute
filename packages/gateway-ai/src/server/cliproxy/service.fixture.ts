@@ -389,21 +389,14 @@ describe("CLIProxy service helpers", () => {
   });
 
   test("rejects persisted configs with a missing, duplicate, or non-loopback host", () => {
-    expect(() => validateLoopbackConfig('host: "127.0.0.1" # safe\nport: 8317')).not.toThrow();
-    expect(() => validateLoopbackConfig("host: 127.0.0.1\nport: 8317")).not.toThrow();
-    expect(() => validateLoopbackConfig('host: "0.0.0.0"\nport: 8317')).toThrow(
-      `host must be ${CLIPROXY_HOST}`
-    );
-    expect(() => validateLoopbackConfig("port: 8317")).toThrow("exactly one root host");
-    expect(() =>
-      validateLoopbackConfig('host: "127.0.0.1"\nhost: "0.0.0.0"\nport: 8317')
-    ).toThrow("exactly one root host");
-    expect(() =>
-      validateLoopbackConfig('host: "127.0.0.1"\n"host": "0.0.0.0"\nport: 8317')
-    ).toThrow("exactly one root host");
-    expect(() => validateLoopbackConfig('"host": "0.0.0.0"\nport: 8317')).toThrow(
-      `host must be ${CLIPROXY_HOST}`
-    );
+    const config = `config-version: 8\nserver:\n  host: "127.0.0.1" # safe\n  port: ${CLIPROXY_PORT}\n`;
+    expect(() => validateLoopbackConfig(config)).not.toThrow();
+    expect(() => validateLoopbackConfig(config.replace('"127.0.0.1"', '"0.0.0.0"'))).toThrow("server.host");
+    expect(() => validateLoopbackConfig(config + '  host: "0.0.0.0"\n')).toThrow();
+    expect(() => validateLoopbackConfig(config + '  "host": "0.0.0.0"\n')).toThrow();
+    expect(() => validateLoopbackConfig(config.replace(`port: ${CLIPROXY_PORT}`, "port: 9999"))).toThrow("server.port");
+    expect(() => validateLoopbackConfig('host: "127.0.0.1"\nport: 8317')).toThrow("canonical V8");
+    expect(() => validateLoopbackConfig(config + 'host: "127.0.0.1"\n')).toThrow("canonical V8");
   });
 
   test("lock retries extend beyond stale recovery while heartbeat remains active", () => {
@@ -505,9 +498,9 @@ describe("CLIProxy service helpers", () => {
       runFixtureScenario(
         ({ dataRoot, executable, root }) => `
           ${serviceFixturePrelude(dataRoot, executable)}
-          installVersion("1.2.3");
+          installVersion("8.0.43");
           const readyPath = path.join(${JSON.stringify(root)}, "hung-child-ready");
-          spawnFixture("1.2.3", readyPath, "", currentPath);
+          spawnFixture("8.0.43", readyPath, "", currentPath);
           await waitForFile(readyPath);
           await new Promise(() => {});
         `,
@@ -522,9 +515,9 @@ describe("CLIProxy service helpers", () => {
     const startedAt = Date.now();
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
-      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "1.2.3", pinnedVersion: null });
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
+      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "8.0.43", pinnedVersion: null });
       const service = await import(${JSON.stringify(moduleUrl)});
       await service.initCliproxy();
       await service.start();
@@ -539,15 +532,35 @@ describe("CLIProxy service helpers", () => {
     expect(Date.now() - startedAt).toBeLessThan(4_000);
   }, FIXTURE_TEST_TIMEOUT_MS);
 
+  test("rejects unsupported installed and requested versions before launching a child", async () => {
+    const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
+      ${serviceFixturePrelude(dataRoot, executable)}
+      installVersion("7.3.4");
+      setCurrent("7.3.4");
+      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "7.3.4", pinnedVersion: null });
+      const service = await import(${JSON.stringify(moduleUrl)});
+      await service.initCliproxy();
+      let startError = "", installError = "";
+      try { await service.start(); } catch (error) { startError = error.message; }
+      try { await service.install("7.3.4"); } catch (error) { installError = error.message; }
+      const childCreated = fs.existsSync(path.join(serviceRoot, "child.json"));
+      await service.shutdownCliproxy();
+      console.log(JSON.stringify({ startError, installError, childCreated }));
+    `, { scenarioName: "reject unsupported engine" });
+    expect(result.startError).toContain("requires CLIProxyAPI V8");
+    expect(result.installError).toContain("requires CLIProxyAPI V8");
+    expect(result.childCreated).toBe(false);
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
   test("preserves the SIGTERM deadline and escalates an unresponsive child to SIGKILL", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl, root }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
       const signalPath = path.join(${JSON.stringify(root)}, "sigterm-received");
       process.env.CLIPROXY_FIXTURE_SIGNAL_PATH = signalPath;
       process.env.CLIPROXY_FIXTURE_IGNORE_SIGTERM = "1";
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
-      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "1.2.3", pinnedVersion: null });
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
+      writeState({ schemaVersion: 1, desiredRunning: false, installedVersion: "8.0.43", pinnedVersion: null });
       const service = await import(${JSON.stringify(moduleUrl)});
       await service.initCliproxy();
       await service.start();
@@ -569,8 +582,8 @@ describe("CLIProxy service helpers", () => {
   test("commits initial install and update transactions without a release download", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      installVersion("1.2.4");
+      installVersion("8.0.43");
+      installVersion("8.0.44");
       const nativeFetch = globalThis.fetch;
       globalThis.fetch = (input, init) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -580,13 +593,13 @@ describe("CLIProxy service helpers", () => {
         return nativeFetch(input, init);
       };
       const service = await import(${JSON.stringify(moduleUrl)});
-      const initialVersion = await service.install("1.2.3");
+      const initialVersion = await service.install("8.0.43");
       const initial = {
         version: currentVersion(),
         state: readState(),
         markerPresent: fs.existsSync(transactionPath),
       };
-      const updatedVersion = await service.install("1.2.4");
+      const updatedVersion = await service.install("8.0.44");
       const updatedStatus = await service.getStatus();
       const updated = {
         version: currentVersion(),
@@ -599,28 +612,28 @@ describe("CLIProxy service helpers", () => {
       console.log(JSON.stringify({ initialVersion, initial, updatedVersion, updated }));
     `);
 
-    expect(result.initialVersion).toBe("1.2.3");
+    expect(result.initialVersion).toBe("8.0.43");
     expect(result.initial).toEqual({
-      version: "1.2.3",
+      version: "8.0.43",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       },
       markerPresent: false,
     });
-    expect(result.updatedVersion).toBe("1.2.4");
+    expect(result.updatedVersion).toBe("8.0.44");
     expect(result.updated).toEqual({
-      version: "1.2.4",
+      version: "8.0.44",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.4",
-        pinnedVersion: "1.2.4",
+        installedVersion: "8.0.44",
+        pinnedVersion: "8.0.44",
       },
       markerPresent: false,
-      childVersion: "1.2.4",
+      childVersion: "8.0.44",
       healthy: true,
     });
   }, FIXTURE_TEST_TIMEOUT_MS);
@@ -648,8 +661,8 @@ describe("CLIProxy service helpers", () => {
         };
       };
       const versions = new Map([
-        ["1.2.4", { archive: validArchive, release: releaseFor("1.2.4", validArchive) }],
-        ["1.2.5", { archive: invalidArchive, release: releaseFor("1.2.5", invalidArchive) }],
+        ["8.0.44", { archive: validArchive, release: releaseFor("8.0.44", validArchive) }],
+        ["8.0.45", { archive: invalidArchive, release: releaseFor("8.0.45", invalidArchive) }],
       ]);
       const fetchedUrls = [];
       globalThis.fetch = async (input) => {
@@ -668,19 +681,19 @@ describe("CLIProxy service helpers", () => {
         }
         throw new Error(\`unexpected network request: \${url}\`);
       };
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       });
       const service = await import(${JSON.stringify(moduleUrl)});
-      const installedVersion = await service.install("1.2.4");
+      const installedVersion = await service.install("8.0.44");
       let archiveError = "";
       try {
-        await service.install("1.2.5");
+        await service.install("8.0.45");
       } catch (error) {
         archiveError = error instanceof Error ? error.message : String(error);
       }
@@ -691,22 +704,22 @@ describe("CLIProxy service helpers", () => {
         state: readState(),
         markerPresent: fs.existsSync(transactionPath),
         stagedDirectories: fs.readdirSync(versionsRoot).filter((entry) => entry.startsWith(".staging-")),
-        validBinary: Array.from(fs.readFileSync(path.join(versionsRoot, "1.2.4", "cli-proxy-api"))),
-        invalidVersionCreated: fs.existsSync(path.join(versionsRoot, "1.2.5")),
+        validBinary: Array.from(fs.readFileSync(path.join(versionsRoot, "8.0.44", "cli-proxy-api"))),
+        invalidVersionCreated: fs.existsSync(path.join(versionsRoot, "8.0.45")),
         fetchedUrls: fetchedUrls.sort(),
       };
       await service.shutdownCliproxy();
       console.log(JSON.stringify(result));
     `);
 
-    expect(result.installedVersion).toBe("1.2.4");
+    expect(result.installedVersion).toBe("8.0.44");
     expect(result.archiveError).toContain("archive is missing a valid cli-proxy-api executable");
-    expect(result.version).toBe("1.2.4");
+    expect(result.version).toBe("8.0.44");
     expect(result.state).toEqual({
       schemaVersion: 1,
       desiredRunning: false,
-      installedVersion: "1.2.4",
-      pinnedVersion: "1.2.4",
+      installedVersion: "8.0.44",
+      pinnedVersion: "8.0.44",
     });
     expect(result.markerPresent).toBe(false);
     expect(result.stagedDirectories).toEqual([]);
@@ -719,16 +732,16 @@ describe("CLIProxy service helpers", () => {
     const failingExecutable = getFixtureExecutable(true);
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.0.0");
-      installVersion("2.0.0");
-      fs.chmodSync(path.join(versionsRoot, "2.0.0", "cli-proxy-api"), 0o700);
-      fs.copyFileSync(${JSON.stringify(failingExecutable)}, path.join(versionsRoot, "2.0.0", "cli-proxy-api"));
-      fs.chmodSync(path.join(versionsRoot, "2.0.0", "cli-proxy-api"), 0o555);
+      installVersion("8.0.43");
+      installVersion("8.1.0");
+      fs.chmodSync(path.join(versionsRoot, "8.1.0", "cli-proxy-api"), 0o700);
+      fs.copyFileSync(${JSON.stringify(failingExecutable)}, path.join(versionsRoot, "8.1.0", "cli-proxy-api"));
+      fs.chmodSync(path.join(versionsRoot, "8.1.0", "cli-proxy-api"), 0o555);
       const service = await import(${JSON.stringify(moduleUrl)});
-      await service.install("1.0.0");
+      await service.install("8.0.43");
       let installError = "";
       try {
-        await service.install("2.0.0");
+        await service.install("8.1.0");
       } catch (error) {
         installError = error instanceof Error ? error.message : String(error);
       }
@@ -748,17 +761,17 @@ describe("CLIProxy service helpers", () => {
 
     expect(result.installError).toContain("not exclusively bound");
     expect(result.rollback).toEqual({
-      version: "1.0.0",
+      version: "8.0.43",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.0.0",
-        pinnedVersion: "1.0.0",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       },
       markerPresent: false,
       processRunning: true,
       healthy: true,
-      statusVersion: "1.0.0",
+      statusVersion: "8.0.43",
       lastError: result.installError,
     });
   }, FIXTURE_TEST_TIMEOUT_MS);
@@ -766,26 +779,26 @@ describe("CLIProxy service helpers", () => {
   test("recovers a marker written before the current link switches", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl, root }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      installVersion("1.2.4");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      installVersion("8.0.44");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       });
       fs.writeFileSync(transactionPath, JSON.stringify({
-        fromVersion: "1.2.3",
-        toVersion: "1.2.4",
-        previousPin: "1.2.3",
+        fromVersion: "8.0.43",
+        toVersion: "8.0.44",
+        previousPin: "8.0.43",
         previousDesiredRunning: true,
       }));
       const readyPath = path.join(${JSON.stringify(root)}, "old-child-ready");
       const signalPath = path.join(${JSON.stringify(root)}, "old-child-signaled");
-      const oldChild = spawnFixture("1.2.3", readyPath, signalPath, currentPath);
+      const oldChild = spawnFixture("8.0.43", readyPath, signalPath, currentPath);
       await waitForFile(readyPath);
-      writeChildRecord(oldChild, "1.2.3");
+      writeChildRecord(oldChild, "8.0.43");
       const service = await import(${JSON.stringify(moduleUrl)});
       await service.initCliproxy();
       const recovered = {
@@ -800,42 +813,42 @@ describe("CLIProxy service helpers", () => {
     `);
 
     expect(result).toEqual({
-      version: "1.2.3",
+      version: "8.0.43",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       },
       markerPresent: false,
-      oldChildCurrentTargetAtStop: "versions/1.2.3",
-      childVersion: "1.2.3",
+      oldChildCurrentTargetAtStop: "versions/8.0.43",
+      childVersion: "8.0.43",
     });
   }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("recovers a switched link whose state commit was interrupted", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl, root }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      installVersion("1.2.4");
-      setCurrent("1.2.4");
+      installVersion("8.0.43");
+      installVersion("8.0.44");
+      setCurrent("8.0.44");
       writeState({
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       });
       fs.writeFileSync(transactionPath, JSON.stringify({
-        fromVersion: "1.2.3",
-        toVersion: "1.2.4",
-        previousPin: "1.2.3",
+        fromVersion: "8.0.43",
+        toVersion: "8.0.44",
+        previousPin: "8.0.43",
         previousDesiredRunning: true,
       }));
       const readyPath = path.join(${JSON.stringify(root)}, "old-child-ready");
       const signalPath = path.join(${JSON.stringify(root)}, "old-child-signaled");
-      const oldChild = spawnFixture("1.2.3", readyPath, signalPath, currentPath);
+      const oldChild = spawnFixture("8.0.43", readyPath, signalPath, currentPath);
       await waitForFile(readyPath);
-      writeChildRecord(oldChild, "1.2.3");
+      writeChildRecord(oldChild, "8.0.43");
       const service = await import(${JSON.stringify(moduleUrl)});
       await service.initCliproxy();
       const recovered = {
@@ -850,35 +863,35 @@ describe("CLIProxy service helpers", () => {
     `);
 
     expect(result).toEqual({
-      version: "1.2.3",
+      version: "8.0.43",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       },
       markerPresent: false,
-      oldChildCurrentTargetAtStop: "versions/1.2.4",
-      childVersion: "1.2.3",
+      oldChildCurrentTargetAtStop: "versions/8.0.44",
+      childVersion: "8.0.43",
     });
   }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("rolls back a committed state when its transaction marker was not removed", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      installVersion("1.2.4");
-      setCurrent("1.2.4");
+      installVersion("8.0.43");
+      installVersion("8.0.44");
+      setCurrent("8.0.44");
       writeState({
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.4",
-        pinnedVersion: "1.2.4",
+        installedVersion: "8.0.44",
+        pinnedVersion: "8.0.44",
       });
       fs.writeFileSync(transactionPath, JSON.stringify({
-        fromVersion: "1.2.3",
-        toVersion: "1.2.4",
-        previousPin: "1.2.3",
+        fromVersion: "8.0.43",
+        toVersion: "8.0.44",
+        previousPin: "8.0.43",
         previousDesiredRunning: true,
       }));
       const service = await import(${JSON.stringify(moduleUrl)});
@@ -899,16 +912,16 @@ describe("CLIProxy service helpers", () => {
     `);
 
     expect(result).toEqual({
-      version: "1.2.3",
+      version: "8.0.43",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       },
       markerPresent: false,
       markerRemovedAfterFirstRecovery: true,
-      childVersion: "1.2.3",
+      childVersion: "8.0.43",
       healthy: true,
     });
   }, FIXTURE_TEST_TIMEOUT_MS);
@@ -916,26 +929,26 @@ describe("CLIProxy service helpers", () => {
   test("recovers an interrupted started update by stopping its new child before restoring", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl, root }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      installVersion("1.2.4");
-      setCurrent("1.2.4");
+      installVersion("8.0.43");
+      installVersion("8.0.44");
+      setCurrent("8.0.44");
       writeState({
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       });
       fs.writeFileSync(transactionPath, JSON.stringify({
-        fromVersion: "1.2.3",
-        toVersion: "1.2.4",
-        previousPin: "1.2.3",
+        fromVersion: "8.0.43",
+        toVersion: "8.0.44",
+        previousPin: "8.0.43",
         previousDesiredRunning: true,
       }));
       const readyPath = path.join(${JSON.stringify(root)}, "new-child-ready");
       const signalPath = path.join(${JSON.stringify(root)}, "new-child-signaled");
-      const newChild = spawnFixture("1.2.4", readyPath, signalPath, currentPath);
+      const newChild = spawnFixture("8.0.44", readyPath, signalPath, currentPath);
       await waitForFile(readyPath);
-      writeChildRecord(newChild, "1.2.4");
+      writeChildRecord(newChild, "8.0.44");
       const service = await import(${JSON.stringify(moduleUrl)});
       await service.initCliproxy();
       const status = await service.getStatus();
@@ -953,17 +966,17 @@ describe("CLIProxy service helpers", () => {
     `);
 
     expect(result).toEqual({
-      version: "1.2.3",
+      version: "8.0.43",
       state: {
         schemaVersion: 1,
         desiredRunning: true,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       },
       markerPresent: false,
       newChildWasStopped: true,
-      newChildCurrentTargetAtStop: "versions/1.2.4",
-      childVersion: "1.2.3",
+      newChildCurrentTargetAtStop: "versions/8.0.44",
+      childVersion: "8.0.43",
       healthy: true,
     });
   }, FIXTURE_TEST_TIMEOUT_MS);
@@ -971,19 +984,19 @@ describe("CLIProxy service helpers", () => {
   test("preserves the recovery marker and known-good version when restore cannot replace current", async () => {
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      installVersion("1.2.4");
+      installVersion("8.0.43");
+      installVersion("8.0.44");
       fs.mkdirSync(currentPath);
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
-        pinnedVersion: "1.2.3",
+        installedVersion: "8.0.43",
+        pinnedVersion: "8.0.43",
       });
       const marker = JSON.stringify({
-        fromVersion: "1.2.3",
-        toVersion: "1.2.4",
-        previousPin: "1.2.3",
+        fromVersion: "8.0.43",
+        toVersion: "8.0.44",
+        previousPin: "8.0.43",
         previousDesiredRunning: false,
       });
       fs.writeFileSync(transactionPath, marker);
@@ -997,7 +1010,7 @@ describe("CLIProxy service helpers", () => {
       console.log(JSON.stringify({
         recoveryError,
         markerWasPreserved: fs.readFileSync(transactionPath, "utf8") === marker,
-        knownGoodVersionWasPreserved: fs.existsSync(path.join(versionsRoot, "1.2.3", "cli-proxy-api")),
+        knownGoodVersionWasPreserved: fs.existsSync(path.join(versionsRoot, "8.0.43", "cli-proxy-api")),
       }));
     `);
 
@@ -1015,7 +1028,7 @@ describe("CLIProxy service helpers", () => {
       import * as path from "node:path";
       const dataRoot = ${JSON.stringify(dataRoot)};
       const serviceRoot = path.join(dataRoot, "cliproxy");
-      const version = "1.2.3";
+      const version = "8.0.43";
       const versionRoot = path.join(serviceRoot, "versions", version);
       const executablePath = path.join(versionRoot, "cli-proxy-api");
       const serverSource = path.join(${JSON.stringify(testRoot)}, "fake-cliproxy.ts");
@@ -1293,7 +1306,7 @@ describe("CLIProxy service helpers", () => {
       import * as path from "node:path";
       const dataRoot = ${JSON.stringify(dataRoot)};
       const serviceRoot = path.join(dataRoot, "cliproxy");
-      const versionRoot = path.join(serviceRoot, "versions", "1.2.3");
+      const versionRoot = path.join(serviceRoot, "versions", "8.0.43");
       const executablePath = path.join(versionRoot, "cli-proxy-api");
       const workerPath = path.join(${JSON.stringify(testRoot)}, "worker.ts");
       fs.mkdirSync(versionRoot, { recursive: true });
@@ -1341,7 +1354,7 @@ describe("CLIProxy service helpers", () => {
         fs.writeFileSync(path.join(serviceRoot, "child.json"), JSON.stringify({
           pid: idle.pid,
           ...identity,
-          version: "1.2.3",
+          version: "8.0.43",
           managerPid: 0,
           managerStartTime: "",
           managerExecutablePath: "",
@@ -1405,7 +1418,7 @@ describe("CLIProxy service helpers", () => {
       import * as path from "node:path";
       const dataRoot = ${JSON.stringify(dataRoot)};
       const serviceRoot = path.join(dataRoot, "cliproxy");
-      const versionRoot = path.join(serviceRoot, "versions", "1.2.3");
+      const versionRoot = path.join(serviceRoot, "versions", "8.0.43");
       const executablePath = path.join(versionRoot, "cli-proxy-api");
       const workerPath = path.join(${JSON.stringify(testRoot)}, "worker.ts");
       const readyPath = path.join(${JSON.stringify(testRoot)}, "ready");
@@ -1437,7 +1450,7 @@ describe("CLIProxy service helpers", () => {
           pid: worker.pid,
           startTime: startTime + "-reused",
           executablePath: fs.realpathSync(\`/proc/\${worker.pid}/exe\`),
-          version: "1.2.3",
+          version: "8.0.43",
           managerPid: 0,
           managerStartTime: "",
           managerExecutablePath: "",
@@ -1639,12 +1652,12 @@ describe("CLIProxy service helpers", () => {
       ${serviceFixturePrelude(dataRoot, executable)}
       const launchDirectory = path.join(${JSON.stringify(root)}, "launches");
       process.env.CLIPROXY_FIXTURE_LAUNCH_DIRECTORY = launchDirectory;
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
+        installedVersion: "8.0.43",
         pinnedVersion: null,
       });
       const service = await import(${JSON.stringify(moduleUrl)});
@@ -1705,12 +1718,12 @@ describe("CLIProxy service helpers", () => {
       const launchDirectory = path.join(${JSON.stringify(root)}, "launches");
       process.env.CLIPROXY_FIXTURE_LAUNCH_DIRECTORY = launchDirectory;
       process.env.CLIPROXY_FIXTURE_EXIT_AFTER_HEALTHY_MS = "500";
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
+        installedVersion: "8.0.43",
         pinnedVersion: null,
       });
       const nativeSetTimeout = globalThis.setTimeout;
@@ -1755,12 +1768,12 @@ describe("CLIProxy service helpers", () => {
       ${serviceFixturePrelude(dataRoot, executable)}
       const launchDirectory = path.join(${JSON.stringify(root)}, "launches");
       process.env.CLIPROXY_FIXTURE_LAUNCH_DIRECTORY = launchDirectory;
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
+        installedVersion: "8.0.43",
         pinnedVersion: null,
       });
       const service = await import(${JSON.stringify(moduleUrl)});
@@ -1801,12 +1814,12 @@ describe("CLIProxy service helpers", () => {
       const longBackoffPath = path.join(${JSON.stringify(root)}, "16-second-backoff-pending");
       process.env.CLIPROXY_FIXTURE_LAUNCH_DIRECTORY = launchDirectory;
       process.env.CLIPROXY_FIXTURE_EXIT_AFTER_LAUNCH = "1";
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
+        installedVersion: "8.0.43",
         pinnedVersion: null,
       });
 
@@ -1877,12 +1890,12 @@ describe("CLIProxy service helpers", () => {
     const startedAt = Date.now();
     const result = await runFixtureScenario(({ dataRoot, executable, moduleUrl }) => `
       ${serviceFixturePrelude(dataRoot, executable)}
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
+        installedVersion: "8.0.43",
         pinnedVersion: null,
       });
       const service = await import(${JSON.stringify(moduleUrl)});
@@ -1896,7 +1909,7 @@ describe("CLIProxy service helpers", () => {
         startError = error instanceof Error ? error.message : String(error);
       }
       const status = await service.getStatus();
-      const managedExecutable = fs.realpathSync(path.join(versionsRoot, "1.2.3", "cli-proxy-api"));
+      const managedExecutable = fs.realpathSync(path.join(versionsRoot, "8.0.43", "cli-proxy-api"));
       const orphanedPids = fs.readdirSync("/proc", { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && /^\\d+$/.test(entry.name))
         .map((entry) => Number(entry.name))
@@ -1939,12 +1952,12 @@ describe("CLIProxy service helpers", () => {
       process.env.CLIPROXY_FIXTURE_HEALTH_REQUEST_PATH = healthRequestPath;
       process.env.CLIPROXY_FIXTURE_FAIL_HEALTH_AND_REBIND = "1";
       process.env.CLIPROXY_FIXTURE_SIGNAL_PATH = signalPath;
-      installVersion("1.2.3");
-      setCurrent("1.2.3");
+      installVersion("8.0.43");
+      setCurrent("8.0.43");
       writeState({
         schemaVersion: 1,
         desiredRunning: false,
-        installedVersion: "1.2.3",
+        installedVersion: "8.0.43",
         pinnedVersion: null,
       });
       const service = await import(${JSON.stringify(moduleUrl)});

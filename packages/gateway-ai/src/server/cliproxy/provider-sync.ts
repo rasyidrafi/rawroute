@@ -33,7 +33,7 @@ type OpenAICompatProjection = {
   prefix: string
   "base-url": string
   "support-prompt-cache-key"?: true
-  "api-key-entries"?: OpenAICompatKeyEntry[]
+  keys?: OpenAICompatKeyEntry[]
   models: OpenAICompatModel[]
   headers?: Record<string, string>
 }
@@ -45,7 +45,8 @@ type ClaudeModel = {
 }
 
 type ClaudeProjection = {
-  "api-key": string
+  name: string
+  keys: OpenAICompatKeyEntry[]
   priority?: number
   prefix: string
   "base-url": string
@@ -161,12 +162,11 @@ function projectionFingerprint(projection: ProjectionShape) {
     executorMode: projection.executorMode,
     openai: projection.openai.map((entry) => ({
       ...entry,
-      "api-key-entries": entry["api-key-entries"]?.map((key) => ({ "api-key-sha256": digest(key["api-key"]) })),
+      keys: entry.keys?.map((key) => ({ "api-key-sha256": digest(key["api-key"]) })),
     })),
     claude: projection.claude.map((entry) => ({
       ...entry,
-      "api-key-sha256": digest(entry["api-key"]),
-      "api-key": undefined,
+      keys: entry.keys.map((key) => ({ "api-key-sha256": digest(key["api-key"]) })),
     })),
   }
   return digest(JSON.stringify(safe))
@@ -226,7 +226,7 @@ async function desiredProjection(providerId: string): Promise<Projection> {
       disabled: false,
       prefix: namespace,
       "base-url": baseUrl,
-      "api-key-entries": [{ "api-key": apiKey.key }],
+      keys: [{ "api-key": apiKey.key }],
       models: mappedModels,
       ...(provider.supportPromptCacheKey === true ? { "support-prompt-cache-key": true as const } : {}),
       ...(headers ? { headers } : {}),
@@ -235,7 +235,8 @@ async function desiredProjection(providerId: string): Promise<Projection> {
   }
 
   const claude = enabledKeys.map((apiKey, index) => ({
-    "api-key": apiKey.key,
+    name: managedName(workspaceId, providerId, apiKey.id),
+    keys: [{ "api-key": apiKey.key }],
     ...(enabledKeys.length - index - 1 > 0 ? { priority: enabledKeys.length - index - 1 } : {}),
     prefix: namespace,
     "base-url": baseUrl,
@@ -267,23 +268,27 @@ function isManagedEntry(entry: RemoteEntry, projection: Projection) {
   return entryPrefix(entry) === projection.namespace && entryName(entry).startsWith(projection.namePrefix)
 }
 
-function configurationEntries(data: unknown, key: string) {
-  const value = data && typeof data === "object" ? (data as Record<string, unknown>)[key] : undefined
+function configurationEntries(value: unknown) {
+  if (value === null) return []
   if (!Array.isArray(value)) return undefined
   if (!value.every((entry) => Boolean(entry && typeof entry === "object" && !Array.isArray(entry)))) return undefined
   return value as RemoteEntry[]
 }
 
+function missingConfiguration(result: { response: Response; data: unknown }) {
+  return result.response.status === 404 && result.data !== null && typeof result.data === "object" && "error" in result.data && result.data.error === "not_found"
+}
+
 async function managementList() {
   if (!managementKeyConfigured()) throw new CliProxyProviderSyncError("CLIProxy management key is not configured.")
   const [openai, claude] = await Promise.all([
-    cliproxyManagementJson<{ "openai-compatibility"?: unknown }>("/v0/management/openai-compatibility"),
-    cliproxyManagementJson<{ "claude-api-key"?: unknown }>("/v0/management/claude-api-key"),
+    cliproxyManagementJson<unknown>("/v8/management/config/api-keys/openai-compatibility"),
+    cliproxyManagementJson<unknown>("/v8/management/config/api-keys/claude"),
   ])
-  if (!openai.response.ok) throw new CliProxyProviderSyncError(`CLIProxy OpenAI-compatible configuration read failed (${openai.response.status}).`)
-  if (!claude.response.ok) throw new CliProxyProviderSyncError(`CLIProxy Anthropic configuration read failed (${claude.response.status}).`)
-  const openaiEntries = configurationEntries(openai.data, "openai-compatibility")
-  const claudeEntries = configurationEntries(claude.data, "claude-api-key")
+  if (!openai.response.ok && !missingConfiguration(openai)) throw new CliProxyProviderSyncError(`CLIProxy OpenAI-compatible configuration read failed (${openai.response.status}).`)
+  if (!claude.response.ok && !missingConfiguration(claude)) throw new CliProxyProviderSyncError(`CLIProxy Anthropic configuration read failed (${claude.response.status}).`)
+  const openaiEntries = missingConfiguration(openai) ? [] : configurationEntries(openai.data)
+  const claudeEntries = missingConfiguration(claude) ? [] : configurationEntries(claude.data)
   if (!openaiEntries) throw new CliProxyProviderSyncError("CLIProxy OpenAI-compatible configuration response was invalid.")
   if (!claudeEntries) throw new CliProxyProviderSyncError("CLIProxy Anthropic configuration response was invalid.")
   return {
@@ -294,14 +299,14 @@ async function managementList() {
 
 async function ensureFillFirst(force = false) {
   if (!force && fillFirstValidUntil > Date.now()) return
-  const current = await cliproxyManagementJson<{ strategy?: unknown }>("/v0/management/routing/strategy")
-  if (!current.response.ok) throw new CliProxyProviderSyncError(`CLIProxy routing strategy read failed (${current.response.status}).`)
-  if (typeof current.data?.strategy !== "string") throw new CliProxyProviderSyncError("CLIProxy routing strategy response was invalid.")
-  if (current.data?.strategy !== "fill-first") {
-    const updated = await cliproxyManagement("/v0/management/routing/strategy", {
+  const current = await cliproxyManagementJson<unknown>("/v8/management/config/routing/strategy")
+  if (!current.response.ok && !missingConfiguration(current)) throw new CliProxyProviderSyncError(`CLIProxy routing strategy read failed (${current.response.status}).`)
+  if (typeof current.data !== "string" && current.data !== null && !missingConfiguration(current)) throw new CliProxyProviderSyncError("CLIProxy routing strategy response was invalid.")
+  if (current.data !== "fill-first") {
+    const updated = await cliproxyManagement("/v8/management/config/routing/strategy", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ value: "fill-first" }),
+      body: JSON.stringify("fill-first"),
     })
     if (!updated.ok) throw new CliProxyProviderSyncError(`CLIProxy routing strategy update failed (${updated.status}).`)
   }
@@ -328,10 +333,10 @@ async function applyProjection(projection: Projection, force: boolean, ensureRou
   const nextClaude = [...current.claude.filter((entry) => !isManagedEntry(entry, projection)), ...projection.claude]
 
   if (stableJson(current.openai) !== stableJson(nextOpenAI)) {
-    await putConfiguration("/v0/management/openai-compatibility", nextOpenAI, "OpenAI-compatible configuration")
+    await putConfiguration("/v8/management/config/api-keys/openai-compatibility", nextOpenAI, "OpenAI-compatible configuration")
   }
   if (stableJson(current.claude) !== stableJson(nextClaude)) {
-    await putConfiguration("/v0/management/claude-api-key", nextClaude, "Anthropic configuration")
+    await putConfiguration("/v8/management/config/api-keys/claude", nextClaude, "Anthropic configuration")
   }
   if (ensureRouting) await ensureFillFirst(force)
 }

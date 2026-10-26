@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { normalizeVersion } from "./release";
+import { configMapping, parseConfig } from "./config";
 
 export const CLIPROXY_HOST = "127.0.0.1";
 const DEFAULT_CLIPROXY_PORT = 8317;
@@ -73,65 +74,50 @@ export function getServicePaths(root: string): ServicePaths {
 export function renderConfig(apiKey: string, managementKey: string, authDir: string): string {
   const quote = (value: string) => JSON.stringify(value);
   return [
-    `host: ${quote(CLIPROXY_HOST)}`,
-    `port: ${CLIPROXY_PORT}`,
-    "debug: false",
-    "logging-to-file: true",
-    "logs-max-total-size-mb: 100",
-    "usage-statistics-enabled: true",
-    "request-retry: 0",
-    "max-retry-credentials: 0",
-    "max-retry-interval: 0",
-    "disable-cooling: true",
-    "transient-error-cooldown-seconds: -1",
+    "config-version: 8",
+    "server:",
+    `  host: ${quote(CLIPROXY_HOST)}`,
+    `  port: ${CLIPROXY_PORT}`,
+    "observability:",
+    "  logs:",
+    "    debug: false",
+    "    logging-to-file: true",
+    "    logs-max-total-size-mb: 100",
+    "  usage:",
+    "    usage-statistics-enabled: true",
     "plugins:",
     "  enabled: false",
     "routing:",
     "  strategy: fill-first",
-    "remote-management:",
+    "  retry:",
+    "    request-retry: 0",
+    "    max-retry-credentials: 0",
+    "    max-retry-interval: 0",
+    "  cooldown:",
+    "    disable-cooling: true",
+    "    transient-error-cooldown-seconds: -1",
+    "management:",
     "  allow-remote: false",
     `  secret-key: ${quote(managementKey)}`,
     "  disable-control-panel: true",
-    "api-keys:",
-    `  - ${quote(apiKey)}`,
-    `auth-dir: ${quote(authDir)}`,
+    "access:",
+    "  api-keys:",
+    `    - ${quote(apiKey)}`,
+    "oauth:",
+    `  auth-dir: ${quote(authDir)}`,
     "",
   ].join("\n");
 }
 
 export function validateLoopbackConfig(contents: string): void {
-  if (contents.trimStart().startsWith("{")) {
-    const config = JSON.parse(contents) as { host?: unknown; port?: unknown }
-    if (config.host !== CLIPROXY_HOST || config.port !== CLIPROXY_PORT) throw new Error("CLIProxy config must use its private loopback listener")
-    return
+  const config = parseConfig(contents);
+  if (config["config-version"] !== 8 || "host" in config || "port" in config || "remote-management" in config || "auth-dir" in config || Array.isArray(config["api-keys"])) {
+    throw new Error("CLIProxy requires canonical V8 configuration. Stop writers and run scripts/migrations/cliproxy.ts before upgrading.");
   }
-  const rootHostLines = contents.split(/\r?\n/).filter(isRootHostSetting);
-  if (rootHostLines.length !== 1) {
-    throw new Error("CLIProxy config must contain exactly one root host setting");
+  const server = configMapping(config.server);
+  if (server.host !== CLIPROXY_HOST || server.port !== CLIPROXY_PORT) {
+    throw new Error(`CLIProxy config must use server.host ${CLIPROXY_HOST} and server.port ${CLIPROXY_PORT}`);
   }
-  const scalar = rootHostLines[0].slice(rootHostLines[0].indexOf(":") + 1);
-  const match = scalar.match(/^\s*(?:"([^"\\]*)"|'([^']*)'|([^#\s]+))\s*(?:#.*)?$/);
-  const configuredHost = match?.[1] ?? match?.[2] ?? match?.[3];
-  if (configuredHost !== CLIPROXY_HOST) {
-    throw new Error(`CLIProxy config host must be ${CLIPROXY_HOST}`);
-  }
-}
-
-function isRootHostSetting(line: string): boolean {
-  if (/^---(?:\s|$)/.test(line) || /^\s*(?:#|$)/.test(line)) return false;
-  if (/^[?!*&]/.test(line)) {
-    throw new Error("CLIProxy config uses unsupported root mapping key syntax");
-  }
-  if (/^host\s*:/.test(line)) return true;
-  const doubleQuoted = line.match(/^"((?:[^"\\]|\\.)*)"\s*:/);
-  if (doubleQuoted) {
-    if (doubleQuoted[1].includes("\\")) {
-      throw new Error("CLIProxy config uses an escaped root mapping key");
-    }
-    return doubleQuoted[1] === "host";
-  }
-  const singleQuoted = line.match(/^'((?:[^']|'')*)'\s*:/);
-  return singleQuoted?.[1].replace(/''/g, "'") === "host";
 }
 
 export function ensureLayout(paths: ServicePaths): void {

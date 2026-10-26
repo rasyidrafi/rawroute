@@ -44,6 +44,15 @@ export function versionFromTag(tag: string): string | null {
   }
 }
 
+export function supportedVersion(input: string): string {
+  const version = normalizeVersion(input);
+  const [major, minor, patch] = version.split(".").map(Number);
+  if (major !== 8 || !Number.isInteger(minor) || !Number.isInteger(patch) || (minor === 0 && patch < 43)) {
+    throw new Error("RawRoute requires CLIProxyAPI V8, version 8.0.43 or newer.");
+  }
+  return version;
+}
+
 export function getLinuxReleaseArch(arch = process.arch): "amd64" | "aarch64" {
   if (process.platform !== "linux") {
     throw new Error("CLIProxyAPI lifecycle supports Linux only");
@@ -148,7 +157,7 @@ export async function getAvailableVersions(): Promise<AvailableVersions> {
   // keeps the browser lifecycle panel from contacting GitHub during a private
   // transport fixture; production never reads the override.
   if (process.env.NODE_ENV === "test" && process.env.RAWROUTE_CLIPROXY_TEST_VERSIONS) {
-    const versions = process.env.RAWROUTE_CLIPROXY_TEST_VERSIONS.split(",").map((item) => normalizeVersion(item.trim()));
+    const versions = process.env.RAWROUTE_CLIPROXY_TEST_VERSIONS.split(",").map((item) => supportedVersion(item.trim()));
     if (!versions.length) throw new Error("RAWROUTE_CLIPROXY_TEST_VERSIONS must contain a version");
     return { latest: versions[0]!, versions: versions.map((version) => ({ version, publishedAt: null })) };
   }
@@ -166,9 +175,11 @@ export async function getAvailableVersions(): Promise<AvailableVersions> {
 
   const latest = versionFromTag(latestRelease.tag_name);
   if (!latest) throw new Error("GitHub latest release has an invalid version tag");
+  supportedVersion(latest);
   const unique = new Map<string, string | null>();
   for (const release of [latestRelease, ...releases]) {
     const version = versionFromTag(release.tag_name);
+    if (version) { try { supportedVersion(version); } catch { continue; } }
     if (version && hasStandardLinuxAsset(release, version)) {
       unique.set(version, release.published_at ?? null);
     }

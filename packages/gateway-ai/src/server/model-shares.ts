@@ -8,6 +8,7 @@ import { currentWorkspaceId, runInWorkspace } from "@rawroute/platform/server/wo
 import { getWorkspace, listWorkspaces } from "@rawroute/platform/server/runtime"
 import { appendMemoryAudit } from "@rawroute/platform/server/audit"
 import { attachWorkspaceActivity } from "@rawroute/platform/server/workspace-activity"
+import { modelUnavailable } from "../contracts/catalog"
 
 let localDatabase: SqliteDatabase | undefined
 declare global { var __rawrouteModelShares: Map<string, ModelShare> | undefined }
@@ -48,7 +49,7 @@ async function activeSource(share: ModelShare) {
     const [models, providers] = await Promise.all([listModels(), listProviders()])
     const model = models.find((entry) => entry.id === share.sourceModelId)
     const provider = model ? providers.find((entry) => entry.id === model.providerId) : undefined
-    if (!model || !provider || !model.enabled || provider.enabled === false) return undefined
+    if (!model || !provider || !model.enabled || modelUnavailable(model) || provider.enabled === false) return undefined
     return { owner, model, provider }
   })
 }
@@ -96,7 +97,7 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
   const [models, providers, workspaces, current] = await Promise.all([listModels(), listProviders(), listWorkspaces(), listModelSharesForSourceModel(sourceModelId, ownerWorkspaceId)])
   const model = models.find((entry) => entry.id === sourceModelId)
   const provider = model ? providers.find((entry) => entry.id === model.providerId) : undefined
-  if (!model || !provider || !model.enabled || provider.enabled === false) throw new Error("Only enabled models on enabled providers can be shared.")
+  if (!model || !provider || !model.enabled || modelUnavailable(model) || provider.enabled === false) throw new Error("Only available enabled models on enabled providers can be shared.")
   const activeWorkspaceIds = new Set(workspaces.filter((workspace) => workspace.status === "active").map((workspace) => workspace.id))
   const recipients = [...new Set(recipientWorkspaceIds.filter((id): id is string => typeof id === "string"))]
   if (recipients.some((id) => id === ownerWorkspaceId)) throw new Error("A model cannot be shared with its own workspace.")

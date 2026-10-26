@@ -68,6 +68,15 @@ mock.module("../../../packages/platform/src/server/runtime", () => ({
 const { BudgetDeniedError, BudgetModelExcludedError } = await import("../../../packages/gateway-ai/src/server/analytics")
 const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, sharedUsageEventCopies, testComboMemberPolicy } = await import("../../../packages/gateway-ai/src/server/cliproxy/gateway")
 const { drainBackgroundTasks } = await import("../../../packages/platform/src/server/background-tasks")
+const { resolveGatewayModel } = await import("../../../packages/gateway-ai/src/server/cliproxy/model-resolution")
+
+test("confirmed unavailable Codex models and their aliases cannot reach inference", async () => {
+  mocks.listModels.mockResolvedValue([{ id: "removed", providerId: "codex", gatewayModelId: "codex/gpt-5.5", upstreamModel: "gpt-5.5", name: "Retired", enabled: true, source: "discovered", discovery: { stale: true, accountIds: [] } }])
+  mocks.listAliases.mockResolvedValue([{ alias: "saved-alias", targetModelId: "removed" }])
+  await expect(resolveGatewayModel("codex/gpt-5.5")).rejects.toMatchObject({ code: "model_not_found" })
+  await expect(resolveGatewayModel("saved-alias")).rejects.toMatchObject({ code: "model_not_found" })
+  expect(fetchTarget.fetch).not.toHaveBeenCalled()
+})
 
 beforeEach(() => {
   process.env.CLIPROXY_MODE = "external"

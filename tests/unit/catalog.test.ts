@@ -32,6 +32,16 @@ test("catalog includes Codex models", () => {
   expect(catalogModels([codexProvider], [{ ...model, providerId: "codex", id: "codex/model", gatewayModelId: "codex/model" }])).toHaveLength(1)
 })
 
+test("confirmed catalog removals hide models, aliases and empty combos; partial discovery failures preserve availability", () => {
+  const removed: Model = { ...model, source: "discovered", discovery: { stale: true, accountIds: [] } }
+  expect(catalogModels([provider], [removed], [alias], [combo])).toEqual([])
+  expect(catalogLiteLlmModelInfo([provider], [removed], [alias])).toEqual([])
+  const uncertain: Model = { ...removed, discovery: { stale: true, accountIds: ["temporarily-unreachable-account"] } }
+  expect(catalogModels([provider], [uncertain], [alias], [combo])).toHaveLength(3)
+  const restored: Model = { ...removed, discovery: { stale: false, accountIds: ["active-account"] } }
+  expect(catalogModels([provider], [restored], [alias], [combo])).toHaveLength(3)
+})
+
 test("catalog includes an alias that points at an enabled model", () => {
   expect(catalogModels([provider], [model], [alias])).toEqual([
     {

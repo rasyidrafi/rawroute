@@ -57,16 +57,16 @@ test("workspace Codex OAuth can complete", async ({ page }) => {
 
 test("managed lifecycle UI confirms version changes and remains usable when release discovery fails", async ({ page }) => {
   await authenticate(page)
-  let version = "7.3.4"
+  let version = "8.0.43"
   await page.route("**/api/admin/cliproxy/status", route => route.fulfill({ json: { mode: "managed", installed: true, version, pinnedVersion: version, healthy: true, processRunning: true, desiredRunning: true, conflict: false, operation: null, restartAttempts: 0, activeRequests: 0 } }))
-  await page.route("**/api/admin/cliproxy/versions", route => route.fulfill({ json: { latest: "7.3.5", versions: [{ version: "7.3.5", publishedAt: null }, { version: "7.3.4", publishedAt: null }] } }))
-  await page.route("**/api/admin/cliproxy/service/install", async route => { expect(route.request().postDataJSON()).toEqual({ version: "latest" }); version = "7.3.5"; await route.fulfill({ json: { ok: true, version } }) })
+  await page.route("**/api/admin/cliproxy/versions", route => route.fulfill({ json: { latest: "8.0.44", versions: [{ version: "8.0.44", publishedAt: null }, { version: "8.0.43", publishedAt: null }] } }))
+  await page.route("**/api/admin/cliproxy/service/install", async route => { expect(route.request().postDataJSON()).toEqual({ version: "latest" }); version = "8.0.44"; await route.fulfill({ json: { ok: true, version } }) })
   await page.goto("/dashboard/cliproxy")
-  await page.getByRole("button", { name: "Install latest (7.3.5)", exact: true }).click()
+  await page.getByRole("button", { name: "Install latest (8.0.44)", exact: true }).click()
   await expect(page.getByRole("alertdialog")).toContainText("every workspace")
   await page.getByRole("alertdialog").getByRole("button", { name: "Confirm", exact: true }).click()
   await expect(page.getByRole("alertdialog")).toBeHidden()
-  await expect(page.getByText("7.3.5", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("8.0.44", { exact: true }).first()).toBeVisible()
   await page.route("**/api/admin/cliproxy/versions", route => route.fulfill({ status: 502, json: { error: { message: "GitHub unavailable" } } }))
   await page.getByRole("button", { name: "Refresh releases", exact: true }).click()
   await expect(page.getByRole("button", { name: "Restart", exact: true })).toBeEnabled()
@@ -78,8 +78,8 @@ for (const width of [390, 1440]) {
   test(`copied CLIProxy layout groups releases with the service at ${width}px`, async ({ page }, testInfo) => {
     await authenticate(page)
     await page.setViewportSize({ width, height: 1000 })
-    await page.route("**/api/admin/cliproxy/status", route => route.fulfill({ json: { mode: "managed", installed: true, version: "7.3.4", pinnedVersion: null, healthy: true, processRunning: true, desiredRunning: true, conflict: false, operation: null, restartAttempts: 0, activeRequests: 1200 } }))
-    await page.route("**/api/admin/cliproxy/versions", route => route.fulfill({ json: { latest: "7.3.5", versions: [{ version: "7.3.5", publishedAt: null }] } }))
+    await page.route("**/api/admin/cliproxy/status", route => route.fulfill({ json: { mode: "managed", installed: true, version: "8.0.43", pinnedVersion: null, healthy: true, processRunning: true, desiredRunning: true, conflict: false, operation: null, restartAttempts: 0, activeRequests: 1200 } }))
+    await page.route("**/api/admin/cliproxy/versions", route => route.fulfill({ json: { latest: "8.0.44", versions: [{ version: "8.0.44", publishedAt: null }] } }))
     await page.goto("/dashboard/cliproxy")
     await expect(page.getByRole("heading", { name: "CLIProxyAPI", exact: true, level: 2 })).toBeVisible()
     const service = page.locator('[data-slot="card"]').filter({ hasText: "Managed process" })

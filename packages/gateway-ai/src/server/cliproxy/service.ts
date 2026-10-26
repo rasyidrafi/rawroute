@@ -8,6 +8,7 @@ import * as lockfile from "proper-lockfile";
 import {
   getAvailableVersions,
   normalizeVersion,
+  supportedVersion,
 } from "./release";
 import {
   CLIPROXY_HOST,
@@ -618,6 +619,7 @@ async function scheduleRestart(
 async function startCurrentVersion(): Promise<void> {
   const version = currentVersion(paths);
   if (!version) throw new Error("No valid CLIProxy version is installed");
+  supportedVersion(version);
   ensureConfig(paths);
   const listeners = readPortListeners();
   if (listenerPortIsBusy(listeners)) {
@@ -677,7 +679,7 @@ async function startCurrentVersion(): Promise<void> {
 }
 
 async function installLocked(input: string): Promise<string> {
-  const desiredVersion = input === "latest" ? (await getAvailableVersions()).latest : normalizeVersion(input);
+  const desiredVersion = supportedVersion(input === "latest" ? (await getAvailableVersions()).latest : input);
   const state = readState(paths);
   const oldVersion = currentVersion(paths);
   if (oldVersion === desiredVersion) {
@@ -868,7 +870,7 @@ export async function getVersions(): Promise<CliproxyVersions> {
 }
 
 export async function install(version: string): Promise<string> {
-  const normalizedInput = version === "latest" ? version : normalizeVersion(version);
+  const normalizedInput = version === "latest" ? version : supportedVersion(version);
   return withOperation("installing", () =>
     withLifecycleLock(async () => {
       assertManagerIsSelf();

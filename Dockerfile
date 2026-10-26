@@ -1,4 +1,4 @@
-FROM docker.io/eceasy/cli-proxy-api:v7.3.4@sha256:97825da3009f98acf78b5c172fde650a5fbe7a690950a69ce6d7b535d77d4266 AS cliproxy-binary
+FROM docker.io/eceasy/cli-proxy-api:v8.0.43@sha256:3f74ca56cba8bea2a2a096a215bb774482d87d257da04c5047e6046493bfd644 AS cliproxy-binary
 
 FROM oven/bun:1.4.2-slim AS dependencies
 WORKDIR /app
@@ -27,7 +27,7 @@ ENV NODE_ENV=production \
     DEPLOYMENT_VERSION=$DEPLOYMENT_VERSION \
     RAWROUTE_DATA_DIR=/data \
     CLIPROXY_BUNDLED_BINARY=/opt/cliproxy/cli-proxy-api \
-    CLIPROXY_BUNDLED_VERSION=7.3.4
+    CLIPROXY_BUNDLED_VERSION=8.0.43
 COPY --from=builder --chown=bun:bun /app/dist ./dist
 COPY --from=cliproxy-binary /CLIProxyAPI/CLIProxyAPI /opt/cliproxy/cli-proxy-api
 RUN mkdir -p /data && chown bun:bun /data

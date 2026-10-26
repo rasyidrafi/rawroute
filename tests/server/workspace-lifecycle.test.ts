@@ -448,8 +448,8 @@ test("concrete AI cleanup deletes only mapped OAuth resources and pending login;
   try {
     await repo.deleteWorkspace(selected.id, selected.name)
     expect(calls).toHaveLength(2)
-    expect(calls.some(call => call.includes("auth-files?name=only-owned-file.json"))).toBe(true)
-    expect(calls.some(call => call.includes("oauth-session?state=only-owned-state"))).toBe(true)
+    expect(calls.some(call => call.includes("credentials?name=only-owned-file.json"))).toBe(true)
+    expect(calls.some(call => call.includes("oauth/session?state=only-owned-state"))).toBe(true)
     expect(await hasPendingCodexLogin()).toBe(false)
     expect(process.env.EXECUTOR_UPSTREAM_URL).toBe("https://global-tools.invalid")
     expect((await queryAudit({ workspaceId: selected.id })).some(event => event.action === "workspace.delete.complete")).toBe(true)
@@ -533,9 +533,9 @@ test("SQLite recovery retries attributed OAuth cancellation after interaction ex
   const upstream = spyOn(target, "fetch").mockImplementation(async (input, init) => {
     const url = String(input)
     if (!url.startsWith("https://isolated-login.invalid/")) return originalFetch(input, init)
-    if (url.includes("/auth-files")) return Response.json({ files: [] })
-    if (url.includes("/codex-auth-url")) return Response.json({ state: "private-durable-oauth-state", url: "https://auth.invalid/?state=private-durable-oauth-state" })
-    expect(url).toContain("/oauth-session?state=private-durable-oauth-state")
+    if (url.includes("/credentials")) return Response.json({ files: [] })
+    if (url.includes("/oauth/auth-url")) return Response.json({ state: "private-durable-oauth-state", url: "https://auth.invalid/?state=private-durable-oauth-state" })
+    expect(url).toContain("/oauth/session?state=private-durable-oauth-state")
     cancellations += 1
     return new Response(null, { status: failCancellation ? 503 : 404 })
   })

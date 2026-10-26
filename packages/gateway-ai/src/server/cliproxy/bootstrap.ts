@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { getDataRoot, getServicePaths, readState, writeState } from "./store"
-import { normalizeVersion } from "./release"
+import { supportedVersion } from "./release"
 import { isInstalledVersion, setCurrentVersion } from "./version-store"
 
 /** Container images carry a tested release; fresh boot never needs GitHub. */
@@ -11,7 +11,7 @@ export function seedBundledVersion() {
   const source = process.env.CLIPROXY_BUNDLED_BINARY
   const rawVersion = process.env.CLIPROXY_BUNDLED_VERSION
   if (!source || !rawVersion) return
-  const version = normalizeVersion(rawVersion)
+  const version = supportedVersion(rawVersion)
   const directory = path.join(paths.versions, version)
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
   if (!isInstalledVersion(paths, version)) {

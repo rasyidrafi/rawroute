@@ -4,8 +4,7 @@ type AuthFile = { name: string; type: string; auth_index: string; email: string;
 type RoutingMode = "cooldown-once" | "always-cooldown" | "codex-cooldown" | "ambiguous-429"
 const files: AuthFile[] = []
 const sessions = new Map<string, boolean>()
-const configuration: Record<string, unknown> = { "api-keys": ["sk-e2e-internal"], "openai-compatibility": [], "claude-api-key": [], "routing/strategy": { strategy: "fill-first" } }
-const gatewaySettings: Record<string, unknown> = { debug: false, "logging-to-file": false, "usage-statistics-enabled": false, "request-retry": 2, "max-retry-interval": 30 }
+const configuration: Record<string, unknown> = { "config/api-keys/openai-compatibility": [], "config/api-keys/claude": [], "config/routing/strategy": "fill-first" }
 const state = { pollCount: 0, routingAttempts: 0, routingMode: undefined as RoutingMode | undefined }
 
 async function handleRequest(request: Request) {
@@ -27,43 +26,37 @@ async function handleRequest(request: Request) {
   }
   if (path === "/debug") return Response.json(state)
 
-  if (path.startsWith("/cliproxy/v0/management/")) {
+  if (path.startsWith("/cliproxy/v8/management/")) {
     if (request.headers.get("x-management-key") !== "e2e-management-key") return Response.json({ error: "Unauthorized" }, { status: 401 })
-    const endpoint = path.slice("/cliproxy/v0/management/".length)
-    if (Object.hasOwn(gatewaySettings, endpoint) && request.method === "PUT") {
-      gatewaySettings[endpoint] = (await request.json() as { value: unknown }).value
-      return Response.json({ ok: true })
-    }
+    const endpoint = path.slice("/cliproxy/v8/management/".length)
     if (Object.hasOwn(configuration, endpoint)) {
       if (request.method === "PUT") {
         configuration[endpoint] = await request.json()
         return Response.json({ ok: true })
       }
-      return Response.json(endpoint === "routing/strategy" ? configuration[endpoint] : { [endpoint]: configuration[endpoint] })
+      return Response.json(configuration[endpoint])
     }
-    if (endpoint === "logs") return Response.json({ lines: request.method === "DELETE" ? [] : ["CLIProxy fixture ready", "Authorization: Bearer fixture-secret"] })
-    if (endpoint === "config") return Response.json({ ...gatewaySettings, routing: { strategy: "fill-first" } })
-    if (endpoint === "codex-auth-url") {
+    if (endpoint === "oauth/auth-url") {
       const id = crypto.randomUUID()
       sessions.set(id, false)
       return Response.json({ state: id, url: `http://127.0.0.1:3211/signin?state=${id}` })
     }
-    if (endpoint === "oauth-session" && request.method === "DELETE") {
+    if (endpoint === "oauth/session" && request.method === "DELETE") {
       sessions.delete(url.searchParams.get("state") || "")
       return Response.json({ ok: true })
     }
-    if (endpoint === "oauth-callback") {
+    if (endpoint === "oauth/callback") {
       const input = await request.json() as { state: string; code?: string }
       if (!sessions.has(input.state) || !input.code) return Response.json({ error: "Invalid callback" }, { status: 400 })
       sessions.set(input.state, true)
       files.push({ name: `codex-${input.state}.json`, type: "codex", auth_index: input.state, email: "codex@example.com", account_id: input.state, plan_type: "pro", disabled: false, status: "active" })
       return Response.json({ ok: true })
     }
-    if (endpoint === "get-auth-status") {
+    if (endpoint === "oauth/status") {
       state.pollCount++
       return Response.json({ status: sessions.get(url.searchParams.get("state") || "") ? "ok" : "wait" })
     }
-    if (endpoint === "auth-files") {
+    if (endpoint === "credentials") {
       if (request.method === "DELETE") {
         const index = files.findIndex((file) => file.name === url.searchParams.get("name"))
         if (index >= 0) files.splice(index, 1)
@@ -71,18 +64,18 @@ async function handleRequest(request: Request) {
       }
       return Response.json({ files })
     }
-    if (endpoint === "auth-files/fields" || endpoint === "auth-files/status") {
+    if (endpoint === "credentials/fields" || endpoint === "credentials/status") {
       const body = await request.json() as Partial<AuthFile> & { name: string }
       const file = files.find((entry) => entry.name === body.name)
       if (!file) return Response.json({ error: "Not found" }, { status: 404 })
       Object.assign(file, body)
       return Response.json({ ok: true })
     }
-    if (endpoint === "auth-files/models") {
+    if (endpoint === "credentials/models") {
       const file = files.find((entry) => entry.name === url.searchParams.get("name"))
       return Response.json({ models: ["gpt-5.4", "gpt-5.3-codex"].map((id) => ({ id: `${file?.prefix}/${id}`, display_name: id })) })
     }
-    if (endpoint === "api-call") {
+    if (endpoint === "requests/api-call") {
       const input = await request.json() as { url: string }
       const usage = input.url.includes("rate-limit-reset-credits") ? { credits: [] } : {
         plan_type: "pro",

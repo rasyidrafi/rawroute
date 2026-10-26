@@ -32,28 +32,37 @@ EXECUTOR_BOOTSTRAP_ADMIN_NAME=RawRoute Executor Admin
 EXECUTOR_ALLOW_LOCAL_NETWORK=false
 EXECUTOR_ALLOW_STDIO_MCP=false
 `,
-  "cliproxy.yaml": `host: ""
-port: 8317
-remote-management:
+  "cliproxy.yaml": `config-version: 8
+server:
+  host: ""
+  port: 8317
+management:
   allow-remote: true
   secret-key: ""
   disable-control-panel: true
   disable-auto-update-panel: true
-auth-dir: "~/.cli-proxy-api"
-api-keys:
-  - "${apiKey}"
-debug: false
-logging-to-file: false
-usage-statistics-enabled: true
-request-retry: 0
-max-retry-credentials: 0
-max-retry-interval: 0
-disable-cooling: true
-transient-error-cooldown-seconds: -1
+oauth:
+  auth-dir: "~/.cli-proxy-api"
+access:
+  api-keys:
+    - "${apiKey}"
+observability:
+  logs:
+    debug: false
+    logging-to-file: false
+  usage:
+    usage-statistics-enabled: true
 plugins:
   enabled: false
 routing:
   strategy: "fill-first"
+  retry:
+    request-retry: 0
+    max-retry-credentials: 0
+    max-retry-interval: 0
+  cooldown:
+    disable-cooling: true
+    transient-error-cooldown-seconds: -1
 `,
 }
 for (const [name, content] of Object.entries(files)) {

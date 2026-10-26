@@ -35,14 +35,14 @@ test("keeps CLIProxy OAuth state and detects a refreshed existing auth file", as
   let authListCalls = 0
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
-    if (url.endsWith("/auth-files")) {
+    if (url.endsWith("/credentials")) {
       authListCalls += 1
       const refreshed = authListCalls > 1
       return Response.json({ files: [{ name: "codex-user.json", type: "codex", auth_index: "idx-1", email: "user@example.com", last_refresh: refreshed ? "2026-09-04T01:00:00Z" : "2026-09-04T00:00:00Z" }] })
     }
-    if (url.includes("/codex-auth-url")) return Response.json({ status: "ok", state: "oauth-state", url: "https://auth.example/?state=oauth-state" })
-    if (url.includes("/get-auth-status")) return Response.json({ status: "ok" })
-    if (url.endsWith("/auth-files/fields") && init?.method === "PATCH") return Response.json({ status: "ok" })
+    if (url.includes("/oauth/auth-url?provider=codex&is_webui=true")) return Response.json({ status: "ok", state: "oauth-state", url: "https://auth.example/?state=oauth-state" })
+    if (url.includes("/oauth/status")) return Response.json({ status: "ok" })
+    if (url.endsWith("/credentials/fields") && init?.method === "PATCH") return Response.json({ status: "ok" })
     throw new Error(`Unexpected request ${url}`)
   })
   spyOn(fetchTarget, "fetch").mockImplementation(fetchMock)
@@ -52,7 +52,7 @@ test("keeps CLIProxy OAuth state and detects a refreshed existing auth file", as
   const completed = await completeCliProxyCodexLogin(started.state, started.existingAuthFiles, "workspace-a")
 
   expect(completed?.file.name).toBe("codex-user.json")
-  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/auth-files/fields"), expect.objectContaining({
+  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/v8/management/credentials/fields"), expect.objectContaining({
     method: "PATCH",
     body: expect.stringContaining('"prefix":"rr-codex-'),
   }))

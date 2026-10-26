@@ -1,7 +1,7 @@
 import { cliproxyBaseUrl, cliproxySecret } from "./connection"
 
 export async function cliproxyManagement(path: string, init: RequestInit = {}) {
-  if (!path.startsWith("/v0/management/") || path.includes("..") || path.includes("\\")) throw new Error("Invalid CLIProxy management path.")
+  if (!path.startsWith("/v8/management/") || path.includes("..") || path.includes("\\")) throw new Error("Invalid CLIProxy management path.")
   const headers = new Headers(init.headers)
   const managementKey = cliproxySecret("managementKey")
   if (managementKey) headers.set("x-management-key", managementKey)

@@ -6,6 +6,7 @@ import type { AuthType, ModelReasoningCapability, Protocol, ProviderApiKey } fro
 import { currentWorkspaceId, runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import { attachWorkspaceActivity } from "@rawroute/platform/server/workspace-activity"
 import { getWorkspace } from "@rawroute/platform/server/runtime"
+import { modelUnavailable } from "../../contracts/catalog"
 
 export interface ResolvedGatewayModel {
   forwardedModel: string
@@ -42,7 +43,7 @@ function modelGatewayId(model: { gatewayModelId?: string; id: string }) {
 }
 
 function activeModel(model: Awaited<ReturnType<typeof listModels>>[number], provider: Awaited<ReturnType<typeof listProviders>>[number] | undefined) {
-  return Boolean(provider && provider.enabled !== false && model.enabled)
+  return Boolean(provider && provider.enabled !== false && model.enabled && !modelUnavailable(model))
 }
 
 function modelNotFound(model: string): never {

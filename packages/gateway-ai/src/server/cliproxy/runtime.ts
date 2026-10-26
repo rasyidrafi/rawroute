@@ -12,6 +12,7 @@ import { listWorkspaces } from "@rawroute/platform/server/runtime"
 import { listProviders } from "../store"
 import { runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import type { CliproxyInstanceStatus } from "../../contracts/cliproxy"
+import { refreshCodexModels } from "../codex/model-discovery"
 
 const globalRuntime = globalThis as typeof globalThis & { rawrouteCliproxyRuntime?: { initialization?: Promise<void>; startupError: string | null; shuttingDown: boolean } }
 const runtime = globalRuntime.rawrouteCliproxyRuntime ??= { startupError: null, shuttingDown: false }
@@ -19,7 +20,9 @@ const runtime = globalRuntime.rawrouteCliproxyRuntime ??= { startupError: null, 
 async function reconcileProviders() {
   invalidateProviderProjections()
   await mapConcurrent((await listWorkspaces()).filter(workspace => workspace.status === "active"), 4, workspace => runInWorkspace(workspace, async () => {
-    await mapConcurrent((await listProviders()).filter(provider => provider.prefix !== "codex"), 4, provider => syncNonCodexProviderProjection(provider.id))
+    const providers = await listProviders()
+    await mapConcurrent(providers.filter(provider => provider.prefix !== "codex"), 4, provider => syncNonCodexProviderProjection(provider.id))
+    if (providers.some(provider => provider.prefix === "codex")) await refreshCodexModels(true)
   }))
 }
 

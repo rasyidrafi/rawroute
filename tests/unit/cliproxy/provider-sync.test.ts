@@ -47,14 +47,14 @@ function setupManagement(strategy = "fill-first") {
   }]
   let claude: unknown[] = []
   mocks.cliproxyManagementJson.mockImplementation(async (path: string) => {
-    if (path.endsWith("/routing/strategy")) return { response: successfulResponse(), data: { strategy } }
-    if (path.endsWith("/openai-compatibility")) return { response: successfulResponse(), data: { "openai-compatibility": openai } }
-    if (path.endsWith("/claude-api-key")) return { response: successfulResponse(), data: { "claude-api-key": claude } }
+    if (path.endsWith("/routing/strategy")) return { response: successfulResponse(), data: strategy }
+    if (path.endsWith("/openai-compatibility")) return { response: successfulResponse(), data: openai }
+    if (path.endsWith("/claude")) return { response: successfulResponse(), data: claude }
     throw new Error(`unexpected management GET ${path}`)
   })
   mocks.cliproxyManagement.mockImplementation(async (path: string, init: RequestInit = {}) => {
     if (path.endsWith("/openai-compatibility") && init.method === "PUT") openai = JSON.parse(String(init.body))
-    if (path.endsWith("/claude-api-key") && init.method === "PUT") claude = JSON.parse(String(init.body))
+    if (path.endsWith("/claude") && init.method === "PUT") claude = JSON.parse(String(init.body))
     return successfulResponse()
   })
 }
@@ -110,9 +110,9 @@ test("projects OpenAI-compatible credentials and priority without deleting unman
     models: [{ name: "upstream-a", alias: "model-a", "force-mapping": true }],
     headers: { "X-Tenant": "rawroute" },
   })
-  expect(managed[0]["api-key-entries"]).toEqual([{ "api-key": "secret-primary" }])
+  expect(managed[0].keys).toEqual([{ "api-key": "secret-primary" }])
   expect(managed[1]).not.toHaveProperty("priority")
-  expect(managed[1]["api-key-entries"]).toEqual([{ "api-key": "secret-backup" }])
+  expect(managed[1].keys).toEqual([{ "api-key": "secret-backup" }])
   expect(mocks.recordLog).toHaveBeenCalledWith("admin.cliproxy.provider.projection.reconciled", expect.objectContaining({ providerId: "provider-a", projectedCredentials: 2, projectedModels: 1 }), { level: "info" })
   expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-primary")
   expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-backup")
@@ -120,6 +120,15 @@ test("projects OpenAI-compatible credentials and priority without deleting unman
 
 test("separates the same RawRoute prefix across workspaces", async () => {
   expect(nonCodexProviderPrefix("workspace-a", "provider-a")).not.toBe(nonCodexProviderPrefix("workspace-b", "provider-a"))
+})
+
+test("V8 omitted configuration paths are empty/default, but generic 404 responses are failures", async () => {
+  mocks.cliproxyManagementJson.mockResolvedValue({ response: Response.json({ error: "not_found" }, { status: 404 }), data: { error: "not_found" } })
+  await syncNonCodexProviderProjection("fresh-provider")
+  expect(mocks.cliproxyManagement).toHaveBeenCalledWith("/v8/management/config/api-keys/openai-compatibility", expect.objectContaining({ method: "PUT" }))
+  expect(mocks.cliproxyManagement).toHaveBeenCalledWith("/v8/management/config/routing/strategy", expect.objectContaining({ method: "PUT", body: '"fill-first"' }))
+  mocks.cliproxyManagementJson.mockResolvedValue({ response: new Response("404 page not found", { status: 404 }), data: undefined })
+  await expect(syncNonCodexProviderProjection("old-engine")).rejects.toThrow("configuration read failed (404)")
 })
 
 test("projects prompt cache key support only when the provider opts in", async () => {
@@ -179,22 +188,24 @@ test("projects Anthropic credentials with fill-first priority", async () => {
 
   await syncNonCodexProviderProjection("provider-a")
 
-  const claudePut = mocks.cliproxyManagement.mock.calls.find(([path, init]) => path.endsWith("/claude-api-key") && init.method === "PUT")
+  const claudePut = mocks.cliproxyManagement.mock.calls.find(([path, init]) => path.endsWith("/claude") && init.method === "PUT")
   if (!claudePut) throw new Error("Anthropic PUT was not sent")
   const entries = JSON.parse(String(claudePut[1].body)) as Array<Record<string, unknown>>
   expect(entries).toHaveLength(2)
   expect(entries[0]).toMatchObject({
-    "api-key": "secret-primary",
+    keys: [{ "api-key": "secret-primary" }],
     priority: 1,
     prefix: nonCodexProviderPrefix("workspace-a", "provider-a"),
     models: [{ name: "upstream-a", alias: "model-a", "force-mapping": true }],
   })
-  expect(entries[1]["api-key"]).toBe("secret-backup")
-  expect(mocks.cliproxyManagement).toHaveBeenCalledWith("/v0/management/routing/strategy", expect.objectContaining({ method: "PUT", body: JSON.stringify({ value: "fill-first" }) }))
+  expect(entries[1].keys).toEqual([{ "api-key": "secret-backup" }])
+  expect(mocks.cliproxyManagement).toHaveBeenCalledWith("/v8/management/config/routing/strategy", expect.objectContaining({ method: "PUT", body: JSON.stringify("fill-first") }))
+  // A second sync must recognize its own Claude groups, not report a namespace conflict.
+  await syncNonCodexProviderProjection("provider-a")
 })
 
 test("surfaces management failures without logging credentials", async () => {
-  mocks.cliproxyManagementJson.mockImplementation(async (path: string) => ({ response: new Response(null, { status: path.endsWith("openai-compatibility") ? 503 : 200 }), data: path.endsWith("claude-api-key") ? { "claude-api-key": [] } : { "openai-compatibility": [] } }))
+  mocks.cliproxyManagementJson.mockImplementation(async (path: string) => ({ response: new Response(null, { status: path.endsWith("openai-compatibility") ? 503 : 200 }), data: [] }))
 
   await expect(syncNonCodexProviderProjection("provider-a")).rejects.toThrow("CLIProxy OpenAI-compatible configuration read failed (503).")
   expect(JSON.stringify(mocks.recordLog.mock.calls)).not.toContain("secret-primary")

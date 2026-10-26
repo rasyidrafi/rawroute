@@ -58,7 +58,7 @@ function authFile(value: RawAuthFile): CliProxyAuthFile | undefined {
 }
 
 export async function listCliProxyCodexAuthFiles() {
-  const response = await cliproxyManagement("/v0/management/auth-files", { signal: AbortSignal.timeout(10_000) })
+  const response = await cliproxyManagement("/v8/management/credentials", { signal: AbortSignal.timeout(10_000) })
   const payload = await response.json().catch(() => undefined) as { files?: RawAuthFile[] } | undefined
   if (!response.ok) throw new Error(`CLIProxy auth-file list failed (${response.status}).`)
   return (Array.isArray(payload?.files) ? payload.files : []).flatMap((value) => authFile(value) ? [authFile(value)!] : [])
@@ -142,7 +142,7 @@ export function setCliProxyCodexAccountEnabled(account: ProviderApiKey, enabled:
 async function setCliProxyCodexAccountEnabledUnlocked(account: ProviderApiKey, enabled: boolean) {
   const name = account.cliProxyAuthFile
   if (!name) throw new Error("Codex account has no CLIProxy auth-file mapping.")
-  const response = await cliproxyManagement("/v0/management/auth-files/status", {
+  const response = await cliproxyManagement("/v8/management/credentials/status", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, ...(account.cliProxyAuthIndex ? { auth_index: account.cliProxyAuthIndex } : {}), disabled: !enabled }),
@@ -155,7 +155,7 @@ export function setCliProxyCodexAccountPriority(account: ProviderApiKey, priorit
 async function setCliProxyCodexAccountPriorityUnlocked(account: ProviderApiKey, priority: number) {
   const name = account.cliProxyAuthFile
   if (!name) throw new Error("Codex account has no CLIProxy auth-file mapping.")
-  const response = await cliproxyManagement("/v0/management/auth-files/fields", {
+  const response = await cliproxyManagement("/v8/management/credentials/fields", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name, priority }),
@@ -168,13 +168,13 @@ export function deleteCliProxyCodexAccount(account: ProviderApiKey) { return wit
 async function deleteCliProxyCodexAccountUnlocked(account: ProviderApiKey) {
   const name = account.cliProxyAuthFile
   if (!name) throw new Error("Codex account has no CLIProxy auth-file mapping.")
-  const response = await cliproxyManagement(`/v0/management/auth-files?name=${encodeURIComponent(name)}`, { method: "DELETE" })
+  const response = await cliproxyManagement(`/v8/management/credentials?name=${encodeURIComponent(name)}`, { method: "DELETE" })
   if (!response.ok && response.status !== 404) throw new Error(`CLIProxy auth-file deletion failed (${response.status}).`)
 }
 
 export async function cliProxyCodexApiCall(account: ProviderApiKey, input: { method: string; url: string; headers?: Record<string, string>; data?: string }) {
   if (!account.cliProxyAuthIndex) throw new Error("Codex account has no CLIProxy auth_index.")
-  const response = await cliproxyManagement("/v0/management/api-call", {
+  const response = await cliproxyManagement("/v8/management/requests/api-call", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ auth_index: account.cliProxyAuthIndex, method: input.method, url: input.url, header: input.headers, data: input.data }),
@@ -189,7 +189,7 @@ export async function cliProxyCodexApiCall(account: ProviderApiKey, input: { met
 
 export async function startCliProxyCodexLogin() {
   const before = await listCliProxyCodexAuthFiles()
-  const response = await cliproxyManagement("/v0/management/codex-auth-url?is_webui=true")
+  const response = await cliproxyManagement("/v8/management/oauth/auth-url?provider=codex&is_webui=true")
   const payload = await response.json().catch(() => undefined) as { url?: unknown; state?: unknown } | undefined
   const url = string(payload?.url)
   const state = string(payload?.state)
@@ -198,12 +198,12 @@ export async function startCliProxyCodexLogin() {
 }
 
 export async function cancelCliProxyCodexLogin(state: string) {
-  const response = await cliproxyManagement(`/v0/management/oauth-session?state=${encodeURIComponent(state)}`, { method: "DELETE" })
+  const response = await cliproxyManagement(`/v8/management/oauth/session?state=${encodeURIComponent(state)}`, { method: "DELETE" })
   if (!response.ok && response.status !== 404) throw new Error(`CLIProxy Codex login cancellation failed (${response.status}).`)
 }
 
 export async function submitCliProxyCodexCallback(input: { code?: string; error?: string; state: string }) {
-  const response = await cliproxyManagement("/v0/management/oauth-callback", {
+  const response = await cliproxyManagement("/v8/management/oauth/callback", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ provider: "codex", ...input }),
@@ -213,7 +213,7 @@ export async function submitCliProxyCodexCallback(input: { code?: string; error?
 }
 
 export async function completeCliProxyCodexLogin(state: string, existingAuthFiles: Record<string, string>, workspaceId: string, name?: string) {
-  const statusResponse = await cliproxyManagement(`/v0/management/get-auth-status?state=${encodeURIComponent(state)}`)
+  const statusResponse = await cliproxyManagement(`/v8/management/oauth/status?state=${encodeURIComponent(state)}`)
   const statusPayload = await statusResponse.json().catch(() => undefined) as { status?: unknown; error?: unknown } | undefined
   if (!statusResponse.ok) throw new Error(`CLIProxy Codex login status failed (${statusResponse.status}).`)
   const status = string(statusPayload?.status)
@@ -229,7 +229,7 @@ export async function completeCliProxyCodexLogin(state: string, existingAuthFile
     throw new Error("This Codex credential is already mapped to another RawRoute workspace.")
   }
   const previousPrefix = file.prefix || ""
-  const response = await cliproxyManagement("/v0/management/auth-files/fields", {
+  const response = await cliproxyManagement("/v8/management/credentials/fields", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: file.name, prefix: workspacePrefix }),
@@ -242,7 +242,7 @@ export async function completeCliProxyCodexLogin(state: string, existingAuthFile
 export function setCliProxyCodexAccountPrefix(fileName: string, prefix: string) { return withManagementMutation(() => setCliProxyCodexAccountPrefixUnlocked(fileName, prefix)) }
 
 async function setCliProxyCodexAccountPrefixUnlocked(fileName: string, prefix: string) {
-  const response = await cliproxyManagement("/v0/management/auth-files/fields", {
+  const response = await cliproxyManagement("/v8/management/credentials/fields", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: fileName, prefix }),

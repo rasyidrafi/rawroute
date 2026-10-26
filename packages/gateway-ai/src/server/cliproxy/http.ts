@@ -5,7 +5,7 @@ import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { instanceStatus, runInstanceAction } from "./runtime"
 import { cliproxyMode } from "./connection"
-import { normalizeVersion } from "./release"
+import { supportedVersion } from "./release"
 
 export function status(request: Request) { return managementRequest(request, false, async () => Response.json(await instanceStatus())) }
 export function versions(request: Request) { return managementRequest(request, false, async () => {
@@ -22,8 +22,8 @@ export function lifecycle(request: Request, params: { action: string }) {
     if (action.data === "install") {
       const input = z.strictObject({ version: z.string() }).safeParse(await boundedObject(request).catch(() => null))
       if (!input.success) return jsonError("Provide a version to install.", 400)
-      try { version = input.data.version === "latest" ? "latest" : normalizeVersion(input.data.version) }
-      catch { return jsonError("Invalid release version.", 400) }
+      try { version = input.data.version === "latest" ? "latest" : supportedVersion(input.data.version) }
+      catch { return jsonError("Choose a CLIProxyAPI V8 release, version 8.0.43 or newer.", 400) }
     } else if (request.body) {
       const reader = request.body.getReader()
       try { const { value } = await reader.read(); if (value?.length) { await reader.cancel(); return jsonError("This operation does not accept a body.", 400) } }
