@@ -41,7 +41,7 @@ function ModelTitle({ event }: { event: RequestLogDisplayEvent }) {
   const name = event.routing?.modelName || event.modelName || event.gatewayModelId
   const routeName = event.routing?.routeName
   return <span className="font-semibold" title={event.routing ? undefined : "Historical label from current configuration; routing names were not recorded."}>
-    {name}{routeName && <span className="font-normal text-muted-foreground"> (as {routeName})</span>}
+    {name}{routeName && routeName !== name && <span className="font-normal text-muted-foreground"> (as {routeName})</span>}
   </span>
 }
 

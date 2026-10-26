@@ -125,3 +125,28 @@ test("recorded names win over renamed catalog labels and historical routing is n
   expect(historical).not.toContain("Copy resolved")
   expect(historical).not.toContain("(as ")
 })
+
+test("request model titles omit only aliases identical to the displayed model name", () => {
+  const render = (changes: Partial<RequestLogDisplayEvent>) => renderToStaticMarkup(<table><tbody><RequestAttemptRow event={{ ...event("title"), ...changes }} /></tbody></table>)
+
+  const identical = render({ routing: { modelId: "provider/model", modelName: "Model", routeName: "Model" } })
+  expect(identical).toContain(">Model</span>")
+  expect(identical).not.toContain("(as Model)")
+
+  const distinct = render({ routing: { modelId: "provider/model", modelName: "Model", routeName: "Clever" } })
+  expect(distinct).toContain("(as Clever)")
+
+  const caseDifferent = render({ routing: { modelId: "provider/model", modelName: "Model", routeName: "model" } })
+  expect(caseDifferent).toContain("(as model)")
+
+  const whitespaceDifferent = render({ routing: { modelId: "provider/model", modelName: "Model", routeName: " Model" } })
+  expect(whitespaceDifferent).toContain("(as  Model)")
+
+  const recordedNameFallback = render({ modelName: "Recorded", routing: { modelId: "provider/model", modelName: "", routeName: "Recorded" } })
+  expect(recordedNameFallback).toContain(">Recorded</span>")
+  expect(recordedNameFallback).not.toContain("(as Recorded)")
+
+  const gatewayIdFallback = render({ modelName: null, routing: { modelId: "provider/model", modelName: "", routeName: "provider/model" } })
+  expect(gatewayIdFallback).toContain(">provider/model</span>")
+  expect(gatewayIdFallback).not.toContain("(as provider/model)")
+})
