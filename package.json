@@ -17,7 +17,7 @@
     "migrate:usage": "bun --no-env-file scripts/migrations/usage-projection.ts",
     "predict:usage": "bun --no-env-file scripts/predict-missing-usage-cost.ts",
     "test:local-db": "bun tests/diagnostics/local-db-smoke.ts",
-    "typecheck": "tsc-rs --fast --noEmit",
+    "typecheck": "bun --bun tsrs --fast --noEmit",
     "check:architecture": "bun --no-env-file scripts/check-architecture.ts"
   },
   "dependencies": {},
@@ -41,7 +41,7 @@
     "react-doctor": "0.9.14",
     "shadcn": "^4.16.2",
     "tailwindcss": "^4",
-    "tsc-rs": "^0.7.0",
+    "tsrs": "0.20.1-ts7.1.0-beta",
     "typescript": "^5",
     "typescript-eslint": "^8",
     "@rawroute/platform": "workspace:*",
