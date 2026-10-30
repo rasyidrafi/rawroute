@@ -8,10 +8,10 @@ import type { BrowserModule } from "@rawroute/platform/web/browser-module"
 import { storagePages, storagePagePaths } from "../contracts/pages"
 const StorageView = lazy(() => import("./view").then(module => ({ default: module.StorageView })))
 const nav = navigationFor(storagePages)
-function StorageSkeleton() { return <DashboardPage aria-busy="true" aria-label="Loading storage" data-slot="dashboard-content-skeleton" data-variant="storage"><Card><CardHeader><CardTitle>Storage Gateway</CardTitle><CardDescription>Loading workspace storage configuration.</CardDescription></CardHeader><CardContent><Skeleton className="h-32 w-full" /></CardContent></Card></DashboardPage> }
+function StorageSkeleton({ title }: { title: string }) { return <DashboardPage aria-busy="true" aria-label={`Loading ${title.toLowerCase()}`} data-slot="dashboard-content-skeleton" data-variant="storage"><Card><CardHeader><CardTitle>{title}</CardTitle><CardDescription>Loading workspace storage.</CardDescription></CardHeader><CardContent><Skeleton className="h-32 w-full" /></CardContent></Card></DashboardPage> }
 export const storageBrowserModule = {
   owner: "storage", pages: storagePages,
   views: { storageOverview: <StorageView page="overview" />, storageConnections: <StorageView page="connections" />, storageBuckets: <StorageView page="buckets" />, storageKeys: <StorageView page="keys" /> },
-  skeletons: Object.fromEntries(Object.keys(storagePages).map(id => [id, <StorageSkeleton key={id} />])),
-  app: { id: "storage-gateway", title: "Storage Gateway", description: "Workspace-scoped S3 buckets and client keys", icon: HardDriveIcon, href: storagePagePaths.storageOverview, showAppTitle: true, navigation: [{ label: "Storage Gateway", items: [nav("storageOverview", HardDriveIcon), nav("storageConnections", PlugIcon), nav("storageBuckets", DatabaseIcon), nav("storageKeys", KeyRoundIcon)] }] },
+  skeletons: Object.fromEntries(Object.entries(storagePages).map(([id, page]) => [id, <StorageSkeleton key={id} title={page.title} />])),
+  app: { id: "storage-gateway", title: "Storage Gateway", description: "Workspace-scoped S3 buckets and client keys", icon: HardDriveIcon, href: storagePagePaths.storageOverview, showAppTitle: true, navigation: [{ label: "Gateway", items: [nav("storageOverview", HardDriveIcon), nav("storageConnections", PlugIcon), nav("storageBuckets", DatabaseIcon), nav("storageKeys", KeyRoundIcon)] }] },
 } satisfies BrowserModule

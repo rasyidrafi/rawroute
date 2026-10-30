@@ -25,6 +25,7 @@
     "@rawroute/platform": "workspace:*",
     "@rawroute/ui": "workspace:*",
     "react": "19.2.7",
+    "react-router": "^8.4.0",
     "lucide-react": "^1.27.0",
     "swr": "^2.4.2",
     "@smithy/node-http-handler": "4.12.1",
