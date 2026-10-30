@@ -64,6 +64,9 @@ The v3 upgrade removes obsolete per-model tier settings while preserving pricing
 historical usage. Tiers are detected automatically using the upstream protocol. Every
 model can use catalog, custom, or Standard-multiplier rates in Model Pricing; catalog
 imports preserve custom tier prices. Reported tiers override requested tiers.
+Existing model shares require `bun scripts/migrations/model-share-conditions.ts
+--sqlite <file> --apply --writers-stopped --backup <new-file>` before upgrading to
+conditional sharing. Existing grants remain unconditional.
 
 ## Develop and verify
 

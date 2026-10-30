@@ -10,11 +10,13 @@ import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTa
 import { resolveGatewayModel } from "../../packages/gateway-ai/src/server/cliproxy/model-resolution"
 import { catalogModels } from "../../packages/gateway-ai/src/contracts/catalog"
 import type { ComboMember, ModelCombo } from "../../packages/gateway-ai/src/contracts/domain"
+import { resetAnalyticsForTests, setBudgetBypassEnabled } from "../../packages/gateway-ai/src/server/analytics"
 
 beforeEach(async () => {
   process.env.STORAGE_BACKEND = "memory"
   _resetMemoryBackend()
   resetModelSharesForTests()
+  resetAnalyticsForTests()
   await resetWorkspacesForTests()
 })
 
@@ -61,5 +63,31 @@ test("shared-only combos resolve and appear in the catalog only with an active r
     expect((await save([member])).status).toBe(400)
     await expect(resolveGatewayModel(member.modelId, member.sharedModelId)).rejects.toThrow("Shared model is no longer available")
     expect(catalogModels([], [], [], await listCombos(), await listSharedModelsForRecipient())).toEqual([])
+  })
+})
+
+test("paused conditional shares remain configurable but cannot resolve or appear in the request catalog", async () => {
+  const owner = (await listWorkspaces())[0]
+  const recipient = await createWorkspace("Recipient")
+  await runInWorkspace(owner, async () => {
+    const provider = await upsertProvider({ name: "Custom", prefix: "custom", baseUrl: "https://example.test", protocol: "openai-responses", authType: "none", enabled: true })
+    const model = await upsertModel(provider.id, { name: "Shared", gatewayModelId: "custom/shared", upstreamModel: "shared", enabled: true })
+    await setModelShareTargets(model.id, [recipient.id], [recipient.id])
+  })
+  const [shared] = await runInWorkspace(recipient, listSharedModelsForRecipient)
+  const member = { modelId: shared.qualifiedModelId, sharedModelId: shared.id }
+  await runInWorkspace(recipient, async () => {
+    expect(shared.status).toBe("paused")
+    const response = await save([member])
+    expect(response.status).toBe(200)
+    const { combo } = await response.json() as { combo: ModelCombo }
+    expect((await save([member], combo.id)).status).toBe(200)
+    expect(catalogModels([], [], [], await listCombos(), await listSharedModelsForRecipient())).toEqual([])
+    await expect(resolveGatewayModel(member.modelId, member.sharedModelId)).rejects.toThrow("Shared model is no longer available")
+  })
+  await runInWorkspace(owner, () => setBudgetBypassEnabled(true))
+  await runInWorkspace(recipient, async () => {
+    expect(catalogModels([], [], [], await listCombos(), await listSharedModelsForRecipient()).map(model => model.id)).toEqual(["my-model"])
+    expect(await resolveGatewayModel(member.modelId, member.sharedModelId)).toMatchObject({ shared: { ownerWorkspaceId: owner.id } })
   })
 })

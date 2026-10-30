@@ -102,8 +102,8 @@ export function AliasesView() {
         <TableBody>{data.sharedModels.map((model) => <TableRow key={model.id}>
           <TableCell><div className="font-mono text-xs">{model.qualifiedModelId}</div><div className="mt-1 text-sm">{model.sourceModelName}</div></TableCell>
           <TableCell>{model.ownerWorkspaceName}</TableCell>
-          <TableCell><Badge variant={model.status === "active" ? "secondary" : "destructive"}>{model.status === "active" ? "Available" : model.status === "revoked" ? "Revoked" : "Unavailable"}</Badge></TableCell>
-          <TableCell className="text-right"><Button size="sm" variant="outline" disabled={model.status !== "active"} onClick={() => editCombo({ id: "", combo: "", name: model.sourceModelName, members: [{ modelId: model.qualifiedModelId, sharedModelId: model.id }], createdAt: "" })}><PlusIcon />Create combo</Button></TableCell>
+          <TableCell><Badge variant={model.status === "active" ? "secondary" : model.status === "paused" ? "outline" : "destructive"}>{model.status === "active" ? "Available" : model.status === "paused" ? "Waiting for Unlimited Mode" : model.status === "revoked" ? "Revoked" : "Unavailable"}</Badge></TableCell>
+          <TableCell className="text-right"><Button size="sm" variant="outline" disabled={model.status !== "active" && model.status !== "paused"} onClick={() => editCombo({ id: "", combo: "", name: model.sourceModelName, members: [{ modelId: model.qualifiedModelId, sharedModelId: model.id }], createdAt: "" })}><PlusIcon />Create combo</Button></TableCell>
         </TableRow>)}{!data.sharedModels.length && <EmptyRow label="No models have been shared with this workspace." colSpan={4} />}</TableBody>
       </Table></CardContent>
     </Card>

@@ -21,8 +21,9 @@ export async function POST(request: Request) {
     ? body.recipientWorkspaceIds.filter((value): value is string => typeof value === "string")
     : []
   if (!modelId) return jsonError("Model ID is required.", 400)
+  if (body?.unlimitedOnlyWorkspaceIds !== undefined && (!Array.isArray(body.unlimitedOnlyWorkspaceIds) || body.unlimitedOnlyWorkspaceIds.some(value => typeof value !== "string"))) return jsonError("Unlimited Mode targets must be workspace IDs.", 400)
   try {
-    const shares = await setModelShareTargets(modelId, recipientWorkspaceIds)
+    const shares = await setModelShareTargets(modelId, recipientWorkspaceIds, body?.unlimitedOnlyWorkspaceIds as string[] | undefined)
     recordLog("admin.model.sharing.updated", { modelId, recipientCount: recipientWorkspaceIds.length }, { level: "info" })
     return Response.json({ shares })
   } catch (error) {

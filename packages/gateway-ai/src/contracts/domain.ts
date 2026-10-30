@@ -118,6 +118,7 @@ export interface ModelShare {
   sourceModelId: string
   sourceGatewayModelId: string
   status: "active" | "revoked"
+  onlyDuringUnlimited: boolean
   createdAt: string
   updatedAt: string
 }
@@ -132,7 +133,7 @@ export interface SharedModelView {
   sourceModelName: string
   providerName: string
   qualifiedModelId: string
-  status: "active" | "revoked" | "unavailable"
+  status: "active" | "revoked" | "unavailable" | "paused"
 }
 
 export interface ApiKey {

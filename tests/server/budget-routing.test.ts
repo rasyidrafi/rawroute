@@ -95,6 +95,59 @@ test("a recipient combo exception cannot bypass the shared owner's budget or Unl
   expect(upstream).toHaveBeenCalledTimes(1)
 })
 
+test("conditional sharing gates real requests and lets paused combo members fall through", async () => {
+  const owner = (await listWorkspaces())[0]
+  const recipient = await createWorkspace("Recipient")
+  const source = await runInWorkspace(owner, () => pricedModel("conditional"))
+  await runInWorkspace(owner, () => setModelShareTargets(source.id, [recipient.id], [recipient.id]))
+  const key = await runInWorkspace(recipient, async () => {
+    const [share] = await listSharedModelsForRecipient()
+    const local = await pricedModel("fallback")
+    await upsertAlias({ alias: "shared-direct", name: "Shared", targetModelId: share.qualifiedModelId, sharedModelId: share.id })
+    await upsertCombo({ combo: "coding", name: "Coding", members: [{ modelId: share.qualifiedModelId, sharedModelId: share.id }, { modelId: local.gatewayModelId }] })
+    await setBudgetBypassEnabled(true)
+    return createApiKey("Recipient key")
+  })
+  expect((await proxyGatewayRequest(request(key.key, "shared-direct"))).status).toBe(400)
+  expect(upstream).not.toHaveBeenCalled()
+  expect((await proxyGatewayRequest(request(key.key, "coding"))).status).toBe(200)
+  expect(JSON.parse(String(upstream.mock.calls[0]?.[1]?.body)).model).toBe("fallback")
+  await runInWorkspace(owner, () => setBudgetBypassEnabled(true))
+  expect((await proxyGatewayRequest(request(key.key, "coding"))).status).toBe(200)
+  expect(JSON.parse(String(upstream.mock.calls[1]?.[1]?.body)).model).toBe("conditional")
+  await runInWorkspace(owner, () => setBudgetUnlimitedSettings({ excludedModelIds: [source.gatewayModelId] }))
+  expect((await proxyGatewayRequest(request(key.key, "shared-direct"))).status).toBe(403)
+  expect(upstream).toHaveBeenCalledTimes(2)
+  await runInWorkspace(owner, () => setBudgetBypassEnabled(false))
+  expect((await proxyGatewayRequest(request(key.key, "shared-direct"))).status).toBe(400)
+  expect(upstream).toHaveBeenCalledTimes(2)
+})
+
+test("turning owner Unlimited Mode off does not interrupt an admitted shared stream", async () => {
+  const owner = (await listWorkspaces())[0]
+  const recipient = await createWorkspace("Recipient")
+  const source = await runInWorkspace(owner, () => pricedModel("stream-shared"))
+  await runInWorkspace(owner, async () => {
+    await setModelShareTargets(source.id, [recipient.id], [recipient.id])
+    await setBudgetBypassEnabled(true)
+  })
+  const key = await runInWorkspace(recipient, async () => {
+    const [share] = await listSharedModelsForRecipient()
+    await upsertAlias({ alias: "shared-stream", name: "Shared", targetModelId: share.qualifiedModelId, sharedModelId: share.id })
+    return createApiKey("Recipient key")
+  })
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  upstream.mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value } }), { headers: { "content-type": "text/event-stream" } }))
+  const response = await proxyGatewayRequest(new Request("http://localhost/v1/responses", { method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" }, body: JSON.stringify({ model: "shared-stream", input: "Hello", stream: true }) }))
+  expect(response.status).toBe(200)
+  await runInWorkspace(owner, () => setBudgetBypassEnabled(false))
+  controller.enqueue(new TextEncoder().encode('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":1}}}\n\n'))
+  controller.close()
+  expect(await response.text()).toContain("response.completed")
+  expect((await proxyGatewayRequest(request(key.key, "shared-stream"))).status).toBe(400)
+  expect(upstream).toHaveBeenCalledTimes(1)
+})
+
 const logQuery = () => ({ from: "2020-01-01T00:00:00.000Z", to: new Date(Date.now() + 60_000).toISOString(), status: "all" as const, model: "", key: "" })
 
 workspaceTest("alias routing records the actual model and names before later configuration changes", async () => {

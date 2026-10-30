@@ -71,7 +71,7 @@ async function validateCombo(input: Partial<ModelCombo> & { originalId?: string 
   await Promise.all(members.map(async (member) => {
     if (member.sharedModelId) {
       const shared = await getSharedModelForRecipient(member.sharedModelId)
-      if (!shared || shared.status !== "active" || shared.qualifiedModelId !== member.modelId) throw new Error("Shared model is no longer available.")
+      if (!shared || (shared.status !== "active" && shared.status !== "paused") || shared.qualifiedModelId !== member.modelId) throw new Error("Shared model is no longer available.")
     } else if (!availableModelIds.has(member.modelId)) throw new Error("One or more combo models are unavailable.")
   }))
   if (availableModelIds.has(combo) || combos.some((entry) => cleanAliasId(entry.combo) === combo && entry.id !== input.originalId)) throw new Error("Combo gateway ID is already in use.")

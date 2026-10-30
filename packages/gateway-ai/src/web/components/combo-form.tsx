@@ -86,7 +86,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
   )
   const targets = useMemo(() => {
     const enabledModels = models.filter((model) => model.enabled && !modelUnavailable(model)).map((model) => ({ id: model.gatewayModelId || model.id, label: model.gatewayModelId || model.id, detail: model.name, shared: false, efforts: supportedReasoningEfforts(model) }))
-    const shared = sharedModels.filter((model) => model.status === "active").map((model) => ({ id: model.qualifiedModelId, label: model.qualifiedModelId, detail: model.sourceModelName, shared: true, efforts: [...standardReasoningEfforts] }))
+    const shared = sharedModels.filter((model) => model.status === "active" || model.status === "paused").map((model) => ({ id: model.qualifiedModelId, label: model.qualifiedModelId, detail: model.status === "paused" ? `${model.sourceModelName} · Waiting for Unlimited Mode` : model.sourceModelName, shared: true, efforts: [...standardReasoningEfforts] }))
     return [...enabledModels, ...shared].sort((left, right) => left.label.localeCompare(right.label))
   }, [models, sharedModels])
   const byId = new Map(targets.map((target) => [target.id, target]))
@@ -102,7 +102,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
 
   function addMember() {
     if (!selectedModel || members.some((member) => member.modelId === selectedModel) || members.length >= 8) return
-    const sharedModelId = sharedModels.find((model) => model.qualifiedModelId === selectedModel && model.status === "active")?.id
+    const sharedModelId = sharedModels.find((model) => model.qualifiedModelId === selectedModel && (model.status === "active" || model.status === "paused"))?.id
     if (!members.length) setName((current) => current || byId.get(selectedModel)?.detail || "")
     setMembers((current) => [...current, { modelId: selectedModel, ...(sharedModelId ? { sharedModelId } : {}), reasoning: { mode: "inherit" } }])
     setPayloadDrafts((current) => ({ ...current, [selectedModel]: "{}" }))

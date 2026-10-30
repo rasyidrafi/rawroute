@@ -9,6 +9,7 @@ import { getWorkspace, listWorkspaces } from "@rawroute/platform/server/runtime"
 import { appendMemoryAudit } from "@rawroute/platform/server/audit"
 import { attachWorkspaceActivity } from "@rawroute/platform/server/workspace-activity"
 import { modelUnavailable } from "../contracts/catalog"
+import { getBudgetWindow } from "./analytics"
 
 let localDatabase: SqliteDatabase | undefined
 declare global { var __rawrouteModelShares: Map<string, ModelShare> | undefined }
@@ -24,7 +25,11 @@ function shareId(ownerWorkspaceId: string, sourceModelId: string, recipientWorks
 async function readShares() {
   if (isMemoryBackend()) return [...memoryShares().values()]
   const snapshot = await sharesRef().get()
-  return snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as ModelShare))
+  return snapshot.docs.map((document) => {
+    const share = { ...document.data(), id: document.id } as ModelShare
+    if (typeof share.onlyDuringUnlimited !== "boolean") throw new Error("Model sharing requires the offline model-share-conditions migration.")
+    return share
+  })
 }
 
 async function writeShares(shares: ModelShare[]) {
@@ -50,7 +55,8 @@ async function activeSource(share: ModelShare) {
     const model = models.find((entry) => entry.id === share.sourceModelId)
     const provider = model ? providers.find((entry) => entry.id === model.providerId) : undefined
     if (!model || !provider || !model.enabled || modelUnavailable(model) || provider.enabled === false) return undefined
-    return { owner, model, provider }
+    const paused = share.onlyDuringUnlimited && !(await getBudgetWindow()).bypassLimits
+    return { owner, model, provider, paused }
   })
 }
 
@@ -67,7 +73,7 @@ function viewFor(share: ModelShare, source: Awaited<ReturnType<typeof activeSour
     sourceModelName: source?.model.name || gatewayModelId,
     providerName: source?.provider.name || "Unavailable provider",
     qualifiedModelId: `${share.ownerWorkspaceId}/${gatewayModelId}`,
-    status: share.status === "active" && source ? "active" : share.status === "revoked" ? "revoked" : "unavailable",
+    status: share.status === "active" && source ? source.paused ? "paused" : "active" : share.status === "revoked" ? "revoked" : "unavailable",
   }
 }
 
@@ -87,12 +93,12 @@ export async function listModelSharesForSourceModel(sourceModelId: string, owner
 export async function listShareTargets(sourceModelId: string) {
   const ownerWorkspaceId = currentWorkspaceId()
   const [workspaces, shares] = await Promise.all([listWorkspaces(), listModelSharesForSourceModel(sourceModelId, ownerWorkspaceId)])
-  const sharedIds = new Set(shares.filter((share) => share.status === "active").map((share) => share.recipientWorkspaceId))
+  const byRecipient = new Map(shares.map(share => [share.recipientWorkspaceId, share]))
   return workspaces.filter((workspace) => workspace.status === "active" && workspace.id !== ownerWorkspaceId)
-    .map((workspace) => ({ id: workspace.id, name: workspace.name, shared: sharedIds.has(workspace.id) }))
+    .map((workspace) => ({ id: workspace.id, name: workspace.name, shared: byRecipient.get(workspace.id)?.status === "active", onlyDuringUnlimited: byRecipient.get(workspace.id)?.onlyDuringUnlimited === true }))
 }
 
-export async function setModelShareTargets(sourceModelId: string, recipientWorkspaceIds: string[]) {
+export async function setModelShareTargets(sourceModelId: string, recipientWorkspaceIds: string[], unlimitedOnlyWorkspaceIds: string[] = []) {
   const ownerWorkspaceId = currentWorkspaceId()
   const [models, providers, workspaces, current] = await Promise.all([listModels(), listProviders(), listWorkspaces(), listModelSharesForSourceModel(sourceModelId, ownerWorkspaceId)])
   const model = models.find((entry) => entry.id === sourceModelId)
@@ -103,6 +109,8 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
   if (recipients.some((id) => id === ownerWorkspaceId)) throw new Error("A model cannot be shared with its own workspace.")
   if (recipients.some((id) => !activeWorkspaceIds.has(id))) throw new Error("One or more target workspaces are unavailable.")
   const selected = new Set(recipients)
+  const conditional = new Set(unlimitedOnlyWorkspaceIds)
+  if ([...conditional].some(id => typeof id !== "string" || !selected.has(id))) throw new Error("Unlimited Mode conditions must refer to selected workspaces.")
   const now = new Date().toISOString()
   const currentByRecipient = new Map(current.map((share) => [share.recipientWorkspaceId, share]))
   const writes: ModelShare[] = []
@@ -114,7 +122,8 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
     attachWorkspaceActivity(recipientWorkspaceId)
     const existing = currentByRecipient.get(recipientWorkspaceId)
     const status = selected.has(recipientWorkspaceId) ? "active" as const : "revoked" as const
-    if (existing?.status === status && existing.sourceGatewayModelId === model.gatewayModelId && existing.sourceProviderId === provider.id) continue
+    const onlyDuringUnlimited = conditional.has(recipientWorkspaceId)
+    if (existing?.status === status && existing.onlyDuringUnlimited === onlyDuringUnlimited && existing.sourceGatewayModelId === model.gatewayModelId && existing.sourceProviderId === provider.id) continue
     writes.push({
       id: existing?.id || shareId(ownerWorkspaceId, model.id, recipientWorkspaceId),
       ownerWorkspaceId,
@@ -123,6 +132,7 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
       sourceModelId: model.id,
       sourceGatewayModelId: model.gatewayModelId,
       status,
+      onlyDuringUnlimited,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
     })
@@ -141,7 +151,7 @@ export async function resolveSharedModelForRecipient(shareIdValue: string, recip
   const share = (await readShares()).find((entry) => entry.id === shareIdValue)
   if (!share || share.recipientWorkspaceId !== recipientWorkspaceId || share.status !== "active") return undefined
   const source = await activeSource(share)
-  if (!source) return undefined
+  if (!source || source.paused) return undefined
   return { share, ...source }
 }
 

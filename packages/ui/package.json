@@ -33,6 +33,7 @@
     "./sidebar": "./src/sidebar.tsx",
     "./skeleton": "./src/skeleton.tsx",
     "./sonner": "./src/sonner.tsx",
+    "./switch": "./src/switch.tsx",
     "./table": "./src/table.tsx",
     "./tabs": "./src/tabs.tsx",
     "./textarea": "./src/textarea.tsx",

@@ -5,6 +5,7 @@ const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<ty
 const mocks = {
   authenticateProxyKey: mock(),
   getBudgetRequestState: mock(),
+  getBudgetWindow: mock(),
   assertUnlimitedModelsAllowed: mock(),
   reserveBudgetAdmission: mock(),
   releaseBudgetReservation: mock(),
@@ -36,6 +37,7 @@ mock.module("../../../packages/gateway-ai/src/server/analytics", () => ({
   },
   createGatewayUsageEvent: mocks.createGatewayUsageEvent,
   getBudgetRequestState: mocks.getBudgetRequestState,
+  getBudgetWindow: mocks.getBudgetWindow,
   recordUsageEvent: mocks.recordUsageEvent,
   releaseBudgetReservation: mocks.releaseBudgetReservation,
   reserveBudgetAdmission: mocks.reserveBudgetAdmission,
@@ -86,6 +88,7 @@ beforeEach(() => {
     apiKey: { id: "gateway-key", name: "Gateway" },
   })
   mocks.getBudgetRequestState.mockResolvedValue({ admission: undefined, usageContext: undefined })
+  mocks.getBudgetWindow.mockResolvedValue({ bypassLimits: false })
   mocks.assertUnlimitedModelsAllowed.mockResolvedValue(undefined)
   mocks.reserveBudgetAdmission.mockResolvedValue(undefined)
   mocks.releaseBudgetReservation.mockResolvedValue(undefined)
