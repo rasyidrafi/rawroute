@@ -5,6 +5,7 @@ const workspaceTest = testsInWorkspace("default")
 import {
   CODEX_USAGE_CACHE_TTL_SECONDS,
   getCodexUsageForAccount,
+  invalidateCodexUsageCache,
   parseCodexUsagePayload,
   setCodexUsageClockForTests,
   setCodexUsageApiCallForTests,
@@ -15,6 +16,8 @@ import type { ProviderApiKey } from "../../../packages/gateway-ai/src/contracts/
 
 class FakeCache implements UsageCache {
   values = new Map<string, unknown>()
+
+  async del(key: string) { return this.values.delete(key) }
 
   async get<T>(key: string) {
     return (this.values.get(key) as T | undefined) ?? null
@@ -40,6 +43,73 @@ const account: ProviderApiKey = {
 }
 
 describe("Codex usage", () => {
+  workspaceTest("a pre-redemption request cannot repopulate the invalidated quota cache", async () => {
+    const cache = new FakeCache()
+    const started = Promise.withResolvers<void>()
+    const finish = Promise.withResolvers<void>()
+    let delayed = true
+    setCodexUsageCacheForTests(cache)
+    setCodexUsageApiCallForTests(async (_account, input) => {
+      if (input.url.endsWith("/rate-limit-reset-credits")) return { status: 200, body: '{"credits":[]}' }
+      if (delayed) { started.resolve(); await finish.promise }
+      return { status: 200, body: JSON.stringify({ rate_limit: { secondary_window: { used_percent: delayed ? 100 : 0 } } }) }
+    })
+    try {
+      const old = getCodexUsageForAccount(account)
+      await started.promise
+      await invalidateCodexUsageCache(account.id, true)
+      finish.resolve()
+      await old
+      expect(cache.values.has("rawroute:codex-usage:v2:default:account-1")).toBe(false)
+      delayed = false
+      expect(await getCodexUsageForAccount(account)).toMatchObject({ weekly: { remainingPercent: 100 } })
+    } finally {
+      finish.resolve()
+      setCodexUsageCacheForTests()
+      setCodexUsageApiCallForTests()
+    }
+  })
+
+  workspaceTest("polls through delayed quota propagation after redemption without retaining the exhausted snapshot", async () => {
+    const cache = new FakeCache()
+    let current = 1_000_000
+    let usedPercent = 100
+    let calls = 0
+    let failing = false
+    setCodexUsageCacheForTests(cache)
+    setCodexUsageClockForTests(() => current)
+    setCodexUsageApiCallForTests(async (_account, input) => {
+      if (input.url.endsWith("/rate-limit-reset-credits")) return { status: 200, body: '{"credits":[]}' }
+      calls++
+      if (failing) throw new Error("temporarily unavailable")
+      return { status: 200, body: JSON.stringify({ rate_limit: { secondary_window: { used_percent: usedPercent } } }) }
+    })
+    try {
+      expect((await getCodexUsageForAccount(account)).weekly?.remainingPercent).toBe(0)
+      await invalidateCodexUsageCache(account.id, true)
+      expect(await getCodexUsageForAccount(account)).toMatchObject({ refreshPending: true, weekly: { remainingPercent: 0 } })
+      expect(calls).toBe(2)
+      current += 2001
+      failing = true
+      expect(await getCodexUsageForAccount(account)).toMatchObject({ refreshPending: true, stale: true })
+      failing = false
+      current += 2001
+      usedPercent = 0
+      const fresh = await getCodexUsageForAccount(account)
+      expect(fresh.weekly?.remainingPercent).toBe(100)
+      expect(fresh.refreshPending).toBeUndefined()
+      expect(fresh.error).toBeUndefined()
+      expect(calls).toBe(4)
+      current += 2001
+      await getCodexUsageForAccount(account)
+      expect(calls).toBe(4)
+    } finally {
+      setCodexUsageCacheForTests()
+      setCodexUsageClockForTests()
+      setCodexUsageApiCallForTests()
+    }
+  })
+
   test("reads the current plan even without quota windows and ignores invalid plans", () => {
     expect(parseCodexUsagePayload({ plan_type: " Free " })).toEqual({ planType: "free", fiveHour: null, weekly: null })
     for (const plan_type of [undefined, null, "", "   ", 42]) {

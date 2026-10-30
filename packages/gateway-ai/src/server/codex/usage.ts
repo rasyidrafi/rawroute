@@ -11,6 +11,7 @@ const REFRESH_LOCK_TTL_SECONDS = 30
 const CACHE_PREFIX = "rawroute:codex-usage:v2"
 const DEFAULT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const localCacheTtlMs = CODEX_USAGE_CACHE_TTL_SECONDS * 1000
+const resetRefreshIntervalMs = 2_000
 const maximumLocalCacheEntries = 128
 const maximumWorkspaceEntries = 256
 
@@ -32,6 +33,7 @@ interface CachedCodexUsage {
   retryAt: number
   error?: string
   reauthRequired?: boolean
+  refreshPending?: boolean
 }
 
 export interface UsageCache {
@@ -60,7 +62,7 @@ function setLocalUsageCache(workspaceId: string, accountId: string, result: Code
     const oldest = localUsageCache.keys().next().value
     if (oldest !== undefined) localUsageCache.delete(oldest)
   }
-  localUsageCache.set(accountId, { result, expiresAt: now() + localCacheTtlMs })
+  localUsageCache.set(accountId, { result, expiresAt: now() + (result.refreshPending ? resetRefreshIntervalMs : localCacheTtlMs) })
 }
 
 function clearWorkspaceLocalUsageCache(accountId?: string) {
@@ -120,6 +122,10 @@ function cacheKey(accountId: string) {
 
 function lockKey(accountId: string) {
   return `${CACHE_PREFIX}:lock:${currentWorkspaceId()}:${accountId}`
+}
+
+function resetRefreshKey(accountId: string) {
+  return `${CACHE_PREFIX}:reset-refresh:${currentWorkspaceId()}:${accountId}`
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
@@ -269,6 +275,7 @@ function resultFromCache(cached: CachedCodexUsage, stale: boolean): CodexUsageRe
     ...(cached.snapshot?.unusedResetCredits !== undefined ? { unusedResetCredits: cached.snapshot.unusedResetCredits } : {}),
     fetchedAt: cached.fetchedAt,
     stale,
+    ...(cached.refreshPending ? { refreshPending: true } : {}),
     ...(cached.error ? { error: cached.error } : {}),
     ...(cached.reauthRequired ? { reauthRequired: true } : {}),
   }
@@ -285,6 +292,7 @@ function readCache(value: unknown): CachedCodexUsage | undefined {
     snapshot: snapshot as unknown as CodexUsageSnapshot | null,
     fetchedAt,
     retryAt,
+    ...(record.refreshPending === true ? { refreshPending: true } : {}),
     ...(typeof record.error === "string" ? { error: record.error } : {}),
     ...(record.reauthRequired === true ? { reauthRequired: true } : {}),
   }
@@ -310,13 +318,20 @@ async function loadCodexUsageForAccount(
   }
 
   const key = cacheKey(account.id)
+  const workspaceId = currentWorkspaceId()
+  const generation = localCacheGeneration(workspaceId)
+  const resetGeneration = localCacheResetGeneration
+  const isCurrent = () => generation === localCacheGeneration(workspaceId) && resetGeneration === localCacheResetGeneration
   let cached: CachedCodexUsage | undefined
+  let refreshPending = false
   try {
+    const refreshUntil = await cache.get<number>(resetRefreshKey(account.id))
+    refreshPending = typeof refreshUntil === "number" && now() < refreshUntil
     cached = readCache(await cache.get(key))
-    if (cached && now() < cached.retryAt) return resultFromCache(cached, Boolean(cached.error))
+    if (cached && Boolean(cached.refreshPending) === refreshPending && now() < cached.retryAt) return resultFromCache(cached, Boolean(cached.error))
     if (!(await acquireRefreshLock(cache, account.id))) {
       const concurrent = readCache(await cache.get(key))
-      return concurrent ? resultFromCache(concurrent, Boolean(concurrent.error) || now() >= concurrent.retryAt) : emptyResult("Usage refresh in progress.")
+      return { ...(concurrent ? resultFromCache(concurrent, Boolean(concurrent.error) || now() >= concurrent.retryAt) : emptyResult("Usage refresh in progress.")), ...(refreshPending ? { refreshPending: true } : {}) }
     }
   } catch (error) {
     return emptyResult(error instanceof Error ? error.message : "Usage cache unavailable.")
@@ -324,9 +339,13 @@ async function loadCodexUsageForAccount(
 
   try {
     const snapshot = await fetchCodexUsage(account)
+    if (refreshPending && snapshot.weekly && snapshot.weekly.remainingPercent > 0) {
+      refreshPending = false
+      await cache.del?.(resetRefreshKey(account.id))
+    }
     const fetchedAt = new Date(now()).toISOString()
-    const record: CachedCodexUsage = { snapshot, fetchedAt, retryAt: now() + CODEX_USAGE_CACHE_TTL_SECONDS * 1000 }
-    await cache.set(key, record, { ex: CACHE_RETENTION_SECONDS })
+    const record: CachedCodexUsage = { snapshot, fetchedAt, retryAt: now() + (refreshPending ? resetRefreshIntervalMs : localCacheTtlMs), ...(refreshPending ? { refreshPending: true } : {}) }
+    if (isCurrent()) await cache.set(key, record, { ex: CACHE_RETENTION_SECONDS })
     return resultFromCache(record, false)
   } catch (error) {
     const reauthRequired = isUnauthorized(error)
@@ -336,14 +355,17 @@ async function loadCodexUsageForAccount(
     const record: CachedCodexUsage = {
       snapshot: cached?.snapshot || null,
       fetchedAt: cached?.fetchedAt || null,
-      retryAt: now() + CODEX_USAGE_CACHE_TTL_SECONDS * 1000,
+      retryAt: now() + (refreshPending ? resetRefreshIntervalMs : localCacheTtlMs),
+      ...(refreshPending ? { refreshPending: true } : {}),
       error: message,
       ...(reauthRequired ? { reauthRequired: true } : {}),
     }
     try {
-      await cache.set(key, record, { ex: CACHE_RETENTION_SECONDS })
+      if (isCurrent()) await cache.set(key, record, { ex: CACHE_RETENTION_SECONDS })
     } catch {}
     return resultFromCache(record, Boolean(cached?.snapshot))
+  } finally {
+    await cache.del?.(lockKey(account.id)).catch(() => undefined)
   }
 }
 
@@ -385,10 +407,11 @@ export function setCodexUsageClockForTests(clock?: () => number) {
   resetLocalUsageCache()
 }
 
-export async function invalidateCodexUsageCache(accountId: string) {
+export async function invalidateCodexUsageCache(accountId: string, afterReset = false) {
   clearWorkspaceLocalUsageCache(accountId)
   try {
     const cache = getCache()
+    if (afterReset) await cache.set(resetRefreshKey(accountId), now() + localCacheTtlMs, { ex: CODEX_USAGE_CACHE_TTL_SECONDS })
     if (cache.del) await cache.del(cacheKey(accountId))
   } catch {}
 }

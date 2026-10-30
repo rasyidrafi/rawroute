@@ -60,7 +60,9 @@ function createProviderDetailActions({ provider, providerId, apiKeys, apiPost, a
   return {
     redeemReset: (account: ProviderApiKey) => withPendingAction(`reset:${account.id}`, pending, async () => {
       await apiPost(`/api/admin/oauth-providers/${account.id}/reset`, { confirmation: resetConfirmation })
-      await refreshCachedResource("/api/admin/oauth-providers/usage")
+      await refreshCachedResource<UsageResponse>("/api/admin/oauth-providers/usage", current => current ? {
+        accounts: { ...current.accounts, [account.id]: { ...current.accounts[account.id], fiveHour: null, weekly: null, fetchedAt: null, stale: false, refreshPending: true } },
+      } : current)
       setResetAccount(null)
       setResetConfirmation("")
       toast.success("Codex reset credit redeemed")
@@ -110,8 +112,8 @@ function ProviderDetailContent({ providerId, data, mutate }: { providerId: strin
   const { mutate: refreshCachedResource } = useSWRConfig()
   const usageKey = providerUsageKey(data.provider, data.apiKeys)
   const { data: usageData, error: usageError, isLoading: usageLoading } = useSWR<UsageResponse>(usageKey, fetcher, {
-    refreshInterval: 300000,
-    dedupingInterval: 300000,
+    refreshInterval: (usage) => Object.values(usage?.accounts || {}).some(account => account.refreshPending) ? 2000 : 300000,
+    dedupingInterval: 1000,
     revalidateOnFocus: false,
   })
 

@@ -36,7 +36,8 @@ function forwardedHeaders(source: Headers) {
 export function responseHeaders(source: Headers) {
   const headers = new Headers()
   for (const [name, value] of source.entries()) {
-    if (!hopByHopHeaders.has(name.toLowerCase())) headers.set(name, value)
+    // fetch decodes the upstream body but retains its compression headers.
+    if (!hopByHopHeaders.has(name.toLowerCase()) && name.toLowerCase() !== "content-encoding") headers.set(name, value)
   }
   return headers
 }

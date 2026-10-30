@@ -527,7 +527,7 @@ async function coordinateCodexReset(account: ProviderApiKey, mode: "manual" | "a
         throw new Error("Codex reset redemption outcome is uncertain; automatic retries are blocked.")
       }
       await finishAttempt(account.id, claim.token, requestId, "redeemed", "Codex reset credit redeemed.")
-      await invalidateCodexUsageCache(account.id)
+      await invalidateCodexUsageCache(account.id, true)
       recordLog("admin.codex.reset.credit.redeemed", { accountId: account.id, redeemRequestId: requestId }, { level: "info" })
       return { ok: true, redeemRequestId: requestId, status: response.status, message: "Codex reset credit redeemed." }
     } finally {

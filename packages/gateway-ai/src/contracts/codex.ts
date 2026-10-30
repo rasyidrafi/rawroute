@@ -11,6 +11,7 @@ export interface CodexUsageSnapshot {
 export interface CodexUsageResult extends CodexUsageSnapshot {
   fetchedAt: string | null
   stale: boolean
+  refreshPending?: boolean
   error?: string
   reauthRequired?: boolean
 }
