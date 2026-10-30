@@ -9,7 +9,7 @@ import { validateServerRoutes } from "../../packages/platform/src/contracts/http
 
 test("production uses all static owner contributions, with only composite health owned by console", () => {
   expect(serverRouteContributions.slice(0, 5)).toEqual([platformServerRoutes, aiServerRoutes, toolsServerRoutes, storageServerRoutes, observabilityServerRoutes])
-  expect(serverRouteContributions.map(item => [item.id, item.routes.length])).toEqual([["platform", 10], ["ai", 54], ["tools", 3], ["storage", 1], ["observability", 3], ["console", 2]])
+  expect(serverRouteContributions.map(item => [item.id, item.routes.length])).toEqual([["platform", 10], ["ai", 54], ["tools", 3], ["storage", 2], ["observability", 3], ["console", 2]])
   expect(() => validateServerRoutes(serverRouteContributions)).not.toThrow()
   expect(Object.keys(apiRoutes).sort()).toEqual(serverRouteContributions.flatMap(item => item.routes.map(route => route.path)).sort())
   expect(serverRouteContributions[5]!.routes.map(route => route.path).sort()).toEqual(["/api/health", "/api/live"])

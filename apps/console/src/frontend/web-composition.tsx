@@ -6,6 +6,7 @@ import { DashboardContentSkeleton, dashboardSkeletonForPath } from "./route-skel
 import { DashboardEvents } from "./dashboard-events"
 import { aiWorkspaceChanged } from "@rawroute/gateway-ai/web"
 import { useToolsAvailability } from "@rawroute/gateway-tools/web"
+import { useStorageAvailability } from "@rawroute/gateway-storage/web"
 import { reportEvent } from "@rawroute/observability/web/client"
 
 const composition: ShellComposition = {
@@ -19,7 +20,10 @@ const composition: ShellComposition = {
   events: <DashboardEvents />,
   wrapDashboard: children => <ConsoleDashboardAvailability>{children}</ConsoleDashboardAvailability>,
   workspaceChanged: aiWorkspaceChanged,
-  availability: { "tool-gateway": { available: false, statusLabel: "Checking" } },
+  availability: {
+    "tool-gateway": { available: false, statusLabel: "Checking" },
+    "storage-gateway": { available: false, statusLabel: "Checking" },
+  },
   reportCopy(page, success, workspaceId) {
     if (!isDashboardPage(page)) return
     reportEvent({ event: success ? "dashboard.copy" : "dashboard.copy-failed", page }, workspaceId ? { kind: "workspace", workspaceId } : { kind: "global" })
@@ -34,5 +38,6 @@ export function ConsoleWebComposition({ children }: { children: ReactNode }) {
 function ConsoleDashboardAvailability({ children }: { children: ReactNode }) {
   const composition = useShellComposition()
   const tools = useToolsAvailability()
-  return <ShellCompositionProvider value={{ ...composition, availability: { "tool-gateway": tools } }}>{children}</ShellCompositionProvider>
+  const storage = useStorageAvailability()
+  return <ShellCompositionProvider value={{ ...composition, availability: { "tool-gateway": tools, "storage-gateway": storage } }}>{children}</ShellCompositionProvider>
 }

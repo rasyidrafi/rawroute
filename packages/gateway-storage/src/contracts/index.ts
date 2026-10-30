@@ -1,6 +1,8 @@
 /** Closed protocol surface. Capabilities not listed here are not implemented. */
 export const storageActions = ["ListBuckets", "HeadBucket", "GetBucketLocation", "ListObjectsV2", "PutObject", "GetObject", "HeadObject", "DeleteObject", "CreateMultipartUpload", "UploadPart", "ListParts", "ListMultipartUploads", "CompleteMultipartUpload", "AbortMultipartUpload"] as const
 export type StorageAction = typeof storageActions[number]
+export type StorageAvailabilityState = "available" | "disabled"
+export interface StorageAvailabilityStatus { state: StorageAvailabilityState }
 export type CapabilityStatus = "unknown" | "supported" | "unsupported" | "failed"
 export interface CapabilityEvidence {
   status: CapabilityStatus

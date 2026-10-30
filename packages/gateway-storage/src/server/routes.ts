@@ -2,8 +2,12 @@ import { declareRoute } from "@rawroute/platform/contracts/http"
 import { jsonError } from "@rawroute/observability/contracts/http"
 import { storageDashboard, saveStorageConnection, attachStorageBucket, createStorageKey, revokeStorageKey, revealStorageKey, setStorageCapabilities, deleteStorageConnection, updateStorageKeyPolicy } from "./repository"
 import { detachStorageBucket, probeStorageBucket, resolveStorageMultipart } from "./service"
+import { storageEnabled } from "./config"
 import type { StorageAction, CapabilityStatus } from "../contracts"
 
+async function GET_STATUS() {
+  return Response.json({ state: storageEnabled() ? "available" : "disabled" }, { headers: { "cache-control": "no-store" } })
+}
 async function GET() { return Response.json(await storageDashboard(), { headers: { "cache-control": "no-store" } }) }
 async function POST(request: Request) {
   if (Number(request.headers.get("content-length")) > 64 * 1024) return jsonError("Storage management request is too large.", 413)
@@ -48,4 +52,7 @@ async function POST(request: Request) {
     return jsonError(message, 400)
   }
 }
-export const storageServerRoutes = { id: "storage", routes: [declareRoute({ GET, POST }, "workspace", "/api/admin/storage", { idleTimeout: 0, idleTimeoutMethods: ["POST"] })] }
+export const storageServerRoutes = { id: "storage", routes: [
+  declareRoute({ GET: GET_STATUS }, "session", "/api/admin/storage/status"),
+  declareRoute({ GET, POST }, "workspace", "/api/admin/storage", { idleTimeout: 0, idleTimeoutMethods: ["POST"] }),
+] }
