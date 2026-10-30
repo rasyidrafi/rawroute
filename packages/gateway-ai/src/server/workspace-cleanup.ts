@@ -11,6 +11,7 @@ import { localCacheDelete } from "@rawroute/platform/server/local-cache"
 import { mapConcurrent } from "@rawroute/platform/server/concurrency"
 import { invalidateCodexUsageCache } from "./codex/usage"
 import { DEFAULT_WORKSPACE_ID } from "@rawroute/platform/contracts/workspace"
+import { cleanupCodexResetWorkspace } from "./codex/reset"
 
 /** AI owns only attributed resources. Never change the shared Tools deployment. */
 export function cleanupAiWorkspaceResources(workspaceId: string) {
@@ -27,6 +28,7 @@ export function cleanupAiWorkspaceResources(workspaceId: string) {
       })
     })
     await cleanupWorkspaceModelShares(workspaceId)
+    cleanupCodexResetWorkspace(workspaceId)
     const complete = await cleanupAiWorkspace(workspaceId)
     complete()
     cleanupWorkspaceAnalytics(workspaceId)

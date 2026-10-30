@@ -4,14 +4,16 @@ on:
   push:
     branches: [main]
     paths-ignore: ["**/*.md"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-image-${{ github.ref }}
-  cancel-in-progress: false
+  group: production-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -25,20 +27,22 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run test
+      - run: bun run typecheck
+      - run: bun run test:e2e
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - run: bun run typecheck
-      - run: bun run test:e2e
       # The VM only pulls the finished Bun production image.
       - name: Build production image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: >-
           docker build --build-arg DEPLOYMENT_VERSION="$GITHUB_SHA"
           -t "rasyidrafi/rawroute:sha-$GITHUB_SHA"
           -t rasyidrafi/rawroute:latest .
       - name: Publish to Docker Hub
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           docker push "rasyidrafi/rawroute:sha-$GITHUB_SHA"
           docker push rasyidrafi/rawroute:latest

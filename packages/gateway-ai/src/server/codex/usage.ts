@@ -250,6 +250,11 @@ async function fetchCodexUsage(account: ProviderApiKey): Promise<CodexUsageSnaps
   }
 }
 
+/** Always performs upstream reads; reset coordination must not make decisions from a five-minute UI cache. */
+export function fetchFreshCodexUsageForReset(account: ProviderApiKey) {
+  return fetchCodexUsage(account)
+}
+
 function emptyResult(error?: string): CodexUsageResult {
   return { fiveHour: null, weekly: null, fetchedAt: null, stale: false, ...(error ? { error } : {}) }
 }

@@ -1,7 +1,7 @@
 import { DashboardPage } from "@rawroute/ui/page-layout"
 import { useDashboardClipboard } from "@rawroute/platform/web/use-dashboard-clipboard"
 import { useState } from "react"
-import { CopyIcon, KeyRoundIcon, PencilIcon, PlusIcon, RouteIcon, Trash2Icon } from "lucide-react"
+import { CopyIcon, KeyRoundIcon, PencilIcon, PlusIcon, RefreshCwIcon, RouteIcon, Trash2Icon } from "lucide-react"
 import useSWR from "swr"
 import { toast } from "sonner"
 
@@ -28,7 +28,8 @@ export function EndpointKeyView() {
   const [keyOpen, setKeyOpen] = useState(false)
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null)
   const [editingName, setEditingName] = useState("")
-  const [createdKey, setCreatedKey] = useState<string>()
+  const [rotatingKey, setRotatingKey] = useState<ApiKey | null>(null)
+  const [revealedKey, setRevealedKey] = useState<{ value: string; title: string; description: string }>()
   const [pending, setPending] = useState<Set<string>>(() => new Set())
 
   if (error) return <LoadError title="Dashboard unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
@@ -41,7 +42,7 @@ export function EndpointKeyView() {
     try {
       const response = await apiPost<{ apiKey: ApiKey }>("/api/admin/api-keys", { name, ...(key ? { key } : {}) })
       toast.success("API key created")
-      setCreatedKey(response.apiKey.key)
+      setRevealedKey({ value: response.apiKey.key, title: "API key created", description: "Copy this value now. It will only be available from the admin dashboard." })
       await mutate()
       setKeyOpen(false)
       return true
@@ -50,6 +51,24 @@ export function EndpointKeyView() {
       return false
     } finally {
       setPending((current) => { const next = new Set(current); next.delete("create-api-key"); return next })
+    }
+  }
+
+  async function rotateKey(apiKey: ApiKey, key?: string) {
+    const pendingKey = `rotate-api-key:${apiKey.id}`
+    setPending((current) => new Set(current).add(pendingKey))
+    try {
+      const response = await apiPost<{ apiKey: ApiKey }>(`/api/admin/api-keys/${apiKey.id}/rotate`, key ? { key } : {})
+      toast.success("API key replaced")
+      setRevealedKey({ value: response.apiKey.key, title: "API key replaced", description: "Copy this replacement now. The previous token no longer works for new requests, and this value will only be available from the admin dashboard." })
+      await mutate()
+      setRotatingKey(null)
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Request failed")
+      return false
+    } finally {
+      setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
     }
   }
 
@@ -108,8 +127,9 @@ export function EndpointKeyView() {
           <CardAction><Button onClick={() => setKeyOpen(true)}><PlusIcon />Create key</Button></CardAction>
         </CardHeader>
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}><DialogContent><ApiKeyForm onSave={createKey} /></DialogContent></Dialog>
+      <Dialog open={Boolean(rotatingKey)} onOpenChange={(open) => { if (!open) setRotatingKey(null) }}><DialogContent>{rotatingKey && <ApiKeyForm key={rotatingKey.id} name={rotatingKey.name} onSave={(_name, key) => rotateKey(rotatingKey, key)} />}</DialogContent></Dialog>
       <Dialog open={Boolean(editingKey)} onOpenChange={(open) => { if (!open) setEditingKey(null) }}><DialogContent><form onSubmit={(event) => { event.preventDefault(); void renameKey() }}><DialogHeader><DialogTitle>Edit API key name</DialogTitle><DialogDescription>The key value cannot be changed.</DialogDescription></DialogHeader><div className="py-5"><label htmlFor="gateway-api-key-name" className="text-sm font-medium">Key Name</label><Input id="gateway-api-key-name" value={editingName} onChange={(event) => setEditingName(event.target.value)} maxLength={80} autoFocus className="mt-2" /></div><DialogFooter><Button type="button" variant="outline" disabled={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} onClick={() => setEditingKey(null)}>Cancel</Button><Button type="submit" aria-busy={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} disabled={!editingName.trim() || Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))}>{editingKey && isPending(`rename-api-key:${editingKey.id}`) && <LoadingSpinner />}Save name</Button></DialogFooter></form></DialogContent></Dialog>
-      <Dialog open={Boolean(createdKey)} onOpenChange={(open) => { if (!open) setCreatedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>API key created</DialogTitle><DialogDescription>Copy this value now. It will only be available from the admin dashboard.</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{createdKey}</code><Button aria-label="Copy created API key" size="icon-sm" variant="outline" onClick={() => { if (createdKey) { void copy(createdKey, "Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setCreatedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={Boolean(revealedKey)} onOpenChange={(open) => { if (!open) setRevealedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>{revealedKey?.title}</DialogTitle><DialogDescription>{revealedKey?.description}</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{revealedKey?.value}</code><Button aria-label="Copy revealed API key" size="icon-sm" variant="outline" onClick={() => { if (revealedKey) { void copy(revealedKey.value, "Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setRevealedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
         <CardContent spacing="compact-stack">
           {!data.apiKeys.length && <EmptyState title="No gateway API keys" description="Create a key before sending requests through this workspace." icon={KeyRoundIcon} variant="compact" treatment="embedded" />}
           {data.apiKeys.map((key) => {
@@ -121,6 +141,7 @@ export function EndpointKeyView() {
               </div>
               <Button aria-label={`Copy ${key.name}`} size="icon-sm" variant="outline" onClick={() => { void copy(key.key, "Copied") }}><CopyIcon /></Button>
               <Button aria-label={`Edit ${key.name}`} size="icon-sm" variant="outline" onClick={() => { setEditingKey(key); setEditingName(key.name) }}><PencilIcon /></Button>
+              <Button aria-label={`Rotate ${key.name}`} size="icon-sm" variant="outline" disabled={isPending(`rotate-api-key:${key.id}`)} onClick={() => setRotatingKey(key)}><RefreshCwIcon /></Button>
               <ConfirmAction title={`Delete ${key.name}?`} description="Clients using this key will immediately lose access." pending={isPending(pendingKey)} onConfirm={() => deleteKey(key)}><Trash2Icon /></ConfirmAction>
             </div>
           })}

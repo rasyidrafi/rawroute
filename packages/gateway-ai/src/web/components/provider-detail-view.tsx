@@ -30,7 +30,9 @@ import { TableColumns, Table, TableBody, TableCell, TableHead, TableHeader, Tabl
 import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "../../contracts/domain"
 import { formatAppDate } from "@rawroute/observability/contracts/timezone"
 import type { CodexDiscoveryStatus } from "../../contracts/codex"
+import type { CodexAutoRedeemResponse, CodexAutoRedeemSettings } from "../../contracts/codex"
 import { modelUnavailable } from "../../contracts/catalog"
+import { Checkbox } from "@rawroute/ui/checkbox"
 
 type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[]; discovery?: CodexDiscoveryStatus }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
@@ -134,11 +136,97 @@ function ProviderDetailContent({ providerId, data, mutate }: { providerId: strin
   return <DashboardPage>
       <ProviderHeading provider={provider} credentialCount={apiKeys.length} isOAuthProvider={isOAuthProvider} />
       <ProviderDetailsCard data={data} isOAuthProvider={isOAuthProvider} mutate={mutate} />
+      {provider.prefix === "codex" && <CodexAutoRedeemCard accounts={apiKeys} />}
       <ProviderCredentialsCard provider={provider} apiKeys={apiKeys} isOAuthProvider={isOAuthProvider} usageData={usageData} usageError={usageError} usageLoading={usageLoading} isPending={isPending} actions={actions} login={login} providerKeyOpen={providerKeyOpen} setProviderKeyOpen={setProviderKeyOpen} editingProviderApiKey={editingProviderApiKey} setEditingProviderApiKey={setEditingProviderApiKey} setToggleAccount={setToggleAccount} setResetAccount={setResetAccount} />
       <CodexResetDialog resetAccount={resetAccount} setResetAccount={setResetAccount} resetConfirmation={resetConfirmation} setResetConfirmation={setResetConfirmation} isPending={isPending} redeemReset={actions.redeemReset} />
       <CodexToggleDialog toggleAccount={toggleAccount} setToggleAccount={setToggleAccount} isPending={isPending} setCodexAccountEnabled={actions.setCodexAccountEnabled} />
       <ProviderModelsCard data={data} mutate={mutate} />
     </DashboardPage>
+}
+
+const codexAutoRedeemKey = "/api/admin/oauth-providers/auto-redeem/settings"
+
+function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
+  const { fetcher, apiPatch } = useDashboardApi()
+  const { data, mutate } = useSWR<CodexAutoRedeemResponse>(codexAutoRedeemKey, fetcher, {
+    refreshInterval: 60_000,
+    dedupingInterval: 15_000,
+  })
+  const [saving, setSaving] = useState(false)
+  const [enableSetting, setEnableSetting] = useState<keyof CodexAutoRedeemSettings | null>(null)
+  const settings = data?.settings || { expiryEnabled: true, weeklyExhaustionEnabled: false }
+  const codexAccounts = accounts.filter(account => account.credentialKind === "codex-cli-proxy")
+
+  async function updateSetting(input: { expiryEnabled?: boolean; weeklyExhaustionEnabled?: boolean }) {
+    setSaving(true)
+    try {
+      await apiPatch(codexAutoRedeemKey, input)
+      await mutate()
+      toast.success("Codex reset automation settings saved")
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to save Codex reset settings")
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function toggleSetting(setting: keyof CodexAutoRedeemSettings, checked: boolean) {
+    if (checked) setEnableSetting(setting)
+    else void updateSetting({ [setting]: false })
+  }
+
+  return <Card>
+    <CardHeader>
+      <CardTitle variant="icon"><RotateCcwIcon className="size-5" />Auto redeem</CardTitle>
+      <CardDescription>Automatically use reset credits for your Codex accounts.</CardDescription>
+    </CardHeader>
+    <CardContent>
+      <div className="space-y-4">
+      <label className="flex items-start gap-3 text-sm">
+        <Checkbox aria-label="Redeem reset credits expiring within one hour" checked={settings.expiryEnabled} disabled={saving || !data} onCheckedChange={checked => toggleSetting("expiryEnabled", checked === true)} />
+        <span className="grid gap-1"><span className="font-medium">Before credits expire</span><span className="text-muted-foreground">Redeem eligible credits within 1 hour of expiry.</span></span>
+      </label>
+      <label className="flex items-start gap-3 text-sm">
+        <Checkbox aria-label="Also redeem when weekly quota is exhausted" checked={settings.weeklyExhaustionEnabled} disabled={saving || !data} onCheckedChange={checked => toggleSetting("weeklyExhaustionEnabled", checked === true)} />
+        <span className="grid gap-1"><span className="font-medium">When weekly quota runs out</span><span className="text-muted-foreground">Use a reset credit when weekly remaining quota reaches 0%.</span></span>
+      </label>
+      <div className="space-y-2 border-t pt-3">
+        <h3 className="text-sm font-medium">Account status</h3>
+        {!codexAccounts.length && <p className="text-sm text-muted-foreground">Connect a Codex account to get started.</p>}
+        {codexAccounts.map(account => {
+          const status = data?.accounts[account.id]
+          const unknown = status?.phase === "unknown"
+          const badge = unknown ? "Outcome unknown" : status?.phase === "redeemed" ? "Redeemed" : status?.phase === "checking" ? "Checking" : status?.phase === "pending" ? "Pending" : !account.enabled ? "Disabled" : "Waiting"
+          const message = !account.enabled
+            ? "Auto-redeem checks enabled accounts only."
+            : unknown ? "Redemption could not be confirmed. Further redemptions are paused." : status?.lastMessage || "Waiting for the next check."
+          return <div key={account.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 rounded-md border px-3 py-2 text-sm">
+            <span className="font-medium">{account.name}</span>
+            <span className="flex flex-wrap items-center gap-2"><Badge variant={unknown ? "outline" : "secondary"}>{badge}</Badge><span className="text-muted-foreground">{message}</span></span>
+          </div>
+        })}
+      </div>
+      </div>
+    </CardContent>
+    <AlertDialog open={enableSetting !== null} onOpenChange={open => { if (!open && !saving) setEnableSetting(null) }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{enableSetting === "expiryEnabled" ? "Enable expiring-credit auto-redeem?" : "Enable weekly-quota auto-redeem?"}</AlertDialogTitle>
+          <AlertDialogDescription>{enableSetting === "expiryEnabled"
+            ? "Uses a reset credit when weekly quota is exhausted. Credits expiring within 1 hour may be redeemed immediately."
+            : "Uses a reset credit when weekly quota reaches 0%. If already exhausted, waits 1 minute. Turn off during that minute to cancel."}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+          <AlertDialogAction disabled={saving} onClick={async () => {
+            if (enableSetting && await updateSetting({ [enableSetting]: true })) setEnableSetting(null)
+          }}>{saving && <LoadingSpinner />}Enable auto-redeem</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  </Card>
 }
 
 function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData, usageError, usageLoading, isPending, actions, login, providerKeyOpen, setProviderKeyOpen, editingProviderApiKey, setEditingProviderApiKey, setToggleAccount, setResetAccount }: {

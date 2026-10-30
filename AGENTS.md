@@ -1,6 +1,11 @@
 # Coding rules
 
 - Keep things simple; no overengineering.
+- Keep user-facing UI concise and focused on the user's task. Do not render
+  unnecessary information, implementation details, internal identifiers or technical
+  jargon. Use clear labels and short, useful descriptions; explain only what users
+  need to decide or act safely. Keep essential consequences, warnings and recovery
+  actions visible, and place confirmation-specific details in confirmation dialogs.
 - Omakase: avoid user choices and configuration unless genuinely necessary or required.
   Implementation details use fixed owner defaults, not deployment knobs. Generate
   and persist internal secrets automatically; only external credentials and genuine
@@ -52,9 +57,31 @@
 
 ## Verification
 
-- Run `bun run lint`; fix all source errors/warnings without suppressions,
-  disabled rules or broader allowances. Architecture checks are part of lint/tests.
-- Run `bun run typecheck` separately from build. Full acceptance:
-  `TMPDIR=/tmp/opencode bun run verify` with no external timeout.
+- Default to scoped verification, not the full suite after every task or edit.
+  Select checks covering the changed behavior and its consumers, not just changed
+  filenames. Aim for local feedback within 30 seconds; this is a target, never a
+  timeout that truncates checks or turns incomplete verification into a pass.
+- Prose-only README/AGENTS changes and non-executable comments need diff review,
+  not runtime suites. Check verification-policy edits against the scripts and CI.
+- For source changes, run `bun run lint` and `bun run typecheck` separately from
+  build, plus relevant owner/component/server tests. Fix all source errors/warnings
+  without suppressions, disabled rules or broader allowances. Architecture checks
+  remain part of lint/tests. Do not run all unit tests by default.
+- For browser/bundling changes, run a production build. Add focused browser tests
+  when interactions/layout change; copy-only changes do not require the full browser
+  suite. Verify selected tests initialize their prerequisites. Finish lint before
+  Chrome starts, build once, and never rebuild `dist` while browser tests serve it.
+- Keep `bun run verify` as full verification. Run
+  `TMPDIR=/tmp/opencode bun run verify` without an external timeout before integration
+  acceptance of security/auth, persistence/migrations, workspace isolation/deletion,
+  shared contracts/UI/platform, CLIProxy lifecycle, dependency/tooling changes, or
+  changes whose impact cannot be bounded. Full CI checks run on pull requests before
+  merge; full acceptance is not required after each local iteration.
+- Distinguish this task's edits from the integration candidate. Integration scope
+  includes all staged, unstaged, untracked, deleted and renamed files since the last
+  verified baseline. Preserve unrelated work. Reuse passing checks only when their
+  inputs and relevant dependencies are demonstrably unchanged.
+- Report commands and scope, including checks omitted. A scoped pass is not full
+  verification; do not claim old results cover a different source state.
 - Docker copies all workspace manifests before frozen install and bundles runtime
   dependencies into `dist/`; the runner needs neither source nor workspace links.

@@ -78,14 +78,13 @@ Development serves `http://localhost:3000` and persists data in `data/`.
 Source lives in `apps/console/` and owner packages under `packages/`.
 Read source and tests for behavior; follow `AGENTS.md` for coding rules.
 
-```sh
-bun run lint
-bun run typecheck
-TMPDIR=/tmp/opencode bun run verify
-```
+Use scoped checks during development: lint, separate typechecking and relevant
+tests for source changes; build and focused browser tests for affected browser
+flows. Prose-only edits need no runtime suites. See `AGENTS.md` for acceptance rules.
 
-Full verification includes unit/integration tests, lint, typechecking, a production
-build and browser tests using installed Google Chrome. Build/start independently
-with `bun run build` and `bun run start`.
+`TMPDIR=/tmp/opencode bun run verify` remains the full suite: unit/integration tests,
+lint, typechecking, a production build and browser tests using installed Google
+Chrome. CI runs these checks on pull requests and main code pushes; only main builds
+publish images. Build/start independently with `bun run build` and `bun run start`.
 
 Third-party attributions are in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).

@@ -914,6 +914,15 @@ export async function createApiKey(name: string, customKey?: string): Promise<Ap
   return apiKey
 }
 
+export async function rotateApiKey(apiKeyId: string, customKey?: string): Promise<ApiKey> {
+  const normalizedCustomKey = customKey === undefined ? undefined : validateGatewayApiKeyValue(customKey)
+  const rotated = isMemoryBackend()
+    ? memorySecurityMutation("gateway-key", "credential.update", () => memoryRotateApiKey(apiKeyId, normalizedCustomKey))
+    : await sqliteRotateApiKey(apiKeyId, normalizedCustomKey)
+  invalidateGatewayApiKeyCaches([rotated.previousHash, apiKeyValueHash(rotated.apiKey.key)])
+  return rotated.apiKey
+}
+
 export async function updateApiKeyName(apiKeyId: string, name: string): Promise<ApiKey> {
   const normalizedName = name.trim()
   if (!normalizedName) throw new Error("API key name is required.")
@@ -1698,6 +1707,31 @@ async function sqliteCreateApiKey(name: string, customKey?: string): Promise<Api
   }
 }
 
+async function sqliteRotateApiKey(apiKeyId: string, customKey?: string): Promise<{ apiKey: ApiKey; previousHash: string }> {
+  const sqlite = getLocalDatabase()
+  try {
+    return await sqlite.runTransaction(async (transaction) => {
+      const ref = apiKeyRef(apiKeyId)
+      const snapshot = await transaction.get(ref)
+      if (!snapshot.exists) throw new Error("API key not found.")
+      const existing = apiKeyFromSnapshot(snapshot)
+      const replacement = customKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : customKey
+      const previousHash = apiKeyValueHash(existing.key)
+      const replacementHash = apiKeyValueHash(replacement)
+      if (replacementHash === previousHash) throw new ApiKeyConflictError()
+
+      const updated = { ...existing, key: replacement }
+      transaction.create(apiKeyIndexRef(replacementHash), apiKeyIndexDocument(updated))
+      transaction.update(ref, { key: replacement })
+      transaction.delete(apiKeyIndexRef(previousHash))
+      return { apiKey: updated, previousHash }
+    })
+  } catch (error) {
+    if (isSqliteAlreadyExistsError(error)) throw new ApiKeyConflictError()
+    throw error
+  }
+}
+
 async function sqliteDeleteApiKey(apiKeyId: string): Promise<string | undefined> {
   const sqlite = getLocalDatabase()
   return sqlite.runTransaction(async (transaction) => {
@@ -2043,6 +2077,23 @@ function memoryCreateApiKey(name: string, customKey?: string): ApiKey {
   state.apiKeyIndexes.set(hash, apiKey.id)
 
   return apiKey
+}
+
+function memoryRotateApiKey(apiKeyId: string, customKey?: string): { apiKey: ApiKey; previousHash: string } {
+  const state = ensureMemorySeeded()
+  const existing = state.apiKeys.get(apiKeyId)
+  if (!existing) throw new Error("API key not found.")
+
+  const replacement = customKey === undefined ? `sk-rr-${crypto.randomUUID().replaceAll("-", "")}` : customKey
+  const previousHash = apiKeyValueHash(existing.key)
+  const replacementHash = apiKeyValueHash(replacement)
+  if (replacementHash === previousHash || memoryApiKeyValueExists(replacementHash)) throw new ApiKeyConflictError()
+
+  const updated = { ...existing, key: replacement }
+  state.apiKeys.set(apiKeyId, updated)
+  state.apiKeyIndexes.delete(previousHash)
+  state.apiKeyIndexes.set(replacementHash, apiKeyId)
+  return { apiKey: updated, previousHash }
 }
 
 function memoryDeleteApiKey(apiKeyId: string): string | undefined {

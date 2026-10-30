@@ -388,12 +388,16 @@ test("Codex reset-credit consumption is audited before the remote financial muta
   let consumed = 0
   const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
   const upstream = spyOn(target, "fetch").mockImplementation(async (_input, init) => {
-    const body = JSON.parse(String(init?.body)) as { method: string }
+    const body = JSON.parse(String(init?.body)) as { method: string; url: string }
     if (body.method === "POST") {
       consumed += 1
       return Response.json({ status_code: 200, body: "private-reset-response" })
     }
-    return Response.json({ status_code: 200, body: JSON.stringify({ rate_limit_reset_credits: { available_count: 1 }, rate_limit: { secondary_window: { used_percent: 100 } } }) })
+    if (body.url.endsWith("/rate-limit-reset-credits")) {
+      const unused = Math.max(0, 2 - consumed)
+      return Response.json({ status_code: 200, body: JSON.stringify({ credits: Array.from({ length: unused }, (_, index) => ({ id: `credit-${consumed + index + 1}`, status: "available" })) }) })
+    }
+    return Response.json({ status_code: 200, body: JSON.stringify({ rate_limit_reset_credits: { available_count: Math.max(0, 2 - consumed) }, rate_limit: { secondary_window: { used_percent: 100 } } }) })
   })
   const account = { id: "opaque-account-id", providerId: "opaque-provider-id", name: "private-account-name", key: "", enabled: true, createdAt: new Date().toISOString(), credentialKind: "codex-cli-proxy" as const, cliProxyAuthIndex: "private-auth-index" }
   try {

@@ -5,6 +5,7 @@ import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { recordLog } from "../../../../../logging"
 import { deleteProviderApiKey, upsertProviderApiKey } from "../../../../../store"
+import { completeCodexResetAccountRemoval, releaseCodexResetAccountRemoval, reserveCodexResetAccountRemoval } from "../../../../../codex/reset"
 
 export async function PATCH(request: Request, params: { accountId: string }) {
   const { accountId } = params
@@ -48,8 +49,15 @@ export async function DELETE(_request: Request, params: { accountId: string }) {
     if (!result.provider || !result.accounts.some((entry) => entry.id === accountId)) return jsonError("Codex account not found.", 404)
     const account = result.accounts.find((entry) => entry.id === accountId)
     if (!account) return jsonError("Codex account not found.", 404)
-    if (account.credentialKind === "codex-cli-proxy" && account.cliProxyAuthFile) await deleteCliProxyCodexAccount(account)
-    await deleteProviderApiKey(result.provider.id, accountId)
+    const removalToken = await reserveCodexResetAccountRemoval(accountId)
+    try {
+      if (account.credentialKind === "codex-cli-proxy" && account.cliProxyAuthFile) await deleteCliProxyCodexAccount(account)
+      await deleteProviderApiKey(result.provider.id, accountId)
+      await completeCodexResetAccountRemoval(accountId, removalToken)
+    } catch (error) {
+      await releaseCodexResetAccountRemoval(accountId, removalToken)
+      throw error
+    }
     recordLog("admin.codex.account.deleted", { accountId }, { level: "info" })
     scheduleCodexModelRefresh(true)
     return Response.json({ ok: true })

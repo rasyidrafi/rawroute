@@ -14,4 +14,21 @@ export interface CodexUsageResult extends CodexUsageSnapshot {
   error?: string
   reauthRequired?: boolean
 }
+export interface CodexAutoRedeemSettings {
+  expiryEnabled: boolean
+  weeklyExhaustionEnabled: boolean
+}
+export type CodexResetCoordinatorPhase = "idle" | "checking" | "pending" | "unknown" | "redeemed" | "deleting"
+export interface CodexAutoRedeemAccountStatus {
+  phase: CodexResetCoordinatorPhase
+  lastCheckedAt?: string
+  lastAttemptAt?: string
+  requestId?: string
+  lastMessage?: string
+  creditExpiresAt?: string
+}
+export type CodexAutoRedeemResponse = {
+  settings: CodexAutoRedeemSettings
+  accounts: Record<string, CodexAutoRedeemAccountStatus>
+}
 export type CodexDiscoveryStatus = { attemptedAt: string; succeededAt?: string; error?: string; added: number; skipped: number }

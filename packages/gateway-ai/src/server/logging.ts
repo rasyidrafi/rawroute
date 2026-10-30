@@ -8,7 +8,7 @@ import { createRecorder } from "@rawroute/observability/server/recorder"
 const identifierFields = new Set(["providerId", "modelId", "memberModelId", "accountId", "apiKeyId", "groupId", "versionId", "comboId", "aliasId", "workspaceId", "redeemRequestId"])
 const labelFields = new Set(["model", "upstreamModel", "protocol", "upstreamProtocol", "errorCode", "action", "setting", "method", "route", "page", "endedAt", "source"])
 const numericFields = new Set(["exitCode", "attempt", "restartAttempts", "status", "durationMs", "ttftMs", "inputTokens", "outputTokens", "cachedTokens", "messageCount", "toolCount", "count", "modelCount", "recipientCount", "added", "removed", "updated", "retryAfter", "providers", "keys", "models", "projectedCredentials", "projectedModels", "hourlyRows", "dailyRows", "rollupRows", "boundaryRows"])
-const booleanFields = new Set(["succeeded", "enabled", "autoDeactivateAtWindowEnd", "terminalEvent", "usageKnown", "reordered", "streaming", "promptCacheKey", "supportPromptCacheKey"])
+const booleanFields = new Set(["succeeded", "enabled", "autoDeactivateAtWindowEnd", "terminalEvent", "usageKnown", "reordered", "streaming", "promptCacheKey", "supportPromptCacheKey", "expiryEnabled", "weeklyExhaustionEnabled"])
 
 export function safeDetails(input: Record<string, unknown>): LogDetails {
   const result: LogDetails = {}

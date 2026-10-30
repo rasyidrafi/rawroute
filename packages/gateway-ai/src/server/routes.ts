@@ -3,6 +3,7 @@ import * as CliproxyInstance from "./cliproxy/http"
 import * as AnthropicCallback from "./routes/anthropic/callback/index"
 import * as AntigravityCallback from "./routes/antigravity/callback/index"
 import * as ApiAdminApiKeysByApikey from "./routes/api/admin/api-keys/by-apikey/index"
+import * as ApiAdminApiKeysRotate from "./routes/api/admin/api-keys/by-apikey/rotate/index"
 import * as ApiAdminApiKeys from "./routes/api/admin/api-keys/index"
 import * as ApiAdminBudgetsByApikey from "./routes/api/admin/budgets/by-apikey/index"
 import * as ApiAdminBudgetsBeyondLimits from "./routes/api/admin/budgets/beyond-limits/index"
@@ -21,6 +22,7 @@ import * as ApiAdminModelPricing from "./routes/api/admin/model-pricing/index"
 import * as ApiAdminModelShares from "./routes/api/admin/model-shares/index"
 import * as ApiAdminOauthProvidersByAccountReset from "./routes/api/admin/oauth-providers/by-account/reset/index"
 import * as ApiAdminOauthProvidersByAccount from "./routes/api/admin/oauth-providers/by-account/index"
+import * as ApiAdminOauthProvidersAutoRedeem from "./routes/api/admin/oauth-providers/auto-redeem/index"
 import * as ApiAdminOauthProvidersCodexDeviceCallback from "./routes/api/admin/oauth-providers/codex/device/callback/index"
 import * as ApiAdminOauthProvidersCodexDeviceCancel from "./routes/api/admin/oauth-providers/codex/device/cancel/index"
 import * as ApiAdminOauthProvidersCodexDevicePoll from "./routes/api/admin/oauth-providers/codex/device/poll/index"
@@ -59,6 +61,7 @@ export const aiServerRoutes = { id: "ai", routes: [
   apiRoute(AnthropicCallback, "public", "/anthropic/callback"),
   apiRoute(AntigravityCallback, "public", "/antigravity/callback"),
   apiRoute(ApiAdminApiKeysByApikey, "workspace", "/api/admin/api-keys/:apiKeyId"),
+  apiRoute(ApiAdminApiKeysRotate, "workspace", "/api/admin/api-keys/:apiKeyId/rotate"),
   apiRoute(ApiAdminApiKeys, "workspace", "/api/admin/api-keys"),
   apiRoute(ApiAdminBudgetsByApikey, "workspace", "/api/admin/budgets/:apiKeyId"),
   apiRoute(ApiAdminBudgetsBeyondLimits, "workspace", "/api/admin/budgets/beyond-limits"),
@@ -76,6 +79,7 @@ export const aiServerRoutes = { id: "ai", routes: [
   apiRoute(ApiAdminModelPricing, "workspace", "/api/admin/model-pricing"),
   apiRoute(ApiAdminModelShares, "workspace", "/api/admin/model-shares"),
   apiRoute(ApiAdminOauthProvidersByAccountReset, "workspace", "/api/admin/oauth-providers/:accountId/reset"),
+  apiRoute(ApiAdminOauthProvidersAutoRedeem, "workspace", "/api/admin/oauth-providers/auto-redeem/settings"),
   apiRoute(ApiAdminOauthProvidersByAccount, "workspace", "/api/admin/oauth-providers/:accountId"),
   apiRoute(ApiAdminOauthProvidersCodexDeviceCallback, "workspace", "/api/admin/oauth-providers/codex/device/callback"),
   apiRoute(ApiAdminOauthProvidersCodexDeviceCancel, "workspace", "/api/admin/oauth-providers/codex/device/cancel"),
