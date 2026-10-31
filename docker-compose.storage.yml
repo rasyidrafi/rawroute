@@ -1,6 +1,5 @@
 # Optional overlay: docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
-# Also works with docker-compose.external.yml as the base. Existing deployments
-# gain no S3 listener/host port unless this overlay is selected explicitly.
+# Existing deployments gain no S3 listener/host port unless this overlay is selected.
 services:
   rawroute:
     environment:

@@ -5,10 +5,10 @@ import { join } from "node:path"
 import { closeLocalDatabase, getDatabase, getSqliteDatabase } from "../../packages/platform/src/server/database"
 import { createWorkspaceRepository, drainWorkspaceDeletions, type WorkspaceCleanupParticipant } from "../../packages/platform/src/server/workspace-repository"
 import { runWithAuditIdentity, runWithGatewayAuditIdentity } from "../../packages/observability/src/server/audit-context"
-import { appendAudit, queryAudit } from "../../packages/platform/src/server/audit"
+import { appendAudit, auditRemoteOperation, queryAudit } from "../../packages/platform/src/server/audit"
 import { attachWorkspaceActivity, reopenWorkspaceAdmission, retainWorkspaceActivity } from "../../packages/platform/src/server/workspace-activity"
 import { runInWorkspace, runWithoutWorkspace, currentWorkspaceId } from "../../packages/platform/src/server/workspace-context"
-import { closeLocalCache, localCacheDelete, localCacheGet, localCacheSetIfAbsent } from "../../packages/platform/src/server/local-cache"
+import { closeLocalCache } from "../../packages/platform/src/server/local-cache"
 import { trackBackgroundTask, drainBackgroundTasks } from "../../packages/platform/src/server/background-tasks"
 import { _resetMemoryBackend, createApiKey, deleteApiKey, listApiKeys, listProviders, upsertProvider, upsertModel, upsertAlias, upsertProviderApiKey, deleteProviderApiKey, findIndexedApiKeyByValue } from "../../packages/gateway-ai/src/server/store"
 import { cleanupAiWorkspaceResources } from "../../packages/gateway-ai/src/server/workspace-cleanup"
@@ -19,15 +19,18 @@ import { requestContext } from "../../packages/observability/src/server/request-
 import { resetAnalyticsForTests, recordGatewayUsage, getDashboardPayload } from "../../packages/gateway-ai/src/server/analytics"
 import { resetModelSharesForTests, setModelShareTargets, listSharedModelsForRecipient } from "../../packages/gateway-ai/src/server/model-shares"
 import { resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
-import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/cliproxy/gateway"
-import { proxyAiOAuthCallback } from "../../packages/gateway-ai/src/server/oauth-callback"
-import { redeemCodexReset } from "../../packages/gateway-ai/src/server/codex/reset"
+import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/gateway/gateway"
+import { redeemCodexReset, setCodexResetApiCallForTests } from "../../packages/gateway-ai/src/server/codex/reset"
+import { setCodexUsageApiCallForTests } from "../../packages/gateway-ai/src/server/codex/usage"
+import { setCodexUpstreamFetchForTests } from "../../packages/gateway-ai/src/server/codex/upstream"
+import { ensureCodexProvider } from "../../packages/gateway-ai/src/server/codex/oauth"
+import { registerCodexCredential } from "../../packages/gateway-ai/src/server/codex-credentials"
 import { POST as login } from "../../packages/platform/src/server/routes/api/auth/login/index"
 import { POST as logout } from "../../packages/platform/src/server/routes/api/auth/logout/index"
 import { POST as password } from "../../packages/platform/src/server/routes/api/admin/account/password/index"
 import { runInRequest } from "../../packages/observability/src/server/request-context"
-import { withManagementMutation, withLifecycleMutation } from "../../packages/gateway-ai/src/server/cliproxy/mutations"
-import { reservePendingCliProxyCodexLogin, savePendingCliProxyCodexLogin, hasPendingCodexLogin, takePendingCliProxyCodexLogin } from "../../packages/gateway-ai/src/server/codex/cli-login"
+import { hasPendingCodexLogin, startCodexLogin } from "../../packages/gateway-ai/src/server/codex/login"
+import { readCodexCredentialSecrets } from "../../packages/gateway-ai/src/server/codex-credential-secrets"
 
 let directory: string
 const environment = { ...process.env }
@@ -38,9 +41,6 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "rawroute-lifecycle-"))
   process.env.SQLITE_PATH = join(directory, "test.sqlite")
   process.env.NODE_ENV = "test"
-  process.env.CLIPROXY_MODE = "external"
-  delete process.env.CLIPROXY_MANAGEMENT_KEY
-  delete process.env.CLIPROXY_URL
   process.env.EXECUTOR_UPSTREAM_URL = "https://global-tools.invalid"
   process.env.EXECUTOR_UPSTREAM_API_KEY = "global-tool-secret-not-a-workspace-resource"
   _resetMemoryBackend()
@@ -50,7 +50,6 @@ beforeEach(async () => {
   globalThis.__rawrouteMemoryWorkspaces = new Map()
   globalThis.__rawrouteMemoryWorkspaceDeletions = new Map()
   globalThis.__rawrouteMemoryAudit = []
-  globalThis.__rawroutePendingCodexCancellations = new Map()
   process.env.STORAGE_BACKEND = "memory"
   await resetWorkspacesForTests()
 })
@@ -333,23 +332,24 @@ test("SQLite rejects captured late writes and restored tombstones prevent new ad
   expect((await ref.get()).exists).toBe(false)
 })
 
-test("remote mutation boundaries persist intent and redacted outcomes, including returned HTTP failures", async () => {
+test("remote operation audits persist intent and redacted outcomes, including returned HTTP failures", async () => {
   process.env.STORAGE_BACKEND = "sqlite"
   await runWithAuditIdentity("administrator", "remote-security", async () => {
-    await expect(withManagementMutation(async () => { throw new Error("remote-secret-must-not-appear") })).rejects.toThrow("remote-secret")
-    await withManagementMutation(async () => Response.json({ error: "private response" }, { status: 400 }))
-    await withLifecycleMutation(async () => "installed")
+    const input = { action: "oauth.remote" as const, resource: "oauth" as const }
+    await expect(auditRemoteOperation(input, async () => { throw new Error("remote-secret-must-not-appear") })).rejects.toThrow("remote-secret")
+    await auditRemoteOperation(input, async () => Response.json({ error: "private response" }, { status: 400 }))
+    await auditRemoteOperation(input, async () => "completed")
   })
   const events = await queryAudit()
-  expect(events.filter(event => event.action === "oauth.remote" && event.result === "started")).toHaveLength(2)
+  expect(events.filter(event => event.action === "oauth.remote" && event.result === "started")).toHaveLength(3)
   expect(events.filter(event => event.action === "oauth.remote" && event.result === "failure")).toHaveLength(2)
-  expect(events.some(event => event.action === "cliproxy.lifecycle" && event.result === "success")).toBe(true)
+  expect(events.some(event => event.action === "oauth.remote" && event.result === "success")).toBe(true)
   expect(events.every(event => event.actor === "administrator" && event.correlationId === "remote-security")).toBe(true)
   expect(JSON.stringify(events)).not.toContain("remote-secret")
   expect(JSON.stringify(events)).not.toContain("private response")
   getDatabase().run("CREATE TRIGGER reject_remote_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
   let mutated = false
-  await expect(withManagementMutation(async () => { mutated = true })).rejects.toThrow("audit unavailable")
+  await expect(auditRemoteOperation({ action: "oauth.remote", resource: "oauth" }, async () => { mutated = true; return true })).rejects.toThrow("audit unavailable")
   expect(mutated).toBe(false)
 })
 
@@ -359,47 +359,30 @@ test("gateway audit identity uses the verified opaque record ID and retains serv
   expect((await queryAudit())[0]).toMatchObject({ actor: "gateway", actorId: "verified-key-record-id", correlationId: "server-correlation", resource: "routing" })
 })
 
-test("canonical upstream OAuth callbacks audit intent/outcome without code, state, URL, or response content", async () => {
-  process.env.STORAGE_BACKEND = "sqlite"
-  process.env.CLIPROXY_URL = "https://isolated-callback.invalid"
-  const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
-  const upstream = spyOn(target, "fetch").mockImplementation(async () => new Response("private-upstream-token", { status: 200 }))
-  try {
-    for (const path of ["/anthropic/callback", "/antigravity/callback", "/codex/callback"] as const) {
-      const response = await runInRequest(() => proxyAiOAuthCallback(new Request(`https://console.test${path}?code=private-code&state=private-state`), path))
-      expect(await response.text()).toBe("private-upstream-token")
-    }
-    const events = await queryAudit()
-    expect(events.filter(event => event.action === "oauth.remote" && event.result === "started")).toHaveLength(3)
-    expect(events.filter(event => event.action === "oauth.remote" && event.result === "success")).toHaveLength(3)
-    expect(events.every(event => event.actor === "anonymous" && event.workspaceId === undefined)).toBe(true)
-    expect(JSON.stringify(events)).not.toContain("private-")
-    getDatabase().run("CREATE TRIGGER reject_callback_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
-    await expect(proxyAiOAuthCallback(new Request("https://console.test/codex/callback?code=private-code"), "/codex/callback")).rejects.toThrow("audit unavailable")
-    expect(upstream).toHaveBeenCalledTimes(3)
-  } finally { upstream.mockRestore() }
-})
-
 test("Codex reset-credit consumption is audited before the remote financial mutation", async () => {
   process.env.STORAGE_BACKEND = "sqlite"
-  process.env.CLIPROXY_URL = "https://isolated-reset.invalid"
   const repo = repository()
   const selected = await workspace(repo, "Reset credit")
   let consumed = 0
-  const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
-  const upstream = spyOn(target, "fetch").mockImplementation(async (_input, init) => {
-    const body = JSON.parse(String(init?.body)) as { method: string; url: string }
-    if (body.method === "POST") {
-      consumed += 1
-      return Response.json({ status_code: 200, body: "private-reset-response" })
-    }
-    if (body.url.endsWith("/rate-limit-reset-credits")) {
+  const account = await runInWorkspace(selected, async () => {
+    const provider = await ensureCodexProvider()
+    const connected = await registerCodexCredential(provider.id, {
+      accountId: "acct-private-reset-account",
+      name: "private-account-name",
+      secrets: { accessToken: "private-access-token", refreshToken: "private-refresh-token", expiresAt: new Date(Date.now() + 60_000).toISOString() },
+    })
+    setCodexUsageApiCallForTests(async (_account, input) => {
+      if (input.url.endsWith("/usage")) return { status: 200, body: JSON.stringify({ rate_limit_reset_credits: { available_count: Math.max(0, 2 - consumed) }, rate_limit: { secondary_window: { used_percent: 100 } } }) }
       const unused = Math.max(0, 2 - consumed)
-      return Response.json({ status_code: 200, body: JSON.stringify({ credits: Array.from({ length: unused }, (_, index) => ({ id: `credit-${consumed + index + 1}`, status: "available" })) }) })
-    }
-    return Response.json({ status_code: 200, body: JSON.stringify({ rate_limit_reset_credits: { available_count: Math.max(0, 2 - consumed) }, rate_limit: { secondary_window: { used_percent: 100 } } }) })
+      return { status: 200, body: JSON.stringify({ credits: Array.from({ length: unused }, (_, index) => ({ id: `credit-${consumed + index + 1}`, status: "available" })) }) }
+    })
+    return connected
   })
-  const account = { id: "opaque-account-id", providerId: "opaque-provider-id", name: "private-account-name", key: "", enabled: true, createdAt: new Date().toISOString(), credentialKind: "codex-cli-proxy" as const, cliProxyAuthIndex: "private-auth-index" }
+  setCodexResetApiCallForTests()
+  setCodexUpstreamFetchForTests((async () => {
+    consumed += 1
+    return Response.json({ ok: true })
+  }) as unknown as typeof fetch)
   try {
     await runWithAuditIdentity("administrator", "reset-credit", () => runInWorkspace(selected, () => redeemCodexReset(account, "use my codex reset")))
     expect(consumed).toBe(1)
@@ -410,7 +393,11 @@ test("Codex reset-credit consumption is audited before the remote financial muta
     getDatabase().run("CREATE TRIGGER reject_reset_audit BEFORE INSERT ON rawroute_documents WHEN NEW.collection_path = 'rawroute_audit' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END")
     await expect(runInWorkspace(selected, () => redeemCodexReset(account, "use my codex reset"))).rejects.toThrow("audit unavailable")
     expect(consumed).toBe(1)
-  } finally { upstream.mockRestore() }
+  } finally {
+    setCodexResetApiCallForTests()
+    setCodexUpstreamFetchForTests()
+    setCodexUsageApiCallForTests()
+  }
 })
 
 test("shutdown drains workspace coordinators even when no HTTP request remains attached", async () => {
@@ -429,36 +416,26 @@ test("shutdown drains workspace coordinators even when no HTTP request remains a
   expect(await repo.getWorkspace(selected.id)).toBeUndefined()
 })
 
-test("concrete AI cleanup deletes only mapped OAuth resources and pending login; leaves shared engine and Tools alone", async () => {
-  process.env.STORAGE_BACKEND = "sqlite"
-  process.env.CLIPROXY_MANAGEMENT_KEY = "isolated-management-secret"
-  process.env.CLIPROXY_URL = "https://isolated-cliproxy.invalid"
+test("concrete AI cleanup removes Codex OAuth account and pending login state", async () => {
   const repo = repository()
-  const selected = await workspace(repo, "OAuth cleanup")
-  await runInWorkspace(selected, async () => {
-    const provider = await upsertProvider({ name: "Codex", prefix: "codex", protocol: "openai-chat", authType: "none", enabled: true })
-    await upsertProviderApiKey(provider.id, { name: "Mapped", key: "", credentialKind: "codex-cli-proxy", cliProxyAuthFile: "only-owned-file.json", enabled: true })
-    await reservePendingCliProxyCodexLogin("owned-login")
-    await savePendingCliProxyCodexLogin("owned-login", { workspaceId: selected.id, state: "only-owned-state", authFiles: {} })
+  const selected = await workspace(repo, "Codex cleanup")
+  const account = await runInWorkspace(selected, async () => {
+    const provider = await ensureCodexProvider()
+    const connected = await registerCodexCredential(provider.id, {
+      accountId: "acct-cleanup",
+      secrets: { accessToken: "cleanup-access-token", refreshToken: "cleanup-refresh-token" },
+    })
+    await startCodexLogin()
+    expect(await hasPendingCodexLogin()).toBe(true)
+    return connected
   })
-  const calls: string[] = []
-  const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
-  const upstream = spyOn(target, "fetch").mockImplementation(async (input, init) => {
-    const url = String(input)
-    calls.push(`${init?.method || "GET"} ${url}`)
-    expect(url.startsWith("https://isolated-cliproxy.invalid/")).toBe(true)
-    return new Response(null, { status: 404 }) // Idempotent already-removed resources.
-  })
-  try {
-    await repo.deleteWorkspace(selected.id, selected.name)
-    expect(calls).toHaveLength(2)
-    expect(calls.some(call => call.includes("credentials?name=only-owned-file.json"))).toBe(true)
-    expect(calls.some(call => call.includes("oauth/session?state=only-owned-state"))).toBe(true)
-    expect(await hasPendingCodexLogin()).toBe(false)
-    expect(process.env.EXECUTOR_UPSTREAM_URL).toBe("https://global-tools.invalid")
-    expect((await queryAudit({ workspaceId: selected.id })).some(event => event.action === "workspace.delete.complete")).toBe(true)
-    expect(JSON.stringify(await queryAudit())).not.toContain("only-owned")
-  } finally { upstream.mockRestore() }
+  expect(await runInWorkspace(selected, () => readCodexCredentialSecrets(account.id))).toMatchObject({ accessToken: "cleanup-access-token" })
+  await repo.deleteWorkspace(selected.id, selected.name)
+  expect(await hasPendingCodexLogin(selected.id)).toBe(false)
+  expect(__rawrouteCodexCredentials?.has(selected.id)).toBe(false)
+  expect(process.env.EXECUTOR_UPSTREAM_URL).toBe("https://global-tools.invalid")
+  expect((await queryAudit({ workspaceId: selected.id })).some(event => event.action === "workspace.delete.complete")).toBe(true)
+  expect(JSON.stringify(await queryAudit())).not.toContain("cleanup-access-token")
 })
 
 test("SQLite retries idempotently when participant side effects succeed but its durable checkpoint fails", async () => {
@@ -518,64 +495,6 @@ test("real shared native SSE settles both usage copies before owner deletion and
     expect(consumerUsage.summary.tokens).toBe(4)
     expect(upstream).toHaveBeenCalledTimes(1)
   } finally { upstream.mockRestore() }
-})
-
-test("SQLite recovery retries attributed OAuth cancellation after interaction expiry and database/cache restart", async () => {
-  process.env.STORAGE_BACKEND = "sqlite"
-  process.env.CLIPROXY_URL = "https://isolated-login.invalid"
-  process.env.CLIPROXY_MANAGEMENT_KEY = "isolated-login-management-key"
-  await identity.readMeta()
-  await identity.updateMeta(meta => { meta.admin.mustChangePassword = false })
-  const repo = repository()
-  const selected = await workspace(repo, "Durable pending login")
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, development: false, routes: apiRoutes, fetch: () => new Response(null, { status: 404 }) })
-  const cookie = (await createSession(new Request(server.url))).split(";", 1)[0]!
-  let cancellations = 0
-  let failCancellation = true
-  const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
-  const originalFetch = globalThis.fetch
-  const upstream = spyOn(target, "fetch").mockImplementation(async (input, init) => {
-    const url = String(input)
-    if (!url.startsWith("https://isolated-login.invalid/")) return originalFetch(input, init)
-    if (url.includes("/credentials")) return Response.json({ files: [] })
-    if (url.includes("/oauth/auth-url")) return Response.json({ state: "private-durable-oauth-state", url: "https://auth.invalid/?state=private-durable-oauth-state" })
-    expect(url).toContain("/oauth/session?state=private-durable-oauth-state")
-    cancellations += 1
-    return new Response(null, { status: failCancellation ? 503 : 404 })
-  })
-  try {
-    const response = await fetch(new URL("/api/admin/oauth-providers/codex/device/start", server.url), { method: "POST", headers: { cookie, "x-rawroute-workspace-id": selected.id } })
-    expect(response.status).toBe(200)
-    const { loginId } = await response.json() as { loginId: string }
-    expect(await hasPendingCodexLogin()).toBe(true)
-    const cacheKey = `rawroute:codex-login:v2:session:${loginId}`
-    const cached = JSON.parse((await localCacheGet(cacheKey))!) as { expiresAt: number }
-    cached.expiresAt = Date.now() - 1
-    await localCacheDelete(cacheKey)
-    await localCacheSetIfAbsent(cacheKey, JSON.stringify(cached), 60_000)
-    expect(await takePendingCliProxyCodexLogin(loginId)).toBeUndefined()
-    expect(await hasPendingCodexLogin()).toBe(false) // Existing five-minute interaction/lock semantics.
-    const ref = getSqliteDatabase().collection("rawroute_codex_login_cancellations").doc(loginId)
-    expect((await ref.get()).data()).toMatchObject({ workspaceId: selected.id, state: "private-durable-oauth-state" })
-    await expect(repo.deleteWorkspace(selected.id, selected.name)).rejects.toThrow("503")
-    expect(cancellations).toBe(1)
-    expect((await repo.getWorkspace(selected.id))?.status).toBe("deleting")
-    expect((await ref.get()).exists).toBe(true)
-    await server.stop(true)
-    await closeLocalDatabase()
-    await closeLocalCache()
-    failCancellation = false
-    const restarted = repository()
-    const recovery = await restarted.recoverWorkspaceDeletions()
-    expect(recovery.every(result => result.status === "fulfilled")).toBe(true)
-    expect(cancellations).toBe(2)
-    expect((await ref.get()).exists).toBe(false)
-    expect(await restarted.getWorkspace(selected.id)).toBeUndefined()
-    const events = await queryAudit({ workspaceId: selected.id, limit: 1000 })
-    expect(events.some(event => event.action === "workspace.delete.failure")).toBe(true)
-    expect(events.some(event => event.action === "workspace.delete.complete")).toBe(true)
-    expect(JSON.stringify(await queryAudit({ limit: 1000 }))).not.toContain("private-durable-oauth-state")
-  } finally { upstream.mockRestore(); await server.stop(true) }
 })
 
 test("authenticated canonical password endpoint audits malformed JSON/null and fails closed if audit is unavailable", async () => {

@@ -9,9 +9,8 @@ export function normalizeReasoningEffort(value: unknown) {
 
 /**
  * Keep the gateway compatible with clients that send Chat Completions
- * parameter names to a Responses endpoint. CLIProxy owns provider-specific
- * translation; this only converts the public API spelling into the canonical
- * Responses spelling before forwarding the request.
+ * parameter names to a Responses endpoint. This converts the public API
+ * spelling into the canonical Responses spelling before provider forwarding.
  */
 export function normalizeResponsesRequest(payload: Record<string, unknown>, options: { dropOutputTokenLimit?: boolean } = {}) {
   const normalized = { ...payload }

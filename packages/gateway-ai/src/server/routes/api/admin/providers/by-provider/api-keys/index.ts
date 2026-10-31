@@ -1,4 +1,3 @@
-import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "../../../../../../cliproxy/provider-sync"
 import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { recordLog } from "../../../../../../logging"
@@ -24,7 +23,7 @@ export async function POST(request: Request, params: { providerId: string }) {
   try {
     const provider = await getProvider(providerId)
     if (!provider) throw new Error("Provider is missing.")
-    if (provider.prefix === "codex") throw new Error("Codex accounts are managed by CLIProxy. Use the Codex account flow.")
+    if (provider.prefix === "codex") throw new Error("Codex accounts are managed from the Codex provider page.")
     if (provider.authType === "none") {
       throw new Error("This provider uses no API keys.")
     }
@@ -46,11 +45,10 @@ export async function POST(request: Request, params: { providerId: string }) {
       rpmLimit,
       maxConcurrency,
     })
-    if (provider?.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
     recordLog("admin.provider.api.key.saved", { providerId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
     recordLog("admin.provider.api.key.save.failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to save provider API key.", error instanceof CliProxyProviderSyncError ? error.status : 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to save provider API key.", 400)
   }
 }

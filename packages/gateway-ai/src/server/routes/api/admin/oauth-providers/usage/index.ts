@@ -6,7 +6,7 @@ import { jsonError } from "@rawroute/observability/contracts/http"
 export async function GET() {
   try {
     const { accounts } = await listCodexAccounts()
-    const entries = await Promise.all(accounts.map(async (account) => [
+    const entries = await Promise.all(accounts.filter(account => account.enabled).map(async (account) => [
       account.id,
       await getCodexUsageForAccount(account),
     ] as const))

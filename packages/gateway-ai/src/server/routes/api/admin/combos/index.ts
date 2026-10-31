@@ -3,7 +3,7 @@ import { signComboConfirmation } from "../../../../signing"
 
 import { invalidateDashboardPresentation } from "../../../../analytics"
 import { cleanReasoningEffort, memberPolicyConfigHash, normalizeComboCustomPayload } from "../../../../../contracts/combo-reasoning"
-import { testComboMemberPolicy, type ComboMemberTestResult } from "../../../../cliproxy/gateway"
+import { testComboMemberPolicy, type ComboMemberTestResult } from "../../../../gateway/gateway"
 import { jsonError } from "@rawroute/observability/contracts/http"
 import { cleanAliasId } from "../../../../model-identifiers"
 import { recordLog } from "../../../../logging"

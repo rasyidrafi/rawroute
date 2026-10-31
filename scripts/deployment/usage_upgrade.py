@@ -45,3 +45,37 @@ def convert(deployment, volume, prefix, timezone, report_name="usage"):
     if not before["copiedRawDocuments"] and before["sourceDigest"] != after["sourceDigest"]:
         raise ValueError("Migration source digest changed unexpectedly")
     return after
+
+
+def convert_codex_credentials(deployment, volume, report_name="codex-credentials", *, production=True):
+    """Move mapped stopped CLIProxy Codex sessions into the workspace credential store."""
+    d = deployment
+
+    def invoke(name, apply=False):
+        args = ["docker", "run", "--rm", "--name", d.m["helper"], "--label",
+                f"local.rawroute.redeploy={d.m['transaction']}", "--network", "none",
+                "--mount", f"type=volume,src={volume},dst=/data,volume-nocopy",
+                "--entrypoint", "bun", d.m["new_image"], "run", "--no-env-file",
+                "migrations/codex-credentials.js", "--sqlite", "/data/rawroute.sqlite",
+                "--auth-dir", "/data/cliproxy/auth", "--config", "/data/cliproxy/config.yaml"]
+        if apply:
+            args += ["--apply", "--writers-stopped"]
+        result = d.runner.run(*args, timeout=300)
+        path = d.directory / f"{report_name}-{name}.json"
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(result.stdout)
+        return json.loads(result.stdout)
+
+    before = invoke("preview")
+    if not before["required"]:
+        return before
+    if production:
+        d.save(data_may_changed=True, phase="migration-intent")
+    applied = invoke("apply", True)
+    after = invoke("validated")
+    if not applied["applied"] or applied["accounts"] != before["accounts"] or applied["resetRecords"] != before["resetRecords"]:
+        raise ValueError("Codex credential migration result did not match its preview")
+    if after["required"] or after["accounts"] or after["resetRecords"]:
+        raise ValueError("Codex credential migration is not an idempotent no-op")
+    return after

@@ -221,13 +221,13 @@ test("system logs retain console geometry through account and log loading", asyn
   sameGeometry(initial, await geometry(page, selector))
 })
 
-for (const route of ["endpoint", "providers", "aliases", "budgets", "model-pricing", "providers/codex", "cliproxy"]) {
+for (const route of ["endpoint", "providers", "aliases", "budgets", "model-pricing", "providers/codex"]) {
   test(`${route} loading preserves page and card padding on mobile`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 1000 })
     await authenticate(page)
-    const endpoint = route === "cliproxy" ? "cliproxy/status" : route === "aliases" ? "combos" : route === "endpoint" ? "endpoint-key" : route
+    const endpoint = route === "aliases" ? "combos" : route === "endpoint" ? "endpoint-key" : route
     const data = await hold(page, `**/api/admin/${endpoint}`)
-    await page.goto(({ endpoint: "/dashboard/ai/endpoint", providers: "/dashboard/ai/providers", aliases: "/dashboard/ai/routing", budgets: "/dashboard/ai/budgets", "model-pricing": "/dashboard/ai/pricing", "providers/codex": "/dashboard/ai/codex-providers", cliproxy: "/dashboard/cliproxy" } as Record<string, string>)[route]!)
+    await page.goto(({ endpoint: "/dashboard/ai/endpoint", providers: "/dashboard/ai/providers", aliases: "/dashboard/ai/routing", budgets: "/dashboard/ai/budgets", "model-pricing": "/dashboard/ai/pricing", "providers/codex": "/dashboard/ai/codex-providers" } as Record<string, string>)[route]!)
     await data.reached
     const selector = 'main [data-slot="card-header"]'
     await expect(page.locator(selector).first()).toBeVisible()

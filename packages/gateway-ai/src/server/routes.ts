@@ -1,7 +1,4 @@
 import { declareRoute as apiRoute } from "@rawroute/platform/contracts/http"
-import * as CliproxyInstance from "./cliproxy/http"
-import * as AnthropicCallback from "./routes/anthropic/callback/index"
-import * as AntigravityCallback from "./routes/antigravity/callback/index"
 import * as ApiAdminApiKeysByApikey from "./routes/api/admin/api-keys/by-apikey/index"
 import * as ApiAdminApiKeysRotate from "./routes/api/admin/api-keys/by-apikey/rotate/index"
 import * as ApiAdminApiKeys from "./routes/api/admin/api-keys/index"
@@ -44,7 +41,6 @@ import * as ApiAdminOverview from "./routes/api/admin/overview/index"
 import * as ApiPublicDashboard from "./routes/api/public/dashboard/index"
 import * as ApiPublicKeyUsage from "./routes/api/public/usage/keys/by-key/index"
 import * as BackendApiCodexProxy from "./routes/backend-api/codex/proxy/index"
-import * as CodexCallback from "./routes/codex/callback/index"
 import * as ModelInfo from "./routes/model/info/index"
 import * as OpenaiV1Proxy from "./routes/openai/v1/proxy/index"
 import * as V1Proxy from "./routes/v1/proxy/index"
@@ -55,11 +51,6 @@ import * as V1betaProxy from "./routes/v1beta/proxy/index"
 export const aiServerRoutes = { id: "ai", routes: [
   apiRoute(ApiAdminRequestLogs, "workspace", "/api/admin/request-logs"),
   apiRoute(ApiAdminOverview, "workspace", "/api/admin/overview"),
-  apiRoute({ GET: CliproxyInstance.status }, "session", "/api/admin/cliproxy/status"),
-  apiRoute({ GET: CliproxyInstance.versions }, "session", "/api/admin/cliproxy/versions", { idleTimeout: 0 }),
-  apiRoute({ POST: CliproxyInstance.lifecycle }, "session", "/api/admin/cliproxy/service/:action", { idleTimeout: 0 }),
-  apiRoute(AnthropicCallback, "public", "/anthropic/callback"),
-  apiRoute(AntigravityCallback, "public", "/antigravity/callback"),
   apiRoute(ApiAdminApiKeysByApikey, "workspace", "/api/admin/api-keys/:apiKeyId"),
   apiRoute(ApiAdminApiKeysRotate, "workspace", "/api/admin/api-keys/:apiKeyId/rotate"),
   apiRoute(ApiAdminApiKeys, "workspace", "/api/admin/api-keys"),
@@ -100,7 +91,6 @@ export const aiServerRoutes = { id: "ai", routes: [
   apiRoute(ApiPublicDashboard, "public", "/api/public/dashboard"),
   apiRoute(ApiPublicKeyUsage, "public", "/api/public/usage/keys/:keyId"),
   apiRoute(BackendApiCodexProxy, "gateway", "/backend-api/codex/*"),
-  apiRoute(CodexCallback, "public", "/codex/callback"),
   apiRoute(ModelInfo, "public", "/model/info"),
   apiRoute(OpenaiV1Proxy, "gateway", "/openai/v1/*"),
   apiRoute(V1Proxy, "gateway", "/v1/*"),

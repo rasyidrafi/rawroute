@@ -15,8 +15,6 @@ function publicAccount(account: Awaited<ReturnType<typeof listCodexAccounts>>["a
     lastRefresh: account.lastRefresh,
     priority: account.priority,
     credentialKind: account.credentialKind,
-    cliProxyStatus: account.cliProxyStatus,
-    cliProxyStatusMessage: account.cliProxyStatusMessage,
     createdAt: account.createdAt,
   }
 }

@@ -1,5 +1,5 @@
-import { listMappedCodexAccounts } from "./cliproxy"
 import { getProvider, listProviders, upsertProvider } from "../store"
+import { listCodexCredentials } from "../codex-credentials"
 import type { Provider, ProviderApiKey } from "../../contracts/domain"
 import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
 
@@ -42,9 +42,7 @@ export async function ensureCodexProvider(): Promise<Provider> {
 }
 
 export async function listCodexAccounts() {
-  // CLIProxy owns every mutable OAuth field. RawRoute keeps only its stable
-  // workspace-to-auth-file mapping and overlays the live management state.
   const provider = (await listProviders()).find((entry) => entry.prefix === CODEX_PROVIDER_PREFIX)
   if (!provider) return { provider: null, accounts: [] as ProviderApiKey[] }
-  return { provider, accounts: await listMappedCodexAccounts(provider) }
+  return { provider, accounts: await listCodexCredentials(provider.id) }
 }

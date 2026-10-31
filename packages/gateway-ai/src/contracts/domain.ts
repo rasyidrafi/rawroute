@@ -4,7 +4,7 @@ export type Protocol = "openai-chat" | "openai-responses" | "anthropic-messages"
 
 export type AuthType = "bearer" | "x-api-key" | "none"
 
-export type ProviderCredentialKind = "api-key" | "codex-cli-proxy"
+export type ProviderCredentialKind = "api-key" | "codex-oauth"
 
 export interface Provider {
   id: string
@@ -37,11 +37,6 @@ export interface ProviderApiKey {
   planType?: string
   expiresAt?: string
   lastRefresh?: string
-  /** CLIProxy-owned Codex credential mapping. RawRoute never stores its tokens. */
-  cliProxyAuthFile?: string
-  cliProxyAuthIndex?: string
-  cliProxyStatus?: string
-  cliProxyStatusMessage?: string
   enabled: boolean
   rpmLimit?: number
   maxConcurrency?: number

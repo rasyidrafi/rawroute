@@ -14,7 +14,6 @@ const OverviewUsageView = lazy(() => import("./components/overview-usage-view").
 const KeyUsageView = lazy(() => import("./components/key-usage-view").then(module => ({ default: module.KeyUsageView })))
 const BudgetsView = lazy(() => import("./components/budgets-view").then(module => ({ default: module.BudgetsView })))
 const ModelPricingView = lazy(() => import("./components/model-pricing-view").then(module => ({ default: module.ModelPricingView })))
-const CliproxyView = lazy(() => import("./cliproxy/cliproxy-view").then(module => ({ default: module.CliproxyView })))
 
 function ProviderPage() {
   const { providerId } = useParams()
@@ -36,7 +35,6 @@ export const aiViews = {
   integrationCodex: <IntegrationDetailView integration="codex" />,
   budgets: <BudgetsView />,
   pricing: <ModelPricingView />,
-  cliproxy: <CliproxyView />,
 } satisfies Record<keyof typeof aiPages, ReactElement>
 
 export const PublicPage = lazy(() => import("./pages/public").then(module => ({ default: module.PublicPage })))

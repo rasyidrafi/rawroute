@@ -3,8 +3,8 @@ import type { Database } from "bun:sqlite"
 import { getDatabase, getSqliteDatabase, type Transaction, withTransaction } from "./database"
 import { collectionPrefix, isMemoryBackend } from "./storage-config"
 
-export type AuditAction = "auth.login" | "auth.logout" | "auth.password" | "identity.update" | "workspace.create" | "workspace.rename" | "workspace.delete.request" | "workspace.delete.participant" | "workspace.delete.complete" | "workspace.delete.failure" | "credential.create" | "credential.update" | "credential.revoke" | "config.update" | "config.delete" | "cliproxy.lifecycle" | "oauth.remote" | "storage.remote" | "storage.secret.reveal"
-export type AuditResource = "administrator" | "workspace" | "gateway-key" | "provider-credential" | "provider" | "model" | "alias" | "combo" | "model-sharing" | "routing" | "budget" | "pricing" | "cliproxy" | "oauth" | "storage-connection" | "storage-bucket" | "storage-key" | "storage-multipart" | "storage-object"
+export type AuditAction = "auth.login" | "auth.logout" | "auth.password" | "identity.update" | "workspace.create" | "workspace.rename" | "workspace.delete.request" | "workspace.delete.participant" | "workspace.delete.complete" | "workspace.delete.failure" | "credential.create" | "credential.update" | "credential.revoke" | "config.update" | "config.delete" | "oauth.remote" | "storage.remote" | "storage.secret.reveal"
+export type AuditResource = "administrator" | "workspace" | "gateway-key" | "provider-credential" | "provider" | "model" | "alias" | "combo" | "model-sharing" | "routing" | "budget" | "pricing" | "oauth" | "storage-connection" | "storage-bucket" | "storage-key" | "storage-multipart" | "storage-object"
 export interface AuditInput {
   action: AuditAction
   resource: AuditResource

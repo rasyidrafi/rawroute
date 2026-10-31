@@ -4,7 +4,7 @@ import { navigationFor } from "@rawroute/ui/navigation"
 import { aiPages, aiPagePaths } from "../contracts/pages"
 
 const nav = navigationFor(aiPages)
-export const aiGlobalNavigation = [nav("cliproxy", ServerIcon)]
+export const aiGlobalNavigation = []
 export const aiApp: DashboardApp = {
   id: "ai-gateway",
   title: "AI Gateway",

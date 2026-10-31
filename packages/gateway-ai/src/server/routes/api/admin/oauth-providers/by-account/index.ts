@@ -1,38 +1,39 @@
-import { deleteCliProxyCodexAccount, setCliProxyCodexAccountEnabled } from "../../../../../codex/cliproxy"
-import { listCodexAccounts } from "../../../../../codex/oauth"
+import { deleteCodexCredential, updateCodexCredential } from "../../../../../codex-credentials"
 import { scheduleCodexModelRefresh } from "../../../../../codex/model-refresh"
 import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { recordLog } from "../../../../../logging"
-import { deleteProviderApiKey, upsertProviderApiKey } from "../../../../../store"
+import { getProviderApiKey, listProviders } from "../../../../../store"
 import { completeCodexResetAccountRemoval, releaseCodexResetAccountRemoval, reserveCodexResetAccountRemoval } from "../../../../../codex/reset"
+
+/** Resolve a workspace-owned OAuth account for local account management. */
+async function resolveCodexAccount(accountId: string) {
+  const provider = (await listProviders()).find((entry) => entry.prefix === "codex")
+  if (!provider) return undefined
+  const account = await getProviderApiKey(provider.id, accountId)
+  return account?.credentialKind === "codex-oauth" ? { provider, account } : undefined
+}
 
 export async function PATCH(request: Request, params: { accountId: string }) {
   const { accountId } = params
   const body = await request.json().catch(() => null) as { enabled?: unknown; name?: unknown } | null
 
   try {
-    const result = await listCodexAccounts()
-    const account = result.accounts.find((entry) => entry.id === accountId)
-    if (!result.provider || !account) return jsonError("Codex account not found.", 404)
-    if (account.credentialKind !== "codex-cli-proxy") throw new Error("This account is not a CLIProxy credential.")
+    const resolved = await resolveCodexAccount(accountId)
+    if (!resolved) return jsonError("Codex account not found.", 404)
+    const { provider, account } = resolved
     const enabled = body?.enabled === undefined ? account.enabled : body.enabled
     if (typeof enabled !== "boolean") throw new Error("Enabled value must be boolean.")
     const name = body?.name === undefined ? account.name : body.name
     if (typeof name !== "string" || !name.trim() || name.trim().length > 80) throw new Error("Account name must be between 1 and 80 characters.")
-    await setCliProxyCodexAccountEnabled(account, enabled)
+    const removalToken = !enabled && account.enabled ? await reserveCodexResetAccountRemoval(account) : undefined
     try {
-      await upsertProviderApiKey(result.provider.id, {
-        originalId: account.id,
-        name: name.trim(),
-        key: "__unchanged__",
-        enabled,
-        priority: account.priority,
-      })
+      await updateCodexCredential(provider.id, accountId, { name: name.trim(), enabled })
     } catch (error) {
-      await setCliProxyCodexAccountEnabled(account, account.enabled).catch(() => undefined)
+      if (removalToken) await releaseCodexResetAccountRemoval(account, removalToken)
       throw error
     }
+    if (removalToken) await releaseCodexResetAccountRemoval(account, removalToken)
     recordLog("admin.codex.account.updated", { accountId }, { level: "info" })
     scheduleCodexModelRefresh(true)
     return Response.json({ ok: true })
@@ -45,17 +46,17 @@ export async function PATCH(request: Request, params: { accountId: string }) {
 export async function DELETE(_request: Request, params: { accountId: string }) {
   const { accountId } = params
   try {
-    const result = await listCodexAccounts()
-    if (!result.provider || !result.accounts.some((entry) => entry.id === accountId)) return jsonError("Codex account not found.", 404)
-    const account = result.accounts.find((entry) => entry.id === accountId)
-    if (!account) return jsonError("Codex account not found.", 404)
-    const removalToken = await reserveCodexResetAccountRemoval(accountId)
+    const resolved = await resolveCodexAccount(accountId)
+    if (!resolved) return jsonError("Codex account not found.", 404)
+    const { provider } = resolved
+    const removalToken = await reserveCodexResetAccountRemoval(resolved.account)
     try {
-      if (account.credentialKind === "codex-cli-proxy" && account.cliProxyAuthFile) await deleteCliProxyCodexAccount(account)
-      await deleteProviderApiKey(result.provider.id, accountId)
-      await completeCodexResetAccountRemoval(accountId, removalToken)
+      // The account record and session material are removed together, and an
+      // in-flight refresh cannot resurrect them.
+      await deleteCodexCredential(provider.id, accountId)
+      await completeCodexResetAccountRemoval(resolved.account, removalToken)
     } catch (error) {
-      await releaseCodexResetAccountRemoval(accountId, removalToken)
+      await releaseCodexResetAccountRemoval(resolved.account, removalToken)
       throw error
     }
     recordLog("admin.codex.account.deleted", { accountId }, { level: "info" })

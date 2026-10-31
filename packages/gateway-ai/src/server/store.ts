@@ -10,6 +10,7 @@ import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, Provider
 import { DEFAULT_WORKSPACE_ID, type WorkspaceStorageMode } from "@rawroute/platform/contracts/workspace"
 import { currentWorkspaceId, workspaceContext } from "@rawroute/platform/server/workspace-context"
 import { appendMemoryAudit, type AuditAction, type AuditResource } from "@rawroute/platform/server/audit"
+import { deleteMemoryCodexCredentialSecrets, deleteWorkspaceMemoryCodexCredentials, resetCodexCredentialMemory, stageCodexCredentialSecretsRemoval } from "./codex-credential-secrets"
 
 function memorySecurityMutation<T>(resource: AuditResource, action: AuditAction, mutate: () => T): T {
   const workspaceId = currentWorkspaceId()
@@ -222,6 +223,13 @@ function storedProviderApiKey(apiKey: ProviderApiKey) {
   return stripUndefined(data)
 }
 
+/** Codex OAuth sessions live in the server-only Codex credential store. */
+function normalizeCodexCredentialApiKey(apiKey: ProviderApiKey) {
+  apiKey.key = ""
+  apiKey.rpmLimit = undefined
+  apiKey.maxConcurrency = undefined
+}
+
 function storedModel(model: Model) {
   return stripUndefined({
     gatewayModelId: model.gatewayModelId || model.id,
@@ -403,7 +411,7 @@ function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   apiKeyLookupInflight.clear()
 }
 
-function invalidateRoutingCaches() {
+export function invalidateRoutingCaches() {
   const state = workspaceCacheState()
   state.generation += 1
   state.routingDataCache = undefined
@@ -423,26 +431,31 @@ function invalidateRoutingCaches() {
   state.apiKeyHashIndex = undefined
 }
 
+/** Monotonic in-process revision for callers that must reject stale snapshots. */
+export function routingConfigurationRevision() {
+  return workspaceCacheState().generation
+}
+
 function invalidateGatewayApiKeyCaches(hashes?: Iterable<string>) {
   invalidateRoutingCaches()
   invalidateApiKeyLookupCache(hashes)
 }
 
 function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { originalId?: string }) {
-  const isCliProxyCodexMapping = input.credentialKind === "codex-cli-proxy"
+  const withoutApiKeyValue = input.credentialKind === "codex-oauth"
   if (!input.originalId && (typeof input.name !== "string" || !input.name.trim())) {
     throw new Error("API key name is required.")
   }
   if (input.name !== undefined && (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 80)) {
     throw new Error("API key name must be between 1 and 80 characters.")
   }
-  if (!isCliProxyCodexMapping && !input.originalId && (typeof input.key !== "string" || !input.key.trim())) {
+  if (!withoutApiKeyValue && !input.originalId && (typeof input.key !== "string" || !input.key.trim())) {
     throw new Error("API key value is required.")
   }
-  if (!isCliProxyCodexMapping && input.key !== undefined && input.key !== "__unchanged__" && (typeof input.key !== "string" || !input.key.trim())) {
+  if (!withoutApiKeyValue && input.key !== undefined && input.key !== "__unchanged__" && (typeof input.key !== "string" || !input.key.trim())) {
     throw new Error("API key value is required.")
   }
-  if (!isCliProxyCodexMapping && input.key === "__unchanged__" && !input.originalId) throw new Error("API key value is required.")
+  if (!withoutApiKeyValue && input.key === "__unchanged__" && !input.originalId) throw new Error("API key value is required.")
   if (input.rpmLimit !== undefined && (!Number.isSafeInteger(input.rpmLimit) || input.rpmLimit <= 0)) {
     throw new Error("RPM limit must be a positive whole number.")
   }
@@ -617,15 +630,15 @@ function providersRef() {
   return workspaceRootRef().collection("providers")
 }
 
-function providerRef(providerId: string) {
+export function providerRef(providerId: string) {
   return providersRef().doc(providerId)
 }
 
-function providerApiKeysRef(providerId: string) {
+export function providerApiKeysRef(providerId: string) {
   return providerRef(providerId).collection("apiKeys")
 }
 
-function providerApiKeyRef(providerId: string, apiKeyId: string) {
+export function providerApiKeyRef(providerId: string, apiKeyId: string) {
   return providerApiKeysRef(providerId).doc(apiKeyId)
 }
 
@@ -673,7 +686,7 @@ function routingRevisionRef(workspaceId = currentWorkspaceId()) {
   return getLocalDatabase().collection(`${collectionPrefix()}_routing_revisions`).doc(workspaceId)
 }
 
-function bumpRoutingRevision(transaction: Transaction) {
+export function bumpRoutingRevision(transaction: Transaction) {
   transaction.set(routingRevisionRef(), {
     revision: FieldValue.increment(1),
     updatedAt: new Date().toISOString(),
@@ -1352,7 +1365,12 @@ async function sqliteDeleteProvider(providerId: string): Promise<void> {
       const model = modelFromSnapshot(doc, providerId)
       return sqliteGatewayIdReservation(transaction, model.gatewayModelId, gatewayIdOwner("model", `${providerId}:${model.id}`))
     }))
-    apiKeys.docs.forEach((doc) => transaction.delete(doc.ref))
+    apiKeys.docs.forEach((doc) => {
+      const stored = doc.data() as Partial<ProviderApiKey> | undefined
+      // Codex sessions must not survive the provider's public accounts.
+      if (stored?.credentialKind === "codex-oauth") stageCodexCredentialSecretsRemoval(transaction, doc.id)
+      transaction.delete(doc.ref)
+    })
     models.docs.forEach((doc) => transaction.delete(doc.ref))
     modelReservations.forEach((reservation) => releaseSqliteGatewayId(transaction, reservation))
     transaction.delete(providerRef(providerId))
@@ -1399,17 +1417,11 @@ async function sqliteUpsertProviderApiKey(providerId: string, input: Partial<Pro
       name: input.name,
       key: input.key,
       credentialKind: input.credentialKind,
-
-
       accountId: input.accountId,
       email: input.email,
       planType: input.planType,
       expiresAt: input.expiresAt,
       lastRefresh: input.lastRefresh,
-      cliProxyAuthFile: input.cliProxyAuthFile,
-      cliProxyAuthIndex: input.cliProxyAuthIndex,
-      cliProxyStatus: input.cliProxyStatus,
-      cliProxyStatusMessage: input.cliProxyStatusMessage,
       enabled: input.enabled,
       rpmLimit: input.rpmLimit,
       maxConcurrency: input.maxConcurrency,
@@ -1428,15 +1440,7 @@ async function sqliteUpsertProviderApiKey(providerId: string, input: Partial<Pro
       priority: input.priority ?? existing?.priority,
       createdAt: existing?.createdAt || new Date().toISOString(),
     }
-    if (apiKey.credentialKind === "codex-cli-proxy") {
-      // CLIProxy is the sole owner of the OAuth token lifecycle. A mapping
-      // keys are never stored in RawRoute.
-      apiKey.key = ""
-
-
-      apiKey.rpmLimit = undefined
-      apiKey.maxConcurrency = undefined
-    }
+    if (apiKey.credentialKind === "codex-oauth") normalizeCodexCredentialApiKey(apiKey)
     transaction.set(providerApiKeyRef(providerId, apiKeyId), storedProviderApiKey(apiKey))
     if (!existing) {
       transaction.update(providerRef(providerId), { apiKeyCount: FieldValue.increment(1), enabledApiKeyCount: FieldValue.increment(apiKey.enabled ? 1 : 0) })
@@ -1455,6 +1459,7 @@ async function sqliteDeleteProviderApiKey(providerId: string, apiKeyId: string):
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const apiKey = snapshot.data() as ProviderApiKey
+    if (apiKey.credentialKind === "codex-oauth") stageCodexCredentialSecretsRemoval(transaction, apiKeyId)
     transaction.delete(ref)
     transaction.update(providerRef(providerId), {
       apiKeyCount: FieldValue.increment(-1),
@@ -1817,6 +1822,9 @@ function memoryDeleteProvider(providerId: string): void {
   for (const model of state.models.get(providerId)?.values() || []) {
     releaseMemoryGatewayId(state, normalizedGatewayId(model.gatewayModelId || model.id), gatewayIdOwner("model", `${providerId}:${model.id}`))
   }
+  for (const account of state.providerApiKeys.get(providerId)?.values() || []) {
+    if (account.credentialKind === "codex-oauth") deleteMemoryCodexCredentialSecrets(account.id)
+  }
   state.providers.delete(providerId)
   state.providerApiKeys.delete(providerId)
   state.models.delete(providerId)
@@ -1835,17 +1843,11 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     name: input.name,
     key: input.key,
     credentialKind: input.credentialKind,
-
-
     accountId: input.accountId,
     email: input.email,
     planType: input.planType,
     expiresAt: input.expiresAt,
-      lastRefresh: input.lastRefresh,
-      cliProxyAuthFile: input.cliProxyAuthFile,
-      cliProxyAuthIndex: input.cliProxyAuthIndex,
-      cliProxyStatus: input.cliProxyStatus,
-      cliProxyStatusMessage: input.cliProxyStatusMessage,
+    lastRefresh: input.lastRefresh,
     enabled: input.enabled,
     rpmLimit: input.rpmLimit,
     maxConcurrency: input.maxConcurrency,
@@ -1864,13 +1866,7 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     priority: input.priority ?? existing?.priority,
     createdAt: existing?.createdAt || new Date().toISOString(),
   }
-  if (apiKey.credentialKind === "codex-cli-proxy") {
-    apiKey.key = ""
-
-
-    apiKey.rpmLimit = undefined
-    apiKey.maxConcurrency = undefined
-  }
+  if (apiKey.credentialKind === "codex-oauth") normalizeCodexCredentialApiKey(apiKey)
   slot.set(apiKeyId, apiKey)
   state.providerApiKeys.set(providerId, slot)
   if (!existing) {
@@ -1896,6 +1892,7 @@ function memoryDeleteProviderApiKey(providerId: string, apiKeyId: string): void 
   const slot = state.providerApiKeys.get(providerId)
   const apiKey = slot?.get(apiKeyId)
   if (!apiKey || !slot) return
+  if (apiKey.credentialKind === "codex-oauth") deleteMemoryCodexCredentialSecrets(apiKeyId)
   slot.delete(apiKeyId)
   state.providers.set(providerId, {
     ...provider,
@@ -2123,6 +2120,7 @@ export function _resetMemoryBackend() {
   globalThis.__rawrouteMemoryStore = { states: new Map() }
   workspaceCacheStates.clear()
   invalidateApiKeyLookupCache()
+  resetCodexCredentialMemory()
 }
 
 function deleteMemoryWorkspace(workspaceId: string) {
@@ -2130,6 +2128,7 @@ function deleteMemoryWorkspace(workspaceId: string) {
   const state = memoryRoot().states.get(workspaceId)
   const hashes = state ? [...state.apiKeys.values()].map((apiKey) => apiKeyValueHash(apiKey.key)) : []
   memoryRoot().states.delete(workspaceId)
+  deleteWorkspaceMemoryCodexCredentials(workspaceId)
   workspaceCacheStates.delete(workspaceId)
   invalidateApiKeyLookupCache(hashes)
 }

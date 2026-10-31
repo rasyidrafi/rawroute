@@ -16,6 +16,6 @@ test("clients retain their captured workspace for delayed follow-up requests", a
   const b = createApiClient("beta")
   await b.apiFetch("/api/admin/combos")
   await a.apiDelete("/api/admin/combos/old")
-  await createApiClient().apiFetch("/api/admin/cliproxy/status", { headers: { "x-rawroute-workspace-id": "spoof" } })
+  await createApiClient().apiFetch("/api/admin/account", { headers: { "x-rawroute-workspace-id": "spoof" } })
   expect(requests.map(request => request.workspace)).toEqual(["alpha", "beta", "alpha", null])
 })

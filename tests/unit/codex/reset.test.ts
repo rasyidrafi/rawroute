@@ -1,19 +1,23 @@
 import { afterEach, expect, jest, mock, spyOn, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runInWorkspace } from "../../../packages/platform/src/server/workspace-context"
 import { closeLocalDatabase } from "../../../packages/platform/src/server/database"
 import * as audit from "../../../packages/platform/src/server/audit"
-import { admitExecution, drainExecutions, resumeExecutions } from "../../../packages/gateway-ai/src/server/cliproxy/admission"
+import { admitGatewayExecution, drainGatewayExecutions, resumeGatewayExecutions } from "../../../packages/gateway-ai/src/server/gateway/admission"
 import type { ProviderApiKey } from "../../../packages/gateway-ai/src/contracts/domain"
-import { upsertProvider, upsertProviderApiKey } from "../../../packages/gateway-ai/src/server/store"
+import { ensureCodexProvider } from "../../../packages/gateway-ai/src/server/codex/oauth"
+import { deleteCodexCredential, registerCodexCredential } from "../../../packages/gateway-ai/src/server/codex-credentials"
+import { setCodexOAuthFetchForTests } from "../../../packages/gateway-ai/src/server/codex/login"
 import { PATCH as patchAutoRedeemSettings } from "../../../packages/gateway-ai/src/server/routes/api/admin/oauth-providers/auto-redeem"
 import {
   checkCodexResetAutomatically,
   checkEnabledCodexAccountsAutomatically,
   completeCodexResetAccountRemoval,
   getCodexAutoRedeemSettings,
+  getCodexAutoRedeemStatus,
   getCodexResetAccountStatus,
   redeemCodexReset,
   resetCodexResetCoordinatorForTests,
@@ -24,18 +28,27 @@ import {
   updateCodexAutoRedeemSettings,
 } from "../../../packages/gateway-ai/src/server/codex/reset"
 import { setCodexUsageApiCallForTests } from "../../../packages/gateway-ai/src/server/codex/usage"
+import { setCodexUpstreamFetchForTests } from "../../../packages/gateway-ai/src/server/codex/upstream"
+import { migrateCodexResetIdentity } from "../../../scripts/migrations/codex-reset-identity"
 
 let workspaceSequence = 0
-const workspaceTest = (name: string, callback: () => Promise<void>) => test(name, () => runInWorkspace({ id: `codex-reset-${++workspaceSequence}` }, callback))
-const account: ProviderApiKey = {
-  id: "reset-account",
-  providerId: "codex",
-  name: "Codex test account",
-  key: "",
-  credentialKind: "codex-cli-proxy",
-  cliProxyAuthIndex: "auth-index",
-  enabled: true,
-  createdAt: new Date().toISOString(),
+let account: ProviderApiKey
+const workspaceTest = (name: string, callback: () => Promise<void>) => test(name, () => runInWorkspace({ id: `codex-reset-${++workspaceSequence}` }, async () => {
+  account = await setupAccount()
+  await callback()
+}))
+
+async function setupAccount() {
+  const provider = await ensureCodexProvider()
+  return registerCodexCredential(provider.id, {
+    accountId: "acct-codex-reset-test",
+    name: "Codex test account",
+    secrets: {
+      accessToken: "reset-access-token",
+      refreshToken: "reset-refresh-token",
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    },
+  })
 }
 
 let expiryAt = Date.now() + 20 * 60_000
@@ -67,9 +80,11 @@ function configureUsage() {
 
 afterEach(async () => {
   await stopCodexResetAutomation()
-  resumeExecutions()
+  resumeGatewayExecutions()
   resetCodexResetCoordinatorForTests()
   setCodexUsageApiCallForTests()
+  setCodexUpstreamFetchForTests()
+  setCodexOAuthFetchForTests()
   expiryAt = Date.now() + 20 * 60_000
   creditIds = ["credit-one"]
   weeklyUsedPercent = 100
@@ -111,6 +126,9 @@ workspaceTest("auto-redemption waits for expiry and the upstream weekly-quota gu
   expect(result).toMatchObject({ ok: true, status: 200 })
   expect(postCalls).toBe(1)
   expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("redeemed")
+  const publicStatus = await getCodexAutoRedeemStatus()
+  expect(publicStatus.accounts[account.id]?.phase).toBe("redeemed")
+  expect(JSON.stringify(publicStatus)).not.toContain(account.accountId!)
 })
 
 workspaceTest("already-exhausted weekly quota waits a full minute after activation", async () => {
@@ -236,11 +254,6 @@ workspaceTest("turning automation off after intent is persisted cancels before s
 })
 
 workspaceTest("settings activation wakes the server immediately and disabling cancels its scheduled wakeup", async () => {
-  process.env.CLIPROXY_MODE = "external"
-  const provider = await upsertProvider({ name: "Codex", prefix: "codex", baseUrl: "https://chatgpt.com/backend-api/codex", protocol: "openai-responses", authType: "bearer", enabled: true })
-  const mapped = await upsertProviderApiKey(provider.id, { name: account.name, key: "", credentialKind: "codex-cli-proxy", cliProxyAuthFile: "test.json", cliProxyAuthIndex: "auth-index", enabled: true })
-  const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
-  spyOn(fetchTarget, "fetch").mockImplementation(async () => Response.json({ files: [{ name: "test.json", type: "codex", auth_index: "auth-index", disabled: false }] }))
   configureUsage()
   setCodexResetApiCallForTests(async () => {
     postCalls++
@@ -259,7 +272,7 @@ workspaceTest("settings activation wakes the server immediately and disabling ca
   // Stopping drains the immediate checks rather than abandoning them.
   await stopCodexResetAutomation()
   expect(postCalls).toBe(1)
-  expect((await getCodexResetAccountStatus(mapped.id))?.phase).toBe("redeemed")
+  expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("redeemed")
 })
 
 workspaceTest("manual and automatic triggers share one persisted pending intent", async () => {
@@ -270,7 +283,7 @@ workspaceTest("manual and automatic triggers share one persisted pending intent"
     const status = await getCodexResetAccountStatus(account.id)
     expect(status?.phase).toBe("pending")
     expect(status?.requestId).toBe(JSON.parse(input.data || "{}").redeem_request_id)
-    await expect(reserveCodexResetAccountRemoval(account.id)).rejects.toThrow("in progress")
+    await expect(reserveCodexResetAccountRemoval(account)).rejects.toThrow("in progress")
     return { status: 200, body: "{}" }
   })
 
@@ -282,9 +295,9 @@ workspaceTest("manual and automatic triggers share one persisted pending intent"
   expect(results.some(result => result.status === "fulfilled" && result.value?.ok === true)).toBe(true)
   expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("redeemed")
 
-  const removal = await reserveCodexResetAccountRemoval(account.id)
-  await completeCodexResetAccountRemoval(account.id, removal)
-  expect(await getCodexResetAccountStatus(account.id)).toBeUndefined()
+  const removal = await reserveCodexResetAccountRemoval(account)
+  await completeCodexResetAccountRemoval(account, removal)
+  expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("redeemed")
 })
 
 workspaceTest("unknown POST outcome retries reads but never sends a second POST", async () => {
@@ -305,6 +318,72 @@ workspaceTest("unknown POST outcome retries reads but never sends a second POST"
   expect(second?.phase).toBe("unknown")
   expect(second?.requestId).toBe(first?.requestId)
   expect(postCalls).toBe(1)
+})
+
+workspaceTest("direct reset-credit consumption is scoped and never replays an uncertain POST", async () => {
+  configureUsage()
+  const requests: Array<{ url: URL; method: string; headers: Headers; body: string }> = []
+  setCodexResetApiCallForTests()
+  setCodexUpstreamFetchForTests((async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({
+      url: new URL(input instanceof Request ? input.url : String(input)),
+      method: init?.method || "GET",
+      headers: new Headers(init?.headers),
+      body: typeof init?.body === "string" ? init.body : "",
+    })
+    return Response.json({ error: "authorization failed" }, { status: 401 })
+  }) as typeof fetch)
+
+  await expect(redeemCodexReset(account, "use my codex reset")).rejects.toThrow("outcome is uncertain")
+  expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("unknown")
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.url.toString()).toBe("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume")
+  expect(requests[0]!.method).toBe("POST")
+  expect(requests[0]!.headers.get("authorization")).toBe("Bearer reset-access-token")
+  expect(requests[0]!.headers.get("chatgpt-account-id")).toBe("acct-codex-reset-test")
+  expect(JSON.parse(requests[0]!.body)).toMatchObject({ redeem_request_id: expect.any(String) })
+
+  await checkCodexResetAutomatically(account)
+  expect(requests).toHaveLength(1)
+  expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("unknown")
+})
+
+workspaceTest("failed token refresh before reset dispatch does not create an unknown outcome", async () => {
+  configureUsage()
+  const provider = await ensureCodexProvider()
+  account = await registerCodexCredential(provider.id, {
+    accountId: account.accountId!,
+    name: account.name,
+    secrets: {
+      accessToken: "expired-reset-access",
+      refreshToken: "failed-reset-refresh",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    },
+  })
+  let refreshCalls = 0
+  setCodexOAuthFetchForTests((async () => {
+    refreshCalls++
+    throw new Error("temporary refresh failure")
+  }) as unknown as typeof fetch)
+  setCodexResetApiCallForTests()
+  const requests: Request[] = []
+  setCodexUpstreamFetchForTests((async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push(new Request(input, init))
+    return Response.json({ ok: true })
+  }) as unknown as typeof fetch)
+
+  await expect(redeemCodexReset(account, "use my codex reset")).rejects.not.toThrow("outcome is uncertain")
+  expect(refreshCalls).toBe(1)
+  expect(requests).toHaveLength(0)
+  expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("idle")
+
+  setCodexOAuthFetchForTests((async () => Response.json({
+    access_token: "recovered-reset-access",
+    refresh_token: "recovered-reset-refresh",
+    expires_in: 3600,
+  })) as unknown as typeof fetch)
+  await expect(redeemCodexReset(account, "use my codex reset")).resolves.toMatchObject({ ok: true, status: 200 })
+  expect(requests).toHaveLength(1)
 })
 
 workspaceTest("manual redemption retains the weekly exhaustion preflight guard", async () => {
@@ -378,18 +457,169 @@ workspaceTest("keeps ambiguous coordinator state across a SQLite close and reope
   process.env.STORAGE_BACKEND = "sqlite"
   process.env.SQLITE_PATH = join(directory, "rawroute.sqlite")
   const durableWorkspace = { id: "codex-reset-durable" }
+  let durableAccountId = ""
   try {
     await runInWorkspace(durableWorkspace, async () => {
+      const durableAccount = await setupAccount()
+      durableAccountId = durableAccount.id
       configureUsage()
       setCodexResetApiCallForTests(async () => {
         postCalls++
         throw new Error("connection closed")
       })
-      await expect(redeemCodexReset(account, "use my codex reset")).rejects.toThrow("outcome is uncertain")
+      await expect(redeemCodexReset(durableAccount, "use my codex reset")).rejects.toThrow("outcome is uncertain")
     })
-    const beforeRestart = await runInWorkspace(durableWorkspace, () => getCodexResetAccountStatus(account.id))
+    const beforeRestart = await runInWorkspace(durableWorkspace, () => getCodexResetAccountStatus(durableAccountId))
     expect(beforeRestart?.phase).toBe("unknown")
     await closeLocalDatabase()
+
+    await runInWorkspace(durableWorkspace, async () => {
+      const durableAccount = await setupAccount()
+      configureUsage()
+      setCodexResetApiCallForTests(async () => {
+        postCalls++
+        return { status: 200, body: "{}" }
+      })
+      await checkCodexResetAutomatically(durableAccount)
+      expect((await getCodexResetAccountStatus(durableAccount.id))?.phase).toBe("unknown")
+    })
+    expect(postCalls).toBe(1)
+  } finally {
+    await closeLocalDatabase()
+    if (previousStorageBackend === undefined) delete process.env.STORAGE_BACKEND
+    else process.env.STORAGE_BACKEND = previousStorageBackend
+    if (previousSqlitePath === undefined) delete process.env.SQLITE_PATH
+    else process.env.SQLITE_PATH = previousSqlitePath
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+workspaceTest("keeps an unknown redemption blocked after SQLite deletion and same-account reconnection", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "rawroute-codex-reset-unknown-reconnect-"))
+  const previousStorageBackend = process.env.STORAGE_BACKEND
+  const previousSqlitePath = process.env.SQLITE_PATH
+  await closeLocalDatabase()
+  process.env.STORAGE_BACKEND = "sqlite"
+  process.env.SQLITE_PATH = join(directory, "rawroute.sqlite")
+  const durableWorkspace = { id: "codex-reset-unknown-reconnect" }
+  let removed: ProviderApiKey
+  try {
+    await runInWorkspace(durableWorkspace, async () => {
+      removed = await setupAccount()
+      configureUsage()
+      setCodexResetApiCallForTests(async () => {
+        postCalls++
+        throw new Error("connection closed")
+      })
+      await expect(redeemCodexReset(removed, "use my codex reset")).rejects.toThrow("outcome is uncertain")
+
+      const removal = await reserveCodexResetAccountRemoval(removed)
+      await deleteCodexCredential(removed.providerId, removed.id)
+      await completeCodexResetAccountRemoval(removed, removal)
+      expect(await getCodexResetAccountStatus(removed.id)).toBeUndefined()
+    })
+    expect(postCalls).toBe(1)
+    await closeLocalDatabase()
+
+    await runInWorkspace(durableWorkspace, async () => {
+      const reconnected = await setupAccount()
+      expect(reconnected.id).not.toBe(removed.id)
+      configureUsage()
+      setCodexResetApiCallForTests(async () => {
+        postCalls++
+        return { status: 200, body: "{}" }
+      })
+      expect((await getCodexResetAccountStatus(reconnected.id))?.phase).toBe("unknown")
+      await expect(redeemCodexReset(reconnected, "use my codex reset")).rejects.toThrow("automatic retries are blocked")
+      await checkCodexResetAutomatically(reconnected)
+      expect(postCalls).toBe(1)
+      expect((await getCodexResetAccountStatus(reconnected.id))?.phase).toBe("unknown")
+    })
+  } finally {
+    await closeLocalDatabase()
+    if (previousStorageBackend === undefined) delete process.env.STORAGE_BACKEND
+    else process.env.STORAGE_BACKEND = previousStorageBackend
+    if (previousSqlitePath === undefined) delete process.env.SQLITE_PATH
+    else process.env.SQLITE_PATH = previousSqlitePath
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+workspaceTest("keeps the confirmed-inventory barrier after SQLite deletion and reconnection", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "rawroute-codex-reset-redeemed-reconnect-"))
+  const previousStorageBackend = process.env.STORAGE_BACKEND
+  const previousSqlitePath = process.env.SQLITE_PATH
+  await closeLocalDatabase()
+  process.env.STORAGE_BACKEND = "sqlite"
+  process.env.SQLITE_PATH = join(directory, "rawroute.sqlite")
+  const durableWorkspace = { id: "codex-reset-redeemed-reconnect" }
+  let removed: ProviderApiKey
+  try {
+    await runInWorkspace(durableWorkspace, async () => {
+      removed = await setupAccount()
+      configureUsage()
+      setCodexResetApiCallForTests(async () => {
+        postCalls++
+        return { status: 200, body: "{}" }
+      })
+      await expect(redeemCodexReset(removed, "use my codex reset")).resolves.toMatchObject({ ok: true })
+      expect((await getCodexResetAccountStatus(removed.id))?.phase).toBe("redeemed")
+
+      const removal = await reserveCodexResetAccountRemoval(removed)
+      await deleteCodexCredential(removed.providerId, removed.id)
+      await completeCodexResetAccountRemoval(removed, removal)
+    })
+    expect(postCalls).toBe(1)
+    await closeLocalDatabase()
+
+    await runInWorkspace(durableWorkspace, async () => {
+      const reconnected = await setupAccount()
+      expect(reconnected.id).not.toBe(removed.id)
+      configureUsage()
+      setCodexResetApiCallForTests(async () => {
+        postCalls++
+        return { status: 200, body: "{}" }
+      })
+      expect((await getCodexResetAccountStatus(reconnected.id))?.phase).toBe("redeemed")
+      await expect(redeemCodexReset(reconnected, "use my codex reset")).rejects.toThrow("waiting for Codex to update")
+      await checkCodexResetAutomatically(reconnected)
+      expect(postCalls).toBe(1)
+      expect((await getCodexResetAccountStatus(reconnected.id))?.phase).toBe("redeemed")
+    })
+  } finally {
+    await closeLocalDatabase()
+    if (previousStorageBackend === undefined) delete process.env.STORAGE_BACKEND
+    else process.env.STORAGE_BACKEND = previousStorageBackend
+    if (previousSqlitePath === undefined) delete process.env.SQLITE_PATH
+    else process.env.SQLITE_PATH = previousSqlitePath
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+for (const legacyRecord of [
+  { phase: "unknown", requestId: "old-unknown-request", lastMessage: "The redemption outcome is unknown." },
+  { phase: "redeemed", requestId: "old-redeemed-request", blockedCreditCount: 1, blockedInventoryKnown: true, lastMessage: "The previous redemption was confirmed." },
+] as const) test(`unmigrated local-ID reset history fails closed and migrated ${legacyRecord.phase} state remains blocked`, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "rawroute-codex-reset-schema-"))
+  const previousStorageBackend = process.env.STORAGE_BACKEND
+  const previousSqlitePath = process.env.SQLITE_PATH
+  await closeLocalDatabase()
+  process.env.STORAGE_BACKEND = "sqlite"
+  process.env.SQLITE_PATH = join(directory, "rawroute.sqlite")
+  const durableWorkspace = { id: `codex-reset-schema-${legacyRecord.phase}` }
+  let localAccount: ProviderApiKey
+  try {
+    localAccount = await runInWorkspace(durableWorkspace, setupAccount)
+    await closeLocalDatabase()
+    const database = new Database(process.env.SQLITE_PATH)
+    try {
+      expect(database.query<{ version: number }, []>("SELECT version FROM ai_codex_reset_schema WHERE id = 1").get()?.version).toBe(1)
+      database.run("DROP TABLE ai_codex_reset_schema")
+      const collection = `rawroute_workspaces/${durableWorkspace.id}/codexResetAutomationAccounts`
+      const path = `${collection}/${localAccount.id}`
+      database.query("INSERT INTO rawroute_documents (path, collection_path, document_id, data) VALUES (?, ?, ?, ?)")
+        .run(path, collection, localAccount.id, JSON.stringify(legacyRecord))
+    } finally { database.close() }
 
     await runInWorkspace(durableWorkspace, async () => {
       configureUsage()
@@ -397,10 +627,30 @@ workspaceTest("keeps ambiguous coordinator state across a SQLite close and reope
         postCalls++
         return { status: 200, body: "{}" }
       })
-      await checkCodexResetAutomatically(account)
-      expect((await getCodexResetAccountStatus(account.id))?.phase).toBe("unknown")
+      await expect(redeemCodexReset(localAccount, "use my codex reset")).rejects.toThrow("offline migration")
+      await expect(checkCodexResetAutomatically(localAccount)).rejects.toThrow("offline migration")
+      expect(postCalls).toBe(0)
     })
-    expect(postCalls).toBe(1)
+    await closeLocalDatabase()
+
+    const migrated = migrateCodexResetIdentity(process.env.SQLITE_PATH, { apply: true, writersStopped: true })
+    expect(migrated).toMatchObject({ applied: true, required: false, records: 1 })
+    await runInWorkspace(durableWorkspace, async () => {
+      configureUsage()
+      setCodexResetApiCallForTests(async () => {
+        postCalls++
+        return { status: 200, body: "{}" }
+      })
+      if (legacyRecord.phase === "unknown") {
+        await expect(redeemCodexReset(localAccount, "use my codex reset")).rejects.toThrow("automatic retries are blocked")
+        await checkCodexResetAutomatically(localAccount)
+      } else {
+        await expect(redeemCodexReset(localAccount, "use my codex reset")).rejects.toThrow("waiting for Codex to update")
+        await checkCodexResetAutomatically(localAccount)
+      }
+      expect(postCalls).toBe(0)
+      expect((await getCodexResetAccountStatus(localAccount.id))?.phase).toBe(legacyRecord.phase)
+    })
   } finally {
     await closeLocalDatabase()
     if (previousStorageBackend === undefined) delete process.env.STORAGE_BACKEND
@@ -422,14 +672,18 @@ workspaceTest("keeps the weekly activation safety deadline across a SQLite resta
   const activatedAt = Date.now()
   jest.setSystemTime(new Date(activatedAt))
   try {
+    const durableWorkspace = { id: "codex-reset-delay-durable" }
+    const durableAccount = await runInWorkspace(durableWorkspace, setupAccount)
     configureUsage()
     setCodexResetApiCallForTests(async () => {
       postCalls++
       return { status: 200, body: "{}" }
     })
-    await updateCodexAutoRedeemSettings({ expiryEnabled: false, weeklyExhaustionEnabled: true })
-    await checkCodexResetAutomatically(account)
-    expect(postCalls).toBe(0)
+    await runInWorkspace(durableWorkspace, async () => {
+      await updateCodexAutoRedeemSettings({ expiryEnabled: false, weeklyExhaustionEnabled: true })
+      await checkCodexResetAutomatically(durableAccount)
+      expect(postCalls).toBe(0)
+    })
     await closeLocalDatabase()
     resetCodexResetCoordinatorForTests()
     setCodexResetApiCallForTests(async () => {
@@ -437,11 +691,15 @@ workspaceTest("keeps the weekly activation safety deadline across a SQLite resta
       return { status: 200, body: "{}" }
     })
     jest.setSystemTime(new Date(activatedAt + 59_999))
-    await checkCodexResetAutomatically(account)
-    expect(postCalls).toBe(0)
+    await runInWorkspace(durableWorkspace, async () => {
+      await checkCodexResetAutomatically(durableAccount)
+      expect(postCalls).toBe(0)
+    })
     jest.setSystemTime(new Date(activatedAt + 60_000))
-    await checkCodexResetAutomatically(account)
-    expect(postCalls).toBe(1)
+    await runInWorkspace(durableWorkspace, async () => {
+      await checkCodexResetAutomatically(durableAccount)
+      expect(postCalls).toBe(1)
+    })
   } finally {
     await closeLocalDatabase()
     if (previousStorageBackend === undefined) delete process.env.STORAGE_BACKEND
@@ -452,7 +710,7 @@ workspaceTest("keeps the weekly activation safety deadline across a SQLite resta
   }
 })
 
-workspaceTest("CLIProxy drain waits for an admitted reset POST", async () => {
+workspaceTest("gateway shutdown drain waits for an admitted reset POST", async () => {
   configureUsage()
   let postStarted!: () => void
   let finishPost!: (result: { status: number; body: string }) => void
@@ -468,10 +726,10 @@ workspaceTest("CLIProxy drain waits for an admitted reset POST", async () => {
   const attempt = redeemCodexReset(account, "use my codex reset")
   await started
   let drained = false
-  const drain = drainExecutions(2_000).then(() => { drained = true })
+  const drain = drainGatewayExecutions(2_000).then(() => { drained = true })
   await Bun.sleep(25)
   expect(drained).toBe(false)
-  expect(() => admitExecution()).toThrow("draining")
+  expect(() => admitGatewayExecution()).toThrow("shutting down")
   finishPost({ status: 200, body: "{}" })
   await attempt
   await drain

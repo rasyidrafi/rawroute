@@ -2,8 +2,6 @@
 Description=RawRoute
 Wants=network-online.target
 After=network-online.target
-Wants=rawroute-cliproxy.service
-After=rawroute-cliproxy.service
 [Container]
 Image=docker.io/rasyidrafi/rawroute:latest
 Pull=missing

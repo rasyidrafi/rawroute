@@ -14,6 +14,7 @@ import uuid
 spec = importlib.util.spec_from_file_location("redeploy", Path(__file__).with_name("redeploy.py"))
 r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
+usage_upgrade = importlib.import_module("usage_upgrade")
 
 
 class FakeRunner:
@@ -78,6 +79,57 @@ class FakeRunner:
         return self.run(*args, **kwargs).stdout.decode().strip()
 
 
+class PrepareRunner(FakeRunner):
+    def __init__(self, *, fail_smoke=False, fail_stop=False):
+        super().__init__()
+        self.fail_smoke = fail_smoke
+        self.fail_stop = fail_stop
+        self.codex_calls = 0
+        self.containers["old-id"].update({
+            "Config": {"Env": ["TIMEZONE=UTC", "DATABASE_COLLECTION_PREFIX=rawroute"], "Labels": {}},
+            "HostConfig": {"LogConfig": {"Type": "local", "Config": {}}, "RestartPolicy": {"Name": "unless-stopped"}},
+        })
+
+    def inspect(self, name, kind="container", optional=False):
+        if kind == "image":
+            return {"Id": "new-image"}
+        return super().inspect(name, kind, optional)
+
+    def run(self, *args, **kwargs):
+        if args[:2] == ("docker", "run"):
+            self.calls.append(args)
+            if "migrations/usage-projection.js" in args:
+                result = {
+                    "classifications": [{"financialState": "known"}], "unchanged": True,
+                    "copiedRawDocuments": 0, "plannedDigest": "plan", "rawDocuments": 0,
+                    "buckets": 0, "workspaceTotals": {}, "workspaceDailySums": {},
+                    "sourceDocuments": 0, "sourceDigest": "source",
+                }
+                return subprocess.CompletedProcess(args, 0, json.dumps(result).encode(), b"")
+            if "migrations/codex-credentials.js" in args:
+                if "--apply" in args:
+                    result = {"applied": True, "required": False, "accounts": 1, "resetRecords": 1}
+                else:
+                    self.codex_calls += 1
+                    result = {"applied": False, "required": self.codex_calls == 1,
+                              "accounts": 1 if self.codex_calls == 1 else 0,
+                              "resetRecords": 1 if self.codex_calls == 1 else 0}
+                return subprocess.CompletedProcess(args, 0, json.dumps(result).encode(), b"")
+            if "predict-missing-usage-cost.js" in args and self.fail_smoke:
+                raise r.Failure("Synthetic isolated smoke failure")
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+        if args[:2] == ("docker", "stop") and self.fail_stop:
+            self.calls.append(args)
+            self.containers[args[-1]]["State"]["Running"] = False
+            raise r.Failure("Synthetic stop failure after process exited")
+        if args[:2] in (("docker", "start"), ("docker", "stop"), ("docker", "rm")):
+            name = args[-1]
+            resolved = next((container_id for container_id, container in self.containers.items()
+                             if name in (container_id, container["Name"].lstrip("/"))), name)
+            args = (*args[:-1], resolved)
+        return super().run(*args, **kwargs)
+
+
 class TransactionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -103,9 +155,10 @@ class TransactionTests(unittest.TestCase):
         self.deployment.prepare = lambda: None
         self.deployment.wait_ready = lambda *_: None
         self.deployment.copy_volume = self.copy_volume
-        patcher = patch.object(r, "convert", lambda *_: None)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name in ("convert", "convert_codex_credentials"):
+            patcher = patch.object(r, name, lambda *_: None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def copy_volume(self, _source, _destination, restore=False):
         self.runner.calls.append(("copy", "restore" if restore else "snapshot"))
@@ -121,6 +174,89 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(self.runner.data, {"database": "before", "credential": "secret"})
         self.assertEqual(self.compose.read_bytes(), self.original_compose)
         self.assertFalse(r.PENDING.exists())
+
+    def prepared_deployment(self, runner):
+        if r.PENDING.exists():
+            r.PENDING.unlink()
+        facts = {"old": runner.inspect("old-id"), "old_image": {"Config": {"Env": ["GOMAXPROCS=1"]}},
+                 "context": "default", "server": "server-id", "revision": "abc123", "compose_mode": 0o600,
+                 "compose_original": r.base64.b64encode(self.original_compose).decode()}
+        deployment = r.begin(runner, facts, 5)
+        deployment.save(new_image="new-image")
+        deployment.export_source = lambda _destination: None
+        deployment.wait_ready = lambda *_: None
+        deployment.copy_volume = self.copy_volume
+        return deployment
+
+    def test_smoke_conversion_failure_does_not_claim_production_data_changed(self):
+        runner = PrepareRunner(fail_smoke=True)
+        deployment = self.prepared_deployment(runner)
+        with patch.object(r, "convert", usage_upgrade.convert), patch.object(r, "convert_codex_credentials", usage_upgrade.convert_codex_credentials):
+            self.assertEqual(r.run_transaction(deployment), 1)
+        self.assertEqual(runner.codex_calls, 2)
+        self.assertNotIn("data_may_changed", deployment.m)
+        self.assertTrue(runner.inspect("old-id")["State"]["Running"])
+        self.assertFalse(r.PENDING.exists())
+        self.assertNotIn(("copy", "restore"), runner.calls)
+
+    def test_committed_compose_strips_old_engine_settings_but_keeps_rollback_record(self):
+        original = {"services": {"rawroute": {"image": "old", "environment": {
+            "CLIPROXY_MODE": "external", "CLIPROXY_URL": "http://old-engine",
+            "CLIPROXY_API_KEY": "private-engine-key", "CLI_PROXY_IMAGE": "old-engine-image",
+            "MANAGEMENT_PASSWORD": "private-management-key", "SESSION_SECRET": "keep-me",
+        }}}}
+        self.original_compose = (json.dumps(original) + "\n").encode()
+        self.compose.write_bytes(self.original_compose)
+        runner = FakeRunner()
+        facts = {"old": runner.inspect("old-id"), "old_image": {"Config": {"Env": ["PORT=8080"]}},
+                 "context": "default", "server": "server-id", "revision": "abc123", "compose_mode": 0o600,
+                 "compose_original": r.base64.b64encode(self.original_compose).decode()}
+        deployment = r.begin(runner, facts, 5)
+        deployment.save(new_image="new-image")
+        deployment.prepare = lambda: None
+        deployment.wait_ready = lambda *_: None
+        deployment.copy_volume = self.copy_volume
+        deployment.finish_committed = lambda: None
+
+        self.assertEqual(r.run_transaction(deployment), 0)
+        committed = json.loads(self.compose.read_bytes())
+        committed_environment = committed["services"]["rawroute"]["environment"]
+        self.assertEqual(committed_environment, {"SESSION_SECRET": "keep-me", "DEPLOYMENT_VERSION": "abc123"})
+        rollback_record = json.loads(r.base64.b64decode(deployment.m["compose_original"]))
+        self.assertEqual(rollback_record, original)
+        deployment.restore_compose()
+        self.assertEqual(self.compose.read_bytes(), self.original_compose)
+
+    def test_stop_failure_after_smoke_before_snapshot_recovers_without_data_restore(self):
+        runner = PrepareRunner(fail_stop=True)
+        deployment = self.prepared_deployment(runner)
+        with patch.object(r, "convert", usage_upgrade.convert), patch.object(r, "convert_codex_credentials", usage_upgrade.convert_codex_credentials):
+            self.assertEqual(r.run_transaction(deployment), 1)
+        self.assertEqual(runner.codex_calls, 2)
+        self.assertNotIn("data_may_changed", deployment.m)
+        self.assertNotIn("snapshot_complete", deployment.m)
+        self.assertTrue(runner.inspect("old-id")["State"]["Running"])
+        self.assertFalse(r.PENDING.exists())
+        self.assertNotIn(("copy", "restore"), runner.calls)
+
+    def test_snapshot_failure_after_smoke_recovers_without_data_restore(self):
+        runner = PrepareRunner()
+        deployment = self.prepared_deployment(runner)
+
+        def fail_snapshot(source, destination, restore=False):
+            if not restore:
+                raise r.Failure("Synthetic offline snapshot failure")
+            self.copy_volume(source, destination, restore=True)
+
+        deployment.copy_volume = fail_snapshot
+        with patch.object(r, "convert", usage_upgrade.convert), patch.object(r, "convert_codex_credentials", usage_upgrade.convert_codex_credentials):
+            self.assertEqual(r.run_transaction(deployment), 1)
+        self.assertEqual(runner.codex_calls, 2)
+        self.assertNotIn("data_may_changed", deployment.m)
+        self.assertNotIn("snapshot_complete", deployment.m)
+        self.assertTrue(runner.inspect("old-id")["State"]["Running"])
+        self.assertFalse(r.PENDING.exists())
+        self.assertNotIn(("copy", "restore"), runner.calls)
 
     def test_build_failure_does_not_stop_production(self):
         def fail():
@@ -352,13 +488,13 @@ class TransactionTests(unittest.TestCase):
         with self.assertRaises(r.Failure):
             self.deployment.no_writers()
 
-    def test_image_defaults_are_not_pinned_to_old_binary(self):
-        old = {"Config": {"Env": ["CLIPROXY_BUNDLED_VERSION=old", "SESSION_SECRET=private", "GOMAXPROCS=2"]}}
-        image = {"Config": {"Env": ["CLIPROXY_BUNDLED_VERSION=old", "GOMAXPROCS=1"]}}
+    def test_old_engine_environment_is_not_carried_to_the_native_runtime(self):
+        old = {"Config": {"Env": ["CLIPROXY_MODE=managed", "CLIPROXY_URL=http://engine", "CLIPROXY_API_KEY=secret",
+                                   "MANAGEMENT_PASSWORD=secret", "SESSION_SECRET=private"]}}
+        image = {"Config": {"Env": ["GOMAXPROCS=1"]}}
         env = r.deployment_environment(old, image, "revision")
-        self.assertNotIn("CLIPROXY_BUNDLED_VERSION", env)
+        self.assertFalse(any(key.startswith(("CLIPROXY_", "CLI_PROXY_")) or key == "MANAGEMENT_PASSWORD" for key in env))
         self.assertEqual(env["SESSION_SECRET"], "private")
-        self.assertEqual(env["GOMAXPROCS"], "2")
 
 
 @unittest.skipUnless(os.getenv("RAWROUTE_TEST_DOCKER") == "1", "opt-in disposable Docker volume test")

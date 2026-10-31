@@ -1,5 +1,3 @@
-FROM docker.io/eceasy/cli-proxy-api:v8.0.43@sha256:3f74ca56cba8bea2a2a096a215bb774482d87d257da04c5047e6046493bfd644 AS cliproxy-binary
-
 FROM oven/bun:1.4.2-slim AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
@@ -26,10 +24,8 @@ ENV NODE_ENV=production \
     PORT=8080 \
     DEPLOYMENT_VERSION=$DEPLOYMENT_VERSION \
     RAWROUTE_DATA_DIR=/data \
-    CLIPROXY_BUNDLED_BINARY=/opt/cliproxy/cli-proxy-api \
-    CLIPROXY_BUNDLED_VERSION=8.0.43
+    SQLITE_PATH=/data/rawroute.sqlite
 COPY --from=builder --chown=bun:bun /app/dist ./dist
-COPY --from=cliproxy-binary /CLIProxyAPI/CLIProxyAPI /opt/cliproxy/cli-proxy-api
 RUN mkdir -p /data && chown bun:bun /data
 WORKDIR /app/dist
 USER bun

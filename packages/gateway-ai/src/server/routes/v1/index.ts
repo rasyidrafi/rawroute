@@ -1,7 +1,6 @@
 export async function GET() {
   return Response.json({
     service: "rawroute",
-    backend: "cliproxyapi",
     endpoints: {
       models: "GET /v1/models",
       chatCompletions: "POST /v1/chat/completions",
@@ -10,4 +9,3 @@ export async function GET() {
     },
   })
 }
-

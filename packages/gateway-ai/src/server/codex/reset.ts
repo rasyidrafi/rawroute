@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { appendAuditSqlite, appendMemoryAudit, auditRemoteOperation } from "@rawroute/platform/server/audit"
 import { getDatabase, getSqliteDatabase } from "@rawroute/platform/server/database"
 import { mapConcurrent } from "@rawroute/platform/server/concurrency"
@@ -7,8 +8,11 @@ import { currentWorkspaceId, runInWorkspace, workspaceContext, type WorkspaceCon
 import type { CodexAutoRedeemAccountStatus, CodexAutoRedeemResponse, CodexAutoRedeemSettings, CodexResetCoordinatorPhase } from "../../contracts/codex"
 import type { ProviderApiKey } from "../../contracts/domain"
 import { recordLog } from "../logging"
-import { admitExecution, CliproxyConflict } from "../cliproxy/admission"
-import { cliProxyCodexApiCall } from "./cliproxy"
+import { admitGatewayExecution, GatewayDrainConflict } from "../gateway/admission"
+import { getCodexCredential } from "../codex-credentials"
+import { assertCodexResetSchema } from "../codex-reset-schema"
+import { aiLocalDatabase } from "../local-db"
+import { fetchCodexAccount } from "./upstream"
 import { listCodexAccounts } from "./oauth"
 import { fetchFreshCodexUsageForReset, invalidateCodexUsageCache } from "./usage"
 
@@ -35,7 +39,7 @@ type CoordinatorRecord = CodexAutoRedeemAccountStatus & {
 }
 type MemoryWorkspace = { settings?: StoredSettings; accounts: Map<string, CoordinatorRecord> }
 type ResetScheduler = { timer?: ReturnType<typeof setInterval>; running?: Promise<void>; active: boolean; checks: Map<string, Promise<void>>; queued: Set<string>; wakeups: Map<string, ReturnType<typeof setTimeout>> }
-type ResetApiCall = typeof cliProxyCodexApiCall
+type ResetApiCall = (account: ProviderApiKey, input: { method: string; url: string; headers?: Record<string, string>; data?: string }) => Promise<{ status: number; body: string }>
 
 declare global {
   var __rawrouteCodexResetMemory: Map<string, MemoryWorkspace> | undefined
@@ -44,7 +48,7 @@ declare global {
 
 const resetMemory = () => globalThis.__rawrouteCodexResetMemory ||= new Map<string, MemoryWorkspace>()
 const scheduler = (): ResetScheduler => globalThis.__rawrouteCodexResetScheduler ||= { active: false, checks: new Map(), queued: new Set(), wakeups: new Map() }
-let resetApiCall: ResetApiCall = cliProxyCodexApiCall
+let resetApiCallOverride: ResetApiCall | undefined
 
 function memoryWorkspace(workspaceId = currentWorkspaceId()) {
   const workspaces = resetMemory()
@@ -57,14 +61,28 @@ function memoryWorkspace(workspaceId = currentWorkspaceId()) {
 }
 
 function settingsRef() {
+  assertResetSchema()
   return getSqliteDatabase().collection(`${collectionPrefix()}_workspaces`).doc(currentWorkspaceId()).collection("codexResetAutomation").doc("settings")
 }
 
 function accountsRef() {
+  assertResetSchema()
   return getSqliteDatabase().collection(`${collectionPrefix()}_workspaces`).doc(currentWorkspaceId()).collection("codexResetAutomationAccounts")
 }
 
 function accountRef(accountId: string) { return accountsRef().doc(accountId) }
+
+function assertResetSchema() {
+  if (isMemoryBackend()) return
+  aiLocalDatabase()
+  assertCodexResetSchema(getDatabase())
+}
+
+/** The workspace scopes the record; hashing keeps upstream identity out of document IDs. */
+function resetIdentityKey(account: ProviderApiKey) {
+  if (account.credentialKind !== "codex-oauth" || !account.accountId) throw new Error("Codex account identity is unavailable.")
+  return `account-${createHash("sha256").update(account.accountId).digest("hex")}`
+}
 
 function parseSettings(value: unknown): StoredSettings {
   const data = objectValue(value)
@@ -167,17 +185,12 @@ export async function updateCodexAutoRedeemSettings(input: Partial<CodexAutoRede
 }
 
 export async function getCodexAutoRedeemStatus(): Promise<CodexAutoRedeemResponse> {
-  const settings = await getCodexAutoRedeemSettings()
-  if (isMemoryBackend()) {
-    const accounts = Object.fromEntries([...memoryWorkspace().accounts].map(([id, status]) => [id, publicStatus(status)]))
-    return { settings, accounts }
-  }
-  const snapshot = await accountsRef().get()
-  const accounts = Object.fromEntries(snapshot.docs.flatMap(doc => {
-    const status = parseRecord(doc.data())
-    return status ? [[doc.id, publicStatus(status)]] : []
-  }))
-  return { settings, accounts }
+  const [settings, { accounts: credentials }] = await Promise.all([getCodexAutoRedeemSettings(), listCodexAccounts()])
+  const statuses = await mapConcurrent(credentials, 4, async account => {
+    const record = await readRecord(resetIdentityKey(account))
+    return record ? [account.id, publicStatus(record)] as const : undefined
+  })
+  return { settings, accounts: Object.fromEntries(statuses.filter((status): status is NonNullable<typeof status> => status !== undefined)) }
 }
 
 async function readRecord(accountId: string) {
@@ -325,13 +338,13 @@ async function noteUnknownRead(accountId: string, requestId: string, succeeded: 
   })
 }
 
-async function refreshUnknownOutcome(account: ProviderApiKey, record: CoordinatorRecord) {
+async function refreshUnknownOutcome(recordId: string, account: ProviderApiKey, record: CoordinatorRecord) {
   let succeeded = false
   try {
     await fetchFreshCodexUsageForReset(account)
     succeeded = true
   } catch {}
-  if (record.requestId) await noteUnknownRead(account.id, record.requestId, succeeded)
+  if (record.requestId) await noteUnknownRead(recordId, record.requestId, succeeded)
 }
 
 function safeUsageFailure(error: unknown) {
@@ -407,18 +420,25 @@ async function automaticTriggers(accountId: string, token: string, weeklyRemaini
 }
 
 async function coordinateCodexReset(account: ProviderApiKey, mode: "manual" | "automatic") {
-  if (account.credentialKind !== "codex-cli-proxy") throw new Error("Codex reset credits are only available for CLIProxy-managed OAuth accounts.")
-  let current = await readRecord(account.id)
+  if (account.credentialKind !== "codex-oauth") throw new Error("Codex reset credits are only available for connected Codex accounts.")
+  const latestAccount = await getCodexCredential(account.providerId, account.id)
+  if (!latestAccount || !latestAccount.enabled) {
+    if (mode === "manual") throw new Error("Codex account is no longer available.")
+    return
+  }
+  account = latestAccount
+  const recordId = resetIdentityKey(account)
+  let current = await readRecord(recordId)
   if (current?.phase === "deleting") {
     if (ageOf(current.deletionStartedAt, Date.now()) < staleIntentMs) {
       if (mode === "manual") throw new Error("This Codex account is being removed.")
       return
     }
-    if (current.deletionToken) await releaseCodexResetAccountRemoval(account.id, current.deletionToken)
-    current = await readRecord(account.id)
+    if (current.deletionToken) await releaseCodexResetAccountRemoval(account, current.deletionToken)
+    current = await readRecord(recordId)
   }
   if (current?.phase === "unknown") {
-    await refreshUnknownOutcome(account, current)
+    await refreshUnknownOutcome(recordId, account, current)
     if (mode === "manual") throw new Error("A previous Codex reset redemption has an uncertain outcome; automatic retries are blocked for this account.")
     return
   }
@@ -427,23 +447,23 @@ async function coordinateCodexReset(account: ProviderApiKey, mode: "manual" | "a
       if (mode === "manual") throw new Error("A reset redemption is already in progress for this account.")
       return
     }
-    if (current.requestId) await markStalePendingUnknown(account.id, current.requestId)
-    current = await readRecord(account.id)
+    if (current.requestId) await markStalePendingUnknown(recordId, current.requestId)
+    current = await readRecord(recordId)
     if (current?.phase === "unknown") {
-      await refreshUnknownOutcome(account, current)
+      await refreshUnknownOutcome(recordId, account, current)
       if (mode === "manual") throw new Error("A previous Codex reset redemption has an uncertain outcome; automatic retries are blocked for this account.")
       return
     }
   }
   const settings = await getCodexAutoRedeemSettings()
   if (mode === "automatic" && !settings.expiryEnabled && !settings.weeklyExhaustionEnabled) {
-    if (current?.phase === "idle") await mutateRecord(account.id, state => state?.phase === "idle" ? { ...state, lastCheckedAt: new Date().toISOString(), lastMessage: "Automatic redemption is disabled." } : state)
+    if (current?.phase === "idle") await mutateRecord(recordId, state => state?.phase === "idle" ? { ...state, lastCheckedAt: new Date().toISOString(), lastMessage: "Automatic redemption is disabled." } : state)
     return
   }
 
-  const claim = await beginCheck(account.id)
+  const claim = await beginCheck(recordId)
   if (!claim) {
-    const state = await readRecord(account.id)
+    const state = await readRecord(recordId)
     if (mode === "manual") throw new Error(state?.phase === "unknown" ? "A previous Codex reset redemption has an uncertain outcome; automatic retries are blocked for this account." : "A reset redemption or account update is already in progress.")
     return
   }
@@ -462,41 +482,40 @@ async function coordinateCodexReset(account: ProviderApiKey, mode: "manual" | "a
     } else if (priorRedeemedCount !== undefined && creditCount >= priorRedeemedCount) {
       inventoryGuardMessage = "A previous redemption was confirmed; waiting for Codex to update the reset-credit inventory before another redemption."
     } else if (priorRedeemedCount !== undefined && resetInventoryKnown(snapshot) && credits.length === 0) {
-      await clearRedeemedInventoryGuard(account.id, claim.token)
+      await clearRedeemedInventoryGuard(recordId, claim.token)
     }
     if (inventoryGuardMessage) {
-      await setCheckStatus(account.id, claim.token, inventoryGuardMessage)
+      await setCheckStatus(recordId, claim.token, inventoryGuardMessage)
       if (mode === "manual") throw new Error(inventoryGuardMessage)
       return
     }
     const weeklyExhausted = snapshot.weekly?.remainingPercent === 0
     const expiry = credits.flatMap(credit => credit.expiresAt ? [credit.expiresAt] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0]
-    const triggers = mode === "automatic" ? await automaticTriggers(account.id, claim.token, snapshot.weekly?.remainingPercent, expiry) : undefined
+    const triggers = mode === "automatic" ? await automaticTriggers(recordId, claim.token, snapshot.weekly?.remainingPercent, expiry) : undefined
     const eligible = creditCount > 0 && weeklyExhausted
       && (mode === "manual" || triggers?.expiry || triggers?.weekly)
     if (!eligible) {
       const message = creditCount > 0 && weeklyExhausted && triggers?.waiting
         ? "Weekly quota was already exhausted at activation. Waiting for the 1-minute safety delay; turn off weekly-quota auto-redeem to cancel."
         : ineligibilityMessage(snapshot, credits, triggers?.settings || settings, mode, now)
-      await setCheckStatus(account.id, claim.token, message, expiry)
+      await setCheckStatus(recordId, claim.token, message, expiry)
       if (mode === "manual") throw errorForIneligibility(snapshot, credits)
       return
     }
 
     let releaseExecution: () => void
     try {
-      releaseExecution = admitExecution()
+      releaseExecution = admitGatewayExecution()
     } catch (error) {
-      const message = error instanceof CliproxyConflict ? error.message : "CLIProxy is unavailable; reset redemption will be retried on the next check."
-      await setCheckStatus(account.id, claim.token, message, expiry)
+      const message = error instanceof GatewayDrainConflict ? "Reset redemption is temporarily unavailable; retry shortly." : "Reset redemption is temporarily unavailable; it will be retried on the next check."
+      await setCheckStatus(recordId, claim.token, message, expiry)
       if (mode === "manual") throw error
       return
     }
     const requestId = crypto.randomUUID()
     try {
-      if (!(await markPending(account.id, claim.token, requestId, creditCount, resetInventoryKnown(snapshot), expiry))) return
-      const headers: Record<string, string> = { authorization: "Bearer $TOKEN$", accept: "application/json", "content-type": "application/json" }
-      if (account.accountId) headers["chatgpt-account-id"] = account.accountId
+      if (!(await markPending(recordId, claim.token, requestId, creditCount, resetInventoryKnown(snapshot), expiry))) return
+      const headers: Record<string, string> = { accept: "application/json", "content-type": "application/json" }
       let response: Awaited<ReturnType<ResetApiCall>>
       let requestStarted = false
       try {
@@ -504,29 +523,40 @@ async function coordinateCodexReset(account: ProviderApiKey, mode: "manual" | "a
           { action: "oauth.remote", resource: "oauth", workspaceId: currentWorkspaceId() },
           async () => {
             if (mode === "automatic") {
-              const latest = await automaticTriggers(account.id, claim.token, snapshot.weekly?.remainingPercent, expiry)
+              const latest = await automaticTriggers(recordId, claim.token, snapshot.weekly?.remainingPercent, expiry)
               if (!latest.expiry && !latest.weekly) throw new Error("Automatic redemption was cancelled or is waiting for its activation safety delay; no request was sent.")
             }
-            requestStarted = true
-            return resetApiCall(account, { method: "POST", url: consumeUrl, headers, data: JSON.stringify({ redeem_request_id: requestId }) })
+            const input = { method: "POST", url: consumeUrl, headers, data: JSON.stringify({ redeem_request_id: requestId }) }
+            if (resetApiCallOverride) {
+              requestStarted = true
+              return resetApiCallOverride(account, input)
+            }
+            const upstream = await fetchCodexAccount(
+              account,
+              input.url,
+              { method: input.method, headers: input.headers, body: input.data },
+              undefined,
+              () => { requestStarted = true },
+            )
+            return { status: upstream.status, body: await upstream.text() }
           },
           result => result.status >= 200 && result.status < 300,
         )
       } catch (error) {
         if (!requestStarted) {
-          await finishNotSent(account.id, claim.token, requestId, "Redemption was cancelled or could not be prepared; no redemption request was sent.")
+          await finishNotSent(recordId, claim.token, requestId, "Redemption was cancelled or could not be prepared; no redemption request was sent.")
           throw error
         }
-        await finishAttempt(account.id, claim.token, requestId, "unknown", "The redemption outcome is unknown; automatic retries are blocked.")
+        await finishAttempt(recordId, claim.token, requestId, "unknown", "The redemption outcome is unknown; automatic retries are blocked.")
         await invalidateCodexUsageCache(account.id)
         throw new Error("Codex reset redemption outcome is uncertain; automatic retries are blocked.")
       }
       if (response.status < 200 || response.status >= 300) {
-        await finishAttempt(account.id, claim.token, requestId, "unknown", `The redemption outcome is uncertain (HTTP ${response.status}); automatic retries are blocked.`)
+        await finishAttempt(recordId, claim.token, requestId, "unknown", `The redemption outcome is uncertain (HTTP ${response.status}); automatic retries are blocked.`)
         await invalidateCodexUsageCache(account.id)
         throw new Error("Codex reset redemption outcome is uncertain; automatic retries are blocked.")
       }
-      await finishAttempt(account.id, claim.token, requestId, "redeemed", "Codex reset credit redeemed.")
+      await finishAttempt(recordId, claim.token, requestId, "redeemed", "Codex reset credit redeemed.")
       await invalidateCodexUsageCache(account.id, true)
       recordLog("admin.codex.reset.credit.redeemed", { accountId: account.id, redeemRequestId: requestId }, { level: "info" })
       return { ok: true, redeemRequestId: requestId, status: response.status, message: "Codex reset credit redeemed." }
@@ -534,11 +564,11 @@ async function coordinateCodexReset(account: ProviderApiKey, mode: "manual" | "a
       releaseExecution()
     }
   } catch (error) {
-    const state = await readRecord(account.id)
+    const state = await readRecord(recordId)
     if (state?.phase === "checking" && state.lockToken === claim.token) {
-      await setCheckStatus(account.id, claim.token, safeUsageFailure(error))
+      await setCheckStatus(recordId, claim.token, safeUsageFailure(error))
     } else if (state?.phase === "pending" && state.lockToken === claim.token && state.requestId) {
-      await finishAttempt(account.id, claim.token, state.requestId, "unknown", "The redemption outcome is unknown; automatic retries are blocked.")
+      await finishAttempt(recordId, claim.token, state.requestId, "unknown", "The redemption outcome is unknown; automatic retries are blocked.")
     }
     if (mode === "manual") throw error
     return undefined
@@ -555,23 +585,27 @@ export async function checkCodexResetAutomatically(account: ProviderApiKey) {
 }
 
 export async function checkEnabledCodexAccountsAutomatically(accounts: ProviderApiKey[]) {
-  await mapConcurrent(accounts.filter(account => account.enabled && account.credentialKind === "codex-cli-proxy"), 4, async account => {
+  await mapConcurrent(accounts.filter(account => account.enabled && account.credentialKind === "codex-oauth"), 4, async account => {
     try { await coordinateCodexReset(account, "automatic") }
     catch { /* Per-account state is durable; one failure must not stop other accounts. */ }
   })
 }
 
 export async function getCodexResetAccountStatus(accountId: string) {
-  const record = await readRecord(accountId)
+  const { accounts } = await listCodexAccounts()
+  const account = accounts.find(entry => entry.id === accountId)
+  if (!account) return undefined
+  const record = await readRecord(resetIdentityKey(account))
   return record ? publicStatus(record) : undefined
 }
 
 /** Reserve account removal against new reset POSTs and wait out an active attempt. */
-export async function reserveCodexResetAccountRemoval(accountId: string) {
+export async function reserveCodexResetAccountRemoval(account: ProviderApiKey) {
+  const recordId = resetIdentityKey(account)
   const token = crypto.randomUUID()
   let acquired = false
   const now = Date.now()
-  await mutateRecord(accountId, current => {
+  await mutateRecord(recordId, current => {
     const active = current?.phase === "checking" && ageOf(current.checkingAt, now) < staleIntentMs
       || current?.phase === "pending" && ageOf(current.lastAttemptAt, now) < staleIntentMs
       || current?.phase === "deleting" && ageOf(current.deletionStartedAt, now) < staleIntentMs
@@ -600,8 +634,9 @@ export async function reserveCodexResetAccountRemoval(accountId: string) {
   return token
 }
 
-export async function releaseCodexResetAccountRemoval(accountId: string, token: string) {
-  await mutateRecord(accountId, current => {
+export async function releaseCodexResetAccountRemoval(account: ProviderApiKey, token: string) {
+  const recordId = resetIdentityKey(account)
+  await mutateRecord(recordId, current => {
     if (current?.phase !== "deleting" || current.deletionToken !== token) return current
     const previousPhase = current.previousPhase
     const rest = withoutFields(current, ["deletionToken", "deletionStartedAt", "previousPhase"])
@@ -615,8 +650,21 @@ export async function releaseCodexResetAccountRemoval(accountId: string, token: 
   })
 }
 
-export async function completeCodexResetAccountRemoval(accountId: string, token: string) {
-  await mutateRecord(accountId, current => current?.phase === "deleting" && current.deletionToken === token ? undefined : current)
+export async function completeCodexResetAccountRemoval(account: ProviderApiKey, token: string) {
+  const recordId = resetIdentityKey(account)
+  await mutateRecord(recordId, current => {
+    if (current?.phase !== "deleting" || current.deletionToken !== token) return current
+    const previousPhase = current.previousPhase
+    if (previousPhase !== "unknown" && previousPhase !== "redeemed") return undefined
+    const rest = withoutFields(current, ["deletionToken", "deletionStartedAt", "previousPhase", "lockToken", "checkingAt"])
+    return {
+      ...rest,
+      phase: previousPhase,
+      lastMessage: previousPhase === "unknown"
+        ? "The redemption outcome remains uncertain; automatic retries are blocked."
+        : "The previous Codex reset redemption was confirmed; waiting for inventory reconciliation.",
+    }
+  })
 }
 
 export function cleanupCodexResetWorkspace(workspaceId: string) {
@@ -716,10 +764,10 @@ export async function stopCodexResetAutomation() {
 }
 
 export function setCodexResetApiCallForTests(apiCall?: ResetApiCall) {
-  resetApiCall = apiCall || cliProxyCodexApiCall
+  resetApiCallOverride = apiCall
 }
 
 export function resetCodexResetCoordinatorForTests() {
   resetMemory().clear()
-  resetApiCall = cliProxyCodexApiCall
+  resetApiCallOverride = undefined
 }

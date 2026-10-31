@@ -7,7 +7,7 @@ import { _resetMemoryBackend, listCombos, upsertModel, upsertProvider } from "..
 import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
 import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
 import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "../../packages/gateway-ai/src/server/model-shares"
-import { resolveGatewayModel } from "../../packages/gateway-ai/src/server/cliproxy/model-resolution"
+import { resolveGatewayModel } from "../../packages/gateway-ai/src/server/gateway/model-resolution"
 import { catalogModels } from "../../packages/gateway-ai/src/contracts/catalog"
 import type { ComboMember, ModelCombo } from "../../packages/gateway-ai/src/contracts/domain"
 import { resetAnalyticsForTests, setBudgetBypassEnabled } from "../../packages/gateway-ai/src/server/analytics"

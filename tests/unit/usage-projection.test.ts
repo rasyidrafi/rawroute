@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { createRequestLogSchema } from "../../packages/gateway-ai/src/server/request-log-schema"
+import { createCodexCredentialSchema } from "@rawroute/gateway-ai/server/maintenance/codex-credentials"
+import { createCodexResetSchema } from "@rawroute/gateway-ai/server/maintenance/codex-reset"
 import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -47,6 +49,8 @@ function legacyDatabase() {
   db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY, collection_path TEXT NOT NULL, document_id TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
   // These fixtures exercise legacy usage projection, with request-log migration already applied.
   createRequestLogSchema(db)
+  createCodexCredentialSchema(db)
+  createCodexResetSchema(db)
   return db
 }
 function source(db: Database, collection: string, id: string, data: object) {

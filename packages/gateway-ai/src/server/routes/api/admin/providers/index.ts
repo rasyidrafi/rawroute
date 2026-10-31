@@ -1,5 +1,4 @@
-import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "../../../../cliproxy/provider-sync"
-import { normalizeProviderBaseUrl, validateProviderCliProxyCompatibility } from "../../../../../contracts/provider-capabilities"
+import { normalizeProviderBaseUrl } from "../../../../../contracts/provider-capabilities"
 import { jsonError } from "@rawroute/observability/contracts/http"
 import { cleanId } from "../../../../model-identifiers"
 import { recordLog } from "../../../../logging"
@@ -23,7 +22,7 @@ export async function POST(request: Request) {
     const name = typeof input.name === "string" ? input.name.trim() : ""
     const rawBaseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim().replace(/\/$/, "") : ""
     if (!prefix || !name || !rawBaseUrl || !input.protocol) throw new Error("Provider fields are incomplete.")
-    if (prefix === "codex" || prefix === "cliproxy") throw new Error("This provider prefix is reserved by RawRoute.")
+    if (prefix === "codex") throw new Error("This provider prefix is reserved by RawRoute.")
     if (!["openai-chat", "openai-responses", "anthropic-messages"].includes(input.protocol)) throw new Error("Invalid provider protocol.")
     if (input.authType !== undefined && !["bearer", "x-api-key", "none"].includes(input.authType)) throw new Error("Invalid provider authentication type.")
     if (input.supportPromptCacheKey !== undefined && typeof input.supportPromptCacheKey !== "boolean") throw new Error("supportPromptCacheKey must be a boolean.")
@@ -31,7 +30,6 @@ export async function POST(request: Request) {
     const baseUrl = normalizeProviderBaseUrl(input.protocol as Protocol, rawBaseUrl)
     const authType = (input.authType || "bearer") as Provider["authType"]
     const openAICompatible = input.protocol !== "anthropic-messages"
-    validateProviderCliProxyCompatibility({ protocol: input.protocol as Protocol, baseUrl, authType })
     const provider = await upsertProvider({
       originalId: input.originalId,
       name,
@@ -43,11 +41,10 @@ export async function POST(request: Request) {
       supportPromptCacheKey: openAICompatible ? input.supportPromptCacheKey : false,
       enabled: input.enabled !== false,
     })
-    if (provider.prefix !== "codex") await syncNonCodexProviderProjection(provider.id)
     recordLog("admin.provider.saved", { providerId: provider.id }, { level: "info" })
     return Response.json({ ok: true, providerId: provider.id })
   } catch (error) {
     recordLog("admin.provider.save.failed", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to save provider.", error instanceof CliProxyProviderSyncError ? error.status : 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to save provider.", 400)
   }
 }

@@ -203,7 +203,7 @@ test("Storage availability loading and errors gate direct routes with a retry", 
   await page.getByRole("button", { name: "Try again" }).click()
   await expect(page.getByRole("heading", { name: "Connections" })).toBeVisible()
   expect(statusRequests).toBeGreaterThanOrEqual(2)
-  expect(workspaceReads).toBeGreaterThan(0)
+  await expect.poll(() => workspaceReads).toBeGreaterThan(0)
 })
 
 test("Storage shows only loading UI while availability is checking and handles a disable race as not found", async ({ page }) => {

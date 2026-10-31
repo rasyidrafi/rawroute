@@ -20,7 +20,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from usage_upgrade import convert
+from usage_upgrade import convert, convert_codex_credentials
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,8 +35,9 @@ LABEL = "local.rawroute.redeploy"
 SNAPSHOT = "cp -a /src/. /dst/ && diff -qr --no-dereference /src /dst"
 RESTORE = "find /dst -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && " + SNAPSHOT
 HEALTH = """const r = await fetch('http://127.0.0.1:8080/api/health', {signal: AbortSignal.timeout(1500)});
-const j = await r.json(); process.exit(r.ok && j.status === 'ok' && j.service === 'rawroute' &&
-j.dependencies?.cliproxy === true && j.dependencies?.database === true ? 0 : 1);"""
+const j = await r.json(); const s = j.dependencies?.storage;
+process.exit(r.ok && j.status === 'ok' && j.service === 'rawroute' && j.dependencies?.database === true &&
+s && (s.enabled === false || s.enabled === true && s.listening === true) ? 0 : 1);"""
 
 
 class Failure(Exception):
@@ -113,10 +114,14 @@ def environment(config):
     return dict(item.split("=", 1) for item in config.get("Env", []) if "=" in item)
 
 
+def retired_engine_setting(key):
+    return key.startswith(("CLIPROXY_", "CLI_PROXY_")) or key == "MANAGEMENT_PASSWORD"
+
+
 def deployment_environment(container, old_image, revision):
     current = environment(container["Config"])
     defaults = environment(old_image["Config"])
-    overrides = {key: value for key, value in current.items() if defaults.get(key) != value}
+    overrides = {key: value for key, value in current.items() if defaults.get(key) != value and not retired_engine_setting(key)}
     overrides["DEPLOYMENT_VERSION"] = revision
     if any("\n" in value or "\r" in value or "\0" in value for value in overrides.values()):
         raise Failure("Multiline environment overrides are unsupported; production was not changed.")
@@ -126,10 +131,10 @@ def deployment_environment(container, old_image, revision):
 def validate_runtime(container, old_image):
     config, host = container["Config"], container["HostConfig"]
     env = environment(config)
-    expected = {"CLIPROXY_MODE": "managed", "SQLITE_PATH": "/data/rawroute.sqlite",
-                "RAWROUTE_DATA_DIR": "/data", "PORT": "8080", "HOSTNAME": "0.0.0.0"}
+    expected = {"SQLITE_PATH": "/data/rawroute.sqlite", "RAWROUTE_DATA_DIR": "/data",
+                "PORT": "8080", "HOSTNAME": "0.0.0.0"}
     if any(env.get(key) != value for key, value in expected.items()):
-        raise Failure("Unsupported live data paths, backend, mode, or listener; explicit migration required.")
+        raise Failure("Unsupported live data paths, backend, or listener; explicit migration required.")
     mounts = container["Mounts"]
     if len(mounts) != 1 or mounts[0].get("Name") != VOLUME or mounts[0]["Destination"] != "/data" or not mounts[0].get("RW") or mounts[0]["Type"] != "volume":
         raise Failure("Expected exactly the canonical writable /data Docker volume.")
@@ -163,6 +168,20 @@ def validate_runtime(container, old_image):
                    "StorageOpt", "BlkioWeight", "BlkioDeviceReadBps", "BlkioDeviceWriteBps", "BlkioDeviceReadIOps", "BlkioDeviceWriteIOps")
     if any(host.get(field) for field in unsupported) or host.get("IpcMode") not in ("", "private") or host.get("ShmSize") != 67108864:
         raise Failure("Unsupported custom Docker isolation/resource settings; refusing a lossy recreation.")
+
+
+def committed_compose(original, image, revision):
+    compose = json.loads(original)
+    service = compose["services"]["rawroute"]
+    environment = service.setdefault("environment", {})
+    if not isinstance(environment, dict):
+        raise Failure("Unsupported Compose environment shape; refusing to retain retired engine settings.")
+    for key in list(environment):
+        if retired_engine_setting(key):
+            del environment[key]
+    service["image"] = image
+    environment["DEPLOYMENT_VERSION"] = revision
+    return (json.dumps(compose, indent=2) + "\n").encode()
 
 
 def source_revision(runner):
@@ -316,15 +335,19 @@ class Deployment:
         timezone = live_env.get("TIMEZONE") or "Asia/Jakarta"
         prefix = live_env.get("DATABASE_COLLECTION_PREFIX") or "rawroute"
         fixture = """import {Database} from 'bun:sqlite';
+import {mkdirSync,writeFileSync} from 'node:fs';
 const db=new Database('/data/rawroute.sqlite',{create:true});
 db.run('CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY,collection_path TEXT NOT NULL,document_id TEXT NOT NULL,data TEXT NOT NULL,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)');
 const c=process.env.DATABASE_COLLECTION_PREFIX.replace(/[^a-zA-Z0-9_-]/g,'_')+'_usage_events';
-db.run('INSERT INTO rawroute_documents(path,collection_path,document_id,data) VALUES(?,?,?,?)',[c+'/fixture',c,'fixture',JSON.stringify({id:'fixture',gatewayKeyId:'fixture',gatewayModelId:'fixture',completedAt:'2026-10-01T00:00:00.000Z',startedAt:'2026-10-01T00:00:00.000Z',status:200,durationMs:0,inputTokens:1,outputTokens:1,cacheReadTokens:0,cacheCreationTokens:0,totalTokens:2,costMicros:1,pricingConfidence:'exact'})]);db.close();"""
+db.run('INSERT INTO rawroute_documents(path,collection_path,document_id,data) VALUES(?,?,?,?)',[c+'/fixture',c,'fixture',JSON.stringify({id:'fixture',gatewayKeyId:'fixture',gatewayModelId:'fixture',completedAt:'2026-10-01T00:00:00.000Z',startedAt:'2026-10-01T00:00:00.000Z',status:200,durationMs:0,inputTokens:1,outputTokens:1,cacheReadTokens:0,cacheCreationTokens:0,totalTokens:2,costMicros:1,pricingConfidence:'exact'})]);db.close();
+mkdirSync('/data/cliproxy/auth',{recursive:true});
+writeFileSync('/data/cliproxy/config.yaml','config-version: 8\\noauth:\\n  auth-dir: "/data/cliproxy/auth"\\n');"""
         self.runner.run("docker", "run", "--rm", "--name", self.m["helper"], "--label", f"{LABEL}={self.m['transaction']}",
                         "--network", "none", "--env", f"DATABASE_COLLECTION_PREFIX={prefix}",
                         "--mount", f"type=volume,src={self.m['smoke_volume']},dst=/data", "--entrypoint", "bun",
                         self.m["new_image"], "-e", fixture)
         convert(self, self.m["smoke_volume"], prefix, timezone, "smoke-usage")
+        convert_codex_credentials(self, self.m["smoke_volume"], "smoke-codex-credentials", production=False)
         self.runner.run("docker", "run", "--rm", "--name", self.m["helper"], "--label", f"{LABEL}={self.m['transaction']}",
                         "--network", "none", "--env", f"TIMEZONE={timezone}",
                         "--mount", f"type=volume,src={self.m['smoke_volume']},dst=/data", "--entrypoint", "bun",
@@ -333,7 +356,7 @@ db.run('INSERT INTO rawroute_documents(path,collection_path,document_id,data) VA
                         "--from=2026-10-01T00:00:00.000Z", "--to=2026-10-02T00:00:00.000Z")
         args = ["docker", "create", "--name", self.m["smoke"], "--label", f"{LABEL}={self.m['transaction']}",
                 "--init", "--network", "none", "--mount", f"type=volume,src={self.m['smoke_volume']},dst=/data",
-                "--env", "SQLITE_PATH=/data/rawroute.sqlite", "--env", "CLIPROXY_MODE=managed",
+                "--env", "SQLITE_PATH=/data/rawroute.sqlite",
                 "--env", f"TIMEZONE={timezone}"]
         args += [self.m["new_image"]]
         self.runner.run(*args)
@@ -417,6 +440,7 @@ db.run('INSERT INTO rawroute_documents(path,collection_path,document_id,data) VA
         self.save(snapshot_complete=True, phase="snapshot-ready")
         env = environment(self.m["old"]["Config"])
         convert(self, VOLUME, env.get("DATABASE_COLLECTION_PREFIX") or "rawroute", env.get("TIMEZONE") or "Asia/Jakarta")
+        convert_codex_credentials(self, VOLUME)
         self.save(phase="rename-intent")
         self.runner.run("docker", "rename", self.m["old"]["Id"], self.m["backup_name"])
         self.save(phase="old-renamed")
@@ -428,10 +452,7 @@ db.run('INSERT INTO rawroute_documents(path,collection_path,document_id,data) VA
         self.runner.run("docker", "start", self.m["candidate"])
         self.save(phase="validating")
         self.wait_ready(self.m["candidate"], self.m["ready_timeout"])
-        compose = json.loads(base64.b64decode(self.m["compose_original"]))
-        compose["services"]["rawroute"]["image"] = self.m["new_tag"]
-        compose["services"]["rawroute"]["environment"]["DEPLOYMENT_VERSION"] = self.m["revision"]
-        updated = (json.dumps(compose, indent=2) + "\n").encode()
+        updated = committed_compose(base64.b64decode(self.m["compose_original"]), self.m["new_tag"], self.m["revision"])
         self.save(phase="compose-intent", compose_updated=base64.b64encode(updated).decode())
         if COMPOSE.read_bytes() != base64.b64decode(self.m["compose_original"]):
             raise Failure("Compose changed concurrently; rollback will not overwrite unknown edits.")

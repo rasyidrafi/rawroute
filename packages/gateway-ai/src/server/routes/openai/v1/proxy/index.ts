@@ -1,4 +1,4 @@
-import { proxyGatewayRequest } from "../../../../cliproxy/gateway"
+import { proxyGatewayRequest } from "../../../../gateway/gateway"
 
 const forward = (request: Request) => proxyGatewayRequest(request, new URL(request.url).pathname)
 

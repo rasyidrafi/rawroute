@@ -24,7 +24,6 @@ docker run -d --name "$provider" --network "$network" -e COM_ADOBE_TESTING_S3MOC
 
 export RAWROUTE_IMAGE="$image"
 unset DEFAULT_PROXY_API_KEY DEFAULT_ADMIN_PASSWORD SESSION_SECRET
-export CLIPROXY_MANAGEMENT_KEY=TEST-storage-auto-management CLIPROXY_API_KEY=TEST-storage-auto-engine
 export STORAGE_S3_ALLOWED_ORIGINS="http://$provider:9090"
 unset STORAGE_ENABLED STORAGE_ENCRYPTION_KEY STORAGE_S3_PORT
 docker run --rm --network "$network" -e PROVIDER="http://$provider:9090" "$client_image" \

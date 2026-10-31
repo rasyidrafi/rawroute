@@ -1,4 +1,3 @@
-import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "../../../../../../cliproxy/provider-sync"
 import { jsonError } from "@rawroute/observability/contracts/http"
 import { gatewayModelId } from "../../../../../../model-identifiers"
 import { recordLog } from "../../../../../../logging"
@@ -45,11 +44,10 @@ export async function POST(request: Request, params: { providerId: string }) {
       reasoningCapability: reasoningCapability ? { mode: reasoningCapability.mode, supportedEfforts: [...new Set(reasoningCapability.supportedEfforts?.map((effort) => effort.trim().toLowerCase()) || [])] } : undefined,
     }
     await upsertModel(providerId, modelInput)
-    if (provider.prefix !== "codex") await syncNonCodexProviderProjection(providerId)
     recordLog("admin.model.saved", { providerId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
     recordLog("admin.model.save.failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to save model.", error instanceof CliProxyProviderSyncError ? error.status : 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to save model.", 400)
   }
 }

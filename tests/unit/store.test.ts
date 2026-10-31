@@ -170,24 +170,22 @@ describe("configuration storage", () => {
     expect(await getProvider(provider.id)).toMatchObject({ apiKeyCount: 0, enabledApiKeyCount: 0 })
   })
 
-  workspaceTest("stores CLIProxy Codex mappings without an API key value", async () => {
+  workspaceTest("stores Codex OAuth accounts without a provider API key value", async () => {
     const provider = await upsertProvider(providerInput("codex"))
     const account = await upsertProviderApiKey(provider.id, {
       name: "Codex account",
       key: "",
-      credentialKind: "codex-cli-proxy",
-      cliProxyAuthFile: "codex-account.json",
-      cliProxyAuthIndex: "auth-index-1",
+      credentialKind: "codex-oauth",
+      accountId: "acct-codex-store-test",
       enabled: true,
       rpmLimit: 60,
       maxConcurrency: 4,
     })
 
     expect(account).toMatchObject({
-      credentialKind: "codex-cli-proxy",
+      credentialKind: "codex-oauth",
       key: "",
-      cliProxyAuthFile: "codex-account.json",
-      cliProxyAuthIndex: "auth-index-1",
+      accountId: "acct-codex-store-test",
     })
     expect(account.rpmLimit).toBeUndefined()
     expect(account.maxConcurrency).toBeUndefined()

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { createRequestLogSchema } from "../../packages/gateway-ai/src/server/request-log-schema"
+import { ensureCodexCredentialSchema } from "../../packages/gateway-ai/src/server/codex-credential-schema"
+import { ensureCodexResetSchema } from "../../packages/gateway-ai/src/server/codex-reset-schema"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -41,6 +43,9 @@ function historicalFixture() {
   db.run("CREATE TABLE rawroute_documents(path TEXT PRIMARY KEY,collection_path TEXT NOT NULL,document_id TEXT NOT NULL,data TEXT NOT NULL,updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
   // These fixtures exercise legacy usage projection, with request-log migration already applied.
   createRequestLogSchema(db)
+  // Model a database initialized on the current application schema before legacy usage data is added.
+  ensureCodexCredentialSchema(db, true)
+  ensureCodexResetSchema(db, true)
   return db
 }
 

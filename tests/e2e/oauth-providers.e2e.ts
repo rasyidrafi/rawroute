@@ -74,12 +74,9 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
   await page.getByLabel("Redirect URL").fill(`http://localhost:1455/auth/callback?code=e2e-code&state=${state}`)
   await page.getByRole("button", { name: "Submit", exact: true }).click()
   await expect(page.getByRole("cell", { name: "Work Codex", exact: true })).toBeVisible({ timeout: 7_000 })
-  const debug = await page.request.get("http://127.0.0.1:3211/debug")
-  expect((await debug.json()).pollCount).toBeGreaterThanOrEqual(1)
-
   const connected = await (await page.request.get("/api/admin/oauth-providers", { headers: { "x-rawroute-workspace-id": "default" } })).json() as { accounts: Array<{ id: string }> }
   let expiryUnavailable = false
-  await page.route("**/api/admin/oauth-providers/usage", route => route.fulfill({ json: { accounts: Object.fromEntries(connected.accounts.map(account => [account.id, { planType: "free", fiveHour: null, weekly: null, fetchedAt: new Date().toISOString(), stale: expiryUnavailable, unusedResetCredits: 2,
+  await page.route("**/api/admin/oauth-providers/usage", route => route.fulfill({ json: { accounts: Object.fromEntries(connected.accounts.map(account => [account.id, { planType: "free", fiveHour: null, weekly: { usedPercent: 100, remainingPercent: 0 }, fetchedAt: new Date().toISOString(), stale: expiryUnavailable, unusedResetCredits: 2,
     ...(expiryUnavailable ? { resetCreditsError: "Expiry unavailable" } : { resetCredits: [
       { id: "later", status: "available", expiresAt: "2099-11-06T22:59:00Z" },
       { id: "earlier", status: "available", expiresAt: "2099-10-22T20:28:00Z" },
@@ -89,6 +86,18 @@ test("Codex Providers menu connects and manages a Codex account", async ({ page 
   const accountRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "Work Codex", exact: true }) })
   await expect(accountRow.getByRole("cell", { name: "Free", exact: true })).toBeVisible()
   await expect(accountRow.getByRole("cell", { name: "Plus", exact: true })).toHaveCount(0)
+  await expect(accountRow.getByText("Weekly", { exact: true })).toBeVisible()
+  await expect(accountRow.getByText("0%", { exact: true })).toBeVisible()
+
+  const redeem = accountRow.getByRole("button", { name: "Redeem", exact: true })
+  await expect(redeem).toBeEnabled()
+  await redeem.click()
+  const redeemDialog = page.getByRole("alertdialog", { name: "Redeem Codex reset credit?" })
+  await expect(redeemDialog).toBeVisible()
+  await redeemDialog.getByPlaceholder("use my codex reset").fill("use my codex reset")
+  await redeemDialog.getByRole("button", { name: "Redeem reset", exact: true }).click()
+  await expect(redeemDialog).toHaveCount(0)
+  await expect(page.getByText("Codex reset credit redeemed", { exact: true })).toBeVisible()
 
   const info = accountRow.getByRole("button", { name: "View reset expiry", exact: true })
   await info.hover()

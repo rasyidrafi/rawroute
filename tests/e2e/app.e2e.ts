@@ -10,7 +10,7 @@ test("production serves every dashboard deep link and keeps unknown APIs out of 
     expect(html).toContain("<title>RawRoute</title>")
     expect(html).not.toContain("/_next/")
   }
-  for (const path of ["/api/admin/settings", "/api/missing", "/v8/management/config", "/executor/auth", "/index.ts"]) {
+  for (const path of ["/api/admin/settings", "/api/missing", "/executor/auth", "/index.ts"]) {
     const response = await request.get(path)
     expect(response.status(), path).toBe(404)
     expect(response.headers()["content-type"]).toContain("application/json")
@@ -84,7 +84,7 @@ test("browser session guard, login, deep links, theme, and logout work without r
 })
 
 test("retired dashboard URLs are absent rather than redirected", async ({ request }) => {
-  for (const path of ["/dashboard/ai/usage", "/dashboard", "/dashboard/providers", "/dashboard/providers/example", "/dashboard/providers/codex", "/dashboard/aliases", "/dashboard/usage", "/dashboard/budgets", "/dashboard/model-pricing", "/dashboard/models", "/dashboard/oauth-providers", "/dashboard/tool-gateway", "/dashboard/tool-gateway/tools", "/dashboard/coding-agents/codex"]) {
+  for (const path of ["/dashboard/ai/usage", "/dashboard", "/dashboard/providers", "/dashboard/providers/example", "/dashboard/providers/codex", "/dashboard/aliases", "/dashboard/usage", "/dashboard/budgets", "/dashboard/model-pricing", "/dashboard/models", "/dashboard/oauth-providers", "/dashboard/tool-gateway", "/dashboard/tool-gateway/tools", "/dashboard/coding-agents/codex", "/dashboard/cliproxy"]) {
     const response = await request.get(path, { maxRedirects: 0 })
     expect(response.status(), path).toBe(404)
     expect(response.headers().location).toBeUndefined()

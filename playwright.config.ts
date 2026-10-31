@@ -34,6 +34,8 @@ function findGoogleChrome() {
 }
 
 const chromeExecutablePath = findGoogleChrome()
+const codexFetchMock = new URL("./tests/e2e/codex-server-fetch-mock.ts", import.meta.url).pathname
+const distRoot = new URL("./dist", import.meta.url).pathname
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -47,26 +49,23 @@ export default defineConfig({
   projects: [{ name: "chrome", use: { ...devices["Desktop Chrome"], launchOptions: { executablePath: chromeExecutablePath } } }],
   webServer: [
     {
-      command: "bun tests/e2e/codex-auth-mock.ts",
+      command: "bun tests/e2e/upstream-fixture.ts",
       url: "http://127.0.0.1:3211/health",
       reuseExistingServer: false,
     },
     {
-      command: "bun run start",
+      command: `bun --preload ${codexFetchMock} --cwd ${distRoot} index.js`,
       url: "http://127.0.0.1:3100/login",
       reuseExistingServer: false,
       env: {
+        NODE_ENV: "production",
         PORT: "3100",
         RAWROUTE_PUBLIC_URL: "http://127.0.0.1:3100",
         HOSTNAME: "127.0.0.1",
         EXECUTOR_UPSTREAM_URL: "http://127.0.0.1:3211/executor",
         EXECUTOR_UPSTREAM_API_KEY: "executor-test-key",
-        CLIPROXY_MODE: "external",
-        CLIPROXY_API_KEY: "sk-e2e-internal",
-        CLIPROXY_MANAGEMENT_KEY: "e2e-management-key",
         STORAGE_BACKEND: "sqlite",
         SQLITE_PATH: ":memory:",
-        CLIPROXY_URL: "http://127.0.0.1:3211/cliproxy",
       },
     },
   ],

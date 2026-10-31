@@ -1,7 +1,6 @@
 export * from "./domain"
 export * from "./pages"
 export * from "./codex"
-export * from "./cliproxy"
 export * from "./overview"
 export * from "./request-logs"
 export * from "./usage-display"

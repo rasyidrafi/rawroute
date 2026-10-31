@@ -1,4 +1,3 @@
-import { CliProxyProviderSyncError, syncNonCodexProviderProjection } from "../../../../../cliproxy/provider-sync"
 import { ensureCodexProvider } from "../../../../../codex/oauth"
 import { codexDiscoveryStatus } from "../../../../../codex/model-discovery"
 import { scheduleCodexModelRefresh } from "../../../../../codex/model-refresh"
@@ -21,11 +20,12 @@ export async function GET(_request: Request, params: { providerId: string }) {
   const { providerId } = params
   const provider = providerId === "codex" ? await ensureCodexProvider() : await getProvider(providerId)
   const resolvedId = provider?.id || providerId
-  const [apiKeys, models] = await Promise.all([
+  const [storedApiKeys, models] = await Promise.all([
     listProviderApiKeys(resolvedId),
     listProviderModels(resolvedId),
   ])
   if (!provider) return jsonError("Provider not found.", 404)
+  const apiKeys = provider.prefix === "codex" ? storedApiKeys.filter((apiKey) => apiKey.credentialKind === "codex-oauth") : storedApiKeys
   if (provider.prefix === "codex") scheduleCodexModelRefresh()
   return Response.json({
     discovery: provider.prefix === "codex" ? await codexDiscoveryStatus() : undefined,
@@ -41,11 +41,10 @@ export async function DELETE(_request: Request, params: { providerId: string }) 
     const provider = await getProvider(providerId)
     if (provider?.prefix === "codex") throw new Error("The Codex provider is fixed and cannot be deleted.")
     await deleteProvider(providerId)
-    await syncNonCodexProviderProjection(providerId)
     recordLog("admin.provider.deleted", { providerId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {
     recordLog("admin.provider.delete.failed", { providerId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "error" })
-    return jsonError(error instanceof Error ? error.message : "Unable to delete provider.", error instanceof CliProxyProviderSyncError ? error.status : 400)
+    return jsonError(error instanceof Error ? error.message : "Unable to delete provider.", 400)
   }
 }

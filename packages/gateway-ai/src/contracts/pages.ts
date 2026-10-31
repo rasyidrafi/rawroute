@@ -15,7 +15,6 @@ export const aiPages = {
   integrationCodex: { path: "/dashboard/ai/integrations/codex", skeleton: "integration-codex", title: "Codex integration", scope: "workspace", owner: "ai", app: "ai-gateway" },
   budgets: { path: "/dashboard/ai/budgets", skeleton: "budgets", title: "Budgets", scope: "workspace", owner: "ai", app: "ai-gateway" },
   pricing: { path: "/dashboard/ai/pricing", skeleton: "model-pricing", title: "Model Pricing", scope: "workspace", owner: "ai", app: "ai-gateway" },
-  cliproxy: { path: "/dashboard/cliproxy", skeleton: "cliproxy", title: "CLIProxyAPI", scope: "global", owner: "ai", app: "shared" },
 } as const satisfies Record<string, DashboardPageMeta>
 
 export const publicUsageRoutes = { keyUsage: "/usage/keys/:keyId" } as const

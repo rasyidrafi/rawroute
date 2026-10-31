@@ -497,7 +497,7 @@ export async function savePricingVersion(input: { groupId: string; rates: Pricin
 export async function getPricingForModelAt(model: { gatewayModelId: string; providerModelId?: string }, at = new Date()) {
   const catalog = await loadPricingCatalog()
   const exact = (model.providerModelId ? catalog.modelById.get(model.providerModelId) : undefined) || catalog.modelByGatewayId.get(model.gatewayModelId)
-  // CLIProxy can expose the upstream model name without the configured
+  // Some providers expose the upstream model name without the configured
   // provider prefix (for example `gpt-5.6-luna` while RawRoute stores
   // `codex/gpt-5.6-luna`). Resolve that spelling only when it maps to one
   // configured model; ambiguous suffixes must remain unpriced rather than

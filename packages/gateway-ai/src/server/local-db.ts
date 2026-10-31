@@ -1,4 +1,4 @@
-import { getDatabase, installDocumentIntegration, withTransaction, type DocumentIntegration } from "@rawroute/platform/server/database"
+import { getDatabase, installDocumentIntegration, withTransaction, type DocumentIntegration, getSqliteDatabase, type SqliteDatabase } from "@rawroute/platform/server/database"
 import { assertUsageProjection, projectSqliteUsage, usagePrefix, usageWorkspace } from "./usage-projection"
 import { readSqliteUsageRange } from "./usage-range"
 import type { RequestLogQuery } from "./request-logs"
@@ -9,6 +9,8 @@ import { appendAuditSqlite } from "@rawroute/platform/server/audit"
 import { assertWorkspaceActivity } from "@rawroute/platform/server/workspace-activity"
 import { assertRequestLogSchema, requestLogIdentitySql } from "./request-log-schema"
 import { assertServiceTierSchema } from "./service-tier-schema"
+import { assertCodexCredentialSchema, ensureCodexCredentialSchema } from "./codex-credential-schema"
+import { assertCodexResetSchema, ensureCodexResetSchema } from "./codex-reset-schema"
 
 // Application persistence composition. All callbacks execute on the platform's
 // single connection, inside its existing transaction/queue boundary.
@@ -21,6 +23,10 @@ export const aiDocumentIntegration: DocumentIntegration = {
     assertUsageProjection(database, initial)
     assertRequestLogSchema(database, initial)
     assertServiceTierSchema(database, initial)
+    ensureCodexCredentialSchema(database, initial)
+    ensureCodexResetSchema(database, initial)
+    assertCodexCredentialSchema(database)
+    assertCodexResetSchema(database)
   },
   validateCollection(collection) {
     const parts = collection.split("/")
@@ -52,6 +58,12 @@ export const aiDocumentIntegration: DocumentIntegration = {
 
 export function initializeAiPersistence() {
   installDocumentIntegration(aiDocumentIntegration)
+}
+
+/** The shared SQLite document store with AI document integrations installed. */
+export function aiLocalDatabase(): SqliteDatabase {
+  initializeAiPersistence()
+  return getSqliteDatabase()
 }
 
 export async function queryLocalUsageRange(workspaceId: string, from: string, to: string, hourly = false, keyId?: string) {

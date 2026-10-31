@@ -1,4 +1,4 @@
-import { testComboMemberPolicy } from "../../../../../cliproxy/gateway"
+import { testComboMemberPolicy } from "../../../../../gateway/gateway"
 import { jsonError } from "@rawroute/observability/contracts/http"
 
 import type { ComboMember } from "../../../../../../contracts/domain"

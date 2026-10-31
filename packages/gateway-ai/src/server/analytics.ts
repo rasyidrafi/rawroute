@@ -1372,7 +1372,7 @@ export interface BudgetReservation {
 }
 
 /**
- * Reserve the RawRoute-owned budget before a request enters CLIProxyAPI.
+ * Reserve the RawRoute-owned budget before a request reaches its provider.
  * Provider rate limits and routing remain entirely outside this layer.
  */
 export async function reserveBudgetAdmission(

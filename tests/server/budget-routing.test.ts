@@ -4,7 +4,7 @@ import { testsInWorkspace } from "../helpers/workspace-test"
 const workspaceTest = testsInWorkspace("default")
 import { _resetMemoryBackend, createApiKey, upsertAlias, upsertCombo, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
 import { getBudgetRequestState, getBudgetRows, listRequestLogs, recordGatewayUsage, resetAnalyticsForTests, setBudgetBeyondLimitsSettings, setBudgetBypassEnabled, setBudgetUnlimitedSettings, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
-import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/cliproxy/gateway"
+import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/gateway/gateway"
 import { listPricingVersions, savePricingVersion, syncModelPricingGroups } from "../../packages/gateway-ai/src/server/model-pricing"
 import { createWorkspace, listWorkspaces, resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
 import { listSharedModelsForRecipient, resetModelSharesForTests, setModelShareTargets } from "../../packages/gateway-ai/src/server/model-shares"

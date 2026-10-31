@@ -11,6 +11,7 @@ export function aiDocumentAudit(collection: string, before: DocumentData | undef
     workspaceId = parts[1]
     const name = parts[parts.length - 1]
     resource = name === "apiKeys" ? parts.length === 3 ? "gateway-key" : "provider-credential"
+      : name === "codexCredentials" ? "provider-credential"
       : name === "providers" ? "provider" : name === "models" ? "model" : name === "aliases" ? "alias" : name === "combos" ? "combo"
       : name === "budgets" || name === "budgetSettings" || name === "budgetWindows" || name === "budgetBypassSessions" ? "budget"
       : name === "modelPricingGroups" || name === "modelPricingVersions" ? "pricing" : undefined

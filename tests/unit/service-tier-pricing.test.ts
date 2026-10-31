@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { calculateCostMicros, extractUsageMetrics, normalizeUsageMetrics } from "../../packages/gateway-ai/src/server/usage-metrics"
-import { collectStreamUsage } from "../../packages/gateway-ai/src/server/cliproxy/stream-usage"
+import { collectStreamUsage } from "../../packages/gateway-ai/src/server/gateway/stream-usage"
 import { mergeCatalogServiceTiers, requestServiceTier } from "../../packages/gateway-ai/src/contracts/service-tier"
 import { modelsDevPricing } from "../../packages/gateway-ai/src/server/models-dev-pricing"
 

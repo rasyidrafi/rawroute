@@ -19,7 +19,6 @@ aiServer.initializePersistence()
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT must be an integer between 0 and 65535.")
 storageServer.preparePersistence()
 if (!isMemoryBackend()) await ensureLocalDatabase()
-// Resume AI cleanup only after its shared engine has had a chance to recover.
 await aiServer.start()
 try { await storageServer.start() } catch (error) { await aiServer.stop(); throw error }
 await recoverWorkspaceDeletions()

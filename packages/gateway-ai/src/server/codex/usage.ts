@@ -1,8 +1,8 @@
-import { cliProxyCodexApiCall } from "./cliproxy"
 import { localCacheGet, localCacheSet, localCacheSetIfAbsent, localCacheDelete } from "@rawroute/platform/server/local-cache"
 import type { ProviderApiKey } from "../../contracts/domain"
 import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
 import type { CodexQuotaWindow, CodexUsageSnapshot, CodexResetCredit, CodexUsageResult } from "../../contracts/codex"
+import { fetchCodexAccount } from "./upstream"
 
 export const CODEX_USAGE_CACHE_TTL_SECONDS = 5 * 60
 
@@ -43,8 +43,8 @@ export interface UsageCache {
 }
 
 let cacheClient: UsageCache | undefined
-type CodexApiCall = typeof cliProxyCodexApiCall
-let codexApiCall: CodexApiCall = cliProxyCodexApiCall
+type CodexApiCall = (account: ProviderApiKey, input: { method: string; url: string; headers?: Record<string, string>; data?: string }) => Promise<{ status: number; body: string }>
+let codexApiCallOverride: CodexApiCall | undefined
 let now = () => Date.now()
 const localUsageCache = new Map<string, { result: CodexUsageResult; expiresAt: number }>()
 const usageInflight = new Map<string, Promise<CodexUsageResult>>()
@@ -231,29 +231,34 @@ export function parseUnusedCodexResetCredits(payload: unknown) {
 }
 
 async function fetchCodexUsage(account: ProviderApiKey): Promise<CodexUsageSnapshot> {
-  const headers: Record<string, string> = { authorization: "Bearer $TOKEN$", accept: "application/json" }
-  if (account.accountId) headers["chatgpt-account-id"] = account.accountId
-  const response = await codexApiCall(account, { method: "GET", url: getUsageUrl(), headers })
-  if (response.status < 200 || response.status >= 300) {
-    throw Object.assign(new Error(`Codex usage request failed (${response.status})${response.body ? `: ${response.body.slice(0, 200)}` : ""}`), { status: response.status })
+  const request = async (url: string) => {
+    if (codexApiCallOverride) return codexApiCallOverride(account, { method: "GET", url, headers: { accept: "application/json" } })
+    const response = await fetchCodexAccount(account, url, { method: "GET", headers: { accept: "application/json" } })
+    return { status: response.status, body: await response.text() }
   }
+  const response = await request(getUsageUrl())
+  if (response.status < 200 || response.status >= 300) {
+    throw Object.assign(new Error(`Codex usage request failed (${response.status}).`), { status: response.status })
+  }
+  let payload: unknown
   try {
-    const snapshot = parseCodexUsagePayload(JSON.parse(response.body) as unknown)
-    try {
-      const url = new URL(getUsageUrl())
-      url.pathname = url.pathname.replace(/\/usage\/?$/, "/rate-limit-reset-credits")
-      url.search = ""
-      const details = await codexApiCall(account, { method: "GET", url: url.toString(), headers })
-      if (details.status < 200 || details.status >= 300) throw new Error("Reset credit inventory unavailable")
-      snapshot.resetCredits = parseCodexResetCredits(JSON.parse(details.body))
-      snapshot.unusedResetCredits = snapshot.resetCredits.filter((credit) => credit.status === "available" && (!credit.expiresAt || Date.parse(credit.expiresAt) > now())).length
-    } catch {
-      snapshot.resetCreditsError = "Expiry unavailable"
-    }
-    return snapshot
+    payload = JSON.parse(response.body) as unknown
   } catch {
     throw new Error("Codex usage response was not valid JSON.")
   }
+  const snapshot = parseCodexUsagePayload(payload)
+  try {
+    const url = new URL(getUsageUrl())
+    url.pathname = url.pathname.replace(/\/usage\/?$/, "/rate-limit-reset-credits")
+    url.search = ""
+    const details = await request(url.toString())
+    if (details.status < 200 || details.status >= 300) throw new Error("Reset credit inventory unavailable")
+    snapshot.resetCredits = parseCodexResetCredits(JSON.parse(details.body))
+    snapshot.unusedResetCredits = snapshot.resetCredits.filter((credit) => credit.status === "available" && (!credit.expiresAt || Date.parse(credit.expiresAt) > now())).length
+  } catch {
+    snapshot.resetCreditsError = "Expiry unavailable"
+  }
+  return snapshot
 }
 
 /** Always performs upstream reads; reset coordination must not make decisions from a five-minute UI cache. */
@@ -398,7 +403,7 @@ export function setCodexUsageCacheForTests(cache?: UsageCache) {
 }
 
 export function setCodexUsageApiCallForTests(apiCall?: CodexApiCall) {
-  codexApiCall = apiCall || cliProxyCodexApiCall
+  codexApiCallOverride = apiCall
   resetLocalUsageCache()
 }
 

@@ -46,9 +46,8 @@
   separate from bounded operational logs/browser reports. Observability owns
   recording/storage/context/client/formatting; platform owns log pages and HTTP
   adapters. Use `createRecorder` with owner event catalogs/normalizers.
-- CLIProxy lifecycle belongs to gateway-ai's `server/cliproxy/`. Use its shared
-  connection and audited mutations; feature handlers must not read transport
-  secrets or spawn children. Preserve deletion admission/drain, durable participant
+- Gateway inference and Codex reset redemption use gateway-owned execution admission.
+  Preserve workspace activity, deletion admission/drain, durable participant
   checkpoints/recovery and shutdown ordering, including Storage drain boundaries.
 - Keep only current features/canonical routes, not compatibility aliases,
   redirects, unused pages or request-time data conversion. Persisted schema changes
@@ -74,7 +73,7 @@
 - Keep `bun run verify` as full verification. Run
   `TMPDIR=/tmp/opencode bun run verify` without an external timeout before integration
   acceptance of security/auth, persistence/migrations, workspace isolation/deletion,
-  shared contracts/UI/platform, CLIProxy lifecycle, dependency/tooling changes, or
+  shared contracts/UI/platform, gateway execution lifecycle, dependency/tooling changes, or
   changes whose impact cannot be bounded. Full CI checks run on pull requests before
   merge; full acceptance is not required after each local iteration.
 - Distinguish this task's edits from the integration candidate. Integration scope

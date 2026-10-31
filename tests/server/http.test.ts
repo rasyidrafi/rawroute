@@ -111,15 +111,15 @@ test("initial-password exceptions are declared options, not inferred from canoni
   expect(await allowed.json()).toEqual({ allowed: true })
 })
 
-test("long-running request timeouts follow concrete options and methods, not CLIProxy or workspace paths", async () => {
+test("long-running request timeouts follow concrete options and methods, not route names", async () => {
   const timeout = mock(() => undefined)
   const transport = { timeout } as unknown as Server<undefined>
   async function call(path: string, method: string, options?: RouteOptions) {
     const response = await apiRoute({ GET: () => new Response(), DELETE: () => new Response() }, "public", path, options)(new Request(`http://localhost${path}`, { method }) as BunRequest<string>, transport)
     expect(response.status).toBe(200)
   }
-  await call("/api/admin/cliproxy/versions", "GET")
-  await call("/api/admin/cliproxy/service/restart", "GET")
+  await call("/api/admin/providers", "GET")
+  await call("/api/admin/model-pricing", "GET")
   await call("/api/admin/workspaces/example", "DELETE")
   expect(timeout).not.toHaveBeenCalled()
   await call("/declared-long-running", "GET", { idleTimeout: 0 })
