@@ -201,7 +201,7 @@ test("Storage availability loading and errors gate direct routes with a retry", 
   expect(workspaceReads).toBe(0)
   allowStorage = true
   await page.getByRole("button", { name: "Try again" }).click()
-  await expect(page.getByRole("heading", { name: "Connections" })).toBeVisible()
+  await expect(page.getByRole("heading", { level: 1, name: "Storage Gateway/Connections" })).toBeVisible()
   expect(statusRequests).toBeGreaterThanOrEqual(2)
   await expect.poll(() => workspaceReads).toBeGreaterThan(0)
 })

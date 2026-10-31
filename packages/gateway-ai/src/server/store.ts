@@ -6,7 +6,7 @@ import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/sto
 
 import { gatewayModelId, cleanAliasId } from "./model-identifiers"
 import { localCacheDelete, localCacheGet, localCacheSet } from "@rawroute/platform/server/local-cache"
-import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey } from "../contracts/domain"
+import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey, ProviderApiKeyInput } from "../contracts/domain"
 import { DEFAULT_WORKSPACE_ID, type WorkspaceStorageMode } from "@rawroute/platform/contracts/workspace"
 import { currentWorkspaceId, workspaceContext } from "@rawroute/platform/server/workspace-context"
 import { appendMemoryAudit, type AuditAction, type AuditResource } from "@rawroute/platform/server/audit"
@@ -441,7 +441,7 @@ function invalidateGatewayApiKeyCaches(hashes?: Iterable<string>) {
   invalidateApiKeyLookupCache(hashes)
 }
 
-function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { originalId?: string }) {
+function validateProviderApiKeyInput(input: ProviderApiKeyInput) {
   const withoutApiKeyValue = input.credentialKind === "codex-oauth"
   if (!input.originalId && (typeof input.name !== "string" || !input.name.trim())) {
     throw new Error("API key name is required.")
@@ -456,10 +456,10 @@ function validateProviderApiKeyInput(input: Partial<ProviderApiKey> & { original
     throw new Error("API key value is required.")
   }
   if (!withoutApiKeyValue && input.key === "__unchanged__" && !input.originalId) throw new Error("API key value is required.")
-  if (input.rpmLimit !== undefined && (!Number.isSafeInteger(input.rpmLimit) || input.rpmLimit <= 0)) {
+  if (input.rpmLimit !== undefined && input.rpmLimit !== null && (!Number.isSafeInteger(input.rpmLimit) || input.rpmLimit <= 0)) {
     throw new Error("RPM limit must be a positive whole number.")
   }
-  if (input.maxConcurrency !== undefined && (!Number.isSafeInteger(input.maxConcurrency) || input.maxConcurrency <= 0)) {
+  if (input.maxConcurrency !== undefined && input.maxConcurrency !== null && (!Number.isSafeInteger(input.maxConcurrency) || input.maxConcurrency <= 0)) {
     throw new Error("Maximum concurrency must be a positive whole number.")
   }
   if (input.priority !== undefined && (!Number.isSafeInteger(input.priority) || input.priority < 0 || input.priority > 100)) {
@@ -744,6 +744,70 @@ export async function listProviderApiKeys(providerId: string): Promise<ProviderA
   return cachedRead(providerScopedCache(state.providerApiKeysCache, providerId), () => sqliteListProviderApiKeys(providerId))
 }
 
+/** Read the committed provider and credentials together for an outbound attempt. */
+export async function getProviderCredentialRoutingSnapshot(providerId: string): Promise<{ provider?: Provider; apiKeys: ProviderApiKey[] }> {
+  if (isMemoryBackend()) {
+    const state = ensureMemorySeeded()
+    const provider = state.providers.get(providerId)
+    const apiKeys = [...(state.providerApiKeys.get(providerId)?.values() || [])].sort(compareProviderApiKeys)
+    return { provider, apiKeys }
+  }
+  return getLocalDatabase().runTransaction(async (transaction) => {
+    const [providerSnapshot, apiKeySnapshot] = await Promise.all([
+      transaction.get(providerRef(providerId)),
+      transaction.get(providerApiKeysRef(providerId)),
+    ])
+    return {
+      provider: providerSnapshot.exists ? providerFromSnapshot(providerSnapshot) : undefined,
+      apiKeys: apiKeySnapshot.docs.map((document) => providerApiKeyFromSnapshot(document, providerId)).sort(compareProviderApiKeys),
+    }
+  })
+}
+
+/**
+ * Run pre-dispatch selection and initiate the request against the same committed
+ * provider/credential snapshot. The callback must return synchronously; it may
+ * start I/O but must not await the upstream response while holding the DB queue.
+ */
+export async function withProviderCredentialRoutingSnapshot<T>(
+  providerId: string,
+  callback: (snapshot: { provider?: Provider; apiKeys: ProviderApiKey[] }) => T & (T extends PromiseLike<unknown> ? never : unknown),
+): Promise<T> {
+  if (isMemoryBackend()) {
+    const state = ensureMemorySeeded()
+    const provider = state.providers.get(providerId)
+    const apiKeys = [...(state.providerApiKeys.get(providerId)?.values() || [])].sort(compareProviderApiKeys)
+    const result = callback({ provider, apiKeys })
+    if (isPromiseLike(result)) throw new TypeError("Provider routing snapshot callbacks must complete synchronously.")
+    return result
+  }
+  let callbackResult: T | undefined
+  let callbackCalled = false
+  await getLocalDatabase().runTransaction(async (transaction) => {
+    const [providerSnapshot, apiKeySnapshot] = await Promise.all([
+      transaction.get(providerRef(providerId)),
+      transaction.get(providerApiKeysRef(providerId)),
+    ])
+    return {
+      provider: providerSnapshot.exists ? providerFromSnapshot(providerSnapshot) : undefined,
+      apiKeys: apiKeySnapshot.docs.map((document) => providerApiKeyFromSnapshot(document, providerId)).sort(compareProviderApiKeys),
+    }
+  }, (snapshot) => {
+    const result = callback(snapshot)
+    if (isPromiseLike(result)) throw new TypeError("Provider routing snapshot callbacks must complete synchronously.")
+    callbackResult = result
+    callbackCalled = true
+  })
+  if (!callbackCalled) throw new Error("Provider routing snapshot did not commit.")
+  return callbackResult as T
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return value !== null
+    && (typeof value === "object" || typeof value === "function")
+    && typeof (value as { then?: unknown }).then === "function"
+}
+
 export async function getProviderApiKey(providerId: string, apiKeyId: string): Promise<ProviderApiKey | undefined> {
   if (isMemoryBackend()) return ensureMemorySeeded().providerApiKeys.get(providerId)?.get(apiKeyId)
   const state = workspaceCacheState()
@@ -783,7 +847,7 @@ export async function listAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   return cachedRead(workspaceCacheState().allProviderApiKeysCache, sqliteListAllProviderApiKeys)
 }
 
-export async function upsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
+export async function upsertProviderApiKey(providerId: string, input: ProviderApiKeyInput): Promise<ProviderApiKey> {
   validateProviderApiKeyInput(input)
   const apiKey = isMemoryBackend() ? memorySecurityMutation("provider-credential", input.originalId ? "credential.update" : "credential.create", () => memoryUpsertProviderApiKey(providerId, input)) : await sqliteUpsertProviderApiKey(providerId, input)
   invalidateRoutingCaches()
@@ -1404,7 +1468,7 @@ async function sqliteListAllProviderApiKeys(): Promise<ProviderApiKey[]> {
   return snapshots.flatMap(({ providerId, snapshot }) => snapshot.docs.map((document) => providerApiKeyFromSnapshot(document, providerId)))
 }
 
-async function sqliteUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): Promise<ProviderApiKey> {
+async function sqliteUpsertProviderApiKey(providerId: string, input: ProviderApiKeyInput): Promise<ProviderApiKey> {
   const sqlite = getLocalDatabase()
   return sqlite.runTransaction(async (transaction) => {
     const providerDocSnapshot = await transaction.get(providerRef(providerId))
@@ -1423,11 +1487,9 @@ async function sqliteUpsertProviderApiKey(providerId: string, input: Partial<Pro
       expiresAt: input.expiresAt,
       lastRefresh: input.lastRefresh,
       enabled: input.enabled,
-      rpmLimit: input.rpmLimit,
-      maxConcurrency: input.maxConcurrency,
       priority: input.priority,
     }) as Partial<ProviderApiKey>
-    const apiKey: ProviderApiKey = {
+    const apiKey = stripUndefined({
       ...(existing || {}),
       ...inputWithoutIds,
       id: apiKeyId,
@@ -1435,11 +1497,11 @@ async function sqliteUpsertProviderApiKey(providerId: string, input: Partial<Pro
       name: input.name || existing?.name || "",
       key: input.key !== undefined && input.key !== "__unchanged__" ? input.key : (existing?.key || ""),
       enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
-      rpmLimit: input.rpmLimit ?? existing?.rpmLimit,
-      maxConcurrency: input.maxConcurrency ?? existing?.maxConcurrency,
+      rpmLimit: input.rpmLimit === null ? undefined : input.rpmLimit ?? existing?.rpmLimit,
+      maxConcurrency: input.maxConcurrency === null ? undefined : input.maxConcurrency ?? existing?.maxConcurrency,
       priority: input.priority ?? existing?.priority,
       createdAt: existing?.createdAt || new Date().toISOString(),
-    }
+    }) as ProviderApiKey
     if (apiKey.credentialKind === "codex-oauth") normalizeCodexCredentialApiKey(apiKey)
     transaction.set(providerApiKeyRef(providerId, apiKeyId), storedProviderApiKey(apiKey))
     if (!existing) {
@@ -1831,7 +1893,7 @@ function memoryDeleteProvider(providerId: string): void {
 
 }
 
-function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderApiKey> & { originalId?: string }): ProviderApiKey {
+function memoryUpsertProviderApiKey(providerId: string, input: ProviderApiKeyInput): ProviderApiKey {
   const state = ensureMemorySeeded()
   const provider = state.providers.get(providerId)
   if (!provider) throw new Error("Provider is missing.")
@@ -1849,11 +1911,9 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     expiresAt: input.expiresAt,
     lastRefresh: input.lastRefresh,
     enabled: input.enabled,
-    rpmLimit: input.rpmLimit,
-    maxConcurrency: input.maxConcurrency,
     priority: input.priority,
   }) as Partial<ProviderApiKey>
-  const apiKey: ProviderApiKey = {
+  const apiKey = stripUndefined({
     ...(existing || {}),
     ...inputWithoutIds,
     id: apiKeyId,
@@ -1861,11 +1921,11 @@ function memoryUpsertProviderApiKey(providerId: string, input: Partial<ProviderA
     name: input.name || existing?.name || "",
     key: input.key !== undefined && input.key !== "__unchanged__" ? input.key : (existing?.key || ""),
     enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
-    rpmLimit: input.rpmLimit ?? existing?.rpmLimit,
-    maxConcurrency: input.maxConcurrency ?? existing?.maxConcurrency,
+    rpmLimit: input.rpmLimit === null ? undefined : input.rpmLimit ?? existing?.rpmLimit,
+    maxConcurrency: input.maxConcurrency === null ? undefined : input.maxConcurrency ?? existing?.maxConcurrency,
     priority: input.priority ?? existing?.priority,
     createdAt: existing?.createdAt || new Date().toISOString(),
-  }
+  }) as ProviderApiKey
   if (apiKey.credentialKind === "codex-oauth") normalizeCodexCredentialApiKey(apiKey)
   slot.set(apiKeyId, apiKey)
   state.providerApiKeys.set(providerId, slot)

@@ -173,7 +173,7 @@ test("consumer fallback remains grouped while shared owner sees only its executi
     await upsertCombo({ combo: "gpt-6-luna", name: "Clever", members: [{ modelId: local.gatewayModelId }, { modelId: share!.qualifiedModelId, sharedModelId: share!.id }] })
     return createApiKey("Consumer key")
   })
-  upstream.mockImplementationOnce(async () => Response.json({ error: { message: "Temporarily unavailable" } }, { status: 503 }))
+  upstream.mockImplementationOnce(async () => Response.json({ error: { type: "rate_limit_error", message: "Rate limit exceeded." } }, { status: 429, headers: { "retry-after": "1" } }))
   expect((await proxyGatewayRequest(request(key.key, "gpt-6-luna"))).status).toBe(200)
   expect(upstream).toHaveBeenCalledTimes(2)
   const consumerLogs = await runInWorkspace(consumer, () => listRequestLogs(logQuery()))
@@ -185,4 +185,20 @@ test("consumer fallback remains grouped while shared owner sees only its executi
   expect(ownerLogs.events[0]).toMatchObject({ requestId: consumerLogs.events[1]!.requestId, attemptIndex: 1, status: 200, costMicros: 3, totalTokens: 3, sharedUsage: { role: "owner", peerWorkspaceName: "HT Non SHI" } })
   expect(await runInWorkspace(owner, () => listRequestLogs({ ...logQuery(), status: "recovered" }))).toMatchObject({ events: [] })
   expect((await runInWorkspace(consumer, () => listRequestLogs({ ...logQuery(), status: "recovered" }))).events).toHaveLength(2)
+})
+
+workspaceTest("a dispatched provider 503 stops combo fallback and records one final attempt", async () => {
+  const first = await pricedModel("temporarily-unavailable")
+  const second = await pricedModel("must-not-run")
+  const key = await createApiKey("Consumer key")
+  await upsertCombo({ combo: "no-retry", name: "No retry", members: [{ modelId: first.gatewayModelId }, { modelId: second.gatewayModelId }] })
+  upstream.mockImplementationOnce(async () => Response.json({ error: { message: "Temporarily unavailable" } }, { status: 503 }))
+
+  const response = await proxyGatewayRequest(request(key.key, "no-retry"))
+
+  expect(response.status).toBe(503)
+  expect(upstream).toHaveBeenCalledTimes(1)
+  const events = await listRequestLogs(logQuery())
+  expect(events.events).toHaveLength(1)
+  expect(events.events[0]).toMatchObject({ gatewayModelId: first.gatewayModelId, attemptIndex: 0, requestFinal: true, status: 503 })
 })

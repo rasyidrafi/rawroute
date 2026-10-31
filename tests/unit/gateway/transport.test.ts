@@ -1,23 +1,41 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test"
+import { closeLocalCache } from "@rawroute/platform/server/local-cache"
+import { DEFAULT_WORKSPACE_ID } from "@rawroute/platform/contracts/workspace"
+import { closeLocalDatabase } from "@rawroute/platform/server/database"
+import { runInWorkspace } from "@rawroute/platform/server/workspace-context"
 import type { Protocol } from "../../../packages/gateway-ai/src/contracts/domain"
-import { prepareProviderRequest, proxyToProvider } from "../../../packages/gateway-ai/src/server/gateway/transport"
+import { _resetMemoryBackend, listProviderApiKeys, upsertProvider, upsertProviderApiKey } from "../../../packages/gateway-ai/src/server/store"
+import { prepareProviderRequest, proxyToProvider as executeProviderRequest } from "../../../packages/gateway-ai/src/server/gateway/transport"
 import type { ResolvedGatewayModel } from "../../../packages/gateway-ai/src/server/gateway/model-resolution"
 
 const protocols: Protocol[] = ["openai-chat", "openai-responses", "anthropic-messages"]
 const model = "provider-model"
+const workspace = { id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" as const }
 let originalFetch: typeof fetch
 let fetchMock: ReturnType<typeof mock>
+let providerIds: Record<Protocol, { anonymous: string; keyed: string }>
+let providerCredentials: Record<Protocol, Awaited<ReturnType<typeof listProviderApiKeys>>>
 
 function resolved(protocol: Protocol, apiKeys: NonNullable<ResolvedGatewayModel["upstream"]>["apiKeys"] = []): ResolvedGatewayModel {
+  const providerId = apiKeys.length ? providerIds[protocol].keyed : providerIds[protocol].anonymous
+  const storedKeys = apiKeys.length
+    ? providerCredentials[protocol].filter((credential) => apiKeys.some((requested) => requested.key === credential.key))
+    : []
+  const authType = apiKeys.length ? protocol === "openai-chat" ? "bearer" : "x-api-key" : "none"
   return {
     upstreamModel: model,
     upstreamProtocol: protocol,
     pricingGatewayModelId: "provider/model",
     modelName: "Provider model",
-    providerId: "provider",
+    providerId,
+    providerPrefix: `${protocol}-${apiKeys.length ? "keyed" : "anonymous"}`,
     promptCacheKey: false,
-    upstream: { baseUrl: "https://provider.test/v1", protocol, authType: apiKeys.length ? "bearer" : "none", headers: {}, apiKeys, codex: false },
+    upstream: { baseUrl: "https://provider.test/v1", protocol, authType, headers: {}, apiKeys: storedKeys, codex: false },
   }
+}
+
+async function proxyToProvider(request: Request, target: ResolvedGatewayModel, prepared: ReturnType<typeof prepareProviderRequest>, client: Protocol) {
+  return runInWorkspace(workspace, () => executeProviderRequest(request, target, prepared, client))
 }
 
 function clientRequest(protocol: Protocol, modelName = "client-model", stream = false) {
@@ -88,8 +106,32 @@ function requestFor(protocol: Protocol, body: unknown) {
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   originalFetch = globalThis.fetch
+  await closeLocalDatabase()
+  await closeLocalCache()
+  Object.assign(process.env, { NODE_ENV: "test", STORAGE_BACKEND: "memory", SQLITE_PATH: ":memory:" })
+  _resetMemoryBackend()
+  providerIds = {} as Record<Protocol, { anonymous: string; keyed: string }>
+  providerCredentials = {} as Record<Protocol, Awaited<ReturnType<typeof listProviderApiKeys>>>
+  await runInWorkspace(workspace, async () => {
+    for (const protocol of protocols) {
+      const authType = protocol === "openai-chat" ? "bearer" : "x-api-key"
+      const anonymous = await upsertProvider({ name: `${protocol} anonymous`, prefix: `${protocol}-anonymous`, baseUrl: "https://provider.test/v1", protocol, authType: "none", headers: {}, enabled: true })
+      const keyed = await upsertProvider({ name: `${protocol} keyed`, prefix: `${protocol}-keyed`, baseUrl: "https://provider.test/v1", protocol, authType, headers: {}, enabled: true })
+      providerIds[protocol] = { anonymous: anonymous.id, keyed: keyed.id }
+      const keys: Array<{ name: string; key: string; priority?: number }> = protocol === "openai-chat"
+        ? [
+          { name: "First", key: "provider-secret-one", priority: 2 },
+          { name: "Second", key: "provider-secret-two", priority: 1 },
+        ]
+        : protocol === "anthropic-messages"
+          ? [{ name: "Anthropic", key: "provider-anthropic-secret" }]
+          : [{ name: "Provider", key: "provider-x-api-key-secret" }]
+      for (const { name, key, priority } of keys) await upsertProviderApiKey(keyed.id, { name, key, enabled: true, priority })
+      providerCredentials[protocol] = await listProviderApiKeys(keyed.id)
+    }
+  })
   fetchMock = mock(async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as { stream?: boolean }
     const protocol = new URL(String(_input)).pathname.endsWith("/messages") ? "anthropic-messages" : new URL(String(_input)).pathname.endsWith("/responses") ? "openai-responses" : "openai-chat"
@@ -99,7 +141,12 @@ beforeEach(() => {
   globalThis.fetch = fetchMock as unknown as typeof fetch
 })
 
-afterEach(() => { globalThis.fetch = originalFetch })
+afterEach(async () => {
+  globalThis.fetch = originalFetch
+  await closeLocalDatabase()
+  await closeLocalCache()
+  _resetMemoryBackend()
+})
 
 for (const client of protocols) for (const upstream of protocols) {
   test(`${client} to ${upstream} returns a native non-streaming response and native usage`, async () => {
@@ -222,6 +269,7 @@ test("sends x-api-key credentials to any directly configured provider origin", a
   const target = resolved("openai-responses", [apiKey])
   target.upstream!.authType = "x-api-key"
   target.upstream!.baseUrl = "https://gateway.example/v1"
+  await runInWorkspace(workspace, () => upsertProvider({ originalId: target.providerId!, baseUrl: target.upstream!.baseUrl }))
   const body = clientRequest("openai-responses")
   await proxyToProvider(requestFor("openai-responses", body), target, prepareProviderRequest(new TextEncoder().encode(JSON.stringify(body)), target, "openai-responses"), "openai-responses")
   const sent = new Headers(fetchMock.mock.calls[0]?.[1]?.headers)

@@ -578,8 +578,20 @@ async function deleteDocument(client: DatabaseClient, reference: LocalDocumentRe
 // Async document callbacks must hold the connection exclusively across awaits.
 // Every public read/write joins this queue, preventing another request from
 // observing or committing an in-progress transaction on the shared connection.
+// afterCommit runs synchronously after COMMIT and before the queue is released.
 let transactionTail: Promise<void> = Promise.resolve()
-export async function withTransaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
+type SynchronousCallbackResult<T> = T extends PromiseLike<unknown> ? never : unknown
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return value !== null
+    && (typeof value === "object" || typeof value === "function")
+    && typeof (value as { then?: unknown }).then === "function"
+}
+
+export async function withTransaction<T, AfterCommitResult = void>(
+  callback: (client: DatabaseClient) => Promise<T>,
+  afterCommit?: (result: T) => AfterCommitResult & SynchronousCallbackResult<AfterCommitResult>,
+): Promise<T> {
   const previous = transactionTail
   let release!: () => void
   transactionTail = new Promise<void>((resolve) => { release = resolve })
@@ -589,14 +601,17 @@ export async function withTransaction<T>(callback: (client: DatabaseClient) => P
     const connection = getDatabase()
     for (const integration of integrations) integration.initialize(connection)
     connection.run("BEGIN IMMEDIATE")
+    let result: T
     try {
-      const result = await callback({ query: executeQuery })
+      result = await callback({ query: executeQuery })
       connection.run("COMMIT")
-      return result
     } catch (error) {
       connection.run("ROLLBACK")
       throw error
     }
+    const afterCommitResult = afterCommit?.(result)
+    if (isPromiseLike(afterCommitResult)) throw new TypeError("Database after-commit callbacks must complete synchronously.")
+    return result
   } finally {
     release()
   }
@@ -611,13 +626,16 @@ export class SqliteDatabase {
     return new LocalWriteBatch()
   }
 
-  async runTransaction<T>(callback: (transaction: LocalTransaction) => Promise<T>) {
+  async runTransaction<T, AfterCommitResult = void>(
+    callback: (transaction: LocalTransaction) => Promise<T>,
+    afterCommit?: (result: T) => AfterCommitResult & SynchronousCallbackResult<AfterCommitResult>,
+  ) {
     return withTransaction(async (client) => {
       const transaction = new LocalTransaction(client)
       const result = await callback(transaction)
       await transaction.commit()
       return result
-    })
+    }, afterCommit)
   }
 
   async recursiveDelete(reference: LocalCollectionReference | LocalDocumentReference, options: { preserveRoot?: boolean } = {}) {

@@ -6,15 +6,19 @@ import {
   ResponsesToChatCompletionConverter,
   ResponsesToMessagesConverter,
 } from "@zenmux/rosetta-ai"
+import { createHash } from "node:crypto"
 import { createOpenAIOAuthTransport, type OpenAIOAuthSession, type OpenAIOAuthTransport } from "@openai-oauth/core"
-import type { Protocol, ProviderApiKey } from "../../contracts/domain"
+import type { Protocol, Provider, ProviderApiKey } from "../../contracts/domain"
 import { mergeComboCustomPayload, applyReasoningOverride } from "../../contracts/combo-reasoning"
 import { normalizeProviderBaseUrl, providerResponsesUrl } from "../../contracts/provider-capabilities"
 import { normalizeResponsesRequest } from "../request-normalization"
+import { withProviderCredentialRoutingSnapshot } from "../store"
 import { extractUsageMetrics, type UsageMetrics } from "../usage-metrics"
 import type { ResolvedGatewayModel } from "./model-resolution"
 import { sessionPromptCacheScope } from "./prompt-cache"
 import { collectStreamUsage, isTerminalStreamEvent } from "./stream-usage"
+import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
+import { providerCredentialScheduler, type ProviderCredentialAdmission, type ProviderCredentialScheduler } from "./provider-credential-scheduler"
 
 const hopByHopHeaders = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -23,13 +27,119 @@ const hopByHopHeaders = new Set([
 const DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 
 const CODEX_REPLAY_CACHE_LIMIT = 256
+const PROVIDER_RESPONSE_REFERENCE_LIMIT = 4_096
+const PROVIDER_RESPONSE_REFERENCE_ID_LIMIT = 512
+const PROVIDER_RESPONSE_REFERENCE_FRAME_LIMIT = 256 * 1_024
+const PROVIDER_STREAM_LEASE_TIMEOUT_MS = 299_000
 const codexReplayTransports = new Map<string, OpenAIOAuthTransport>()
 const codexResponseCaptures = new WeakMap<Response, CodexReplayCapture>()
 const codexTransportSessions = new WeakMap<OpenAIOAuthTransport, { lastSession?: OpenAIOAuthSession }>()
 const codexReplayCredentialIds = new Map<string, string>()
+const providerResponseCredentialIds = new Map<string, ProviderResponseCredential | { conflict: true }>()
 
 type GatewayCaller = { workspaceId: string; gatewayKeyId: string }
 type CodexReplayCapture = { namespace: string; callerNamespace: string; sessionKey?: string; credentialId: string; transport: OpenAIOAuthTransport }
+type ProviderResponseReferenceObserver = { write: (chunk: Uint8Array) => void; finish: () => void }
+type ProviderResponseCredential = { credentialId: string | null; keyFingerprint?: string }
+
+function providerResponseNamespace(resolved: ResolvedGatewayModel, caller: GatewayCaller) {
+  const upstream = resolved.upstream!
+  return JSON.stringify([
+    caller.workspaceId,
+    caller.gatewayKeyId,
+    resolved.shared?.ownerWorkspaceId || currentWorkspaceId(),
+    resolved.providerId,
+    resolved.providerPrefix,
+    upstream.baseUrl,
+    upstream.protocol,
+    upstream.authType,
+    createHash("sha256").update(providerHeadersFingerprint(upstream.headers)).digest("hex"),
+  ])
+}
+
+function providerResponseReferenceKey(namespace: string, id: string) {
+  return JSON.stringify([namespace, id])
+}
+
+function credentialFingerprint(credential: ProviderApiKey | undefined) {
+  return credential ? createHash("sha256").update(credential.key).digest("hex") : undefined
+}
+
+function rememberProviderResponseCredential(namespace: string, id: string, credential: ProviderResponseCredential) {
+  if (!id || id.length > PROVIDER_RESPONSE_REFERENCE_ID_LIMIT) return
+  const key = providerResponseReferenceKey(namespace, id)
+  const existing = providerResponseCredentialIds.get(key)
+  const value = existing && ("conflict" in existing || JSON.stringify(existing) !== JSON.stringify(credential))
+    ? { conflict: true as const }
+    : credential
+  providerResponseCredentialIds.delete(key)
+  providerResponseCredentialIds.set(key, value)
+  while (providerResponseCredentialIds.size > PROVIDER_RESPONSE_REFERENCE_LIMIT) {
+    const oldest = providerResponseCredentialIds.keys().next().value
+    if (oldest === undefined) break
+    providerResponseCredentialIds.delete(oldest)
+  }
+}
+
+function lookupProviderResponseCredential(namespace: string, id: string) {
+  if (id.length > PROVIDER_RESPONSE_REFERENCE_ID_LIMIT) return { found: false as const }
+  const key = providerResponseReferenceKey(namespace, id)
+  if (!providerResponseCredentialIds.has(key)) return { found: false as const }
+  const credential = providerResponseCredentialIds.get(key)!
+  providerResponseCredentialIds.delete(key)
+  providerResponseCredentialIds.set(key, credential)
+  return "conflict" in credential
+    ? { found: true as const, conflict: true as const }
+    : { found: true as const, credential }
+}
+
+function providerResponseReferenceIds(payload: Record<string, unknown>) {
+  const ids = [
+    ...(typeof payload.previous_response_id === "string" ? [payload.previous_response_id] : []),
+    ...responseReferences(payload.input),
+  ]
+  return [...new Set(ids)]
+}
+
+function rememberProviderResponseValue(namespace: string, credential: ProviderResponseCredential, value: unknown, jsonRoot = false) {
+  const record = objectValue(value)
+  if (!record) return
+  const response = objectValue(record.response) || record
+  const responseId = response.id
+  const isResponseEvent = typeof record.type === "string" && record.type.startsWith("response.")
+  if (typeof responseId === "string" && responseId && (jsonRoot || Object.hasOwn(record, "response") || isResponseEvent)) {
+    rememberProviderResponseCredential(namespace, responseId, credential)
+  }
+  if (Array.isArray(response.output)) for (const entry of response.output.slice(0, PROVIDER_RESPONSE_REFERENCE_LIMIT)) {
+    const item = objectValue(entry)
+    if (typeof item?.id === "string" && item.id) rememberProviderResponseCredential(namespace, item.id, credential)
+  }
+  const item = objectValue(record.item)
+  if (typeof item?.id === "string" && item.id) rememberProviderResponseCredential(namespace, item.id, credential)
+  for (const field of [record.item_id, record.response_id]) {
+    if (typeof field === "string" && field) rememberProviderResponseCredential(namespace, field, credential)
+  }
+}
+
+function createProviderResponseReferenceObserver(namespace: string, credential: ProviderResponseCredential): ProviderResponseReferenceObserver {
+  const decoder = new TextDecoder()
+  let buffer = ""
+  const observe = (event: ParsedSseEvent) => {
+    if (event.data.trim() === "[DONE]") return
+    try { rememberProviderResponseValue(namespace, credential, JSON.parse(event.data)) } catch {}
+  }
+  return {
+    write(chunk) {
+      buffer = drainSseFrames(buffer + decoder.decode(chunk, { stream: true }), observe)
+      if (buffer.length > PROVIDER_RESPONSE_REFERENCE_FRAME_LIMIT) buffer = ""
+    },
+    finish() {
+      buffer += decoder.decode()
+      if (buffer && buffer.length <= PROVIDER_RESPONSE_REFERENCE_FRAME_LIMIT) drainSseFrames(`${buffer}\n\n`, observe)
+      buffer = ""
+    },
+  }
+}
 
 // The OAuth transport owns response replay state. Keep it caller/account scoped;
 // without a session header, reuse is allowed only through that caller's response ID.
@@ -173,6 +283,44 @@ export class ProtocolConversionError extends Error {
     super(message)
     this.name = "ProtocolConversionError"
   }
+}
+
+function localProviderError(status: number, code: string, message: string, options: { retryAfterSeconds?: number; terminal?: boolean } = {}) {
+  return Response.json({ error: { code, message } }, {
+    status,
+    headers: {
+      ...(options.retryAfterSeconds !== undefined ? { "retry-after": String(options.retryAfterSeconds) } : {}),
+      ...(options.terminal ? { "x-rawroute-combo-terminal": "1" } : {}),
+    },
+  })
+}
+
+function providerAdmissionFailure(admission: Extract<ProviderCredentialAdmission, { ok: false }>, terminal = false) {
+  if (admission.reason === "rpm_limit") {
+    return localProviderError(429, "provider_credential_rpm_limit", "Provider request limit reached. Retry after the current window expires.", {
+      retryAfterSeconds: Math.max(1, Math.ceil((admission.retryAfterMs || 0) / 1_000)),
+      terminal,
+    })
+  }
+  if (admission.reason === "required_credential_unavailable") {
+    return localProviderError(503, "provider_response_continuation_unavailable", "This Responses continuation is unavailable. Start a new response.", { terminal: true })
+  }
+  if (admission.reason === "no_eligible_credentials") {
+    return localProviderError(503, "provider_credentials_unavailable", "Provider credentials are unavailable.", { terminal })
+  }
+  return localProviderError(503, "provider_credential_concurrency_limit", "Provider capacity is temporarily unavailable.", { terminal })
+}
+
+function ambiguousProviderFailure() {
+  return localProviderError(502, "provider_request_outcome_unknown", "The provider request did not complete. It was not retried because its outcome is unknown.", { terminal: true })
+}
+
+function continuationUnavailable() {
+  return localProviderError(503, "provider_response_continuation_unavailable", "This Responses continuation is unavailable. Start a new response.", { terminal: true })
+}
+
+function continuationConflict() {
+  return localProviderError(400, "provider_response_continuation_conflict", "Responses continuation items belong to different requests.", { terminal: true })
 }
 
 type RosettaRoundTrip = {
@@ -769,6 +917,67 @@ function cancelablePassthrough(source: ReadableStream<Uint8Array>, abort: AbortC
   })
 }
 
+function providerBodyLifetime(source: ReadableStream<Uint8Array>, abort: AbortController, lease?: Extract<ProviderCredentialAdmission, { ok: true }>, observer?: ProviderResponseReferenceObserver) {
+  const reader = source.getReader()
+  let finished = false
+  let cancellation: Promise<void> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let timeoutError: Error | undefined
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+  const finish = () => {
+    if (finished) return
+    finished = true
+    if (timer) clearTimeout(timer)
+    try { observer?.finish() }
+    finally { lease?.release() }
+  }
+  const cancelUpstream = (reason: unknown) => {
+    abort.abort(reason)
+    cancellation ??= reader.cancel(reason).then(() => undefined, () => undefined)
+    return cancellation
+  }
+  if (lease) {
+    timer = setTimeout(() => {
+      const reason = new Error("Provider response stream exceeded its maximum lifetime.")
+      timeoutError = reason
+      void cancelUpstream(reason).then(() => {
+        finish()
+        try { streamController?.error(reason) } catch {}
+      })
+    }, PROVIDER_STREAM_LEASE_TIMEOUT_MS)
+    timer.unref()
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      streamController = controller
+      if (timeoutError) {
+        controller.error(timeoutError)
+        return
+      }
+      try {
+        const next = await reader.read()
+        if (cancellation) await cancellation
+        if (timeoutError) return
+        if (next.done) {
+          finish()
+          controller.close()
+        } else {
+          observer?.write(next.value)
+          controller.enqueue(next.value)
+        }
+      } catch (error) {
+        await cancelUpstream(error)
+        finish()
+        if (!timeoutError) controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      await cancelUpstream(reason)
+      finish()
+    },
+  })
+}
+
 function chatUsageOnly(event: ParsedSseEvent | undefined) {
   if (!event || event.data.trim() === "[DONE]") return false
   try {
@@ -894,28 +1103,83 @@ export interface GatewayUpstreamResponse {
   streamUsage?: ReturnType<typeof collectStreamUsage>
 }
 
-/** Execute one provider request using its configured protocol and ordered credentials. */
-export async function proxyToProvider(request: Request, resolved: ResolvedGatewayModel, prepared: PreparedProviderRequest, clientProtocol: Protocol, caller?: GatewayCaller): Promise<GatewayUpstreamResponse> {
-  const upstream = resolved.upstream
-  if (!upstream) return { response: Response.json({ error: { message: "Provider configuration is unavailable." } }, { status: 503 }) }
-  const converted = prepared
-  const credentials = eligibleCredentials(resolved)
-  if (!credentials.length) return { response: Response.json({ error: { message: "No enabled provider credentials are available." } }, { status: 503 }) }
-  if (upstream.codex) {
-    let preferred: ReturnType<typeof preferredCodexCredential>
-    try { preferred = preferredCodexCredential(request, converted.body, resolved, caller) }
-    catch (error) {
-      const message = error instanceof Error ? error.message : "Responses continuation is unavailable."
-      return { response: Response.json({ error: { message, code: "unsupported_protocol_conversion" } }, { status: 400 }) }
-    }
-    if (preferred) {
-      const selected = credentials.find((credential) => credential?.id === preferred!.credentialId)
-      if (!selected && preferred.continuation) return { response: Response.json({ error: { message: "The Codex account for this Responses continuation is unavailable." } }, { status: 503 }) }
-      if (selected) credentials.splice(0, credentials.length, selected, ...credentials.filter((credential) => credential?.id !== selected.id))
-    }
+type ProviderFailure = { status: number; statusText: string; headers: Headers; body: Uint8Array }
+
+function responseFromProviderFailure(failure: ProviderFailure, clientProtocol: Protocol, upstreamProtocol: Protocol, terminal = false): GatewayUpstreamResponse {
+  const responseHeadersForFailure = responseHeaders(failure.headers)
+  if (terminal) responseHeadersForFailure.set("x-rawroute-combo-terminal", "1")
+  if (clientProtocol === upstreamProtocol) {
+    return { response: new Response(Buffer.from(failure.body), { status: failure.status, statusText: failure.statusText, headers: responseHeadersForFailure }) }
   }
-  let lastFailure: { status: number; statusText: string; headers: Headers; body: Uint8Array } | undefined
-  for (const credential of credentials) {
+  let payload: unknown
+  try { payload = JSON.parse(new TextDecoder().decode(failure.body)) } catch { payload = undefined }
+  const headers = responseHeadersForFailure
+  headers.set("content-type", "application/json")
+  headers.delete("content-length")
+  return { response: Response.json(makeClientError(clientProtocol, upstreamErrorDetails(payload)), { status: failure.status, statusText: failure.statusText, headers }) }
+}
+
+function responseReferencesForOrdinaryRequest(body: Uint8Array, clientProtocol: Protocol, resolved: ResolvedGatewayModel, caller: GatewayCaller | undefined) {
+  const upstream = resolved.upstream
+  if (!caller || clientProtocol !== "openai-responses" || upstream?.protocol !== "openai-responses") return { continuation: false as const }
+  const namespace = providerResponseNamespace(resolved, caller)
+  let payload: Record<string, unknown> | undefined
+  try { payload = objectValue(JSON.parse(new TextDecoder().decode(body))) } catch {}
+  if (!payload) return { continuation: false as const, namespace }
+  const references = providerResponseReferenceIds(payload)
+  if (!references.length) return { continuation: false as const, namespace }
+  const credentials = references.map((id) => lookupProviderResponseCredential(namespace, id))
+  if (credentials.some((value) => !value.found)) return { continuation: true as const, error: continuationUnavailable() }
+  if (credentials.some((value) => value.found && "conflict" in value)) return { continuation: true as const, error: continuationConflict() }
+  const bound = credentials.map((value) => value.found && "credential" in value ? value.credential : undefined)
+  if (bound.some((value) => value === undefined)) return { continuation: true as const, error: continuationUnavailable() }
+  const unique = new Map(bound.map((value) => [JSON.stringify(value), value]))
+  if (unique.size !== 1) return { continuation: true as const, error: continuationConflict() }
+  const credential = bound[0]!
+  if (credential.credentialId === null && upstream.authType !== "none"
+    || credential.credentialId !== null && upstream.authType === "none") {
+    return { continuation: true as const, error: continuationUnavailable() }
+  }
+  return { continuation: true as const, namespace, credential }
+}
+
+function providerHeadersFingerprint(headers: Record<string, string>) {
+  return JSON.stringify(Object.entries(headers).sort(([left], [right]) => left.localeCompare(right)))
+}
+
+function providerConfigurationMatches(provider: Provider, resolved: ResolvedGatewayModel) {
+  const upstream = resolved.upstream!
+  const promptCacheKey = provider.prefix === "codex"
+    || provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true
+  return provider.enabled
+    && provider.prefix === resolved.providerPrefix
+    && provider.baseUrl === upstream.baseUrl
+    && provider.protocol === upstream.protocol
+    && provider.protocol === resolved.upstreamProtocol
+    && provider.authType === upstream.authType
+    && providerHeadersFingerprint(provider.headers || {}) === providerHeadersFingerprint(upstream.headers)
+    && (provider.prefix === "codex") === upstream.codex
+    && promptCacheKey === resolved.promptCacheKey
+}
+
+function safeCredentialFallback(status: number) {
+  return status === 401 || status === 403 || status === 429
+}
+
+async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayModel, converted: PreparedProviderRequest, clientProtocol: Protocol, caller?: GatewayCaller): Promise<GatewayUpstreamResponse> {
+  const upstream = resolved.upstream!
+  const credentials = eligibleCredentials(resolved).filter((credential): credential is ProviderApiKey => credential !== undefined)
+  if (!credentials.length) return { response: localProviderError(503, "provider_credentials_unavailable", "No enabled Codex accounts are available.") }
+  let preferred: ReturnType<typeof preferredCodexCredential>
+  try { preferred = preferredCodexCredential(request, converted.body, resolved, caller) }
+  catch { return { response: continuationConflict() } }
+  if (preferred) {
+    const selected = credentials.find((credential) => credential.id === preferred!.credentialId)
+    if (!selected && preferred.continuation) return { response: continuationUnavailable() }
+    if (selected) credentials.splice(0, credentials.length, selected, ...credentials.filter((credential) => credential.id !== selected.id))
+  }
+  let lastFailure: ProviderFailure | undefined
+  for (const [index, credential] of credentials.entries()) {
     if (request.signal.aborted) throw request.signal.reason
     const abort = new AbortController()
     let response: Response
@@ -923,13 +1187,17 @@ export async function proxyToProvider(request: Request, resolved: ResolvedGatewa
     catch {
       abort.abort()
       if (request.signal.aborted) throw request.signal.reason
-      continue
+      return { response: ambiguousProviderFailure() }
     }
     if (!response.ok) {
-      const failure = { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers), body: new Uint8Array(await response.arrayBuffer()) }
+      let body: Uint8Array
+      try { body = new Uint8Array(await response.arrayBuffer()) }
+      catch { abort.abort(); return { response: ambiguousProviderFailure() } }
+      const failure = { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers), body }
       lastFailure = failure
-      if (credential !== credentials.at(-1)) continue
-      break
+      const safeFallback = safeCredentialFallback(response.status)
+      if (!preferred?.continuation && safeFallback && index < credentials.length - 1) continue
+      return responseFromProviderFailure(failure, clientProtocol, upstream.protocol, preferred?.continuation || !safeFallback)
     }
 
     const isEventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true
@@ -948,40 +1216,264 @@ export async function proxyToProvider(request: Request, resolved: ResolvedGatewa
       return { response: new Response(outputBody, { status: response.status, statusText: response.statusText, headers }), streamUsage }
     }
 
-    const upstreamBody = new Uint8Array(await response.arrayBuffer())
+    let upstreamBody: Uint8Array
+    try { upstreamBody = new Uint8Array(await response.arrayBuffer()) }
+    catch { abort.abort(); return { response: ambiguousProviderFailure() } }
     const codexCapture = codexResponseCaptures.get(response)
     if (codexCapture) {
       try { rememberCodexResponse(codexCapture, JSON.parse(new TextDecoder().decode(upstreamBody)) as unknown) } catch {}
     }
     const usage = nativeUsage(upstreamBody, upstream.protocol, response.headers.get("content-type"))
-    if (!converted.converter) return { response: new Response(upstreamBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }), usage }
-    let convertedBody: Uint8Array
+    if (!converted.converter) return { response: new Response(Buffer.from(upstreamBody), { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }), usage }
     try {
       const value = objectValue(JSON.parse(new TextDecoder().decode(upstreamBody)))
       if (!value) throw new Error("The provider returned a non-JSON response.")
       const result = objectValue(converted.converter.convertResponse(value))
       if (!result) throw new Error("The converter did not produce a JSON response.")
-      convertedBody = new TextEncoder().encode(JSON.stringify(result))
+      const headers = responseHeaders(response.headers)
+      headers.set("content-type", "application/json")
+      headers.delete("content-length")
+      return { response: new Response(JSON.stringify(result), { status: response.status, statusText: response.statusText, headers }), usage }
     } catch (error) {
       const message = error instanceof Error ? error.message : "The provider response could not be converted."
-      return { response: Response.json({ error: { message, code: "unsupported_protocol_conversion" } }, { status: 502 }), usage }
+      return { response: localProviderError(502, "unsupported_protocol_conversion", message, { terminal: true }), usage }
     }
-    const headers = responseHeaders(response.headers)
-    headers.set("content-type", "application/json")
-    headers.delete("content-length")
-    return { response: new Response(Buffer.from(convertedBody), { status: response.status, statusText: response.statusText, headers }), usage }
   }
-  if (lastFailure) {
-    if (clientProtocol === upstream.protocol) {
-      return { response: new Response(Buffer.from(lastFailure.body), { status: lastFailure.status, statusText: lastFailure.statusText, headers: lastFailure.headers }) }
+  return lastFailure
+    ? responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol)
+    : { response: ambiguousProviderFailure() }
+}
+
+async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatewayModel, prepared: PreparedProviderRequest, clientProtocol: Protocol, caller: GatewayCaller | undefined, scheduler: ProviderCredentialScheduler): Promise<GatewayUpstreamResponse> {
+  const upstream = resolved.upstream!
+  if (!resolved.providerId) return { response: localProviderError(503, "provider_configuration_unavailable", "Provider configuration is temporarily unavailable.") }
+  const body = Buffer.from(prepared.body)
+  const url = endpointUrl(upstream.baseUrl, upstream.protocol, new URL(request.url).search)
+  const baseHeaders = upstreamHeaders(request, upstream.headers, undefined, upstream.authType, upstream.protocol)
+  const continuation = responseReferencesForOrdinaryRequest(prepared.body, clientProtocol, resolved, caller)
+  if (continuation.error) return { response: continuation.error }
+  const namespace = continuation.namespace
+  const usesCredentialScheduler = upstream.authType !== "none"
+  const responseCaptureEnabled = namespace !== undefined && clientProtocol === "openai-responses" && upstream.protocol === "openai-responses"
+  const attemptedCredentialIds = new Set<string>()
+  const sessionScopeHash = caller ? sessionPromptCacheScope(request.headers, caller.workspaceId, caller.gatewayKeyId) : undefined
+  let lastFailure: ProviderFailure | undefined
+
+  while (true) {
+    if (request.signal.aborted) throw request.signal.reason
+    type DispatchResult =
+      | { kind: "dispatched"; pending: Promise<Response>; abort: AbortController; credential?: ProviderApiKey; lease?: Extract<ProviderCredentialAdmission, { ok: true }> }
+      | { kind: "retry" }
+      | { kind: "aborted" }
+      | { kind: "blocked"; response: Response }
+    let dispatch: DispatchResult
+    try {
+      dispatch = await withProviderCredentialRoutingSnapshot(resolved.providerId, (snapshot): DispatchResult => {
+        if (!snapshot.provider || !providerConfigurationMatches(snapshot.provider, resolved)) {
+          if (lastFailure) return { kind: "blocked", response: responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response }
+          return {
+            kind: "blocked",
+            response: localProviderError(
+              503,
+              continuation.continuation ? "provider_response_continuation_unavailable" : "provider_configuration_changed",
+              continuation.continuation ? "This Responses continuation is unavailable. Start a new response." : "Provider settings changed during request preparation. Retry the request.",
+              { terminal: continuation.continuation },
+            ),
+          }
+        }
+
+        const credentials: Array<ProviderApiKey | undefined> = upstream.authType === "none"
+          ? [undefined]
+          : snapshot.apiKeys.filter((key) => key.enabled && key.credentialKind !== "codex-oauth" && key.key.trim())
+        if (!credentials.length) {
+          if (continuation.continuation) return { kind: "blocked", response: continuationUnavailable() }
+          if (lastFailure) return { kind: "blocked", response: responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response }
+          return { kind: "blocked", response: localProviderError(503, "provider_credentials_unavailable", "No enabled provider credentials are available.") }
+        }
+        if (upstream.authType === "none" && attemptedCredentialIds.has("__none__")) {
+          return { kind: "blocked", response: lastFailure
+            ? responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response
+            : localProviderError(503, "provider_credentials_unavailable", "Provider credentials are unavailable.") }
+        }
+
+        if (continuation.credential) {
+          if (continuation.credential.credentialId === null) {
+            if (upstream.authType !== "none") return { kind: "blocked", response: continuationUnavailable() }
+          } else {
+            const original = credentials.find((credential) => credential?.id === continuation.credential!.credentialId)
+            if (!original || credentialFingerprint(original) !== continuation.credential.keyFingerprint) {
+              return { kind: "blocked", response: continuationUnavailable() }
+            }
+          }
+        }
+
+        let credential: ProviderApiKey | undefined
+        let lease: Extract<ProviderCredentialAdmission, { ok: true }> | undefined
+        if (usesCredentialScheduler) {
+          const admission = scheduler.acquire({
+            ownerWorkspaceId: resolved.shared?.ownerWorkspaceId || currentWorkspaceId(),
+            providerId: resolved.providerId!,
+            credentials: credentials.filter((value): value is ProviderApiKey => value !== undefined),
+            ...(sessionScopeHash ? { sessionScopeHash } : {}),
+            excludedCredentialIds: attemptedCredentialIds,
+            ...(continuation.credential?.credentialId ? { requiredCredentialId: continuation.credential.credentialId } : {}),
+          })
+          if (!admission.ok) {
+            if (lastFailure && !continuation.continuation) {
+              return { kind: "blocked", response: responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response }
+            }
+            return { kind: "blocked", response: providerAdmissionFailure(admission, continuation.continuation) }
+          }
+          lease = admission
+          credential = admission.credential
+        } else {
+          credential = credentials.find((candidate) => candidate === undefined
+            ? !attemptedCredentialIds.has("__none__")
+            : !attemptedCredentialIds.has(candidate.id))
+          if (!credential && upstream.authType !== "none") {
+            return { kind: "blocked", response: lastFailure
+              ? responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response
+              : localProviderError(503, "provider_credentials_unavailable", "No enabled provider credentials are available.") }
+          }
+        }
+
+        if (credential) {
+          const resolvedCredential = upstream.apiKeys.find((candidate) => candidate.id === credential!.id)
+          if (!resolvedCredential || credentialFingerprint(resolvedCredential) !== credentialFingerprint(credential)) {
+            lease?.cancelBeforeDispatch()
+            if (continuation.continuation) return { kind: "blocked", response: continuationUnavailable() }
+            if (lastFailure) return { kind: "blocked", response: responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response }
+            return { kind: "blocked", response: localProviderError(503, "provider_configuration_changed", "Provider credentials changed during request preparation. Retry the request.") }
+          }
+        }
+
+        if (request.signal.aborted) {
+          lease?.cancelBeforeDispatch()
+          return { kind: "aborted" }
+        }
+        if (credential) attemptedCredentialIds.add(credential.id)
+        else attemptedCredentialIds.add("__none__")
+        const abort = new AbortController()
+        let dispatched = false
+        try {
+          const headers = new Headers(baseHeaders)
+          if (credential && upstream.authType === "bearer") headers.set("authorization", `Bearer ${credential.key}`)
+          if (credential && upstream.authType === "x-api-key") headers.set("x-api-key", credential.key)
+          const signal = request.signal ? AbortSignal.any([request.signal, abort.signal]) : abort.signal
+          const pending = fetch(url, { method: "POST", headers, body, signal, cache: "no-store", redirect: "manual" })
+          lease?.markDispatched()
+          dispatched = true
+          return { kind: "dispatched", pending, abort, credential, lease }
+        } catch {
+          abort.abort()
+          if (!dispatched) {
+            lease?.cancelBeforeDispatch()
+            if (request.signal.aborted) return { kind: "aborted" }
+            if (continuation.continuation) return { kind: "blocked", response: continuationUnavailable() }
+            return { kind: "retry" }
+          }
+          lease?.release()
+          return { kind: "blocked", response: ambiguousProviderFailure() }
+        }
+      })
+    } catch {
+      return { response: localProviderError(503, "provider_configuration_unavailable", "Provider configuration is temporarily unavailable.", { terminal: continuation.continuation }) }
     }
-    let payload: unknown
-    try { payload = JSON.parse(new TextDecoder().decode(lastFailure.body)) } catch { payload = undefined }
-    const details = upstreamErrorDetails(payload)
-    const headers = responseHeaders(lastFailure.headers)
-    headers.set("content-type", "application/json")
-    headers.delete("content-length")
-    return { response: Response.json(makeClientError(clientProtocol, details), { status: lastFailure.status, statusText: lastFailure.statusText, headers }) }
+    if (dispatch.kind === "blocked") return { response: dispatch.response }
+    if (dispatch.kind === "aborted") throw request.signal.reason
+    if (dispatch.kind === "retry") continue
+    const { abort, credential, lease } = dispatch
+    let response: Response
+    try { response = await dispatch.pending }
+    catch {
+      abort.abort()
+      lease?.release()
+      if (request.signal.aborted) throw request.signal.reason
+      return { response: ambiguousProviderFailure() }
+    }
+
+    if (!response.ok) {
+      let responseBody: Uint8Array
+      try { responseBody = new Uint8Array(await response.arrayBuffer()) }
+      catch { abort.abort(); lease?.release(); return { response: ambiguousProviderFailure() } }
+      lease?.release()
+      const failure = { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers), body: responseBody }
+      lastFailure = failure
+      const safeFallback = safeCredentialFallback(response.status)
+      if (continuation.continuation || !safeFallback) {
+        return responseFromProviderFailure(failure, clientProtocol, upstream.protocol, continuation.continuation || !safeFallback)
+      }
+      continue
+    }
+
+    const isEventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true
+    if (isEventStream && response.body) {
+      try {
+        const referenceCredential: ProviderResponseCredential = {
+          credentialId: credential?.id || null,
+          ...(credential ? { keyFingerprint: credentialFingerprint(credential) } : {}),
+        }
+        const observer = responseCaptureEnabled
+          ? createProviderResponseReferenceObserver(namespace!, referenceCredential)
+          : undefined
+        const lifetimeBody = providerBodyLifetime(response.body, abort, lease, observer)
+        const [clientBody, accountingBody] = lifetimeBody.tee()
+        const streamUsage = collectStreamUsage(accountingBody, upstream.protocol === "anthropic-messages" ? "anthropic" : "openai")
+        const outputBody = prepared.converter
+          ? convertStreamBody(clientBody, prepared.converter, clientProtocol, abort, prepared.includeChatStreamUsage)
+          : clientProtocol === "openai-chat" && upstream.protocol === "openai-chat" && !prepared.includeChatStreamUsage
+            ? filterUnrequestedChatUsage(clientBody, abort)
+            : cancelablePassthrough(clientBody, abort)
+        const headers = responseHeaders(response.headers)
+        if (prepared.converter) headers.set("content-type", "text/event-stream; charset=utf-8")
+        return { response: new Response(outputBody, { status: response.status, statusText: response.statusText, headers }), streamUsage }
+      } catch {
+        abort.abort()
+        lease?.release()
+        return { response: ambiguousProviderFailure() }
+      }
+    }
+
+    try {
+      const responseBody = new Uint8Array(await response.arrayBuffer())
+      if (responseCaptureEnabled && response.headers.get("content-type")?.toLowerCase().includes("json")) {
+        try { rememberProviderResponseValue(namespace!, { credentialId: credential?.id || null, ...(credential ? { keyFingerprint: credentialFingerprint(credential) } : {}) }, JSON.parse(new TextDecoder().decode(responseBody)), true) } catch {}
+      }
+      const usage = nativeUsage(responseBody, upstream.protocol, response.headers.get("content-type"))
+      if (!prepared.converter) return { response: new Response(Buffer.from(responseBody), { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) }), usage }
+      try {
+        const value = objectValue(JSON.parse(new TextDecoder().decode(responseBody)))
+        if (!value) throw new Error("The provider returned a non-JSON response.")
+        const result = objectValue(prepared.converter.convertResponse(value))
+        if (!result) throw new Error("The converter did not produce a JSON response.")
+        const headers = responseHeaders(response.headers)
+        headers.set("content-type", "application/json")
+        headers.delete("content-length")
+        return { response: new Response(JSON.stringify(result), { status: response.status, statusText: response.statusText, headers }), usage }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "The provider response could not be converted."
+        return { response: localProviderError(502, "unsupported_protocol_conversion", message, { terminal: true }), usage }
+      }
+    } catch {
+      abort.abort()
+      return { response: ambiguousProviderFailure() }
+    } finally {
+      lease?.release()
+    }
   }
-  return { response: Response.json({ error: { message: "Upstream request failed." } }, { status: 502 }) }
+}
+
+/** Execute one provider request using fresh credentials and provider-owned admission. */
+export async function proxyToProvider(
+  request: Request,
+  resolved: ResolvedGatewayModel,
+  prepared: PreparedProviderRequest,
+  clientProtocol: Protocol,
+  caller?: GatewayCaller,
+  scheduler: ProviderCredentialScheduler = providerCredentialScheduler,
+): Promise<GatewayUpstreamResponse> {
+  const upstream = resolved.upstream
+  if (!upstream) return { response: Response.json({ error: { message: "Provider configuration is unavailable." } }, { status: 503 }) }
+  if (upstream.codex) return proxyToCodexProvider(request, resolved, prepared, clientProtocol, caller)
+  return proxyToOrdinaryProvider(request, resolved, prepared, clientProtocol, caller, scheduler)
 }

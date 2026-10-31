@@ -15,6 +15,7 @@ export interface ResolvedGatewayModel {
   providerModelId?: string
   providerId?: string
   providerName?: string
+  providerPrefix: string
   promptCacheKey: boolean
   reasoningEffort?: string
   customPayload?: Record<string, unknown>
@@ -63,6 +64,7 @@ async function resolveProvider(provider: Awaited<ReturnType<typeof listProviders
     providerModelId: target.id,
     providerId: provider.id,
     providerName: provider.name,
+    providerPrefix: provider.prefix,
     promptCacheKey: provider.prefix === "codex" || provider.protocol !== "anthropic-messages" && provider.supportPromptCacheKey === true,
     reasoningCapability: target.reasoningCapability,
     upstream: {

@@ -33,6 +33,7 @@ function resolved(account: Awaited<ReturnType<typeof addAccount>>): ResolvedGate
     pricingGatewayModelId: "codex/gpt-5",
     modelName: "GPT-5",
     providerId,
+    providerPrefix: "codex",
     promptCacheKey: true,
     upstream: {
       baseUrl: "https://chatgpt.com/backend-api/codex",

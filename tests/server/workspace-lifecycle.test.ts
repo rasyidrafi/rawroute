@@ -20,6 +20,7 @@ import { resetAnalyticsForTests, recordGatewayUsage, getDashboardPayload } from 
 import { resetModelSharesForTests, setModelShareTargets, listSharedModelsForRecipient } from "../../packages/gateway-ai/src/server/model-shares"
 import { resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
 import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/gateway/gateway"
+import { providerCredentialScheduler } from "../../packages/gateway-ai/src/server/gateway/provider-credential-scheduler"
 import { redeemCodexReset, setCodexResetApiCallForTests } from "../../packages/gateway-ai/src/server/codex/reset"
 import { setCodexUsageApiCallForTests } from "../../packages/gateway-ai/src/server/codex/usage"
 import { setCodexUpstreamFetchForTests } from "../../packages/gateway-ai/src/server/codex/upstream"
@@ -460,9 +461,11 @@ test("real shared native SSE settles both usage copies before owner deletion and
   const repo = repository()
   const owner = await workspace(repo, "Streaming owner")
   const consumer = await workspace(repo, "Streaming consumer")
-  const model = await runInWorkspace(owner, async () => {
-    const provider = await upsertProvider({ name: "Native", prefix: "native", baseUrl: "https://native-provider.invalid/v1", protocol: "openai-responses", authType: "none", enabled: true })
-    return upsertModel(provider.id, { name: "Stream", gatewayModelId: "native/stream", upstreamModel: "stream", enabled: true })
+  const { model, provider, credential } = await runInWorkspace(owner, async () => {
+    const provider = await upsertProvider({ name: "Native", prefix: "native", baseUrl: "https://native-provider.invalid/v1", protocol: "openai-responses", authType: "bearer", enabled: true })
+    const credential = await upsertProviderApiKey(provider.id, { name: "Stream key", key: "stream-provider-secret", maxConcurrency: 1 })
+    const model = await upsertModel(provider.id, { name: "Stream", gatewayModelId: "native/stream", upstreamModel: "stream", enabled: true })
+    return { provider, credential, model }
   })
   await runInWorkspace(owner, () => setModelShareTargets(model.id, [consumer.id]))
   const key = await runInWorkspace(consumer, async () => {
@@ -472,13 +475,19 @@ test("real shared native SSE settles both usage copies before owner deletion and
   })
   let stream!: ReadableStreamDefaultController<Uint8Array>
   const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
-  const upstream = spyOn(target, "fetch").mockImplementation(async input => {
+  const upstream = spyOn(target, "fetch").mockImplementation(async (input, init) => {
     expect(String(input).startsWith("https://native-provider.invalid/")).toBe(true)
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer stream-provider-secret")
     return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller } }), { headers: { "content-type": "text/event-stream" } })
   })
   try {
-    const response = await proxyGatewayRequest(new Request("https://gateway.test/v1/responses", { method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" }, body: JSON.stringify({ model: "streaming", input: "Hello", stream: true }) }))
+    const makeRequest = () => new Request("https://gateway.test/v1/responses", { method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" }, body: JSON.stringify({ model: "streaming", input: "Hello", stream: true }) })
+    const response = await proxyGatewayRequest(makeRequest())
     expect(response.status).toBe(200)
+    const atCapacity = await proxyGatewayRequest(makeRequest())
+    expect(atCapacity.status).toBe(503)
+    expect(await atCapacity.json()).toMatchObject({ error: { code: "provider_credential_concurrency_limit" } })
+    expect(upstream).toHaveBeenCalledTimes(1)
     let deleted = false
     const deletion = repo.deleteWorkspace(owner.id, owner.name).then(() => { deleted = true })
     await tick()
@@ -490,8 +499,11 @@ test("real shared native SSE settles both usage copies before owner deletion and
     await deletion
     expect(await repo.getWorkspace(owner.id)).toBeUndefined()
     expect((await getSqliteDatabase().collection(`rawroute_workspaces/${owner.id}/usageEvents`).get()).docs).toHaveLength(0)
+    const releasedAfterDeletion = providerCredentialScheduler.acquire({ ownerWorkspaceId: owner.id, providerId: provider.id, credentials: [credential] })
+    expect(releasedAfterDeletion.ok).toBe(true)
+    if (releasedAfterDeletion.ok) releasedAfterDeletion.release()
     const consumerUsage = await runInWorkspace(consumer, () => getDashboardPayload({ preset: "all" }))
-    expect(consumerUsage.summary.requests).toBe(1)
+    expect(consumerUsage.summary.requests).toBe(2)
     expect(consumerUsage.summary.tokens).toBe(4)
     expect(upstream).toHaveBeenCalledTimes(1)
   } finally { upstream.mockRestore() }

@@ -2,13 +2,16 @@ import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { recordLog } from "../../../../../../logging"
 import { getProvider, upsertProviderApiKey } from "../../../../../../store"
-import type { ProviderApiKey } from "../../../../../../../contracts/domain"
+import type { ProviderApiKeyInput } from "../../../../../../../contracts/domain"
 
-function parseInteger(value: unknown, label: string, minimum: number, maximum?: number): number | undefined {
-  if (value === undefined || value === null) return undefined
-  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN
-  if (!Number.isSafeInteger(parsed) || parsed < minimum || (maximum !== undefined && parsed > maximum)) {
-    throw new Error(`${label} must be a valid whole number.`)
+function parseLimit(value: unknown, label: string): number | null | undefined {
+  if (value === undefined || value === null) return value
+  const text = typeof value === "string" ? value.trim() : undefined
+  const parsed = typeof value === "number"
+    ? value
+    : text && /^\d+$/.test(text) ? Number(text) : Number.NaN
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive whole number.`)
   }
   return parsed
 }
@@ -17,7 +20,7 @@ export async function POST(request: Request, params: { providerId: string }) {
   const { providerId } = params
   const body = await request.json().catch(() => null) as Record<string, unknown> | null
   if (!body) return jsonError("Invalid request.", 400)
-  const input = body.providerApiKey as Partial<ProviderApiKey> & { originalId?: string } | undefined
+  const input = body.providerApiKey as ProviderApiKeyInput | undefined
   if (!input) return jsonError("Provider API key payload is required.", 400)
 
   try {
@@ -34,8 +37,8 @@ export async function POST(request: Request, params: { providerId: string }) {
       ? input.key
       : typeof input.key === "string" ? input.key.trim() : ""
     if (!key) throw new Error("API key value is required.")
-    const rpmLimit = parseInteger(input.rpmLimit, "RPM limit", 1)
-    const maxConcurrency = parseInteger(input.maxConcurrency, "Maximum concurrency", 1)
+    const rpmLimit = parseLimit(input.rpmLimit, "RPM limit")
+    const maxConcurrency = parseLimit(input.maxConcurrency, "Maximum concurrency")
     if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("Enabled value must be a boolean.")
     await upsertProviderApiKey(providerId, {
       originalId: input.originalId,

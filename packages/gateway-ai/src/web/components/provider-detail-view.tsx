@@ -27,7 +27,7 @@ import { Button } from "@rawroute/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
 import { Dialog, DialogContent } from "@rawroute/ui/dialog"
 import { TableColumns, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@rawroute/ui/table"
-import { protocolLabels, type Model, type Provider, type ProviderApiKey } from "../../contracts/domain"
+import { protocolLabels, type Model, type Provider, type ProviderApiKey, type ProviderApiKeyInput } from "../../contracts/domain"
 import { formatAppDate } from "@rawroute/observability/contracts/timezone"
 import type { CodexDiscoveryStatus } from "../../contracts/codex"
 import type { CodexAutoRedeemResponse, CodexAutoRedeemSettings } from "../../contracts/codex"
@@ -79,7 +79,7 @@ function createProviderDetailActions({ provider, providerId, apiKeys, apiPost, a
       toast.success(`Codex account ${account.enabled ? "disabled" : "enabled"}`)
       return true
     }, (error) => toast.error(error instanceof Error ? error.message : "Unable to update Codex account")).then((result) => result ?? false),
-    saveProviderApiKey: (apiKey: Partial<ProviderApiKey> & { originalId?: string }) => withPendingAction("save-provider-api-key", pending, async () => {
+    saveProviderApiKey: (apiKey: ProviderApiKeyInput) => withPendingAction("save-provider-api-key", pending, async () => {
       await apiPost(`/api/admin/providers/${provider.id}/api-keys`, { providerApiKey: apiKey })
       toast.success(editingProviderApiKey ? "Provider API key updated" : "Provider API key added")
       await mutate()
@@ -262,7 +262,7 @@ function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData
           <TableRow>
             <TableHead className="w-20" />
             <TableHead>Name</TableHead>
-            <TableHead>{isOAuthProvider ? "Plan" : "Limits"}</TableHead>
+            <TableHead>{isOAuthProvider ? "Plan" : "Local limits"}</TableHead>
             <TableHead>Status</TableHead>
             {isOAuthProvider && <TableHead>Usage Limits</TableHead>}
             {isOAuthProvider && <TableHead>Unused Resets</TableHead>}
@@ -547,13 +547,13 @@ function ProviderCredentialsHeader({ provider, isOAuthProvider, login, onAdd }: 
   const { device, starting, connect } = login
   return <CardHeader>
           <CardTitle variant="icon"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
-          <CardDescription>Accounts are tried in priority order. Requests fall back when an account is unavailable.</CardDescription>
+          <CardDescription>{provider.prefix === "codex" ? "Codex accounts are tried in priority order. Requests fall back when an account is unavailable." : "Sessions reuse an available key; other requests favor current load. Key order breaks ties."}</CardDescription>
           <CardAction>{provider.prefix === "codex" ? <Button aria-busy={starting} onClick={() => void connect()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={onAdd}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
 }
 
 function ProviderKeyMetadata({ apiKey, isOAuthProvider, accountUsage, usageLoading }: Pick<ProviderKeyRowProps, "apiKey" | "isOAuthProvider" | "usageLoading"> & { accountUsage?: UsageResponse["accounts"][string] }) {
-  return <><TableCell>{isOAuthProvider ? <CodexPlanBadge accountUsage={accountUsage} loading={usageLoading} /> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
+  return <><TableCell>{isOAuthProvider ? <CodexPlanBadge accountUsage={accountUsage} loading={usageLoading} /> : <span className="text-sm text-muted-foreground">{apiKey.rpmLimit !== undefined ? `${apiKey.rpmLimit} rpm` : "—"}<span className="mx-2 text-border">·</span>{apiKey.maxConcurrency !== undefined ? `${apiKey.maxConcurrency} concurrent` : "—"}</span>}</TableCell>
                     <TableCell><Badge variant={apiKey.enabled ? "secondary" : "outline"}>{apiKey.enabled ? "Enabled" : "Disabled"}</Badge></TableCell></>
 }
 

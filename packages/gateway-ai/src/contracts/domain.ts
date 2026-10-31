@@ -38,11 +38,20 @@ export interface ProviderApiKey {
   expiresAt?: string
   lastRefresh?: string
   enabled: boolean
+  /** Optional local per-minute request limit. */
   rpmLimit?: number
+  /** Optional local in-flight request limit. */
   maxConcurrency?: number
   /** Internal routing weight derived from the key's position in the provider list. */
   priority?: number
   createdAt: string
+}
+
+/** Omitted limits preserve existing values; null clears them; positive integers set them. */
+export type ProviderApiKeyInput = Omit<Partial<ProviderApiKey>, "rpmLimit" | "maxConcurrency"> & {
+  originalId?: string
+  rpmLimit?: number | null
+  maxConcurrency?: number | null
 }
 
 export type ModelSource = "custom" | "discovered"

@@ -225,7 +225,7 @@ function confirmedLimitError(code: string | undefined, message: string) {
   return ["usage limit reached", "quota exceeded", "quota exhausted", "insufficient quota", "rate limit exceeded", "requests per minute", "request per minute", "too many requests", "weekly budget exceeded"].some((phrase) => message.includes(phrase))
 }
 
-async function normalizeRoutingFailure(response: Response) {
+export async function normalizeRoutingFailure(response: Response) {
   const headers = responseHeaders(response.headers)
   if (response.status !== 429) {
     // Retry-After on a server/auth/routing failure makes coding clients treat a
@@ -243,7 +243,8 @@ async function normalizeRoutingFailure(response: Response) {
   const message = routingErrorMessage(payload).toLowerCase()
   const syntheticCooldownCodes = new Set(["model_cooldown", "codex_cooldown", "combo_cooldown", "combo_rate_limited"])
   const syntheticCooldown = Boolean(code && syntheticCooldownCodes.has(code)) || message.includes("cooldown is still active") || message.includes("credentials for model") && message.includes("cooling down")
-  const confirmedLimit = response.headers.get("x-rawroute-combo-terminal") === "1" || confirmedLimitError(code, message)
+  const localProviderRpmLimit = code === "provider_credential_rpm_limit"
+  const confirmedLimit = response.headers.get("x-rawroute-combo-terminal") === "1" || localProviderRpmLimit || confirmedLimitError(code, message)
   if (!syntheticCooldown && confirmedLimit) return new Response(body, { status: response.status, statusText: response.statusText, headers })
 
   headers.delete("retry-after")
@@ -251,7 +252,7 @@ async function normalizeRoutingFailure(response: Response) {
   return Response.json({ error: { code: "upstream_unavailable", message: "Upstream routing is temporarily unavailable." } }, { status: 503, headers })
 }
 
-async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }) {
+export async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }) {
   const isInference = request.method === "POST" && supportedInferencePath(path)
   if (!isInference) return proxyGatewaySingleRequest(request, path, apiKey)
   const rawBody = new Uint8Array(await request.clone().arrayBuffer())

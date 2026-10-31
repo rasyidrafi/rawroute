@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, mock, spyOn } from "bun:test"
+import type { Provider, ProviderApiKey } from "../../../packages/gateway-ai/src/contracts/domain"
 
 const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
 
@@ -54,6 +55,18 @@ mock.module("../../../packages/gateway-ai/src/server/store", () => ({
     ...(provider.prefix === "codex" ? { prefix: "test-codex" } : {}),
   })),
   listProviderApiKeys: mocks.listProviderApiKeys,
+  withProviderCredentialRoutingSnapshot: async (
+    providerId: string,
+    callback: (snapshot: { provider?: Provider; apiKeys: ProviderApiKey[] }) => unknown,
+  ) => {
+    const providers = (await mocks.listProviders()).map((provider: Record<string, unknown>) => ({
+      id: "p", name: "Provider", prefix: "provider", baseUrl: "https://provider.test/v1", protocol: "openai-chat", authType: "none", headers: {}, enabled: true,
+      ...provider,
+      ...(provider.prefix === "codex" ? { prefix: "test-codex" } : {}),
+    })) as Provider[]
+    const apiKeys = await mocks.listProviderApiKeys(providerId) as ProviderApiKey[] | undefined
+    return callback({ provider: providers.find((provider) => provider.id === providerId), apiKeys: apiKeys || [] })
+  },
 }))
 mock.module("../../../packages/platform/src/server/workspace-context", () => ({
   currentWorkspaceId: () => "default",
@@ -120,7 +133,7 @@ test("OpenAI-compatible providers forward stable scoped cache keys through norma
   spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => {
     const body = JSON.parse(String(init?.body))
     sent.push(body)
-    return body.model === "a" ? Response.json({ error: { message: "Unavailable" } }, { status: 503 }) : Response.json({ id: "ok" })
+    return body.model === "a" ? Response.json({ error: { type: "rate_limit_error", message: "Rate limit exceeded." } }, { status: 429 }) : Response.json({ id: "ok" })
   }))
   for (const input of ["first", "first and second"]) {
     const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer secret", "x-session-id": "conversation" }, body: JSON.stringify({ model: "coding", input, max_tokens: 10 }) }))
@@ -163,7 +176,7 @@ test("fallback attempts retain client tier, account for each sent override and c
   mocks.listModels.mockResolvedValue(["a", "b"].map(id => ({ id, providerId: "p", gatewayModelId: `p/${id}`, name: id, upstreamModel: id, enabled: true })))
   mocks.listCombos.mockResolvedValue([{ id: "c", combo: "combo", name: "Combo", members: [{ modelId: "p/a", customPayload: { service_tier: "priority" } }, { modelId: "p/b", customPayload: { service_tier: "ultrafast" } }] }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_url, init) => JSON.parse(String(init?.body)).model === "a"
-    ? Response.json({ error: { message: "Unavailable" } }, { status: 503 })
+    ? Response.json({ error: { type: "rate_limit_error", message: "Rate limit exceeded." } }, { status: 429 })
     : Response.json({ service_tier: "default", usage: { input_tokens: 10, output_tokens: 1 } })))
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify({ model: "combo", input: "hello", service_tier: "flex" }) }))
   expect(response.status).toBe(200)
