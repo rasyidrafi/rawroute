@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { testsInWorkspace } from "../../helpers/workspace-test"
 
@@ -44,7 +45,7 @@ afterEach(async () => {
 })
 
 async function useSqlite() {
-  temporaryDirectory = await mkdtemp(join("/mnt/cache/bull/tmp/opencode", "codex-discovery-"))
+  temporaryDirectory = await mkdtemp(join(tmpdir(), "codex-discovery-"))
   Object.assign(process.env, { STORAGE_BACKEND: "sqlite", SQLITE_PATH: join(temporaryDirectory, "test.sqlite") })
 }
 
