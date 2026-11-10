@@ -14,7 +14,8 @@ import type { ComboMember, ModelCombo } from "../../../../../contracts/domain"
 export async function GET() {
   const [combos, models, providers, sharedModels] = await Promise.all([listCombos(), listModels(), listProviders(), listSharedModelsForRecipient()])
   const enabledProviders = new Set(providers.filter((provider) => provider.enabled !== false).map((provider) => provider.id))
-  return Response.json({ combos, models: models.filter((model) => model.enabled && enabledProviders.has(model.providerId)), sharedModels })
+  const providerProtocols = new Map(providers.map((provider) => [provider.id, provider.protocol]))
+  return Response.json({ combos, models: models.filter((model) => model.enabled && enabledProviders.has(model.providerId)).map(model => ({ ...model, providerProtocol: providerProtocols.get(model.providerId) })), sharedModels })
 }
 
 function normalizedMembers(input: Partial<ModelCombo>) {
@@ -23,11 +24,13 @@ function normalizedMembers(input: Partial<ModelCombo>) {
     const modelId = typeof member.modelId === "string" ? member.modelId.trim() : ""
     const mode = member.reasoning?.mode || "inherit"
     const effort = mode === "override" ? cleanReasoningEffort(member.reasoning?.effort) : undefined
+    const serviceTier = member.serviceTier === "fast" ? "fast" : undefined
     if (!["inherit", "provider-default", "override"].includes(mode)) throw new Error("Combo reasoning mode is invalid.")
     if (mode === "override" && !effort) throw new Error("Reasoning effort is required when override is enabled.")
+    if (member.serviceTier !== undefined && !serviceTier) throw new Error("Combo service tier is invalid.")
     const customPayload = normalizeComboCustomPayload(member.customPayload)
     const sharedModelId = typeof member.sharedModelId === "string" ? member.sharedModelId.trim() : undefined
-    return { modelId, ...(sharedModelId ? { sharedModelId } : {}), reasoning: { mode, ...(effort ? { effort } : {}) }, ...(customPayload ? { customPayload } : {}), validation: member.validation }
+    return { modelId, ...(sharedModelId ? { sharedModelId } : {}), reasoning: { mode, ...(effort ? { effort } : {}) }, ...(serviceTier ? { serviceTier } : {}), ...(customPayload ? { customPayload } : {}), validation: member.validation }
   })
 }
 
@@ -86,7 +89,7 @@ export async function POST(request: Request) {
     const value = await validateCombo(input)
     const existingByModel = new Map(value.existing?.members?.map((member) => [member.modelId, member]) || [])
     const cachedValidation = new Map<string, ComboMember["validation"]>()
-    const policyMembers = value.members.filter((member) => member.reasoning?.mode === "override" || member.customPayload)
+    const policyMembers = value.members.filter((member) => member.reasoning?.mode === "override" || member.serviceTier || member.customPayload)
     const membersToTest = policyMembers.filter((member) => {
       const existing = existingByModel.get(member.modelId)
       const hash = memberPolicyConfigHash(member)
@@ -106,7 +109,7 @@ export async function POST(request: Request) {
     }
     const testedAt = new Date().toISOString()
     value.members = value.members.map((member) => {
-      if (member.reasoning?.mode !== "override" && !member.customPayload) return { ...member, validation: undefined }
+      if (member.reasoning?.mode !== "override" && !member.serviceTier && !member.customPayload) return { ...member, validation: undefined }
       const cached = cachedValidation.get(member.modelId)
       if (cached) return { ...member, validation: cached }
       const result = results.find((entry) => entry.modelId === member.modelId)!

@@ -86,8 +86,9 @@ export function AliasesView() {
               <span className="truncate font-mono">{member.modelId}</span>
               {member.sharedModelId && <Badge variant={sharedById.get(member.sharedModelId)?.status === "active" ? "secondary" : "destructive"}>{sharedById.get(member.sharedModelId)?.status === "active" ? "Shared" : "Unavailable"}</Badge>}
               {member.reasoning?.mode === "override" && <Badge variant="outline">{member.reasoning.effort}</Badge>}
+              {member.serviceTier === "fast" && <Badge variant="outline">{data.models.find(model => (model.gatewayModelId || model.id) === member.modelId)?.providerProtocol === "anthropic-messages" || sharedById.get(member.sharedModelId || "")?.providerProtocol === "anthropic-messages" ? "Claude Fast" : "OpenAI Fast"}</Badge>}
               {member.customPayload && <Badge variant="outline">Custom</Badge>}
-              {member.validation?.status && (member.reasoning?.mode === "override" || member.customPayload) && <span className="shrink-0 text-muted-foreground">{member.validation.status}</span>}
+              {member.validation?.status && (member.reasoning?.mode === "override" || member.serviceTier || member.customPayload) && <span className="shrink-0 text-muted-foreground">{member.validation.status}</span>}
               {index === visibleMembers.length - 1 && hiddenCount > 0 && <Badge variant="secondary">+{hiddenCount} more</Badge>}
             </li>)}</ol></TableCell>
             <TableCell><div className="flex justify-end gap-1"><Button aria-label={`Edit ${combo.name || combo.combo}`} size="icon-sm" variant="ghost" onClick={() => editCombo(combo)}><PencilIcon /></Button><ConfirmAction title={`Delete ${combo.name || combo.combo}?`} description={`Requests using "${combo.combo}" will stop resolving. The member models are not affected.`} pending={pending.has(`delete-combo:${combo.id}`)} onConfirm={() => deleteCombo(combo)}><Trash2Icon /></ConfirmAction></div></TableCell>

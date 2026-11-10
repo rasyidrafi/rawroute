@@ -27,6 +27,19 @@ describe("combo reasoning policies", () => {
     expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "provider-default" } }).payload).toEqual({})
   })
 
+  test("combo Fast override replaces client and custom tier fields", () => {
+    expect(applyComboMemberPolicy({ service_tier: "flex", speed: "standard", extra_body: { service_tier: "flex" } }, {
+      modelId: "p/a",
+      serviceTier: "fast",
+      customPayload: { service_tier: "ultrafast", speed: "standard", extra_body: { service_tier: "ultrafast" }, temperature: 0.2 },
+    })).toEqual({
+      payload: { temperature: 0.2 },
+      serviceTierOverride: "fast",
+      customPayload: { temperature: 0.2 },
+    })
+    expect(memberPolicyConfigHash({ modelId: "p/a", serviceTier: "fast" })).not.toBe(memberPolicyConfigHash({ modelId: "p/a" }))
+  })
+
   test("deep merges custom payload without changing protected request fields", () => {
     expect(applyComboMemberPolicy({ model: "combo", messages: [{ role: "user", content: "hello" }], response_format: { type: "text" }, stop: ["old"] }, {
       modelId: "p/a",
@@ -48,6 +61,7 @@ describe("combo reasoning policies", () => {
     const left = memberPolicyConfigHash({ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { z: 1, nested: { b: 2, a: 1 } } })
     const right = memberPolicyConfigHash({ modelId: "p/a", reasoning: { mode: "inherit" }, customPayload: { nested: { a: 1, b: 2 }, z: 1 } })
     expect(left).toBe(right)
+    expect(memberPolicyConfigHash({ modelId: "p/a", reasoning: { mode: "inherit" } })).toBe(JSON.stringify(["p/a", "inherit", "", {}]))
   })
 
   test("uses model capability choices", () => {

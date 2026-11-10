@@ -9,7 +9,8 @@ import {
 import { createHash } from "node:crypto"
 import { createOpenAIOAuthTransport, type OpenAIOAuthSession, type OpenAIOAuthTransport } from "@openai-oauth/core"
 import type { Protocol, Provider, ProviderApiKey } from "../../contracts/domain"
-import { mergeComboCustomPayload, applyReasoningOverride } from "../../contracts/combo-reasoning"
+import { applyServiceTierOverride, requestServiceTier, serviceTierProfile } from "../../contracts/service-tier"
+import { mergeComboCustomPayload, applyReasoningOverride, stripServiceTierFields } from "../../contracts/combo-reasoning"
 import { normalizeProviderBaseUrl, providerResponsesUrl } from "../../contracts/provider-capabilities"
 import { normalizeResponsesRequest } from "../request-normalization"
 import { withProviderCredentialRoutingSnapshot } from "../store"
@@ -610,14 +611,15 @@ function convertRequestBody(body: Uint8Array, resolved: ResolvedGatewayModel, cl
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new ProtocolConversionError("Request body must be a JSON object.")
   const upstream = resolved.upstreamProtocol
-  assertCrossProtocolSemantics(payload, client, upstream, resolved.customPayload)
+  const clientPayload = resolved.serviceTierOverride ? stripServiceTierFields(payload) : payload
+  assertCrossProtocolSemantics(clientPayload, client, upstream, resolved.customPayload)
   const converter = createConverter(client, upstream)
-  const clientPayload = client === "openai-responses" ? normalizeResponsesRequest(payload) : payload
+  const normalizedClientPayload = client === "openai-responses" ? normalizeResponsesRequest(clientPayload) : clientPayload
   let converted: Record<string, unknown>
-  if (!converter) converted = structuredClone(clientPayload)
+  if (!converter) converted = structuredClone(normalizedClientPayload)
   else {
     try {
-      const result = objectValue(converter.convertRequest(clientPayload))
+      const result = objectValue(converter.convertRequest(normalizedClientPayload))
       if (!result) throw new Error("The converter did not produce a JSON request.")
       converted = result
     } catch (error) {
@@ -627,8 +629,13 @@ function convertRequestBody(body: Uint8Array, resolved: ResolvedGatewayModel, cl
   }
   converted = mergeComboCustomPayload(converted, resolved.customPayload)
   converted = applyReasoningOverride(converted, resolved.reasoningEffort, upstream)
+  converted = applyServiceTierOverride(converted, resolved.serviceTierOverride, upstream)
   converted.model = resolved.upstreamModel
   if (upstream === "openai-responses") converted = normalizeResponsesRequest(converted)
+  const tierProfile = serviceTierProfile(upstream)
+  const requestedTier = requestServiceTier(payload, serviceTierProfile(client))
+  const convertedTier = requestServiceTier(converted, tierProfile)
+  if (!resolved.serviceTierOverride && requestedTier && requestedTier !== convertedTier) throw new ProtocolConversionError("Service tier selection cannot be converted to this provider protocol.")
   if (upstream === "openai-chat" && converted.stream === true) {
     converted.stream_options = { ...objectValue(converted.stream_options), include_usage: true }
   }

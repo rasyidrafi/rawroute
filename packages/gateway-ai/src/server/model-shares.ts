@@ -72,6 +72,7 @@ function viewFor(share: ModelShare, source: Awaited<ReturnType<typeof activeSour
     sourceGatewayModelId: gatewayModelId,
     sourceModelName: source?.model.name || gatewayModelId,
     providerName: source?.provider.name || "Unavailable provider",
+    providerProtocol: source?.provider.protocol,
     qualifiedModelId: `${share.ownerWorkspaceId}/${gatewayModelId}`,
     status: share.status === "active" && source ? source.paused ? "paused" : "active" : share.status === "revoked" ? "revoked" : "unavailable",
   }

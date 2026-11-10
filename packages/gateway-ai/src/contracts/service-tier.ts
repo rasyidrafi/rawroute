@@ -24,6 +24,16 @@ export function requestServiceTier(payload: Record<string, unknown>, profile: Se
   return tier === "standard" ? "default" : tier
 }
 
+export function applyServiceTierOverride(payload: Record<string, unknown>, tier: "fast" | undefined, protocol: Protocol) {
+  const next = { ...payload }
+  if (!tier) return next
+  delete next.service_tier
+  delete next.speed
+  if (protocol === "anthropic-messages") next.speed = tier
+  else next.service_tier = "priority"
+  return next
+}
+
 /** A Standard response does not cancel an explicit non-Standard client tier. */
 export function selectServiceTier(context: ServiceTierContext) {
   const requested = normalizeServiceTier(context.requestedServiceTier)

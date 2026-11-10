@@ -117,13 +117,15 @@ workspaceTest("records without known status do not claim complete success covera
 
 workspaceTest("budgets use their own window and include configured keys with no selected traffic", async () => {
   const key = await createApiKey("Quiet key")
-  await updateBudgetWindow({ anchor: "custom", start: "2026-10-01T00:00:00.000Z", end: "2026-11-01T00:00:00.000Z" })
+  const budgetStart = new Date(Date.now() - 60_000).toISOString()
+  const budgetEnd = new Date(Date.now() + 60_000).toISOString()
+  await updateBudgetWindow({ anchor: "custom", start: budgetStart, end: budgetEnd })
   await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1000, enabled: true })
-  await recordUsageEvent(event("budget-only", "2026-10-02T03:00:00.000Z", { gatewayKeyId: key.id, costMicros: 300 }), null)
+  await recordUsageEvent(event("budget-only", new Date(Date.now() - 30_000).toISOString(), { gatewayKeyId: key.id, costMicros: 300 }), null)
   const payload = await getOverviewPayload(range)
   expect(payload.summary.requests).toBe(0)
   expect(payload.overview.budgets).toEqual([{ id: key.id, name: "Quiet key", enabled: true, limitMicros: 1000, spentMicros: 300 }])
-  expect(payload.overview.budgetWindow?.from).toBe("2026-10-01T00:00:00.000Z")
+  expect(payload.overview.budgetWindow?.from).toBe(budgetStart)
   await upsertBudget({ apiKeyId: key.id, weeklyLimitMicros: 1000, enabled: false })
   expect((await getOverviewPayload(range)).overview.budgets[0]?.enabled).toBe(false)
   await setBudgetBypassEnabled(true)

@@ -68,6 +68,7 @@ export interface Model {
   source?: ModelSource
   discovery?: { lastSeenAt?: string; accountIds: string[]; stale: boolean }
   reasoningCapability?: ModelReasoningCapability
+  providerProtocol?: Protocol
   createdAt: string
 }
 
@@ -101,6 +102,7 @@ export interface ComboMember {
   modelId: string
   sharedModelId?: string
   reasoning?: { mode: ComboReasoningMode; effort?: string }
+  serviceTier?: "fast"
   customPayload?: Record<string, unknown>
   validation?: ComboMemberValidation
 }
@@ -136,6 +138,7 @@ export interface SharedModelView {
   sourceGatewayModelId: string
   sourceModelName: string
   providerName: string
+  providerProtocol?: Protocol
   qualifiedModelId: string
   status: "active" | "revoked" | "unavailable" | "paused"
 }

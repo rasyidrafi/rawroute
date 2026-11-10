@@ -187,6 +187,41 @@ test("fallback attempts retain client tier, account for each sent override and c
   expect(mocks.getBudgetRequestState.mock.calls.map(call => call[3].service_tier)).toEqual(["priority", "ultrafast"])
 })
 
+test("combo Fast override follows each member protocol and drives tier accounting", async () => {
+  const sent: Array<{ protocol: string; body: Record<string, unknown> }> = []
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async (url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+    const protocol = String(url).includes("anthropic") ? "anthropic-messages" : "openai-responses"
+    sent.push({ protocol, body })
+    return protocol === "anthropic-messages"
+      ? Response.json({ id: "message", type: "message", model: "b", content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1, speed: "fast" } })
+      : Response.json({ id: "resp", object: "response", status: "completed", model: "a", output: [], usage: { input_tokens: 1, output_tokens: 1, service_tier: "priority" } })
+  }))
+  for (const [providerProtocol, modelId, body] of [
+    ["openai-responses", "p/a", { model: "combo", input: "hello", service_tier: "flex" }],
+    ["anthropic-messages", "p/b", { model: "combo", input: "hello", service_tier: "flex" }],
+  ] as const) {
+    mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: providerProtocol === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.example.com/v1", protocol: providerProtocol, authType: "none", headers: {}, enabled: true }])
+    mocks.listModels.mockResolvedValue([{ id: modelId.slice(2), providerId: "p", gatewayModelId: modelId, name: modelId, upstreamModel: modelId.slice(2), enabled: true }])
+    mocks.listCombos.mockResolvedValue([{ id: "c", combo: "combo", name: "Combo", members: [{ modelId, serviceTier: "fast" }] }])
+    const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", { method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" }, body: JSON.stringify(body) }))
+    expect(response.status).toBe(200)
+    await response.text()
+  }
+  expect(sent.map(entry => entry.body)).toEqual([
+    expect.objectContaining({ model: "a", service_tier: "priority" }),
+    expect.objectContaining({ model: "b", speed: "fast" }),
+  ])
+  expect(sent[1]?.body).not.toHaveProperty("service_tier")
+  expect(mocks.getBudgetRequestState.mock.calls.map(call => call[3])).toMatchObject([
+    expect.objectContaining({ service_tier: "priority" }),
+    expect.objectContaining({ speed: "fast" }),
+  ])
+  expect(mocks.createGatewayUsageEvent.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining([
+    expect.objectContaining({ requestedServiceTier: "fast", sentServiceTier: "fast" }),
+  ]))
+})
+
 for (const [protocol, path, reported, expected] of [
   ["openai-responses", "/v1/responses", { service_tier: "fast" }, "priority"],
   ["openai-responses", "/v1/responses", { service_tier: "ultrafast" }, "ultrafast"],

@@ -18,6 +18,7 @@ export interface ResolvedGatewayModel {
   providerPrefix: string
   promptCacheKey: boolean
   reasoningEffort?: string
+  serviceTierOverride?: "fast"
   customPayload?: Record<string, unknown>
   reasoningCapability?: ModelReasoningCapability
   upstream?: {

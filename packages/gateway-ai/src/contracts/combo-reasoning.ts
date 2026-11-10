@@ -75,8 +75,23 @@ export function supportedReasoningEfforts(model: Pick<Model, "reasoningCapabilit
   return configured?.length ? [...new Set(configured)] : [...standardReasoningEfforts]
 }
 
-export function memberPolicyConfigHash(member: Pick<ComboMember, "modelId" | "sharedModelId" | "reasoning" | "customPayload">) {
-  return JSON.stringify([member.modelId, member.reasoning?.mode || "inherit", member.reasoning?.effort || "", sortedJsonValue(member.customPayload || {}), ...(member.sharedModelId ? [member.sharedModelId] : [])])
+export function memberPolicyConfigHash(member: Pick<ComboMember, "modelId" | "sharedModelId" | "reasoning" | "serviceTier" | "customPayload">) {
+  const config: unknown[] = [member.modelId, member.reasoning?.mode || "inherit", member.reasoning?.effort || "", sortedJsonValue(member.customPayload || {}), ...(member.sharedModelId ? [member.sharedModelId] : [])]
+  if (member.serviceTier) config.push("service-tier", member.serviceTier)
+  return JSON.stringify(config)
+}
+
+export function stripServiceTierFields(payload: Record<string, unknown>) {
+  const next = structuredClone(payload)
+  delete next.service_tier
+  delete next.speed
+  const extraBody = next.extra_body
+  if (extraBody && typeof extraBody === "object" && !Array.isArray(extraBody)) {
+    delete (extraBody as Record<string, unknown>).service_tier
+    delete (extraBody as Record<string, unknown>).speed
+    if (!Object.keys(extraBody).length) delete next.extra_body
+  }
+  return next
 }
 
 export function stripReasoningFields(payload: Record<string, unknown>) {
@@ -104,19 +119,25 @@ export function stripReasoningFields(payload: Record<string, unknown>) {
   return next
 }
 
-export function applyComboMemberPolicy(payload: Record<string, unknown>, member: ComboMember): { payload: Record<string, unknown>; effort?: string; customPayload?: Record<string, unknown> } {
-  const customPayload = normalizeComboCustomPayload(member.customPayload)
-  const merged = mergeComboCustomPayload(payload, customPayload)
+export function applyComboMemberPolicy(payload: Record<string, unknown>, member: ComboMember): { payload: Record<string, unknown>; effort?: string; serviceTierOverride?: "fast"; customPayload?: Record<string, unknown> } {
+  let customPayload = normalizeComboCustomPayload(member.customPayload)
+  let merged = mergeComboCustomPayload(payload, customPayload)
+  const serviceTierOverride = member.serviceTier === "fast" ? "fast" : undefined
+  if (member.serviceTier !== undefined && !serviceTierOverride) throw new Error("Combo service tier is invalid.")
+  if (serviceTierOverride) {
+    merged = stripServiceTierFields(merged)
+    if (customPayload) customPayload = stripServiceTierFields(customPayload)
+  }
   const mode = member.reasoning?.mode || "inherit"
-  if (mode === "inherit") return { payload: merged, ...(customPayload ? { customPayload } : {}) }
+  if (mode === "inherit") return { payload: merged, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(customPayload ? { customPayload } : {}) }
   const next = stripReasoningFields(merged)
   if (mode !== "override") {
     const providerPayload = customPayload ? stripReasoningFields(customPayload) : undefined
-    return { payload: next, ...(providerPayload && Object.keys(providerPayload).length ? { customPayload: providerPayload } : {}) }
+    return { payload: next, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(providerPayload && Object.keys(providerPayload).length ? { customPayload: providerPayload } : {}) }
   }
   const effort = cleanReasoningEffort(member.reasoning?.effort)
   if (!effort) throw new Error("Reasoning effort is required when override is enabled.")
-  return { payload: next, effort, ...(customPayload ? { customPayload } : {}) }
+  return { payload: next, effort, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(customPayload ? { customPayload } : {}) }
 }
 
 export function applyReasoningOverride(payload: Record<string, unknown>, effort: string | undefined, protocol: Protocol) {

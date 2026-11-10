@@ -136,3 +136,23 @@ test("Model routing menu creates, reorders and deletes a fallback combo", async 
   await expect(page.getByText("No combos yet.", { exact: false })).toBeVisible()
 
 })
+
+test("Model routing applies OpenAI Fast to a combo member", async ({ page }) => {
+  await authenticate(page)
+  await seedProviderAndModel(page)
+  page.on("dialog", dialog => dialog.accept())
+  await page.goto("/dashboard/ai/routing")
+  await page.getByRole("main").getByRole("button", { name: "Add combo" }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByPlaceholder("auto", { exact: true }).fill("fast-member-combo")
+  await dialog.getByPlaceholder("Automatic fallback", { exact: true }).fill("Fast member combo")
+  await dialog.getByRole("combobox").filter({ hasText: "Select a local or shared model" }).click()
+  await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
+  await dialog.getByRole("button", { name: "Add model" }).click()
+  await dialog.getByRole("combobox").nth(3).click()
+  await page.getByRole("option", { name: "Fast (OpenAI)" }).click()
+  await expect(dialog.getByText("OpenAI Fast")).toBeVisible()
+  await dialog.getByRole("button", { name: "Add combo" }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByRole("row").filter({ hasText: "Fast member combo" }).getByText("OpenAI Fast")).toBeVisible()
+})

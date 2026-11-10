@@ -21,7 +21,7 @@ import type { ResolvedGatewayModel } from "./model-resolution"
 import { collectStreamUsage } from "./stream-usage"
 import { withSessionPromptCacheKey } from "./prompt-cache"
 import { prepareProviderRequest, ProtocolConversionError, proxyToProvider, responseHeaders } from "./transport"
-import { requestServiceTier, serviceTierProfile } from "../../contracts/service-tier"
+import { applyServiceTierOverride, requestServiceTier, serviceTierProfile } from "../../contracts/service-tier"
 
 function estimateRequest(body: unknown) {
   const value = body && typeof body === "object" ? body as Record<string, unknown> : {}
@@ -128,7 +128,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
   let customPayload: Record<string, unknown> | undefined
   try { customPayload = normalizeComboCustomPayload(member.customPayload) }
   catch (error) { return { modelId: member.modelId, status: "invalid", message: error instanceof Error ? error.message : "Custom payload is invalid.", latencyMs: 0 } }
-  if (!effort && !customPayload) return { modelId: member.modelId, status: "verified", message: "No member policy to test.", latencyMs: 0 }
+  if (!effort && !member.serviceTier && !customPayload) return { modelId: member.modelId, status: "verified", message: "No member policy to test.", latencyMs: 0 }
   try {
     const resolved = await resolveGatewayModel(member.modelId, member.sharedModelId)
     const supported = resolved.reasoningCapability?.supportedEfforts?.map((value) => value.trim().toLowerCase()).filter(Boolean)
@@ -141,7 +141,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
     const applied = applyComboMemberPolicy(probe, { ...member, customPayload: testCustomPayload })
     const payload = { ...applied.payload, model: member.modelId, messages: probe.messages, max_completion_tokens: 8, stream: true }
     const body = new TextEncoder().encode(JSON.stringify(payload))
-    const tested = { ...resolved, reasoningEffort: applied.effort, customPayload: applied.customPayload }
+    const tested = { ...resolved, reasoningEffort: applied.effort, serviceTierOverride: applied.serviceTierOverride, customPayload: applied.customPayload }
     const request = new Request("http://rawroute.internal/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body, signal: AbortSignal.timeout(20_000) })
     const prepared = prepareProviderRequest(body, tested, "openai-chat")
     let response: Response
@@ -280,11 +280,13 @@ export async function proxyGatewayRequestInWorkspace(request: Request, path: str
     if (member.sharedModelId && !resolved) continue
     let memberPayload = payload
     let reasoningEffort: string | undefined
+    let serviceTierOverride: "fast" | undefined
     let customPayload: Record<string, unknown> | undefined
     try {
       const applied = applyComboMemberPolicy(payload!, member)
       memberPayload = applied.payload
       reasoningEffort = applied.effort
+      serviceTierOverride = applied.serviceTierOverride
       customPayload = applied.customPayload
     } catch (error) {
       recordLog("gateway.combo.member.policy.is.invalid", { comboId: combo.id, memberModelId, error: error instanceof Error ? error.message : "Unknown error" }, { level: "warn" })
@@ -296,7 +298,7 @@ export async function proxyGatewayRequestInWorkspace(request: Request, path: str
       body: JSON.stringify({ ...memberPayload, model: memberModelId }),
       signal: request.signal,
     })
-    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, customPayload } : undefined, requestedModel, { ...attempt, attemptIndex, last: attemptIndex === members.length - 1 }))
+    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, serviceTierOverride, customPayload } : undefined, requestedModel, { ...attempt, attemptIndex, last: attemptIndex === members.length - 1 }))
     if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
       return responseWithoutComboHeaders(response)
@@ -376,6 +378,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       }
     }
     const forwardedPayload = objectValue(JSON.parse(new TextDecoder().decode(forwardedBody))) || payload
+    const budgetPayload = applyServiceTierOverride(forwardedPayload, resolvedModel.serviceTierOverride, resolvedModel.upstreamProtocol)
     let budgetState: Awaited<ReturnType<typeof getBudgetRequestState>>
     let reservation: BudgetReservation | undefined
     try {
@@ -386,8 +389,8 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             `shared-workspace:${resolvedModel.shared!.consumerWorkspaceId}`,
             resolvedModel.pricingGatewayModelId,
             resolvedModel.providerModelId,
-            forwardedPayload,
-            forwardedBody.byteLength,
+            budgetPayload,
+            new TextEncoder().encode(JSON.stringify(budgetPayload)).byteLength,
             protocol,
             undefined,
             tierProfile,
@@ -396,8 +399,8 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
             apiKey.id,
             resolvedModel.pricingGatewayModelId,
             resolvedModel.providerModelId,
-            forwardedPayload,
-            forwardedBody.byteLength,
+            budgetPayload,
+            new TextEncoder().encode(JSON.stringify(budgetPayload)).byteLength,
             protocol,
             requestedCombo,
             tierProfile,
@@ -436,8 +439,8 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
     const startedAtMs = Date.now()
     const startedAt = new Date(startedAtMs).toISOString()
     const requestMetadata: RequestLogMetadata = normalizeRequestLogMetadata({
-      requestedServiceTier: attempt ? attempt.requestedServiceTier : requestServiceTier(payload, serviceTierProfile(protocol)),
-      sentServiceTier: requestServiceTier(forwardedPayload, tierProfile) || "auto",
+      requestedServiceTier: resolvedModel.serviceTierOverride ? requestServiceTier(budgetPayload, tierProfile) : attempt ? attempt.requestedServiceTier : requestServiceTier(payload, serviceTierProfile(protocol)),
+      sentServiceTier: requestServiceTier(budgetPayload, tierProfile) || "auto",
       reasoningEffort: resolvedModel.reasoningEffort !== undefined
         ? resolvedModel.reasoningEffort
         : extractRequestReasoningEffort(payload, protocol),

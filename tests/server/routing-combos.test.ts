@@ -38,6 +38,21 @@ workspaceTest("one-model aliases can grow into fallback combos and reject empty 
   expect((await listCombos())[0].members).toHaveLength(2)
 })
 
+workspaceTest("saves and verifies a combo service-tier override", async () => {
+  const provider = await upsertProvider({ name: "Fast provider", prefix: "fast", baseUrl: "https://example.test/v1", protocol: "openai-chat", authType: "none", enabled: true })
+  const model = await upsertModel(provider.id, { name: "Fast model", gatewayModelId: "fast/model", upstreamModel: "model", enabled: true })
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch
+  try {
+    const response = await save([{ modelId: model.gatewayModelId, serviceTier: "fast" }])
+    expect(response.status).toBe(200)
+    const { combo } = await response.json() as { combo: ModelCombo }
+    expect(combo.members[0]).toMatchObject({ serviceTier: "fast", validation: { status: "verified" } })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test("shared-only combos resolve and appear in the catalog only with an active recipient grant", async () => {
   const owner = (await listWorkspaces())[0]
   const recipient = await createWorkspace("Recipient")

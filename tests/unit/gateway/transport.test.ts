@@ -201,6 +201,18 @@ test("rejects silently lossy cross-protocol options before contacting the provid
   expect(globalThis.fetch).not.toHaveBeenCalled()
 })
 
+test("applies combo Fast to the selected upstream protocol", () => {
+  const openAI = { ...resolved("openai-responses"), serviceTierOverride: "fast" as const }
+  const openAIRequest = prepareProviderRequest(new TextEncoder().encode(JSON.stringify({ ...clientRequest("openai-responses"), service_tier: "flex" })), openAI, "openai-responses")
+  expect(JSON.parse(new TextDecoder().decode(openAIRequest.body))).toMatchObject({ service_tier: "priority" })
+
+  const claude = { ...resolved("anthropic-messages"), serviceTierOverride: "fast" as const }
+  const claudeRequest = prepareProviderRequest(new TextEncoder().encode(JSON.stringify({ ...clientRequest("openai-responses"), service_tier: "flex" })), claude, "openai-responses")
+  const body = JSON.parse(new TextDecoder().decode(claudeRequest.body))
+  expect(body).toMatchObject({ speed: "fast" })
+  expect(body).not.toHaveProperty("service_tier")
+})
+
 test("converts flat Responses allowed_tools to Chat shape and rejects unsupported entries", async () => {
   const target = resolved("openai-chat")
   const body = {
