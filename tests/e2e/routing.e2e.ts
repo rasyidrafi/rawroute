@@ -137,6 +137,81 @@ test("Model routing menu creates, reorders and deletes a fallback combo", async 
 
 })
 
+test("Model routing keeps open and closed fallback cards stable when reordered in either direction", async ({ page }) => {
+  await authenticate(page)
+  await seedProviderAndModel(page)
+  await page.goto("/dashboard/ai/routing")
+  await page.getByRole("main").getByRole("button", { name: "Add combo" }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByPlaceholder("auto", { exact: true }).fill("open-closed-reorder")
+  await dialog.getByPlaceholder("Automatic fallback", { exact: true }).fill("Open closed reorder")
+  await dialog.getByRole("combobox").filter({ hasText: "Select a local or shared model" }).click()
+  await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
+  await dialog.getByRole("button", { name: "Add model" }).click()
+  await dialog.getByRole("combobox").filter({ hasText: "Select a local or shared model" }).click()
+  await page.getByRole("option", { name: /alias-target\/target-model-2/ }).click()
+  await dialog.getByRole("button", { name: "Add model" }).click()
+  await dialog.getByRole("button", { name: "Add combo" }).click()
+  await expect(dialog).toBeHidden()
+
+  await page.getByRole("button", { name: "Edit Open closed reorder" }).click()
+  const cards = dialog.locator(".sortable-member")
+  await dialog.getByRole("button", { name: "Configure alias-target/target-model", exact: true }).click()
+
+  async function drag(sourceId: string, targetId: string) {
+    const sourceHandle = dialog.getByRole("button", { name: `Drag ${sourceId} to reorder`, exact: true })
+    const currentOrder = await cards.evaluateAll(elements => elements.map(element => element.querySelector<HTMLButtonElement>('button[aria-label^="Drag "]')?.getAttribute("aria-label")?.replace(/^Drag | to reorder$/g, "")))
+    const targetIndex = currentOrder.indexOf(targetId)
+    const [sourceHandleBox, sourceCardBox, targetBox] = await Promise.all([
+      sourceHandle.boundingBox(),
+      sourceHandle.evaluate(element => element.closest<HTMLElement>(".sortable-member")!.getBoundingClientRect().toJSON()),
+      cards.nth(targetIndex).boundingBox(),
+    ])
+    expect(targetIndex).toBeGreaterThanOrEqual(0)
+    expect(sourceHandleBox).not.toBeNull()
+    expect(targetBox).not.toBeNull()
+    await page.mouse.move(sourceHandleBox!.x + sourceHandleBox!.width / 2, sourceHandleBox!.y + sourceHandleBox!.height / 2)
+    await page.mouse.down()
+    const activeCenterOffset = sourceCardBox.height / 2 - (sourceHandleBox!.y + sourceHandleBox!.height / 2 - sourceCardBox.top)
+    const targetPointerY = targetBox!.y + targetBox!.height / 2 - activeCenterOffset
+    await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetPointerY, { steps: 16 })
+    await page.mouse.up()
+    const expectedOrder = [...currentOrder]
+    const sourceIndex = expectedOrder.indexOf(sourceId)
+    expectedOrder.splice(sourceIndex, 1)
+    expectedOrder.splice(targetIndex, 0, sourceId)
+    await expect.poll(async () => cards.evaluateAll(elements => elements.map(element => element.querySelector<HTMLButtonElement>('button[aria-label^="Drag "]')?.getAttribute("aria-label")))).toEqual(expectedOrder.map(id => `Drag ${id} to reorder`))
+    const boxes = await cards.evaluateAll(elements => elements.map(element => {
+      const { top, bottom, height } = element.getBoundingClientRect()
+      return { top, bottom, height }
+    }))
+    expect(boxes).toHaveLength(2)
+    await expect.poll(async () => cards.evaluateAll(elements => {
+      const boxes = elements.map(element => element.getBoundingClientRect())
+      return boxes.length === 2 && boxes[1]!.top >= boxes[0]!.bottom - 1 && boxes.every(box => box.height > 40)
+    })).toBe(true)
+  }
+
+  await expect(cards.nth(0).getByRole("button", { name: "Collapse alias-target/target-model" })).toBeVisible()
+  await expect(cards.nth(1).getByRole("button", { name: "Configure alias-target/target-model-2" })).toBeVisible()
+  await drag("alias-target/target-model-2", "alias-target/target-model")
+  await expect(cards.nth(0)).toContainText("alias-target/target-model-2")
+  await expect(cards.nth(1)).toContainText("alias-target/target-model")
+  await expect(cards.nth(1).getByRole("button", { name: "Collapse alias-target/target-model" })).toBeVisible()
+  await expect.poll(async () => (await cards.nth(0).boundingBox())?.height).toBeLessThan(80)
+  await expect.poll(async () => (await cards.nth(1).boundingBox())?.height).toBeGreaterThan(100)
+  await drag("alias-target/target-model", "alias-target/target-model-2")
+  await expect(cards.nth(0)).toContainText("alias-target/target-model")
+  await expect(cards.nth(1)).toContainText("alias-target/target-model-2")
+  await expect(cards.nth(0).getByRole("button", { name: "Collapse alias-target/target-model" })).toBeVisible()
+  await expect.poll(async () => (await cards.nth(0).boundingBox())?.height).toBeGreaterThan(100)
+  await expect.poll(async () => (await cards.nth(1).boundingBox())?.height).toBeLessThan(80)
+
+  await dialog.getByRole("button", { name: "Close" }).click()
+  await page.getByRole("button", { name: "Delete Open closed reorder?" }).click()
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click()
+})
+
 test("Model routing applies OpenAI Fast to a combo member", async ({ page }) => {
   await authenticate(page)
   await seedProviderAndModel(page)
@@ -149,10 +224,35 @@ test("Model routing applies OpenAI Fast to a combo member", async ({ page }) => 
   await dialog.getByRole("combobox").filter({ hasText: "Select a local or shared model" }).click()
   await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
   await dialog.getByRole("button", { name: "Add model" }).click()
-  await dialog.getByRole("combobox").nth(3).click()
+  await dialog.getByRole("combobox", { name: "Service tier" }).click()
   await page.getByRole("option", { name: "Fast (OpenAI)" }).click()
   await expect(dialog.getByText("OpenAI Fast")).toBeVisible()
   await dialog.getByRole("button", { name: "Add combo" }).click()
   await expect(dialog).toBeHidden()
   await expect(page.getByRole("row").filter({ hasText: "Fast member combo" }).getByText("OpenAI Fast")).toBeVisible()
+})
+
+test("Model routing effort autocomplete accepts custom values and suggests presets", async ({ page }) => {
+  await authenticate(page)
+  await seedProviderAndModel(page)
+  await page.goto("/dashboard/ai/routing")
+  await page.getByRole("main").getByRole("button", { name: "Add combo" }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByPlaceholder("auto", { exact: true }).fill("effort-autocomplete")
+  await dialog.getByPlaceholder("Automatic fallback", { exact: true }).fill("Effort autocomplete")
+  await dialog.getByRole("combobox").filter({ hasText: "Select a local or shared model" }).click()
+  await page.getByRole("option", { name: /^alias-target\/target-model\s/ }).click()
+  await dialog.getByRole("button", { name: "Add model" }).click()
+
+  await dialog.getByRole("combobox", { name: "Reasoning" }).click()
+  await page.getByRole("option", { name: "Override client" }).click()
+  const effort = dialog.getByRole("combobox", { name: "Effort" })
+  await effort.fill("custom-reasoning-level")
+  await expect(effort).toHaveValue("custom-reasoning-level")
+  await effort.fill("")
+  await effort.click()
+  await page.getByRole("option", { name: "xhigh", exact: true }).click()
+  await expect(effort).toHaveValue("xhigh")
+  await effort.fill("custom-reasoning-level")
+  await expect(effort).toHaveValue("custom-reasoning-level")
 })

@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core"
-import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable"
+import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { BoxesIcon, BracesIcon, ChevronDownIcon, GripVerticalIcon, PlusIcon, SearchIcon, TestTube2Icon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
@@ -9,6 +9,7 @@ import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { FormField, FormSubmitButton } from "@rawroute/ui/resource-feedback"
 import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
 import { Badge } from "@rawroute/ui/badge"
+import { Autocomplete, AutocompleteEmpty, AutocompleteInput, AutocompleteInputGroup, AutocompleteItem, AutocompleteList, AutocompletePopup, AutocompletePortal, AutocompletePositioner, AutocompleteTrigger } from "@rawroute/ui/autocomplete"
 import { Button } from "@rawroute/ui/button"
 import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@rawroute/ui/dialog"
 import { EmptyState } from "@rawroute/ui/empty-state"
@@ -74,7 +75,7 @@ function SortableMemberCard({ member, index, open, effortOptions, protocol, payl
       <Button type="button" size="icon-sm" variant="ghost" aria-label={`Remove ${member.modelId}`} onClick={onRemove}><Trash2Icon /></Button>
     </div>
 
-    {open && <MemberPolicyEditor panelId={panelId} member={member} index={index} effortOptions={effortOptions} protocol={protocol} payloadDraft={payloadDraft} payloadError={payloadError} testing={testing} onUpdate={onUpdate} onPayloadChange={onPayloadChange} onFormatPayload={onFormatPayload} onTest={onTest} />}
+    {open && <MemberPolicyEditor panelId={panelId} member={member} effortOptions={effortOptions} protocol={protocol} payloadDraft={payloadDraft} payloadError={payloadError} testing={testing} onUpdate={onUpdate} onPayloadChange={onPayloadChange} onFormatPayload={onFormatPayload} onTest={onTest} />}
   </div>
 }
 
@@ -186,7 +187,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
       <div className="grid gap-4 sm:grid-cols-2"><FormField label="Gateway ID"><Input name="combo" defaultValue={combo?.combo} placeholder="auto" pattern="[a-z0-9._/-]+" required /></FormField><FormField label="Name"><Input name="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Automatic fallback" maxLength={80} required /></FormField></div>
       <FormField label="Models / fallback order"><div className="grid gap-2"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => targetById.get(String(value))?.label || String(value)}><SelectTrigger className="h-9 flex-1"><SelectValue placeholder="Select a local or shared model" /></SelectTrigger><SelectContent>{selectableTargets.map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span>{target.shared && <Badge variant="secondary" className="ml-2">Shared</Badge>}</SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div>{!selectableTargets.length && <EmptyState title={targets.length ? "All available models are selected" : "No eligible models"} description={targets.length ? "Remove a member to make it available for selection again." : "Enable a provider model or use a model shared into this workspace."} icon={targets.length ? SearchIcon : BoxesIcon} variant="compact" treatment="embedded" />}</div></FormField>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderMembers}>
-        <SortableContext items={members.map((member) => member.modelId)} strategy={verticalListSortingStrategy}>
+        <SortableContext items={members.map((member) => member.modelId)} strategy={rectSortingStrategy}>
           <div className="grid gap-2">{members.map((member, index) => <SortableMemberCard key={member.modelId} member={member} index={index} open={openMembers.has(member.modelId)} effortOptions={targetById.get(member.modelId)?.efforts || [...standardReasoningEfforts]} protocol={targetById.get(member.modelId)?.protocol} payloadDraft={payloadDrafts[member.modelId] ?? JSON.stringify(member.customPayload || {}, null, 2)} payloadError={payloadErrors[member.modelId]} testing={testing.has(member.modelId)} onToggle={() => toggleMember(member.modelId)} onRemove={() => removeMember(member.modelId)} onUpdate={(update) => updateMember(member.modelId, update)} onPayloadChange={(value) => updateCustomPayload(member.modelId, value)} onFormatPayload={() => formatCustomPayload(member.modelId)} onTest={() => void testMember(member.modelId)} />)}{!members.length && <EmptyState title="No models selected" description="Choose a model above, then add it. One model creates an alias; additional models provide fallback." icon={BoxesIcon} variant="compact" treatment="embedded" />}</div>
         </SortableContext>
       </DndContext>
@@ -195,13 +196,13 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
   </form>
 }
 
-function MemberPolicyEditor({ panelId, member, index, effortOptions, protocol, payloadDraft, payloadError, testing, onUpdate, onPayloadChange, onFormatPayload, onTest }: Pick<MemberCardProps, "member" | "index" | "effortOptions" | "protocol" | "payloadDraft" | "payloadError" | "testing" | "onUpdate" | "onPayloadChange" | "onFormatPayload" | "onTest"> & { panelId: string }) {
+function MemberPolicyEditor({ panelId, member, effortOptions, protocol, payloadDraft, payloadError, testing, onUpdate, onPayloadChange, onFormatPayload, onTest }: Pick<MemberCardProps, "member" | "effortOptions" | "protocol" | "payloadDraft" | "payloadError" | "testing" | "onUpdate" | "onPayloadChange" | "onFormatPayload" | "onTest"> & { panelId: string }) {
   const mode = member.reasoning?.mode || "inherit"
   const configured = memberIsConfigured(member, mode)
   return <div id={panelId} className="grid gap-3 border-t bg-muted/10 p-3 sm:p-4">
       <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
-        <FormField label="Reasoning"><Select value={mode} onValueChange={(value) => value && onUpdate((current) => ({ ...current, reasoning: { mode: value as "inherit" | "provider-default" | "override", ...(value === "override" ? { effort: current.reasoning?.effort || effortOptions[0] || "medium" } : {}) } }))}><SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit client</SelectItem><SelectItem value="provider-default">Provider default</SelectItem><SelectItem value="override">Override client</SelectItem></SelectContent></Select></FormField>
-        <FormField label="Effort"><Input value={member.reasoning?.effort || ""} list={`efforts-${index}`} placeholder="high" disabled={mode !== "override" || !effortOptions.length} onChange={(event) => onUpdate((current) => ({ ...current, reasoning: { mode: "override", effort: event.target.value } }))} /><datalist id={`efforts-${index}`}>{effortOptions.map((effort) => <option key={effort} value={effort} />)}</datalist></FormField>
+        <FormField label="Reasoning"><Select value={mode} onValueChange={(value) => value && onUpdate((current) => ({ ...current, reasoning: { mode: value as "inherit" | "provider-default" | "override", ...(value === "override" ? { effort: current.reasoning?.effort || effortOptions[0] || "medium" } : {}) } }))}><SelectTrigger aria-label="Reasoning" className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit client</SelectItem><SelectItem value="provider-default">Provider default</SelectItem><SelectItem value="override">Override client</SelectItem></SelectContent></Select></FormField>
+        <FormField label="Effort"><Autocomplete items={effortOptions} value={member.reasoning?.effort || ""} onValueChange={(effort) => onUpdate((current) => ({ ...current, reasoning: { mode: "override", effort } }))} openOnInputClick disabled={mode !== "override" || !effortOptions.length}><AutocompleteInputGroup><AutocompleteInput aria-label="Effort" placeholder="high" /><AutocompleteTrigger /></AutocompleteInputGroup><AutocompletePortal><AutocompletePositioner align="start"><AutocompletePopup><AutocompleteEmpty>No suggested efforts.</AutocompleteEmpty><AutocompleteList>{(effort: string) => <AutocompleteItem key={effort} value={effort}>{effort}</AutocompleteItem>}</AutocompleteList></AutocompletePopup></AutocompletePositioner></AutocompletePortal></Autocomplete></FormField>
         <ServiceTierField member={member} protocol={protocol} onUpdate={onUpdate} />
         <div className="flex items-end"><Button type="button" variant="outline" disabled={Boolean(payloadError) || testing || !memberCanBeTested(member, mode)} onClick={onTest}>{testing ? <LoadingSpinner /> : <TestTube2Icon />}Test model</Button></div>
       </div>
@@ -216,5 +217,5 @@ function MemberPolicyEditor({ panelId, member, index, effortOptions, protocol, p
 }
 
 function ServiceTierField({ member, protocol, onUpdate }: { member: ComboMember; protocol?: Protocol; onUpdate: MemberCardProps["onUpdate"] }) {
-  return <FormField label="Service tier"><Select value={member.serviceTier || "inherit"} onValueChange={(value) => onUpdate((current) => ({ ...current, serviceTier: value === "fast" ? "fast" : undefined }))}><SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit client</SelectItem><SelectItem value="fast">Fast ({protocol === "anthropic-messages" ? "Claude" : "OpenAI"})</SelectItem></SelectContent></Select></FormField>
+  return <FormField label="Service tier"><Select value={member.serviceTier || "inherit"} onValueChange={(value) => onUpdate((current) => ({ ...current, serviceTier: value === "fast" ? "fast" : undefined }))}><SelectTrigger aria-label="Service tier" className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="inherit">Inherit client</SelectItem><SelectItem value="fast">Fast ({protocol === "anthropic-messages" ? "Claude" : "OpenAI"})</SelectItem></SelectContent></Select></FormField>
 }
