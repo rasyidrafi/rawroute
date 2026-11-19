@@ -3,7 +3,7 @@ import { test } from "./empty-workspace.fixture"
 
 test.use({ timezoneId: "Asia/Tokyo" })
 
-test("fallback request expands in execution order, copies payload ID, and survives refresh", async ({ page, emptyWorkspaceId }) => {
+test("fallback request expands in execution order and survives refresh", async ({ page, emptyWorkspaceId }) => {
   expect(emptyWorkspaceId).toBeTruthy()
   const at = new Date().toISOString()
   const base = { gatewayKeyId: "key", keyName: "Rizky", modelName: "Astra", gatewayModelId: "provider/astra", routing: { modelId: "provider/astra", modelName: "Astra", routeName: "Clever" }, startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true, totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costMicros: 12, pricingConfidence: "exact", reasoningEffort: "low", toolCount: 0 }
@@ -31,13 +31,9 @@ test("fallback request expands in execution order, copies payload ID, and surviv
   await expect(children.nth(1)).toContainText("Astra (as Clever)")
   await expect(children.nth(1)).toContainText("Payload:astra-auto")
   await expect(children.nth(1)).toContainText("Resolved:provider/astra")
+  await expect(page.getByRole("button", { name: /^Copy (payload|resolved) model/ })).toHaveCount(0)
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(children).toHaveCount(2)
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
-  await page.locator('[data-slot="request-group-row"]').getByRole("button", { name: "Copy payload model astra-auto", exact: true }).click()
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("astra-auto")
-  await children.nth(1).getByRole("button", { name: "Copy resolved model provider/astra", exact: true }).click()
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("provider/astra")
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 900 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -47,7 +43,7 @@ test("fallback request expands in execution order, copies payload ID, and surviv
   await expect(page.getByText("Historical attempt: historic", { exact: true })).toBeVisible()
 })
 
-test("shared fallback with multiple recorded usages keeps the aggregate and copies the source workspace model", async ({ page, emptyWorkspaceId }) => {
+test("shared fallback with multiple recorded usages keeps the aggregate and resolves the source workspace model", async ({ page, emptyWorkspaceId }) => {
   expect(emptyWorkspaceId).toBeTruthy()
   const at = new Date().toISOString()
   const base = {
@@ -71,9 +67,7 @@ test("shared fallback with multiple recorded usages keeps the aggregate and copi
   await expect(group.locator("td").nth(4)).toContainText("200")
   await expect(group.getByText("Known usage · partial", { exact: true })).toBeVisible()
   await expect(group).toContainText("Resolved:default/codex/gpt-5.6-luna")
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
-  await group.getByRole("button", { name: "Copy resolved model default/codex/gpt-5.6-luna", exact: true }).click()
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("default/codex/gpt-5.6-luna")
+  await expect(group.getByRole("button", { name: /^Copy / })).toHaveCount(0)
   await page.getByRole("button", { name: "Expand request shared-chain", exact: true }).click()
   const attempts = page.locator('[data-slot="request-attempt-row"]')
   await expect(attempts).toHaveCount(3)

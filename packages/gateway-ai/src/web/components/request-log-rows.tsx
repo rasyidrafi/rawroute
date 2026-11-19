@@ -1,6 +1,5 @@
 import { useId, useState } from "react"
-import { ChevronDownIcon, ChevronRightIcon, CopyIcon } from "lucide-react"
-import { toast } from "sonner"
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import { Badge } from "@rawroute/ui/badge"
 import { Button } from "@rawroute/ui/button"
 import { TableCell, TableRow } from "@rawroute/ui/table"
@@ -13,10 +12,6 @@ import { ServiceTierBadge } from "./service-tier-badge"
 export function RequestModelId({ label, value }: { label: string; value?: string }) {
   return <div className="flex min-h-6 max-w-96 items-center gap-1 text-xs text-muted-foreground">
     <span className="shrink-0">{label}:</span><span className="min-w-0 whitespace-normal break-all font-mono" title={value === undefined ? "Not recorded" : undefined}>{value ?? "—"}</span>
-    {value !== undefined && <Button variant="ghost" size="icon-xs" aria-label={`Copy ${label.toLowerCase()} model ${value}`} onClick={async () => {
-      try { await navigator.clipboard.writeText(value); toast.success("Model ID copied") }
-      catch { toast.error("Unable to copy to clipboard") }
-    }}><CopyIcon /></Button>}
   </div>
 }
 
