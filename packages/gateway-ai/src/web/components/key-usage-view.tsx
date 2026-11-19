@@ -44,8 +44,8 @@ function costUnavailable(data: DashboardPayload) {
   return !!coverage && (coverage.financialUnavailable || coverage.excludedSources > 0 || coverage.costCoveredRequests < data.summary.requests)
 }
 
-function trendUnavailable(data: DashboardPayload) {
-  return costUnavailable(data) || (!!data.summary.requests && data.coverage?.tokenCoveredRequests === 0)
+export function trendUnavailable(data: DashboardPayload) {
+  return costUnavailable(data) || (!!data.summary.requests && data.coverage?.tokenCoveredRequests === 0) || (data.summary.requests > 0 && data.trend.length === 0 && (data.coverage?.unsupportedTrendSources ?? 0) > 0)
 }
 
 function BackLink({ publicView, workspaceId }: { publicView?: boolean; workspaceId?: string }) {
