@@ -10,7 +10,7 @@ import { Link, useNavigate } from "react-router"
 import useSWR, { useSWRConfig, type KeyedMutator } from "swr"
 import { toast } from "sonner"
 
-import { ConfirmAction, DetailValue, EmptyTableRow, NotFoundState } from "@rawroute/ui/resource-feedback"
+import { ConfirmAction, EmptyTableRow, NotFoundState } from "@rawroute/ui/resource-feedback"
 import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { withPendingAction } from "@rawroute/ui/pending-action"
 import { codexUsageError, CodexPlanBadge, CodexQuotaTableCell, type UsageResponse } from "./codex-quota"
@@ -531,16 +531,26 @@ function ProviderDetailsCard({ data, isOAuthProvider, mutate }: { data: Provider
           </DialogContent>
         </Dialog>
         <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(120px,1fr))]">
-            <DetailValue label="Gateway prefix" value={`${provider.prefix}/`} mono />
-            <DetailValue label="Authentication" value={provider.authType === "none" ? "None" : provider.authType} />
-            <DetailValue label="Protocol" value={protocolLabels[provider.protocol]} />
-            {provider.protocol !== "anthropic-messages" && <DetailValue label="Prompt cache key" value={provider.prefix === "codex" || provider.supportPromptCacheKey === true ? "Enabled" : "Disabled"} />}
-            <DetailValue label={isOAuthProvider ? "Configured accounts" : "Configured keys"} value={String(apiKeyCounts.configured)} />
-            <DetailValue label="Configured models" value={String(models.length)} />
+          <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+            <DetailFact label="Gateway prefix" value={`${provider.prefix}/`} mono />
+            <DetailFact label="Protocol" value={protocolLabels[provider.protocol]} />
+            <DetailFact label="Authentication" value={provider.authType === "none" ? "None" : provider.authType} />
+            {provider.protocol !== "anthropic-messages" && <DetailFact label="Prompt cache key" value={provider.prefix === "codex" || provider.supportPromptCacheKey === true ? "Enabled" : "Disabled"} dim />}
+            {provider.protocol === "openai-responses" && <DetailFact label="Reasoning summaries" value={provider.reasoningSummaries === true ? "Enabled" : "Disabled"} tone={provider.reasoningSummaries === true ? "success" : "neutral"} />}
+            <DetailFact label={isOAuthProvider ? "Configured accounts" : "Configured keys"} value={String(apiKeyCounts.configured)} />
+            <DetailFact label="Configured models" value={String(models.length)} />
           </div>
         </CardContent>
       </Card>
+}
+
+function DetailFact({ label, value, mono, dim, tone }: { label: string; value: string; mono?: boolean; dim?: boolean; tone?: "success" | "neutral" }) {
+  return <div>
+    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+    <div className="mt-1 text-sm font-medium">{tone
+      ? <span className={`inline-block rounded-md px-2 py-0.5 text-xs font-semibold ${tone === "success" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>{value}</span>
+      : <span className={`${mono ? "font-mono" : ""} ${dim ? "text-muted-foreground" : ""}`}>{value}</span>}</div>
+  </div>
 }
 
 function ProviderCredentialsHeader({ provider, isOAuthProvider, login, onAdd }: { provider: Provider; isOAuthProvider: boolean; login: ReturnType<typeof useCodexLogin>; onAdd: () => void }) {

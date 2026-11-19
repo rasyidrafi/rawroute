@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
+import { BracesIcon, ChevronDownIcon } from "lucide-react"
 import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@rawroute/ui/dialog"
-import { Checkbox } from "@rawroute/ui/checkbox"
+import { Switch } from "@rawroute/ui/switch"
 import { Input } from "@rawroute/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@rawroute/ui/select"
 import { Textarea } from "@rawroute/ui/textarea"
@@ -80,7 +81,7 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
     <form onSubmit={submit}>
       <DialogHeader>
         <DialogTitle>{provider ? "Edit provider" : "Add provider"}</DialogTitle>
-        <DialogDescription>Configure the upstream origin first, then attach one or more API keys. RawRoute keeps the provider catalog and handles request translation and forwarding.</DialogDescription>
+        <DialogDescription>Connection settings for this provider. API keys are managed on the provider page.</DialogDescription>
       </DialogHeader>
       <div className="grid gap-4 py-4">
         <FormField label="Name"><Input name="name" defaultValue={provider?.name} placeholder="OpenAI" required /></FormField>
@@ -102,9 +103,21 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
         </FormField>
         {protocol === "anthropic-messages" && <p className="-mt-2 text-xs text-muted-foreground">RawRoute appends /v1/messages. Enter the base URL with or without a trailing /v1.</p>}
         {protocol !== "anthropic-messages" && <p className="-mt-2 text-xs text-muted-foreground">Credentials use the selected authentication method. Static headers below are forwarded separately.</p>}
-        {protocol !== "anthropic-messages" && <div className="grid gap-2"><label className="flex items-start gap-3 rounded-lg border p-3"><Checkbox checked={supportPromptCacheKey} onCheckedChange={(checked) => setSupportPromptCacheKey(checked === true)} disabled={pending} /><span className="grid gap-1"><span className="text-sm font-medium">Enable session prompt cache keys</span><span className="text-xs text-muted-foreground">Preserves supplied cache keys and creates a stable key from supported session headers when available.</span></span></label></div>}
-        {protocol === "openai-responses" && <div className="grid gap-2"><label className="flex items-start gap-3 rounded-lg border p-3"><Checkbox checked={reasoningSummaries} onCheckedChange={(checked) => setReasoningSummaries(checked === true)} disabled={pending} /><span className="grid gap-1"><span className="text-sm font-medium">Enable reasoning summaries</span><span className="text-xs text-muted-foreground">Asks the upstream for thinking summaries (reasoning.summary auto). Request and model reasoning settings take priority.</span></span></label></div>}
-        <FormField label="Static headers (JSON)"><Textarea name="headers" defaultValue={JSON.stringify(provider?.headers || {}, null, 2)} variant="code" /></FormField>
+        {protocol !== "anthropic-messages" && <div className="grid gap-2">
+          <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Request behavior</div>
+          <div className="flex items-start justify-between gap-3">
+            <span className="grid gap-0.5"><span className="text-sm font-medium">Session prompt cache keys</span><span className="text-xs text-muted-foreground">Preserves supplied cache keys and derives a stable key from session headers.</span></span>
+            <Switch checked={supportPromptCacheKey} onCheckedChange={(checked) => setSupportPromptCacheKey(checked)} disabled={pending} aria-label="Session prompt cache keys" />
+          </div>
+          {protocol === "openai-responses" && <div className="flex items-start justify-between gap-3 border-t pt-2">
+            <span className="grid gap-0.5"><span className="text-sm font-medium">Reasoning summaries</span><span className="text-xs text-muted-foreground">Asks the upstream for thinking summaries. Request and model settings take priority.</span></span>
+            <Switch checked={reasoningSummaries} onCheckedChange={(checked) => setReasoningSummaries(checked)} disabled={pending} aria-label="Reasoning summaries" />
+          </div>}
+        </div>}
+        <details className="rounded-md border bg-background">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium"><BracesIcon className="size-4" />Static headers (JSON){Object.keys(provider?.headers || {}).length > 0 && <span className="text-xs font-normal text-muted-foreground">Configured</span>}<ChevronDownIcon className="ml-auto size-4" /></summary>
+          <div className="border-t p-3"><Textarea name="headers" defaultValue={JSON.stringify(provider?.headers || {}, null, 2)} variant="code" /></div>
+        </details>
       </div>
       <DialogFooter><FormSubmitButton pending={pending} idleLabel={provider ? "Update provider" : "Save provider"} pendingLabel={provider ? "Updating provider..." : "Saving provider..."} /></DialogFooter>
     </form>
