@@ -10,6 +10,10 @@ export function isTerminalStreamEvent(eventName: string, parsed: Record<string, 
   if (["message_stop", "response.completed", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "response.done", "message.completed", "message.done", "done", "error"].includes(normalizedEvent)) return true
   const type = typeof parsed?.type === "string" ? parsed.type.trim().toLowerCase() : ""
   if (["response.completed", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "response.done", "message_stop", "message.completed", "message.done", "done", "error"].includes(type)) return true
+  // OpenAI-chat providers may close the stream without [DONE]; a non-null
+  // finish_reason marks the final choice chunk of a completed response.
+  const choices = Array.isArray(parsed?.choices) ? parsed.choices : []
+  if (choices.some((choice) => objectValue(choice)?.finish_reason != null)) return true
   const response = objectValue(parsed?.response)
   return response?.status === "completed" || response?.status === "complete" || response?.status === "incomplete" || response?.status === "failed" || response?.status === "cancelled" || response?.status === "canceled"
 }
