@@ -210,6 +210,11 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(recent.locator("a", { hasText: "View all" })).toHaveAttribute("href", "/dashboard/ai/overview/request-logs")
   expect(aggregateRanges[0]!.toString()).toBe(recentRanges[0]!.toString())
   await checkLowerPair()
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    expect((await page.getByRole("combobox").boundingBox())!.width).toBeLessThanOrEqual(140)
+  }
+  await page.setViewportSize({ width: 1280, height: 844 })
   await page.getByRole("combobox").click()
   await page.getByRole("option", { name: "7 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(7 * 86_400_000)
