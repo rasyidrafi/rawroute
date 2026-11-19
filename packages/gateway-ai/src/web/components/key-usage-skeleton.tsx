@@ -1,5 +1,5 @@
 import { DashboardPage } from "@rawroute/ui/page-layout"
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
 import { Skeleton } from "@rawroute/ui/skeleton"
 import { RequestLogsTable } from "./request-logs-table"
 
@@ -9,7 +9,7 @@ export function KeyUsageSkeleton() {
     <div className="flex flex-col gap-2"><Skeleton className="h-6 w-40" /><Skeleton className="h-4 w-64" /></div>
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
       <Card><CardHeader><CardTitle>Budget balance</CardTitle><CardDescription><Skeleton className="h-4 w-44" /></CardDescription></CardHeader><CardContent spacing="stack"><Skeleton className="h-4 w-36" /><Skeleton className="h-10 w-32" /><Skeleton className="h-2 w-full" /><Skeleton className="h-px w-full" /><div className="grid grid-cols-2 gap-4"><div className="flex flex-col gap-2"><span className="text-xs text-muted-foreground">Average daily spend so far</span><Skeleton className="h-5 w-24" /></div><div className="flex flex-col gap-2"><span className="text-xs text-muted-foreground">Average daily tokens so far</span><Skeleton className="h-5 w-24" /></div></div><div className="flex flex-col gap-2"><span className="text-xs text-muted-foreground">Budget reset</span><Skeleton className="h-5 w-32" /></div></CardContent></Card>
-      <Card><CardHeader><CardTitle>Daily spend</CardTitle><CardDescription><Skeleton className="h-4 w-44" /></CardDescription><CardAction><div className="flex gap-1 rounded-lg bg-muted p-0.75"><Skeleton className="h-7 w-12" /><Skeleton className="h-7 w-12" /></div></CardAction></CardHeader><CardContent><Skeleton className="h-64 w-full" /></CardContent></Card>
+      <Card><CardHeader><CardTitle>Usage Trend</CardTitle><CardDescription><Skeleton className="h-4 w-44" /></CardDescription></CardHeader><CardContent className="flex min-h-0 flex-1 flex-col"><div className="relative min-h-72 min-w-0 flex-1 sm:min-h-80"><Skeleton className="absolute inset-0" /></div></CardContent></Card>
     </div>
     <div className="grid gap-4 lg:grid-cols-2">{["Where the spend goes", "Usage profile"].map(title => <Card key={title}><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent><Skeleton className="h-56 w-full" /></CardContent></Card>)}</div>
     <Card><CardHeader><CardTitle>Recent requests</CardTitle></CardHeader><CardContent><RequestLogsTable loading /></CardContent></Card>

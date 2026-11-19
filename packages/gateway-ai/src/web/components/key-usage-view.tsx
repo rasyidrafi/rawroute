@@ -13,7 +13,7 @@ import { groupRequestLogEvents, type PublicKeyUsageDetail, type RequestLogDispla
 import { aiPagePaths as pagePaths, publicWorkspacePagePath } from "../../contracts/pages"
 import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { formatCost, formatRequestCount, formatTokenCount } from "../../contracts/usage-display"
-import { KeySpendChart } from "./key-spend-chart"
+import { KeyUsageTrend } from "./key-usage-trend"
 import { KeyUsageSkeleton } from "./key-usage-skeleton"
 import { RequestLogResults } from "./request-logs-view"
 
@@ -71,6 +71,10 @@ function costUnavailable(data: DashboardPayload) {
   return !!coverage && (coverage.financialUnavailable || coverage.excludedSources > 0 || coverage.costCoveredRequests < data.summary.requests)
 }
 
+function trendUnavailable(data: DashboardPayload) {
+  return costUnavailable(data) || (!!data.summary.requests && data.coverage?.tokenCoveredRequests === 0)
+}
+
 function KeyUsageContent({ keyId, publicView, workspaceId }: { keyId: string; publicView: boolean; workspaceId?: string }) {
   const { data, error, isValidating, refresh, recentData, recentError } = useKeyUsage(keyId, publicView, workspaceId)
   if (!data && !error) return <KeyUsageSkeleton />
@@ -83,7 +87,7 @@ function KeyUsageContent({ keyId, publicView, workspaceId }: { keyId: string; pu
     {!!error && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && <>
       <div><h3 className="text-lg font-medium">Budget & spend</h3><p className="mt-1 text-sm text-muted-foreground">{formatAppDateTime(data.range.from)} – {formatAppDateTime(data.range.to)}</p></div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeySpendChart data={data} unavailable={costUnavailable(data)} /></div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} /></div>
       <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
       <Card><CardHeader><CardTitle>Recent requests</CardTitle><CardDescription>Latest requests and their recorded attempts for this key</CardDescription></CardHeader><CardContent>
         {!!recentError && <Alert variant="destructive"><AlertDescription>Unable to load recent requests. Try refreshing.</AlertDescription></Alert>}
