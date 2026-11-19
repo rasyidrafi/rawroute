@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, jest } from "bun:test"
 import { testsInWorkspace } from "../helpers/workspace-test"
 const test = testsInWorkspace("pricing-tests")
 
-import { deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPricingGroups, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "../../packages/gateway-ai/src/server/model-pricing"
+import { createPricingGroup, deletePricingGroup, getPricingAdminData, getPricingForModelAt, listPricingGroups, savePricingVersion, syncModelPricingGroups, updatePricingGroup } from "../../packages/gateway-ai/src/server/model-pricing"
 import { getBudgetAdmission, getBudgetRows, getDashboardPayload, listUsageEvents, recordUsageEvent, repriceUsageForGroup, resetAnalyticsForTests, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
 import { _resetMemoryBackend, createApiKey, upsertAlias, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
 import type { Provider, UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
@@ -184,6 +184,43 @@ describe("model pricing catalog", () => {
     expect(refreshed.groups.find((group) => group.id === target.id)?.memberModelIds).toContain(second.id)
     expect(refreshed.groups.find((group) => group.id === source.id)?.memberModelIds).not.toContain(second.id)
     expect(refreshed.groups.find((group) => group.id === target.id)?.name).toBe("Shared models")
+  })
+
+  test("prunes empty fixed groups whose models all belong to other groups", async () => {
+    const providerEntry = await upsertProvider(provider("lcat"))
+    const dotted = await upsertModel(providerEntry.id, { id: "dotted", name: "LongCat 2.5", gatewayModelId: "lcat/longcat-2.5", upstreamModel: "LongCat-2.5" })
+    const dashed = await upsertModel(providerEntry.id, { id: "dashed", name: "LongCat 2.5", gatewayModelId: "lcat/longcat-2-5", upstreamModel: "longcat-2-5" })
+    const groups = await syncModelPricingGroups()
+    const kept = groups.find((group) => group.memberModelIds.includes(dotted.id))!
+    const zombie = groups.find((group) => group.memberModelIds.includes(dashed.id))!
+    await updatePricingGroup(zombie.id, [])
+    await updatePricingGroup(kept.id, [dotted.id, dashed.id])
+    expect((await syncModelPricingGroups()).find((group) => group.id === zombie.id)).toBeUndefined()
+    expect((await syncModelPricingGroups()).find((group) => group.id === kept.id)?.memberModelIds.sort()).toEqual([dotted.id, dashed.id].sort())
+    expect((await listPricingGroups()).find((group) => group.id === zombie.id)).toBeUndefined()
+    expect((await getPricingAdminData()).ungroupedModels.map((model) => model.id)).not.toContain(dashed.id)
+  })
+
+  test("does not keep an empty fixed group for models collected by a custom group", async () => {
+    const providerEntry = await upsertProvider(provider("cx"))
+    const model = await upsertModel(providerEntry.id, { id: "solo", name: "Solo", gatewayModelId: "cx/solo", upstreamModel: "solo" })
+    const fixed = (await syncModelPricingGroups()).find((group) => group.memberModelIds.includes(model.id))!
+    await updatePricingGroup(fixed.id, [])
+    const custom = await createPricingGroup("Collected", [model.id])
+    expect((await syncModelPricingGroups()).find((group) => group.id === fixed.id)).toBeUndefined()
+    await deletePricingGroup(custom.id)
+    expect((await syncModelPricingGroups()).find((group) => group.id === fixed.id)?.memberModelIds).toEqual([model.id])
+  })
+
+  test("keeps an emptied fixed group while its excluded models stay ungrouped", async () => {
+    const providerEntry = await upsertProvider(provider("cx"))
+    const model = await upsertModel(providerEntry.id, { id: "solo", name: "Solo", gatewayModelId: "cx/solo", upstreamModel: "solo" })
+    const fixed = (await syncModelPricingGroups()).find((group) => group.memberModelIds.includes(model.id))!
+    await updatePricingGroup(fixed.id, [])
+    const refreshed = (await syncModelPricingGroups()).find((group) => group.id === fixed.id)!
+    expect(refreshed.memberModelIds).toEqual([])
+    expect(refreshed.excludedModelIds).toEqual([model.id])
+    expect((await getPricingAdminData()).ungroupedModels.map((entry) => entry.id)).toContain(model.id)
   })
 
   test("persists a custom canonical link without fetching the catalog", async () => {

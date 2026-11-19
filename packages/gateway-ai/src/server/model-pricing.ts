@@ -255,6 +255,7 @@ async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models
   const validModelIds = new Set(models.map((model) => model.id))
   const now = new Date().toISOString()
   const writes: ModelPricingGroup[] = []
+  const deletes: string[] = []
   for (const [key, groupedModels] of grouped) {
     const id = stableGroupId(key)
     const current = existingById.get(id)
@@ -267,6 +268,16 @@ async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models
     ])].filter((modelId) => availableIds.has(modelId))
     const excludedIds = new Set(excluded)
     const memberModelIds = [...groupedModels.map((model) => model.id).filter((modelId) => !excludedIds.has(modelId)), ...addedModelIds]
+    // A fixed group whose natural models all belong to other groups carries no
+    // pricing intent of its own; drop it so sync never resurrects deleted empty groups.
+    const assignedElsewhere = (modelId: string) => customAssigned.has(modelId) || (fixedAddedOwner.has(modelId) && fixedAddedOwner.get(modelId) !== id)
+    if (!memberModelIds.length && groupedModels.every((model) => assignedElsewhere(model.id))) {
+      if (current) {
+        nextById.delete(id)
+        deletes.push(id)
+      }
+      continue
+    }
     const candidate: ModelPricingGroup = {
       ...current,
       id,
@@ -287,7 +298,7 @@ async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models
     nextById.set(id, candidate)
     writes.push(candidate)
   }
-  await writeGroups(writes)
+  await writeGroupChanges(writes, deletes)
   return [...nextById.values()]
 }
 
