@@ -210,7 +210,8 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(recent.locator("a", { hasText: "View all" })).toHaveAttribute("href", "/dashboard/ai/overview/request-logs")
   expect(aggregateRanges[0]!.toString()).toBe(recentRanges[0]!.toString())
   await checkLowerPair()
-  await page.getByRole("tab", { name: "7 days", exact: true }).click()
+  await page.getByRole("combobox").click()
+  await page.getByRole("option", { name: "7 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(7 * 86_400_000)
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
   await chart.focus()
@@ -221,10 +222,12 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(costRow).toHaveText("Cost$0.50")
   // A late old-period response cannot replace the currently selected range.
   holdNext = true
-  await page.getByRole("tab", { name: "Past 24h", exact: true }).click()
+  await page.getByRole("combobox").click()
+  await page.getByRole("option", { name: "Past 24h", exact: true }).click()
   await expect.poll(() => !!releaseOld).toBe(true)
   await expect(page.getByText("4.80K", { exact: true })).toHaveCount(0)
-  await page.getByRole("tab", { name: "30 days", exact: true }).click()
+  await page.getByRole("combobox").click()
+  await page.getByRole("option", { name: "30 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(30 * 86_400_000)
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
   const oldResponse = page.waitForResponse(response => response.url() === heldUrl)
@@ -283,7 +286,8 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   dense = true
   for (const [period, points] of [["Past 24h", 24], ["30 days", 31]] as const) {
     await page.setViewportSize({ width: 1280, height: 844 })
-    await page.getByRole("tab", { name: period, exact: true }).click()
+    await page.getByRole("combobox").click()
+    await page.getByRole("option", { name: period, exact: true }).click()
     await expect.poll(async () => ((await trend.locator(".recharts-area-curve").first().getAttribute("d"))?.match(/C/g) ?? []).length).toBe(points - 1)
     const ticks = trend.locator(".recharts-xAxis-tick-labels text")
     const desktopTicks = await ticks.count()

@@ -7,7 +7,7 @@ import { Button } from "@rawroute/ui/button"
 import { MostUsedModels } from "./most-used-models"
 import { Skeleton } from "@rawroute/ui/skeleton"
 import { Alert, AlertDescription } from "@rawroute/ui/alert"
-import { Tabs, TabsList, TabsTrigger } from "@rawroute/ui/tabs"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger } from "@rawroute/ui/select"
 import { useOverview } from "../use-overview"
 import type { OverviewPayload, OverviewPeriod } from "../../contracts/overview"
 import type { RequestLogsPage } from "../../contracts/request-logs"
@@ -53,7 +53,7 @@ function OverviewLayout({ data, period, onPeriod, refresh, busy, error, recent, 
   return <DashboardPage spacing="normal" aria-busy={busy || undefined}>
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div><h2 className="text-2xl font-semibold tracking-tight">Your gateway at a glance</h2><p className="mt-1 text-sm text-muted-foreground">Recorded traffic, reliability, and spend for this workspace.</p></div>
-      <div className="flex flex-wrap items-center gap-2"><Tabs value={period} onValueChange={value => { if (value === "24h" || value === "7d" || value === "30d") onPeriod?.(value) }}><TabsList aria-label="Overview time range">{(["24h", "7d", "30d"] as const).map(value => <TabsTrigger disabled={!onPeriod} key={value} value={value}>{value === "24h" ? "Past 24h" : value === "7d" ? "7 days" : "30 days"}</TabsTrigger>)}</TabsList></Tabs><Button variant="outline" size="sm" disabled={busy || !refresh} onClick={refresh}><RefreshCwIcon data-icon="inline-start" />{busy && refresh ? "Refreshing…" : "Refresh"}</Button></div>
+      <div className="flex flex-wrap items-center gap-2"><div className="flex min-w-0 items-center gap-2"><span className="shrink-0 text-xs font-medium text-muted-foreground">Range</span><Select disabled={!onPeriod} value={period} onValueChange={value => { if (value === "24h" || value === "7d" || value === "30d") onPeriod?.(value) }}><SelectTrigger className="h-8 min-w-0 flex-1 sm:w-[220px] sm:flex-none"><span className="truncate">{period === "24h" ? "Past 24h" : period === "7d" ? "7 days" : "30 days"}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Period</SelectLabel>{(["24h", "7d", "30d"] as const).map(value => <SelectItem key={value} value={value}>{value === "24h" ? "Past 24h" : value === "7d" ? "7 days" : "30 days"}</SelectItem>)}</SelectGroup></SelectContent></Select></div><Button variant="outline" size="sm" disabled={busy || !refresh} onClick={refresh}><RefreshCwIcon data-icon="inline-start" />{busy && refresh ? "Refreshing…" : "Refresh"}</Button></div>
     </div>
     {error && <Alert variant="destructive"><AlertDescription>Unable to load overview. <Button variant="link" size="sm" onClick={refresh} disabled={busy}>Retry overview</Button></AlertDescription></Alert>}
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
