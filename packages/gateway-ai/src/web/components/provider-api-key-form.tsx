@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from "react"
 
-import { Checkbox } from "@rawroute/ui/checkbox"
 import { DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@rawroute/ui/dialog"
 import { Input } from "@rawroute/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@rawroute/ui/select"
@@ -15,7 +14,6 @@ function optionalLimit(formData: FormData, name: string) {
 
 export function ProviderApiKeyForm({ providers, apiKey, onSave }: { providers: Provider[]; apiKey: ProviderApiKey | null; onSave: (apiKey: ProviderApiKeyInput) => Promise<boolean> }) {
   const [pending, setPending] = useState(false)
-  const [enabled, setEnabled] = useState(apiKey?.enabled !== false)
   const scopedProvider = providers.length === 1 ? providers[0] : undefined
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -27,7 +25,6 @@ export function ProviderApiKeyForm({ providers, apiKey, onSave }: { providers: P
         providerId: String(formData.get("providerId")),
         name: String(formData.get("name")),
         key: apiKey && !formData.get("key") ? "__unchanged__" : String(formData.get("key") || ""),
-        enabled,
         rpmLimit: optionalLimit(formData, "rpmLimit"),
         maxConcurrency: optionalLimit(formData, "maxConcurrency"),
       })
@@ -49,7 +46,6 @@ export function ProviderApiKeyForm({ providers, apiKey, onSave }: { providers: P
         <FormField label="Concurrency (local limit)"><Input name="maxConcurrency" type="number" min={1} step={1} defaultValue={apiKey?.maxConcurrency ?? ""} /></FormField>
       </div>
       <p className="text-xs text-muted-foreground">Leave blank for no local limit. Limits and session affinity are local to this RawRoute process; RPM counts and session routing reset on restart. Sessions reuse an available key; otherwise routing favors current load, with key order breaking ties. These limits do not change your provider quota.</p>
-      <label className="flex items-center gap-3 rounded-lg border p-3"><Checkbox checked={enabled} onCheckedChange={setEnabled} /><span className="text-sm font-medium">Enabled for routing</span></label>
     </div>
     <DialogFooter><FormSubmitButton pending={pending} idleLabel={apiKey ? "Update API key" : "Add API key"} pendingLabel={apiKey ? "Updating API key..." : "Saving API key..."} /></DialogFooter>
   </form>
