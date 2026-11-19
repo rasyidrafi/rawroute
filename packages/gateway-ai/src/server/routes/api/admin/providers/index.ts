@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       headers: validateProviderHeaders(input.headers || {}),
       supportPromptCacheKey: openAICompatible ? input.supportPromptCacheKey : false,
       reasoningSummaries: input.protocol === "openai-responses" ? input.reasoningSummaries : false,
-      enabled: input.enabled !== false,
+      enabled: input.enabled,
     })
     recordLog("admin.provider.saved", { providerId: provider.id }, { level: "info" })
     return Response.json({ ok: true, providerId: provider.id })

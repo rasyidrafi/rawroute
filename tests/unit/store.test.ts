@@ -24,6 +24,7 @@ import {
   upsertProviderApiKey,
 } from "../../packages/gateway-ai/src/server/store"
 import { hashPassword, validatePasswordUpdate, verifyPassword } from "../../packages/platform/src/server/identity"
+import { closeLocalDatabase } from "../../packages/platform/src/server/database"
 import { identity, readMeta, updateMeta } from "../../packages/platform/src/server/runtime"
 
 import type { Model, Provider } from "../../packages/gateway-ai/src/contracts/domain"
@@ -220,6 +221,18 @@ describe("configuration storage", () => {
     expect(provider).not.toHaveProperty("unexpectedField")
   })
 
+  workspaceTest("preserves provider enabled when an edit omits it", async () => {
+    const disabled = await upsertProvider({ ...providerInput(), enabled: false })
+    await upsertProvider({ originalId: disabled.id, name: "Renamed" })
+    expect(await getProvider(disabled.id)).toMatchObject({ id: disabled.id, name: "Renamed", enabled: false })
+
+    await upsertProvider({ originalId: disabled.id, name: "Enabled again", enabled: true })
+    expect(await getProvider(disabled.id)).toMatchObject({ id: disabled.id, enabled: true })
+
+    const fresh = await upsertProvider({ name: "Fresh", prefix: "fresh", baseUrl: "https://fresh.example.com/v1", protocol: "openai-chat", authType: "bearer" })
+    expect(fresh.enabled).toBe(true)
+  })
+
   workspaceTest("rejects invalid provider API key configuration", async () => {
     const provider = await upsertProvider(providerInput())
     await expect(upsertProviderApiKey(provider.id, { name: "", key: "" })).rejects.toThrow("API key name is required.")
@@ -279,6 +292,33 @@ describe("configuration storage", () => {
     if (!key) throw new Error("Memory backend did not seed a gateway API key.")
     await deleteApiKey(key.id)
     expect(await listApiKeys()).toEqual([])
+  })
+})
+
+describe("sqlite provider persistence", () => {
+  workspaceTest("preserves provider enabled when an edit omits it", async () => {
+    const previousBackend = process.env.STORAGE_BACKEND
+    const previousPath = process.env.SQLITE_PATH
+    await closeLocalDatabase()
+    process.env.STORAGE_BACKEND = "sqlite"
+    process.env.SQLITE_PATH = ":memory:"
+    try {
+      const disabled = await upsertProvider({ ...providerInput(), enabled: false })
+      await upsertProvider({ originalId: disabled.id, name: "Renamed" })
+      expect(await getProvider(disabled.id)).toMatchObject({ id: disabled.id, name: "Renamed", enabled: false })
+
+      await upsertProvider({ originalId: disabled.id, name: "Enabled again", enabled: true })
+      expect(await getProvider(disabled.id)).toMatchObject({ id: disabled.id, enabled: true })
+
+      const fresh = await upsertProvider({ name: "Fresh", prefix: "fresh", baseUrl: "https://fresh.example.com/v1", protocol: "openai-chat", authType: "bearer" })
+      expect(fresh.enabled).toBe(true)
+    } finally {
+      if (previousBackend === undefined) delete process.env.STORAGE_BACKEND
+      else process.env.STORAGE_BACKEND = previousBackend
+      if (previousPath === undefined) delete process.env.SQLITE_PATH
+      else process.env.SQLITE_PATH = previousPath
+      await closeLocalDatabase()
+    }
   })
 })
 
