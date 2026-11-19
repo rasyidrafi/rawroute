@@ -212,6 +212,21 @@ describe("model pricing catalog", () => {
     expect((await syncModelPricingGroups()).find((group) => group.id === fixed.id)?.memberModelIds).toEqual([model.id])
   })
 
+  test("keeps a configured empty fixed group when its models move to a custom group", async () => {
+    const providerEntry = await upsertProvider(provider("cx"))
+    const model = await upsertModel(providerEntry.id, { id: "solo", name: "Solo", gatewayModelId: "cx/solo", upstreamModel: "solo" })
+    const fixed = (await syncModelPricingGroups()).find((group) => group.memberModelIds.includes(model.id))!
+    await updatePricingGroup(fixed.id, [model.id], { id: "custom-solo", source: "custom" }, "Configured Solo")
+    await updatePricingGroup(fixed.id, [])
+    const custom = await createPricingGroup("Collected", [model.id])
+    const emptied = (await syncModelPricingGroups()).find((group) => group.id === fixed.id)
+    expect(emptied).toMatchObject({ name: "Configured Solo", canonicalModelId: "custom-solo", canonicalSource: "custom", memberModelIds: [] })
+    await deletePricingGroup(custom.id)
+    const restored = (await syncModelPricingGroups()).find((group) => group.id === fixed.id)
+    expect(restored).toMatchObject({ name: "Configured Solo", canonicalModelId: "custom-solo", canonicalSource: "custom", memberModelIds: [model.id] })
+    expect((await listPricingGroups()).find((group) => group.id === fixed.id)).toMatchObject({ name: "Configured Solo", canonicalModelId: "custom-solo" })
+  })
+
   test("keeps an emptied fixed group while its excluded models stay ungrouped", async () => {
     const providerEntry = await upsertProvider(provider("cx"))
     const model = await upsertModel(providerEntry.id, { id: "solo", name: "Solo", gatewayModelId: "cx/solo", upstreamModel: "solo" })

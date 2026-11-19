@@ -268,15 +268,18 @@ async function reconcileModelPricingGroups(existing: ModelPricingGroup[], models
     ])].filter((modelId) => availableIds.has(modelId))
     const excludedIds = new Set(excluded)
     const memberModelIds = [...groupedModels.map((model) => model.id).filter((modelId) => !excludedIds.has(modelId)), ...addedModelIds]
-    // A fixed group whose natural models all belong to other groups carries no
-    // pricing intent of its own; drop it so sync never resurrects deleted empty groups.
+    // Drop empty fixed groups whose natural models all belong to other groups so
+    // sync never resurrects deleted groups, unless they carry explicit
+    // configuration (a custom name or canonical link).
     const assignedElsewhere = (modelId: string) => customAssigned.has(modelId) || (fixedAddedOwner.has(modelId) && fixedAddedOwner.get(modelId) !== id)
     if (!memberModelIds.length && groupedModels.every((model) => assignedElsewhere(model.id))) {
-      if (current) {
+      if (!current) continue
+      const configured = Boolean(current.canonicalModelId) || current.name.trim() !== modelGroupLabel(groupedModels[0], providerPrefixes)
+      if (!configured) {
         nextById.delete(id)
         deletes.push(id)
+        continue
       }
-      continue
     }
     const candidate: ModelPricingGroup = {
       ...current,
