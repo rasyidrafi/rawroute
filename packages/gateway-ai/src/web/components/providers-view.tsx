@@ -1,7 +1,7 @@
 import { aiPagePaths as pagePaths, providerPagePath } from "../../contracts/pages"
 import { DashboardPage } from "@rawroute/ui/page-layout"
 import { useState } from "react"
-import { ChevronRightIcon, LinkIcon, PlusIcon, ServerIcon, Trash2Icon } from "lucide-react"
+import { ChevronRightIcon, LinkIcon, PencilIcon, PlusIcon, ServerIcon, Trash2Icon } from "lucide-react"
 import { Link } from "react-router"
 import { useNavigate } from "react-router"
 import useSWR from "swr"
@@ -94,6 +94,7 @@ export function ProvidersView() {
                   <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.modelCount}</span><span className="text-xs text-muted-foreground">configured</span>{provider.enabledModelCount !== provider.modelCount && <Badge variant="outline">{provider.enabledModelCount} enabled</Badge>}</div></TableCell>
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
+                      <Button aria-label={`Edit ${provider.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProvider(provider); setProviderOpen(true) }}><PencilIcon /></Button>
                       {provider.prefix !== "codex" && <ConfirmAction title={`Delete ${provider.name}?`} description={`This permanently deletes ${provider.apiKeyCount} API keys and ${provider.modelCount} models attached to this provider.`} pending={isPending(pendingKey)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>}
                       <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link to={providerPagePath(provider.id)} />}><ChevronRightIcon /></Button>
                     </div>
