@@ -12,8 +12,10 @@ import {
   deleteApiKey,
   deleteProvider,
   deleteProviderApiKey,
+  findApiKeyByValue,
   getProvider,
   listApiKeys,
+  listDeletedApiKeyNames,
   listIndexedApiKeyNames,
   listProviderApiKeys,
   listProviderModels,
@@ -261,6 +263,16 @@ describe("configuration storage", () => {
     const updated = await updateApiKeyName(apiKey.id, " Renamed ")
     expect(updated).toMatchObject({ id: apiKey.id, name: "Renamed", key: "client-secret" })
     expect((await listApiKeys()).find((entry) => entry.id === apiKey.id)).toMatchObject({ name: "Renamed", key: "client-secret" })
+  })
+
+  workspaceTest("archives deleted key names for history without keeping authentication", async () => {
+    const key = await createApiKey("Archived name", "archived-name-secret")
+    await deleteApiKey(key.id)
+    expect((await listDeletedApiKeyNames()).get(key.id)).toBe("Archived name")
+    expect((await listDeletedApiKeyNames("default")).get(key.id)).toBe("Archived name")
+    expect((await listDeletedApiKeyNames("other-workspace")).has(key.id)).toBe(false)
+    expect((await listIndexedApiKeyNames()).has(key.id)).toBe(false)
+    expect(await findApiKeyByValue(key.key)).toBeUndefined()
   })
 
   workspaceTest("resolves API-key names from every workspace index", async () => {

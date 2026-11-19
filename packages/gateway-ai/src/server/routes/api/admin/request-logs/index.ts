@@ -4,17 +4,19 @@ import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
 import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { requestLogKeyLabel } from "../../../../../contracts/request-logs"
-import { listApiKeys } from "../../../../store"
+import { listApiKeys, listDeletedApiKeyNames } from "../../../../store"
 
 export async function GET(request: Request) {
   let query
   try { query = parseRequestLogQuery(new URL(request.url).searchParams, currentWorkspaceId()) }
   catch { return jsonError("Invalid request log range, filters or cursor.", 400) }
   try {
-    const [page, modelNames, keys] = await Promise.all([listRequestLogs(query), loadDashboardModelLabels(), listApiKeys()])
+    const [page, modelNames, keys, deletedNames] = await Promise.all([listRequestLogs(query), loadDashboardModelLabels(), listApiKeys(), listDeletedApiKeyNames(currentWorkspaceId())])
     const keyNames = new Map(keys.map(key => [key.id, key.name]))
+    for (const [id, name] of deletedNames) if (!keyNames.has(id)) keyNames.set(id, name)
     const modelOptions = new Map(modelNames)
     const keyOptions = new Map(keyNames)
+    if (query.key && !keyOptions.has(query.key)) keyOptions.set(query.key, keyNames.get(query.key) || requestLogKeyLabel({ gatewayKeyId: query.key }))
     // Include historical, alias and shared IDs seen on this bounded page, without scanning history.
     for (const event of page.events) if (!modelOptions.has(event.gatewayModelId)) modelOptions.set(event.gatewayModelId, event.gatewayModelId)
     for (const event of page.events) if (event.requestedModel && !modelOptions.has(event.requestedModel)) modelOptions.set(event.requestedModel, event.requestedModel)

@@ -15,9 +15,18 @@ export function requestLogComplete(event: Pick<UsageEvent, "requestFinal" | "sha
   return event.sharedUsage?.role === "owner" || event.requestFinal !== false
 }
 
+/** Short, human-safe label for a key whose name is not resolvable here. Full IDs stay in tooltips/URLs only. */
+export function unresolvedKeyLabel(keyId: string) {
+  return `Unknown key · ${keyId.slice(0, 8)}`
+}
+
+export function keyDisplayLabel(name: string | null | undefined, keyId: string) {
+  return name?.trim() || unresolvedKeyLabel(keyId)
+}
+
 export function requestLogKeyLabel(event: { keyName?: string | null; gatewayKeyId?: string; sharedUsage?: UsageEvent["sharedUsage"] }) {
   if (event.sharedUsage?.role === "owner") return `Shared usage · ${event.sharedUsage.peerWorkspaceName || event.sharedUsage.peerWorkspaceId}`
-  return event.keyName || (event.gatewayKeyId ? `Unknown key (${event.gatewayKeyId.slice(0, 8)})` : "Unknown key")
+  return event.gatewayKeyId ? keyDisplayLabel(event.keyName, event.gatewayKeyId) : "Unknown key"
 }
 
 /** Only consumer ingress correlation joins attempts. Historical attempts stay standalone. */

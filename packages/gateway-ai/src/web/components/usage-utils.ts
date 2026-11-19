@@ -66,6 +66,11 @@ export function getOptionLabel<T extends string>(options: ReadonlyArray<{ value:
   return options.find((option) => option.value === value)?.label ?? value
 }
 
+/** Chart ticks keep the distinguishing tail (key ID suffix) of long labels. */
+export function formatKeyTickLabel(name: string) {
+  return name.length > 14 ? `${name.slice(0, 6)}…${name.slice(-8)}` : name
+}
+
 export function getGranularityOptions(preset: DashboardQuery["preset"]): Array<{ value: NonNullable<DashboardQuery["granularity"]> | "auto"; label: string }> {
   if (preset === "today" || preset === "yesterday") return [{ value: "auto", label: "Auto (hourly)" }, { value: "hourly", label: "Hourly" }]
   if (preset === "month" || preset === "lastMonth" || preset === "week" || preset === "lastWeek" || preset === "budget") return [{ value: "auto", label: "Auto (daily)" }, { value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }]

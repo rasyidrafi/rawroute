@@ -2,13 +2,13 @@ import { budgetModelOptions } from "./budget-models"
 import { queryLocalRequestLogs, queryLocalUsageRange } from "./local-db"
 import type { OverviewDetails, OverviewPayload } from "../contracts/overview"
 import { selectRequestLogGroups, requestLogLatest, requestLogCursor, type RequestLogQuery } from "./request-logs"
-import { groupRequestLogEvents } from "../contracts/request-logs"
+import { groupRequestLogEvents, keyDisplayLabel } from "../contracts/request-logs"
 import { normalizeRequestLogMetadata } from "./request-log-metadata"
 import { createHash } from "node:crypto"
 import { getSqliteDatabase, type SqliteDatabase } from "@rawroute/platform/server/database"
 
 import { localCacheSetIfAbsent } from "@rawroute/platform/server/local-cache"
-import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "./store"
+import { listAliases, listApiKeys, listDeletedApiKeyNames, listIndexedApiKeyNames, listModels } from "./store"
 import { listCodexAccounts } from "./codex/oauth"
 import { getCodexUsageForAccount } from "./codex/usage"
 import { getModelPricingGeneration, getPricingForModelAt as getModernPricingForModelAt, getPricingJob, listPricingGroups, listPricingVersions, resetModelPricingForTests, updatePricingJob } from "./model-pricing"
@@ -315,7 +315,7 @@ function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean 
   clearWorkspaceEntries(dashboardInflight, workspaceId)
 }
 
-/** Drop cached key-detail payloads after a gateway key rename, rotation or deletion. */
+/** Drop cached key-detail payloads and this workspace's usage lists after a gateway key rename, rotation or deletion. */
 export function invalidateKeyUsageDetail(keyId: string) {
   const workspaceId = currentWorkspaceId()
   advanceWorkspaceGeneration(presentationGenerations, workspaceId)
@@ -325,7 +325,10 @@ export function invalidateKeyUsageDetail(keyId: string) {
   }
   for (const key of dashboardCache.keys()) {
     const { owner, identity } = identityOf(key)
-    if (identity.at(-1) !== keyId) continue
+    const last = identity.at(-1)
+    // List payloads carry the deleted/renamed key's mask and label; refresh them too.
+    if (last === "") { if (owner === workspaceId) dashboardCache.delete(key); continue }
+    if (last !== keyId) continue
     // Public detail can render another workspace's historical key; evict it everywhere.
     if (identity[0] === true) {
       advanceWorkspaceGeneration(presentationGenerations, owner)
@@ -334,7 +337,9 @@ export function invalidateKeyUsageDetail(keyId: string) {
   }
   for (const key of dashboardInflight.keys()) {
     const { owner, identity } = identityOf(key)
-    if (identity.at(-1) !== keyId) continue
+    const last = identity.at(-1)
+    if (last === "") { if (owner === workspaceId) dashboardInflight.delete(key); continue }
+    if (last !== keyId) continue
     if (identity[0] === true) {
       // Fence a fill that read the old name before the rename and would publish after it.
       advanceWorkspaceGeneration(presentationGenerations, owner)
@@ -1424,7 +1429,7 @@ async function loadBudgetRows(
   const budgets = currentBudgets || await listBudgets()
   if (!budgets.length) return { rows: [], window: currentWindow }
   const window = currentWindow || await getBudgetWindow()
-  const [usageStartAt, usage] = await Promise.all([budgetUsageStart(window), getBudgetUsage(window, options.freshUsage === true)])
+  const [usageStartAt, usage, deletedNames] = await Promise.all([budgetUsageStart(window), getBudgetUsage(window, options.freshUsage === true), listDeletedApiKeyNames(currentWorkspaceId())])
   const names = new Map(keys.map(key => [key.id, key.name]))
   return {
     rows: budgets.map(budget => ({
@@ -1432,7 +1437,7 @@ async function loadBudgetRows(
       spentMicros: usage.get("")?.available === false || usage.get(budget.apiKeyId)?.available === false ? null : usage.get(budget.apiKeyId)?.spentMicros || 0,
       ...(usage.get("")?.available === false || usage.get(budget.apiKeyId)?.available === false ? { usageAvailable: false as const } : {}),
       windowStart: window.start, windowEnd: window.end, usageStartAt,
-      name: names.get(budget.apiKeyId) || "Unknown",
+      name: keyDisplayLabel(names.get(budget.apiKeyId) || deletedNames.get(budget.apiKeyId), budget.apiKeyId),
       lastUsedAt: usage.get(budget.apiKeyId)?.lastUsedAt || null,
     })),
     window,
@@ -1518,8 +1523,9 @@ function mergedUsageGaps(gaps: Array<{ from: string | null; to: string | null }>
   return merged
 }
 function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•".repeat(Math.max(4, key.length - 4))}` : `${key.slice(0, 7)}${"•".repeat(12)}${key.slice(-4)}` }
-function publicKeyName(key: { name?: string } | undefined, keyId: string, indexedNames: ReadonlyMap<string, string>) {
-  return key?.name?.trim() || indexedNames.get(keyId)?.trim() || keyId
+function keyUsageLabel(key: { name?: string } | undefined, keyId: string, indexedNames: ReadonlyMap<string, string>, deletedNames: ReadonlyMap<string, string>, publicView: boolean) {
+  const archived = (publicView ? indexedNames.get(keyId)?.trim() : undefined) || deletedNames.get(keyId)?.trim()
+  return keyDisplayLabel(key?.name?.trim() || archived, keyId)
 }
 
 /** Shared display labels for analytics and request history, including groups and aliases. */
@@ -1589,10 +1595,11 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
   const trendGranularity = effectiveDashboardGranularity(query.granularity, range.to.getTime() - range.from.getTime())
   const toExclusive = exactRange ? exactRange.to : new Date(range.to.getTime() + (query.preset === "budget" ? 0 : 1)).toISOString()
   const from = range.from.toISOString()
-  const [usage, keys, indexedNames, labels, budgetData] = await Promise.all([
+  const [usage, keys, indexedNames, deletedNames, labels, budgetData] = await Promise.all([
     canonicalUsageRange(from, toExclusive, trendGranularity === "hourly", keyId),
     budgetSelectableKeys(),
     publicView ? listIndexedApiKeyNames() : Promise.resolve(new Map<string, string>()),
+    listDeletedApiKeyNames(publicView ? undefined : currentWorkspaceId()),
     loadDashboardModelLabels(),
     budgetsPromise.then(async budgets => {
       if (!budgets.length) return { rows: [], window: windowPromise ? await windowPromise : undefined }
@@ -1607,8 +1614,8 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
   if (keyId) {
     const key = keyMap.get(keyId)
     const shared = sharedWorkspaceIdFromBudgetId(keyId)
-    const label = shared ? sharedWorkspaceUsageLabel(key, shared) : publicView ? publicKeyName(key, keyId, indexedNames) : key?.name?.trim() || keyId
-    keyRows.set(keyId, { id: publicView ? label : keyId, label, ...(publicView ? { publicId: publicKeyUsageId(keyId) } : {}), maskedKey: "hidden", requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null })
+    const label = shared ? sharedWorkspaceUsageLabel(key, shared) : keyUsageLabel(key, keyId, indexedNames, deletedNames, publicView)
+    keyRows.set(keyId, { id: publicView ? label : keyId, label, ...(publicView ? { publicId: publicKeyUsageId(keyId) } : {}), maskedKey: key || shared ? "hidden" : deletedNames.has(keyId) ? "deleted" : publicView ? "hidden" : "unknown", requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null })
     modelsByKey.set(keyId, new Set())
   }
   const models = new Map<string, DashboardPayload["models"][number]>()
@@ -1667,8 +1674,8 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
       if (!keyRow) {
         const key = keyMap.get(row.gatewayKeyId)
         const shared = sharedWorkspaceIdFromBudgetId(row.gatewayKeyId)
-        const name = shared ? sharedWorkspaceUsageLabel(key, shared) : publicView ? publicKeyName(key, row.gatewayKeyId, indexedNames) : key?.name?.trim() || row.gatewayKeyId
-        keyRow = { id: publicView ? name : row.gatewayKeyId, label: name, ...(publicView ? { publicId: publicKeyUsageId(row.gatewayKeyId) } : {}), maskedKey: publicView ? "hidden" : mask(key?.key || "unknown"), requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
+        const name = shared ? sharedWorkspaceUsageLabel(key, shared) : keyUsageLabel(key, row.gatewayKeyId, indexedNames, deletedNames, publicView)
+        keyRow = { id: publicView ? name : row.gatewayKeyId, label: name, ...(publicView ? { publicId: publicKeyUsageId(row.gatewayKeyId) } : {}), maskedKey: key ? (publicView ? "hidden" : mask(key.key)) : deletedNames.has(row.gatewayKeyId) ? "deleted" : publicView ? "hidden" : "unknown", requests: 0, tokens: 0, costMicros: 0, models: [], lastUsed: null }
         keyRows.set(row.gatewayKeyId, keyRow); modelsByKey.set(row.gatewayKeyId, new Set())
       }
       keyRow.requests += row.requests; keyRow.tokens += tokens; keyRow.costMicros += row.costMicros
@@ -1726,7 +1733,7 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
       inputTokens: totals.inputTokens, cacheReadTokens: totals.cacheReadTokens, failedRequests: totals.failedRequests, statusCoveredRequests: totals.statusCoveredRequests,
       cacheUsageInputTokens: totals.cacheUsageInputTokens, cacheUsageReadTokens: totals.cacheUsageReadTokens, cacheUsageCoveredRequests: totals.cacheUsageCoveredRequests,
       durationCount: totals.durationCount, durationSumMs: totals.durationSumMs,
-      budgets: budgetData.rows.map(budget => ({ id: budget.apiKeyId, name: keyMap.get(budget.apiKeyId)?.name || budget.apiKeyId, enabled: budget.enabled, limitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros, ...(budget.usageAvailable === false ? { usageAvailable: false } : {}) })),
+      budgets: budgetData.rows.map(budget => ({ id: budget.apiKeyId, name: keyDisplayLabel(keyMap.get(budget.apiKeyId)?.name || deletedNames.get(budget.apiKeyId), budget.apiKeyId), enabled: budget.enabled, limitMicros: budget.weeklyLimitMicros, spentMicros: budget.spentMicros, ...(budget.usageAvailable === false ? { usageAvailable: false } : {}) })),
       budgetWindow: budgetData.window ? { from: budgetData.window.start, to: budgetData.window.end, bypassLimits: budgetData.window.bypassLimits } : null,
     } } : {}),
     generatedAt: new Date().toISOString(),
@@ -1767,10 +1774,11 @@ export async function getPublicKeyUsageDetail(publicId: string): Promise<{ keyId
   const workspaceId = currentWorkspaceId()
   const mapped = publicUsageKeyIds.get(workspaceId)?.get(publicId)
   if (mapped) return { keyId: mapped, payload: await getDashboardPayload({ preset: "budget", granularity: "daily" }, true, mapped) }
-  const [keys, workspaces, indexedNames] = await Promise.all([listApiKeys(), listWorkspaces(), listIndexedApiKeyNames()])
+  const [keys, workspaces, indexedNames, deletedNames] = await Promise.all([listApiKeys(), listWorkspaces(), listIndexedApiKeyNames(), listDeletedApiKeyNames()])
   const candidates = [
     ...keys.map(key => key.id),
     ...indexedNames.keys(),
+    ...deletedNames.keys(),
     ...workspaces.filter(workspace => workspace.status === "active" && workspace.id !== workspaceId).map(workspace => sharedWorkspaceBudgetId(workspace.id)),
   ]
   let keyId = candidates.find(candidate => hash(`${workspaceId}:${candidate}`) === publicId)

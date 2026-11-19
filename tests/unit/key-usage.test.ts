@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test"
-import { getDashboardPayload, getKeyUsagePayload, invalidateKeyUsageDetail, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
+import { getBudgetAdminData, getDashboardPayload, getKeyUsagePayload, invalidateKeyUsageDetail, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
 import { closeLocalDatabase } from "../../packages/platform/src/server/database"
 import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
-import { _resetMemoryBackend, createApiKey, updateApiKeyName } from "../../packages/gateway-ai/src/server/store"
+import { _resetMemoryBackend, createApiKey, deleteApiKey, findApiKeyByValue, updateApiKeyName } from "../../packages/gateway-ai/src/server/store"
+import { keyDisplayLabel } from "../../packages/gateway-ai/src/contracts/request-logs"
 import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 import { GET } from "../../packages/gateway-ai/src/server/routes/api/admin/usage/keys/by-key/index"
 
@@ -56,8 +57,44 @@ for (const backend of ["memory", "sqlite"] as const) test(`${backend}: key detai
   await runInWorkspace({ id: `other-detail-${backend}`, storageMode: "scoped" }, async () => {
     const data = await getKeyUsagePayload(selectedId)
     expect(data.summary.requests).toBe(0)
-    expect(data.keys[0]?.label).toBe(selectedId)
+    // Foreign live keys must not leak their name into another workspace's admin view.
+    expect(data.keys[0]?.label).toBe(keyDisplayLabel(null, selectedId))
+    expect(data.keys[0]?.maskedKey).toBe("unknown")
     expect(data.keys[0]?.budget).toBeUndefined()
+  })
+})
+
+for (const backend of ["memory", "sqlite"] as const) test(`${backend}: deleted keys keep their archived name while unknown IDs degrade to a short label`, async () => {
+  process.env.STORAGE_BACKEND = backend
+  if (backend === "sqlite") process.env.NODE_ENV = "development"
+  let retiredId = ""
+  await runInWorkspace({ id: `key-deleted-${backend}`, storageMode: "scoped" }, async () => {
+    const retired = await createApiKey("Retired user")
+    retiredId = retired.id
+    await recordUsageEvent(attempt("retired-0", retired.id, "2026-10-16T11:00:00.000Z", 100), null)
+    await upsertBudget({ apiKeyId: retired.id, weeklyLimitMicros: 1000, enabled: true })
+    // Warm the list cache while the key is live so deletion must evict it.
+    expect((await getDashboardPayload({ preset: "all" })).keys.find(row => row.id === retired.id)?.maskedKey).not.toBe("deleted")
+    await deleteApiKey(retired.id)
+    invalidateKeyUsageDetail(retired.id)
+    expect(await findApiKeyByValue(retired.key)).toBeUndefined()
+    const detail = await getKeyUsagePayload(retired.id)
+    expect(detail.keys[0]).toMatchObject({ id: retired.id, label: "Retired user", maskedKey: "deleted" })
+    const list = await getDashboardPayload({ preset: "all" })
+    expect(list.keys.find(row => row.id === retired.id)).toMatchObject({ label: "Retired user", maskedKey: "deleted" })
+    const budgets = await getBudgetAdminData()
+    expect(budgets.budgets.find(row => row.apiKeyId === retired.id)?.name).toBe("Retired user")
+    await recordUsageEvent(attempt("ghost-0", "ghost-key-id", "2026-10-16T11:30:00.000Z", 50), null)
+    const ghost = await getDashboardPayload({ preset: "all" })
+    expect(ghost.keys.find(row => row.id === "ghost-key-id")).toMatchObject({ label: keyDisplayLabel(null, "ghost-key-id"), maskedKey: "unknown" })
+    const publicList = await getDashboardPayload({ preset: "all" }, true)
+    expect(publicList.keys.find(row => row.label === "Retired user")).toMatchObject({ maskedKey: "deleted" })
+    expect(publicList.keys.find(row => row.label === keyDisplayLabel(null, "ghost-key-id"))).toMatchObject({ maskedKey: "hidden" })
+  })
+  await runInWorkspace({ id: `foreign-deleted-${backend}`, storageMode: "scoped" }, async () => {
+    const foreign = await getKeyUsagePayload(retiredId)
+    expect(foreign.keys[0]?.label).toBe(keyDisplayLabel(null, retiredId))
+    expect(foreign.keys[0]?.maskedKey).toBe("unknown")
   })
 })
 

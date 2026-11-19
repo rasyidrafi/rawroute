@@ -263,7 +263,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   expect(requests.at(-1)!.has("cursor")).toBe(false)
   const frozenTo = requests.at(-1)!.get("to")
   await page.getByRole("button", { name: "Older", exact: true }).click()
-  await expect(page.getByText("Unknown key (old-key)", { exact: false })).toBeVisible()
+  await expect(page.getByText("Unknown key · old-key", { exact: false })).toBeVisible()
   await expect(page.getByText("Unpriced", { exact: true })).toBeVisible()
   expect(requests.at(-1)!.get("to")).toBe(frozenTo)
   expect(requests.at(-1)!.get("key")).toBe("old-key")

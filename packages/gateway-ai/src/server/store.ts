@@ -89,6 +89,7 @@ interface IndexedApiKey { workspaceId: string; workspaceStorageMode: WorkspaceSt
 const apiKeyLookupCache = new Map<string, { value: IndexedApiKey | null; expiresAt: number }>()
 const apiKeyLookupInflight = new Map<string, Promise<IndexedApiKey | undefined>>()
 let apiKeyNamesCache: { value: Map<string, string>; expiresAt: number; inflight?: Promise<Map<string, string>> } | undefined
+let deletedApiKeyNamesCache: { value: Map<string, { name: string; workspaceId: string }>; expiresAt: number; inflight?: Promise<Map<string, { name: string; workspaceId: string }>> } | undefined
 const maximumApiKeyLookupEntries = 512
 const apiKeyCachePrefix = "rawroute:api-key-lookup:v1:"
 const apiKeyCacheMiss = "__rawroute_missing__"
@@ -271,6 +272,13 @@ interface ApiKeyIndexData {
   createdAt?: string
 }
 
+interface DeletedApiKeyNameData {
+  apiKeyId?: string
+  name?: string
+  workspaceId?: string
+  deletedAt?: string
+}
+
 function apiKeyIndexDocumentForWorkspace(workspaceId: string, workspaceStorageMode: WorkspaceStorageMode, apiKey: ApiKey): Required<ApiKeyIndexData> {
   return {
     workspaceId,
@@ -399,6 +407,7 @@ function invalidateApiKeyLookupCache(hashes?: Iterable<string>) {
   // value that was changed while its database read was in flight.
   apiKeyLookupGeneration += 1
   apiKeyNamesCache = undefined
+  deletedApiKeyNamesCache = undefined
   if (hashes) {
     const cacheKeys: string[] = []
     for (const hash of hashes) {
@@ -525,6 +534,7 @@ interface MemoryState {
   gatewayIds: Map<string, string>
   apiKeys: Map<string, ApiKey>
   apiKeyIndexes: Map<string, string>
+  deletedApiKeyNames: Map<string, string>
   initialized: boolean
 }
 
@@ -535,7 +545,7 @@ function memoryRoot(): MemoryRoot {
 }
 
 function newMemoryState(): MemoryState {
-  return { providers: new Map(), providerApiKeys: new Map(), models: new Map(), aliases: new Map(), combos: new Map(), gatewayIds: new Map(), apiKeys: new Map(), apiKeyIndexes: new Map(), initialized: false }
+  return { providers: new Map(), providerApiKeys: new Map(), models: new Map(), aliases: new Map(), combos: new Map(), gatewayIds: new Map(), apiKeys: new Map(), apiKeyIndexes: new Map(), deletedApiKeyNames: new Map(), initialized: false }
 }
 
 function ensureMemorySeeded(workspaceId = currentWorkspaceId()): MemoryState {
@@ -565,6 +575,7 @@ function memorySnapshot(state: MemoryState) {
     combos: new Map(state.combos),
     apiKeys: new Map(state.apiKeys),
     apiKeyIndexes: new Map(state.apiKeyIndexes),
+    deletedApiKeyNames: new Map(state.deletedApiKeyNames),
   }
 }
 
@@ -682,6 +693,11 @@ function apiKeyRef(apiKeyId: string) {
 
 function apiKeyIndexesRef() {
   return getLocalDatabase().collection(`${collectionPrefix()}_api_key_indexes`)
+}
+
+/** Name-only tombstones for deleted keys; never consulted for authentication. */
+function deletedApiKeyNamesRef() {
+  return getLocalDatabase().collection(`${collectionPrefix()}_deleted_api_key_names`)
 }
 
 function routingRevisionRef(workspaceId = currentWorkspaceId()) {
@@ -984,6 +1000,48 @@ export async function listIndexedApiKeyNames(): Promise<Map<string, string>> {
     if (apiKeyNamesCache?.inflight === promise) apiKeyNamesCache.inflight = undefined
   })
   apiKeyNamesCache = { value: new Map(), expiresAt: 0, inflight: promise }
+  return promise
+}
+
+/**
+ * Names archived when keys were deleted, so historical usage keeps real labels.
+ * Tombstones hold names only and are never used to authenticate requests.
+ * Admin callers pass their workspace: deletion must not make a name discoverable
+ * outside its workspace. Public views read globally, like the live key index.
+ */
+export async function listDeletedApiKeyNames(workspaceId?: string): Promise<Map<string, string>> {
+  const entries = await readDeletedApiKeyNames()
+  const names = new Map<string, string>()
+  for (const [apiKeyId, entry] of entries) {
+    if (workspaceId === undefined || entry.workspaceId === workspaceId) names.set(apiKeyId, entry.name)
+  }
+  return names
+}
+
+async function readDeletedApiKeyNames(): Promise<Map<string, { name: string; workspaceId: string }>> {
+  if (isMemoryBackend()) {
+    const names = new Map<string, { name: string; workspaceId: string }>()
+    for (const [ownerWorkspaceId, state] of memoryRoot().states) {
+      for (const [apiKeyId, name] of state.deletedApiKeyNames) names.set(apiKeyId, { name, workspaceId: ownerWorkspaceId })
+    }
+    return names
+  }
+  const now = Date.now()
+  if (deletedApiKeyNamesCache && deletedApiKeyNamesCache.expiresAt > now) return deletedApiKeyNamesCache.value
+  if (deletedApiKeyNamesCache?.inflight) return deletedApiKeyNamesCache.inflight
+  const generation = apiKeyLookupGeneration
+  const promise = deletedApiKeyNamesRef().get().then((snapshot) => {
+    const names = new Map<string, { name: string; workspaceId: string }>()
+    for (const document of snapshot.docs) {
+      const data = document.data() as DeletedApiKeyNameData
+      if (typeof data.apiKeyId === "string" && typeof data.name === "string" && data.name.trim()) names.set(data.apiKeyId, { name: data.name.trim(), workspaceId: typeof data.workspaceId === "string" ? data.workspaceId : "" })
+    }
+    if (generation === apiKeyLookupGeneration) deletedApiKeyNamesCache = { value: names, expiresAt: Date.now() + apiKeyCacheTtlMs }
+    return names
+  }).finally(() => {
+    if (deletedApiKeyNamesCache?.inflight === promise) deletedApiKeyNamesCache.inflight = undefined
+  })
+  deletedApiKeyNamesCache = { value: new Map(), expiresAt: 0, inflight: promise }
   return promise
 }
 
@@ -1811,6 +1869,9 @@ async function sqliteDeleteApiKey(apiKeyId: string): Promise<string | undefined>
     if (!target.exists) return undefined
     const apiKey = apiKeyFromSnapshot(target)
     const hash = apiKeyValueHash(apiKey.key)
+    if (apiKey.name.trim()) {
+      transaction.set(deletedApiKeyNamesRef().doc(apiKeyId), { apiKeyId, name: apiKey.name.trim(), workspaceId: currentWorkspaceId(), deletedAt: new Date().toISOString() })
+    }
     transaction.delete(ref)
     transaction.delete(apiKeyIndexRef(hash))
     return hash
@@ -2164,6 +2225,7 @@ function memoryDeleteApiKey(apiKeyId: string): string | undefined {
   if (!state.apiKeys.has(apiKeyId)) return undefined
   const apiKey = state.apiKeys.get(apiKeyId)
   state.apiKeys.delete(apiKeyId)
+  if (apiKey?.name.trim()) state.deletedApiKeyNames.set(apiKeyId, apiKey.name.trim())
   const hash = apiKey ? apiKeyValueHash(apiKey.key) : undefined
   if (hash) state.apiKeyIndexes.delete(hash)
 

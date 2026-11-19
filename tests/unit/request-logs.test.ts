@@ -9,7 +9,7 @@ import { runInWorkspace } from "../../packages/platform/src/server/workspace-con
 import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 import { GET } from "../../packages/gateway-ai/src/server/routes/api/admin/request-logs/index"
 import type { RequestLogsPage } from "../../packages/gateway-ai/src/contracts/request-logs"
-import { createApiKey, upsertAlias, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
+import { createApiKey, deleteApiKey, upsertAlias, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
 import { syncModelPricingGroups, updatePricingGroup } from "../../packages/gateway-ai/src/server/model-pricing"
 
 initializeAiPersistence()
@@ -155,9 +155,21 @@ test("endpoint exposes historical model options from returned rows and filters b
     const page = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
     expect(page.models.filter(model => model.id === "removed/model")).toEqual([{ id: "removed/model", name: "removed/model" }])
     expect(page.events.find(row => row.gatewayModelId === "removed/model")?.modelName).toBeNull()
-    expect(page.keys).toContainEqual({ id: "deleted-key", name: "Unknown key (deleted-)" })
+    expect(page.keys).toContainEqual({ id: "deleted-key", name: "Unknown key · deleted-" })
     expect(page.keys).toContainEqual({ id: configuredKey.id, name: configuredKey.name })
     expect(JSON.stringify(page.keys)).not.toContain(configuredKey.key)
+    const retired = await createApiKey("Retired logs key")
+    await recordUsageEvent(event("retired-log", { gatewayKeyId: retired.id }), null)
+    await deleteApiKey(retired.id)
+    const afterDelete = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
+    expect(afterDelete.keys).toContainEqual({ id: retired.id, name: "Retired logs key" })
+    expect(afterDelete.events.find(row => row.id === "retired-log")?.keyName).toBe("Retired logs key")
+    const ghostFilter = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams({ ...query, key: "ghost-filter-key" })}`))).json() as RequestLogsPage
+    expect(ghostFilter.keys).toContainEqual({ id: "ghost-filter-key", name: "Unknown key · ghost-fi" })
+    await runInWorkspace({ id: "foreign-logs-view", storageMode: "scoped" }, async () => {
+      const foreign = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
+      expect(foreign.keys.some(option => option.id === retired.id)).toBe(false)
+    })
     const keyed = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams({ ...query, key: "deleted-key" })}`))).json() as RequestLogsPage
     expect(keyed.events.map(row => row.id)).toEqual(["another-model"])
     params.set("model", "removed/model")

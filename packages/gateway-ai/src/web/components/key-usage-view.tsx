@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@rawr
 import { Progress } from "@rawroute/ui/progress"
 import { Separator } from "@rawroute/ui/separator"
 import type { DashboardKeyBudget, DashboardPayload } from "../../contracts/domain"
-import { groupRequestLogEvents, type PublicKeyUsageDetail, type RequestLogDisplayEvent, type RequestLogsPage } from "../../contracts/request-logs"
+import { groupRequestLogEvents, keyDisplayLabel, type PublicKeyUsageDetail, type RequestLogDisplayEvent, type RequestLogsPage } from "../../contracts/request-logs"
 import { aiPagePaths as pagePaths, publicWorkspacePagePath } from "../../contracts/pages"
 import { calendarDateFromInstant, formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { formatCost, formatRequestCount, formatTokenCount } from "../../contracts/usage-display"
@@ -72,7 +72,7 @@ function PublicKeyUsageContent({ keyId, workspaceId }: { keyId: string; workspac
   if (!data && !error) return <KeyUsageSkeleton rangeControls={false} />
   return <DashboardPage spacing="normal">
     <BackLink publicView workspaceId={workspaceId} />
-    <KeyHeader label={data?.keys[0]?.label || keyId} sub="Public key usage" busy={isValidating} onRefresh={refresh} />
+    <KeyHeader label={data?.keys[0]?.label || keyDisplayLabel(null, keyId)} sub={data?.keys[0]?.maskedKey === "deleted" ? "Deleted key" : "Public key usage"} busy={isValidating} onRefresh={refresh} />
     {!!error && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && <>
       <div><h3 className="text-lg font-medium">Budget & spend</h3><p className="mt-1 text-sm text-muted-foreground">{formatAppDateTime(data.range.from)} – {formatAppDateTime(data.range.to)}</p></div>
@@ -95,15 +95,15 @@ function useDashboardKeyUsage(keyId: string) {
   const data = range.dashboard
   const budgetData = range.loadedPreset === "budget" ? data : budgetQuery.data ?? range.lastBudgetPayload
   const refresh = () => { range.refresh(); void budgetQuery.mutate().catch(() => undefined); void recent.mutate().catch(() => undefined) }
-  return { range, data, budgetData, recent, refresh, failed: Boolean(range.error || budgetQuery.error), label: budgetData?.keys[0]?.label || data?.keys[0]?.label || keyId }
+  return { range, data, budgetData, recent, refresh, failed: Boolean(range.error || budgetQuery.error), label: budgetData?.keys[0]?.label || data?.keys[0]?.label || keyDisplayLabel(null, keyId), deleted: (budgetData?.keys[0]?.maskedKey ?? data?.keys[0]?.maskedKey) === "deleted" }
 }
 
 function DashboardKeyUsageContent({ keyId }: { keyId: string }) {
-  const { range, data, budgetData, recent, refresh, failed, label } = useDashboardKeyUsage(keyId)
+  const { range, data, budgetData, recent, refresh, failed, label, deleted } = useDashboardKeyUsage(keyId)
   if ((!data || !budgetData) && !failed) return <KeyUsageSkeleton />
   return <DashboardPage spacing="normal">
     <BackLink />
-    <KeyHeader label={label} sub={`Key usage · ${keyId}`} busy={range.pending} onRefresh={refresh} />
+    <KeyHeader label={label} sub={deleted ? "Deleted key" : "Key usage"} busy={range.pending} onRefresh={refresh} />
     {failed && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && budgetData && <DashboardKeyUsageBody data={data} budgetData={budgetData} range={range} recent={recent} />}
   </DashboardPage>

@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Alert, AlertDescription } from "@rawroute/ui/alert"
 import { aiPagePaths as pagePaths } from "../../contracts/pages"
 import type { OverviewDetails } from "../../contracts/overview"
-import type { RequestLogsPage } from "../../contracts/request-logs"
+import { requestLogKeyLabel, type RequestLogsPage } from "../../contracts/request-logs"
 import { formatCost, formatDuration } from "../../contracts/usage-display"
 import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { RequestLogMetadata, RequestLogMetadataSkeleton, requestLogMetadataDescription } from "./request-logs-table"
@@ -77,7 +77,7 @@ export function RecentRequestsCard({ data, loading, error, retry }: { data?: Req
         {loading ? [0, 1, 2, 3].map(index => <TableRow key={index} variant="static" data-slot="overview-request-skeleton-row"><TableCell><div className="flex flex-col gap-2"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-36" /></div></TableCell><TableCell><RequestLogMetadataSkeleton /></TableCell><TableCell><Skeleton className="h-4 w-24" /></TableCell><TableCell><Skeleton shape="pill" className="h-5 w-24" /></TableCell><TableCell><Skeleton className="h-5 w-16" /></TableCell><TableCell><Skeleton className="h-5 w-40" /></TableCell></TableRow>) : !data?.events.length ? <TableRow variant="static"><TableCell colSpan={6}>No recorded attempts in this period.</TableCell></TableRow> : data.events.slice(0, 4).map(event => <TableRow key={event.id}>
           <TableCell><div className="max-w-48 truncate font-semibold" title={event.modelName || event.gatewayModelId}>{event.modelName || event.gatewayModelId}</div><div className="max-w-48 truncate text-xs text-muted-foreground" title={event.id}>{event.id.slice(0, 8)}</div></TableCell>
           <TableCell><RequestLogMetadata event={event} /></TableCell>
-          <TableCell><div className="max-w-40 truncate" title={event.keyName || event.gatewayKeyId}>{event.keyName || `Unknown key (${event.gatewayKeyId.slice(0, 8)})`}</div></TableCell>
+          <TableCell><div className="max-w-40 truncate" title={event.keyName || event.gatewayKeyId}>{requestLogKeyLabel(event)}</div></TableCell>
           <TableCell><Badge variant={event.status >= 200 && event.status < 300 ? "secondary" : "destructive"}>{event.status >= 200 && event.status < 300 ? "Success" : "Failed"} · {event.status}</Badge></TableCell>
           <TableCell>{formatDuration(event.durationMs)}</TableCell><TableCell>{formatAppDateTime(event.completedAt)}</TableCell>
         </TableRow>)}
