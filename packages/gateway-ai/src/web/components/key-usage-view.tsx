@@ -11,34 +11,22 @@ import { Separator } from "@rawroute/ui/separator"
 import type { DashboardKeyBudget, DashboardPayload } from "../../contracts/domain"
 import { groupRequestLogEvents, type PublicKeyUsageDetail, type RequestLogDisplayEvent, type RequestLogsPage } from "../../contracts/request-logs"
 import { aiPagePaths as pagePaths, publicWorkspacePagePath } from "../../contracts/pages"
-import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
+import { calendarDateFromInstant, formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { formatCost, formatRequestCount, formatTokenCount } from "../../contracts/usage-display"
+import { useUsageDashboard } from "../use-usage-dashboard"
 import { KeyUsageTrend } from "./key-usage-trend"
 import { KeyUsageSkeleton } from "./key-usage-skeleton"
 import { RequestLogResults } from "./request-logs-view"
+import { UsageRangeToolbar } from "./usage-range-toolbar"
 
 export function KeyUsageView({ publicView = false, workspaceId }: { publicView?: boolean; workspaceId?: string }) {
   const { keyId = "" } = useParams()
-  return <KeyUsageContent key={`${workspaceId || ""}:${keyId}`} keyId={keyId} publicView={publicView} workspaceId={workspaceId} />
+  return publicView
+    ? <PublicKeyUsageContent key={`${workspaceId || ""}:${keyId}`} keyId={keyId} workspaceId={workspaceId} />
+    : <DashboardKeyUsageContent key={keyId} keyId={keyId} />
 }
 
-type KeyUsageState = {
-  data?: DashboardPayload
-  error: unknown
-  isValidating: boolean
-  refresh: () => void
-  recentData?: { events: RequestLogDisplayEvent[] }
-  recentError: unknown
-}
-
-function useKeyUsage(keyId: string, publicView: boolean, selectedWorkspaceId?: string) {
-  const { apiFetch, workspaceId } = useDashboardApi()
-  const publicUsage = usePublicKeyUsage(keyId, selectedWorkspaceId, apiFetch)
-  const dashboardUsage = useDashboardKeyUsage(keyId, workspaceId, apiFetch)
-  return publicView ? publicUsage : dashboardUsage
-}
-
-function usePublicKeyUsage(keyId: string, workspaceId: string | undefined, apiFetch: ReturnType<typeof useDashboardApi>["apiFetch"]): KeyUsageState {
+function usePublicKeyUsage(keyId: string, workspaceId: string | undefined, apiFetch: ReturnType<typeof useDashboardApi>["apiFetch"]) {
   const url = `/api/public/usage/keys/${encodeURIComponent(keyId)}?workspace=${encodeURIComponent(workspaceId || "default")}`
   const usage = useSWR<PublicKeyUsageDetail>(workspaceId ? [workspaceId, "public-key-usage", keyId] : null, () => apiFetch<PublicKeyUsageDetail>(url), { revalidateOnFocus: false, refreshInterval: 15_000 })
   return {
@@ -51,21 +39,6 @@ function usePublicKeyUsage(keyId: string, workspaceId: string | undefined, apiFe
   }
 }
 
-function useDashboardKeyUsage(keyId: string, workspaceId: string | null, apiFetch: ReturnType<typeof useDashboardApi>["apiFetch"]): KeyUsageState {
-  const usage = useSWR<DashboardPayload>(workspaceId ? [workspaceId, "key-usage", keyId] : null, () => apiFetch<DashboardPayload>(`/api/admin/usage/keys/${encodeURIComponent(keyId)}`), { revalidateOnFocus: false, refreshInterval: 15_000 })
-  const params = usage.data ? new URLSearchParams({ from: usage.data.range.from, to: usage.data.range.to, key: keyId }) : null
-  const recentUrl = params ? `/api/admin/request-logs?${params}` : null
-  const recent = useSWR<RequestLogsPage>(workspaceId && recentUrl ? [workspaceId, recentUrl] : null, () => apiFetch<RequestLogsPage>(recentUrl!), { revalidateOnFocus: false, refreshInterval: 15_000 })
-  return {
-    data: usage.data,
-    error: usage.error,
-    isValidating: usage.isValidating,
-    refresh: () => { void usage.mutate().catch(() => undefined); void recent.mutate().catch(() => undefined) },
-    recentData: recent.data,
-    recentError: recent.error,
-  }
-}
-
 function costUnavailable(data: DashboardPayload) {
   const coverage = data.coverage
   return !!coverage && (coverage.financialUnavailable || coverage.excludedSources > 0 || coverage.costCoveredRequests < data.summary.requests)
@@ -75,26 +48,84 @@ function trendUnavailable(data: DashboardPayload) {
   return costUnavailable(data) || (!!data.summary.requests && data.coverage?.tokenCoveredRequests === 0)
 }
 
-function KeyUsageContent({ keyId, publicView, workspaceId }: { keyId: string; publicView: boolean; workspaceId?: string }) {
-  const { data, error, isValidating, refresh, recentData, recentError } = useKeyUsage(keyId, publicView, workspaceId)
-  if (!data && !error) return <KeyUsageSkeleton />
+function BackLink({ publicView, workspaceId }: { publicView?: boolean; workspaceId?: string }) {
+  return <div><Button variant="ghost" nativeButton={false} role="link" render={<Link to={publicView ? publicWorkspacePagePath(workspaceId || "default") : pagePaths.overviewUsage} />}><ArrowLeftIcon data-icon="inline-start" />Back to usage</Button></div>
+}
+
+function KeyHeader({ label, sub, busy, onRefresh }: { label: string; sub: string; busy: boolean; onRefresh: () => void }) {
+  return <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="flex min-w-0 items-start gap-3"><div className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted/30"><KeyRoundIcon className="size-5" /></div><div className="min-w-0"><h2 className="break-words text-2xl font-semibold tracking-tight">{label}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{sub}</p></div></div>
+    <Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}><RefreshCwIcon data-icon="inline-start" />Refresh</Button>
+  </div>
+}
+
+function RecentRequests({ recentData, recentError }: { recentData?: { events: RequestLogDisplayEvent[] }; recentError: unknown }) {
+  return <Card><CardHeader><CardTitle>Recent requests</CardTitle><CardDescription>Latest requests and their recorded attempts for this key</CardDescription></CardHeader><CardContent>
+    {!!recentError && <Alert variant="destructive"><AlertDescription>Unable to load recent requests. Try refreshing.</AlertDescription></Alert>}
+    <RequestLogResults data={recentData && { events: groupRequestLogEvents(recentData.events).slice(0, 5).flat() }} loading={!recentData && !recentError} failed={!!recentError} />
+  </CardContent></Card>
+}
+
+function PublicKeyUsageContent({ keyId, workspaceId }: { keyId: string; workspaceId?: string }) {
+  const { apiFetch } = useDashboardApi()
+  const { data, error, isValidating, refresh, recentData, recentError } = usePublicKeyUsage(keyId, workspaceId, apiFetch)
+  if (!data && !error) return <KeyUsageSkeleton rangeControls={false} />
   return <DashboardPage spacing="normal">
-    <div><Button variant="ghost" nativeButton={false} role="link" render={<Link to={publicView ? publicWorkspacePagePath(workspaceId || "default") : pagePaths.overviewUsage} />}><ArrowLeftIcon data-icon="inline-start" />Back to usage</Button></div>
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex min-w-0 items-start gap-3"><div className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted/30"><KeyRoundIcon className="size-5" /></div><div className="min-w-0"><h2 className="break-words text-2xl font-semibold tracking-tight">{data?.keys[0]?.label || keyId}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{publicView ? "Public key usage" : `Key usage · ${keyId}`}</p></div></div>
-      <Button variant="outline" size="sm" disabled={isValidating} onClick={refresh}><RefreshCwIcon data-icon="inline-start" />Refresh</Button>
-    </div>
+    <BackLink publicView workspaceId={workspaceId} />
+    <KeyHeader label={data?.keys[0]?.label || keyId} sub="Public key usage" busy={isValidating} onRefresh={refresh} />
     {!!error && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && <>
       <div><h3 className="text-lg font-medium">Budget & spend</h3><p className="mt-1 text-sm text-muted-foreground">{formatAppDateTime(data.range.from)} – {formatAppDateTime(data.range.to)}</p></div>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} /></div>
       <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
-      <Card><CardHeader><CardTitle>Recent requests</CardTitle><CardDescription>Latest requests and their recorded attempts for this key</CardDescription></CardHeader><CardContent>
-        {!!recentError && <Alert variant="destructive"><AlertDescription>Unable to load recent requests. Try refreshing.</AlertDescription></Alert>}
-        <RequestLogResults data={recentData && { events: groupRequestLogEvents(recentData.events).slice(0, 5).flat() }} loading={!recentData && !recentError} failed={!!recentError} />
-      </CardContent></Card>
+      <RecentRequests recentData={recentData} recentError={recentError} />
     </>}
   </DashboardPage>
+}
+
+function useDashboardKeyUsage(keyId: string) {
+  const { apiFetch, workspaceId } = useDashboardApi()
+  const range = useUsageDashboard({ keyId, refreshIntervalMs: 15_000 })
+  const budgetQuery = useSWR<DashboardPayload>(workspaceId && range.preset !== "budget" ? [workspaceId, "key-usage-budget", keyId] : null, () => apiFetch<DashboardPayload>(`/api/admin/usage/keys/${encodeURIComponent(keyId)}`), { revalidateOnFocus: false, refreshInterval: 15_000, keepPreviousData: true })
+  const recent = useSWR<RequestLogsPage>(workspaceId ? [workspaceId, "key-recent", keyId] : null, () => {
+    const to = new Date()
+    const params = new URLSearchParams({ from: new Date(to.getTime() - 7 * 86_400_000).toISOString(), to: to.toISOString(), key: keyId })
+    return apiFetch<RequestLogsPage>(`/api/admin/request-logs?${params}`)
+  }, { revalidateOnFocus: false, refreshInterval: 15_000 })
+  const data = range.dashboard
+  const budgetData = range.loadedPreset === "budget" ? data : budgetQuery.data ?? range.lastBudgetPayload
+  const refresh = () => { range.refresh(); void budgetQuery.mutate().catch(() => undefined); void recent.mutate().catch(() => undefined) }
+  return { range, data, budgetData, recent, refresh, failed: Boolean(range.error || budgetQuery.error), label: budgetData?.keys[0]?.label || data?.keys[0]?.label || keyId }
+}
+
+function DashboardKeyUsageContent({ keyId }: { keyId: string }) {
+  const { range, data, budgetData, recent, refresh, failed, label } = useDashboardKeyUsage(keyId)
+  if ((!data || !budgetData) && !failed) return <KeyUsageSkeleton />
+  return <DashboardPage spacing="normal">
+    <BackLink />
+    <KeyHeader label={label} sub={`Key usage · ${keyId}`} busy={range.pending} onRefresh={refresh} />
+    {failed && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
+    {data && budgetData && <DashboardKeyUsageBody data={data} budgetData={budgetData} range={range} recent={recent} />}
+  </DashboardPage>
+}
+
+function DashboardKeyUsageBody({ data, budgetData, range, recent }: { data: DashboardPayload; budgetData: DashboardPayload; range: ReturnType<typeof useUsageDashboard>; recent: { data?: RequestLogsPage; error: unknown } }) {
+  return <>
+    <UsageRangeToolbar preset={range.preset} setPreset={range.setPreset} granularity={range.activeGranularity} setGranularity={range.setGranularity} selectedRange={range.preset === "custom" ? range.selectedRange : { from: calendarDateFromInstant(data.range.from), to: calendarDateFromInstant(data.range.to) }} onRangeChange={range.handleRangeChange} />
+    <RangeSummary data={data} />
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={budgetData} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} /></div>
+    <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
+    <RecentRequests recentData={recent.data} recentError={recent.error} />
+  </>
+}
+
+function RangeSummary({ data }: { data: DashboardPayload }) {
+  const tokensUnavailable = data.summary.requests > 0 && data.coverage?.tokenCoveredRequests === 0
+  return <div className="flex flex-wrap gap-x-8 gap-y-2">
+    <div><p className="text-lg font-semibold tabular-nums">{formatRequestCount(data.summary.requests)}</p><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requests</p></div>
+    <div><p className="text-lg font-semibold tabular-nums">{tokensUnavailable ? "Unavailable" : formatTokenCount(data.summary.tokens)}</p><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tokens</p></div>
+    <div><p className="text-lg font-semibold tabular-nums">{costUnavailable(data) ? "Unavailable" : formatCost(data.summary.costMicros)}</p><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cost</p></div>
+  </div>
 }
 
 function budgetState(budget?: DashboardKeyBudget) {

@@ -21,7 +21,7 @@ export function PublicKeyUsagePage() {
   })
 
   if (error) return <main className="p-6" role="alert">Public gateway analytics are unavailable. Please try again.</main>
-  if (!data) return <PublicPageLayout loading authenticated={session?.authenticated}><KeyUsageSkeleton /></PublicPageLayout>
+  if (!data) return <PublicPageLayout loading authenticated={session?.authenticated}><KeyUsageSkeleton rangeControls={false} /></PublicPageLayout>
   const workspace = data.workspaces.find(entry => entry.id === searchParams.get("workspace"))
     || data.workspaces.find(entry => entry.isDefault)
   if (!workspace) return <PublicPageLayout authenticated={session?.authenticated}><main className="mx-auto w-full max-w-7xl p-4 md:p-6"><EmptyState title="No public workspaces are available" description="Public gateway analytics will appear here when a workspace is made public." icon={DatabaseIcon} /></main></PublicPageLayout>

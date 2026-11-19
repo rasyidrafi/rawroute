@@ -9,6 +9,8 @@ const millisecondsPerDay = 86_400_000
 
 export interface DashboardQueryOptions {
   maxCustomRangeDays?: number
+  /** Accept the admin-only key filter; public callers ignore it. */
+  allowKey?: boolean
 }
 
 const defaultMaximumCustomRangeDays = 3_650
@@ -34,8 +36,10 @@ export function parseDashboardQuery(params: URLSearchParams, options: DashboardQ
   const granularity = allowedGranularities.has(requestedGranularity as NonNullable<DashboardQuery["granularity"]>)
     ? requestedGranularity as NonNullable<DashboardQuery["granularity"]>
     : DEFAULT_DASHBOARD_QUERY.granularity
+  const key = options.allowKey ? params.get("key")?.trim() || undefined : undefined
+  if (key && key.length > 512) throw new Error("Invalid key filter.")
 
-  if (preset !== "custom") return { preset, granularity }
+  if (preset !== "custom") return { preset, granularity, key }
 
   const from = parseCalendarDate(params.get("from"))
   const to = parseCalendarDate(params.get("to"))
@@ -43,7 +47,7 @@ export function parseDashboardQuery(params: URLSearchParams, options: DashboardQ
     ? options.maxCustomRangeDays!
     : defaultMaximumCustomRangeDays
   if (!from || !to || to.dayNumber < from.dayNumber || to.dayNumber - from.dayNumber + 1 > maximumDays) {
-    return DEFAULT_DASHBOARD_QUERY
+    return { ...DEFAULT_DASHBOARD_QUERY, key }
   }
-  return { preset, from: from.value, to: to.value, granularity }
+  return { preset, from: from.value, to: to.value, granularity, key }
 }

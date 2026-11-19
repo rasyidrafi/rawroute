@@ -349,6 +349,8 @@ export interface DashboardQuery {
   from?: string
   to?: string
   granularity?: "auto" | "hourly" | "daily" | "weekly" | "monthly"
+  /** Scope the dashboard to one gateway key (admin only). */
+  key?: string
 }
 
 export interface DashboardKeyBudget {

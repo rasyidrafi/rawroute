@@ -1743,16 +1743,17 @@ export async function getPublicKeyUsageDetail(publicId: string): Promise<{ keyId
 }
 
 export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
-  if (isMemory()) return buildDashboardPayload(query, publicView)
+  const keyId = publicView ? undefined : query.key
+  if (isMemory()) return buildDashboardPayload(query, publicView, undefined, keyId)
   const workspaceId = currentWorkspaceId()
-  const cacheKey = scopedKey(JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto"]))
+  const cacheKey = scopedKey(JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto", keyId || ""]))
   const cached = dashboardCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = dashboardInflight.get(cacheKey)
   if (existing) return existing
 
   const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
-  const promise = buildDashboardPayload(query, publicView).then((payload) => {
+  const promise = buildDashboardPayload(query, publicView, undefined, keyId).then((payload) => {
     if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
       boundedSet(dashboardCache, cacheKey, { value: payload, expiresAt: Date.now() + dashboardCacheTtlMs }, 32)
     }

@@ -322,18 +322,17 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   expect(real.ok()).toBe(true)
   expect((await real.json()).summary.requests).toBe(0)
   expect((await page.request.get("/api/admin/usage/keys/usage-empty-state-key")).status()).toBe(400)
-  await page.route("**/api/admin/usage?*", route => route.fulfill({ json: dashboardPayload({ trend: [trendRow], keys: [keyRow], models: [modelRow] }) }))
   const budget = { enabled: true, weeklyLimitMicros: 1_000_000, spentMicros: 15000, remainingMicros: 985000, percentUsed: 1.5, bypassLimits: false, usageStartAt: "2026-10-11T00:00:00.000Z", windowStart: "2026-10-11T00:00:00.000Z", windowEnd: "2026-10-18T00:00:00.000Z" }
   let payload = dashboardPayload({ trend: [{ ...trendRow, bucketStart: "2026-10-11T00:00:00.000Z", costMicros: 6000 }, { ...trendRow, bucketStart: "2026-10-12T00:00:00.000Z", costMicros: 9000 }], keys: [{ ...keyRow, budget }], models: [modelRow] })
   payload.range.granularity = "daily"
   payload.range.from = budget.windowStart
   payload.range.to = budget.windowEnd
+  await page.route("**/api/admin/usage?*", route => route.fulfill({ json: payload }))
   await page.route("**/api/admin/usage/keys/usage-empty-state-key", route => route.fulfill({ json: payload }))
   await page.route("**/api/admin/request-logs?*", route => {
     const params = new URL(route.request().url()).searchParams
     expect(params.get("key")).toBe(keyRow.id)
-    expect(params.get("from")).toBe(payload.range.from)
-    expect(params.get("to")).toBe(payload.range.to)
+    expect(Date.parse(params.get("to")!) - Date.parse(params.get("from")!)).toBe(7 * 86_400_000)
     return route.fulfill({ json: { events: [], models: [], keys: [{ id: keyRow.id, name: keyRow.label }], nextCursor: null, from: params.get("from"), to: params.get("to") } })
   })
   await page.goto("/dashboard/ai/overview/usage")

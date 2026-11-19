@@ -26,3 +26,10 @@ describe("parseDashboardQuery", () => {
     expect(parseDashboardQuery(new URLSearchParams("preset=custom&from=2026-01-01&to=2026-02-01"), { maxCustomRangeDays: 31 })).toEqual(DEFAULT_DASHBOARD_QUERY)
   })
 })
+
+  test("key filter is admin-only and bounded", () => {
+    expect(parseDashboardQuery(new URLSearchParams("preset=today&key=k1"), { allowKey: true })).toEqual({ preset: "today", granularity: "auto", key: "k1" })
+    expect(parseDashboardQuery(new URLSearchParams("preset=today&key=k1"))).toEqual({ preset: "today", granularity: "auto" })
+    expect(() => parseDashboardQuery(new URLSearchParams(`key=${"k".repeat(513)}`), { allowKey: true })).toThrow("Invalid key filter.")
+    expect(parseDashboardQuery(new URLSearchParams(`key=${"k".repeat(513)}`))).toEqual(DEFAULT_DASHBOARD_QUERY)
+  })
