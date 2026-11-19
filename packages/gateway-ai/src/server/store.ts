@@ -147,6 +147,7 @@ function providerFromSnapshot(snapshot: DocumentSnapshot): Provider {
     authType: data.authType || "bearer",
     headers: data.headers || {},
     supportPromptCacheKey: data.supportPromptCacheKey === true,
+    reasoningSummaries: data.reasoningSummaries === true,
     enabled: data.enabled !== false,
     createdAt: data.createdAt || "",
     apiKeyCount: data.apiKeyCount || 0,
@@ -207,6 +208,7 @@ function storedProvider(provider: Provider) {
     authType: provider.authType,
     headers: provider.headers,
     supportPromptCacheKey: provider.supportPromptCacheKey,
+    reasoningSummaries: provider.reasoningSummaries,
     enabled: provider.enabled,
     createdAt: provider.createdAt,
     apiKeyCount: provider.apiKeyCount,
@@ -1385,6 +1387,7 @@ async function sqliteUpsertProvider(input: Partial<Provider> & { originalId?: st
       authType: input.authType,
       headers: input.headers,
       supportPromptCacheKey: input.supportPromptCacheKey,
+      reasoningSummaries: input.reasoningSummaries,
       enabled: input.enabled,
     }) as Partial<Provider>
     const provider: Provider = {
@@ -1398,6 +1401,7 @@ async function sqliteUpsertProvider(input: Partial<Provider> & { originalId?: st
       authType: input.authType || existing?.authType || "bearer",
       headers: input.headers || existing?.headers || {},
       supportPromptCacheKey: input.supportPromptCacheKey !== undefined ? input.supportPromptCacheKey : (existing?.supportPromptCacheKey ?? expected?.supportPromptCacheKey ?? false),
+      reasoningSummaries: input.reasoningSummaries !== undefined ? input.reasoningSummaries : (existing?.reasoningSummaries ?? expected?.reasoningSummaries ?? false),
       enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
       createdAt: existing?.createdAt || new Date().toISOString(),
       apiKeyCount: existing?.apiKeyCount ?? 0,
@@ -1831,6 +1835,7 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
     authType: input.authType,
     headers: input.headers,
     supportPromptCacheKey: input.supportPromptCacheKey,
+    reasoningSummaries: input.reasoningSummaries,
     enabled: input.enabled,
   }) as Partial<Provider>
   for (const provider of state.providers.values()) {
@@ -1854,6 +1859,7 @@ function memoryUpsertProvider(input: Partial<Provider> & { originalId?: string }
     authType: input.authType || existing?.authType || "bearer",
     headers: input.headers || existing?.headers || {},
     supportPromptCacheKey: input.supportPromptCacheKey !== undefined ? input.supportPromptCacheKey : (existing?.supportPromptCacheKey ?? expected?.supportPromptCacheKey ?? false),
+    reasoningSummaries: input.reasoningSummaries !== undefined ? input.reasoningSummaries : (existing?.reasoningSummaries ?? expected?.reasoningSummaries ?? false),
     enabled: input.enabled !== undefined ? input.enabled : existing?.enabled !== false,
     createdAt: existing?.createdAt || new Date().toISOString(),
     ...counters,

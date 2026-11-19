@@ -35,6 +35,7 @@ function resolved(account: Awaited<ReturnType<typeof addAccount>>): ResolvedGate
     providerId,
     providerPrefix: "codex",
     promptCacheKey: true,
+    reasoningSummaries: false,
     upstream: {
       baseUrl: "https://chatgpt.com/backend-api/codex",
       protocol: "openai-responses",

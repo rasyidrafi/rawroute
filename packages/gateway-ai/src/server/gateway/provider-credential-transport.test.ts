@@ -38,6 +38,7 @@ async function setupProvider(keys: Array<{ name: string; key: string; rpmLimit?:
     upstreamProtocol: "openai-responses",
     pricingGatewayModelId: "synthetic/model",
     modelName: "Synthetic model",
+    reasoningSummaries: false,
     providerId,
     providerPrefix: provider.prefix,
     promptCacheKey: false,

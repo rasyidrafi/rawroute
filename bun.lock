@@ -67,7 +67,7 @@
         "@rawroute/observability": "workspace:*",
         "@rawroute/platform": "workspace:*",
         "@rawroute/ui": "workspace:*",
-        "@zenmux/rosetta-ai": "1.0.38",
+        "@zenmux/rosetta-ai": "1.0.41",
         "date-fns": "^4.4.0",
         "lucide-react": "^1.27.0",
         "react": "19.2.7",
@@ -705,7 +705,7 @@
 
     "@typescript-eslint/visitor-keys": ["@typescript-eslint/visitor-keys@8.65.0", "", { "dependencies": { "@typescript-eslint/types": "8.65.0", "eslint-visitor-keys": "^5.0.0" } }, ""],
 
-    "@zenmux/rosetta-ai": ["@zenmux/rosetta-ai@1.0.38", "", { "dependencies": { "@anthropic-ai/sdk": "0.132.1", "@google/genai": "2.28.0", "openai": "7.32.0" } }, "sha512-/su/CChWcq/cugGaHZUvwsrJUQkf3IZehpyzgHGqZ8+hkRdxDpdUk3s8Suq/YJ0HsQu2iw4cBkjOkVNTwxKHIg=="],
+    "@zenmux/rosetta-ai": ["@zenmux/rosetta-ai@1.0.41", "", { "dependencies": { "@anthropic-ai/sdk": "0.132.1", "@google/genai": "2.28.0", "openai": "7.32.0" } }, "sha512-Gb1YEnpXfdxk2srH7YvSkGQpwn2ByH1zRmPhnJshfpYrNoQvLgnVhAgj6kA4DQ7sctNAAYOqsnA80ZGhtyxS1Q=="],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, ""],
 

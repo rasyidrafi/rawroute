@@ -26,6 +26,7 @@ export async function POST(request: Request) {
     if (!["openai-chat", "openai-responses", "anthropic-messages"].includes(input.protocol)) throw new Error("Invalid provider protocol.")
     if (input.authType !== undefined && !["bearer", "x-api-key", "none"].includes(input.authType)) throw new Error("Invalid provider authentication type.")
     if (input.supportPromptCacheKey !== undefined && typeof input.supportPromptCacheKey !== "boolean") throw new Error("supportPromptCacheKey must be a boolean.")
+    if (input.reasoningSummaries !== undefined && typeof input.reasoningSummaries !== "boolean") throw new Error("reasoningSummaries must be a boolean.")
     new URL(rawBaseUrl)
     const baseUrl = normalizeProviderBaseUrl(input.protocol as Protocol, rawBaseUrl)
     const authType = (input.authType || "bearer") as Provider["authType"]
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
       authType,
       headers: validateProviderHeaders(input.headers || {}),
       supportPromptCacheKey: openAICompatible ? input.supportPromptCacheKey : false,
+      reasoningSummaries: input.protocol === "openai-responses" ? input.reasoningSummaries : false,
       enabled: input.enabled !== false,
     })
     recordLog("admin.provider.saved", { providerId: provider.id }, { level: "info" })

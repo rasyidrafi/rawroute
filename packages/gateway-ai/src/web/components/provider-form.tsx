@@ -30,11 +30,13 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || "")
   const [authType, setAuthType] = useState<AuthType>(() => initialAuthType(provider))
   const [supportPromptCacheKey, setSupportPromptCacheKey] = useState(provider?.supportPromptCacheKey === true)
+  const [reasoningSummaries, setReasoningSummaries] = useState(provider?.reasoningSummaries === true)
   const authOptions = supportedProviderAuthTypes()
 
   function setProtocolAndAuth(nextProtocol: Protocol) {
     setProtocol(nextProtocol)
     if (nextProtocol === "anthropic-messages") setSupportPromptCacheKey(false)
+    if (nextProtocol !== "openai-responses") setReasoningSummaries(false)
     const nextOptions = supportedProviderAuthTypes()
     setAuthType((current) => nextOptions.includes(current) ? current : nextOptions[0] || "bearer")
   }
@@ -67,6 +69,7 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
         authType,
         headers,
         supportPromptCacheKey,
+        reasoningSummaries,
       })
     } finally {
       setPending(false)
@@ -100,6 +103,7 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
         {protocol === "anthropic-messages" && <p className="-mt-2 text-xs text-muted-foreground">RawRoute appends /v1/messages. Enter the base URL with or without a trailing /v1.</p>}
         {protocol !== "anthropic-messages" && <p className="-mt-2 text-xs text-muted-foreground">Credentials use the selected authentication method. Static headers below are forwarded separately.</p>}
         {protocol !== "anthropic-messages" && <div className="grid gap-2"><label className="flex items-start gap-3 rounded-lg border p-3"><Checkbox checked={supportPromptCacheKey} onCheckedChange={(checked) => setSupportPromptCacheKey(checked === true)} disabled={pending} /><span className="grid gap-1"><span className="text-sm font-medium">Enable session prompt cache keys</span><span className="text-xs text-muted-foreground">Preserves supplied cache keys and creates a stable key from supported session headers when available.</span></span></label></div>}
+        {protocol === "openai-responses" && <div className="grid gap-2"><label className="flex items-start gap-3 rounded-lg border p-3"><Checkbox checked={reasoningSummaries} onCheckedChange={(checked) => setReasoningSummaries(checked === true)} disabled={pending} /><span className="grid gap-1"><span className="text-sm font-medium">Enable reasoning summaries</span><span className="text-xs text-muted-foreground">Asks the upstream for thinking summaries (reasoning.summary auto). Request and model reasoning settings take priority.</span></span></label></div>}
         <FormField label="Static headers (JSON)"><Textarea name="headers" defaultValue={JSON.stringify(provider?.headers || {}, null, 2)} variant="code" /></FormField>
       </div>
       <DialogFooter><FormSubmitButton pending={pending} idleLabel={provider ? "Update provider" : "Save provider"} pendingLabel={provider ? "Updating provider..." : "Saving provider..."} /></DialogFooter>

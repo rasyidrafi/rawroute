@@ -30,6 +30,7 @@ function resolved(protocol: Protocol, apiKeys: NonNullable<ResolvedGatewayModel[
     providerId,
     providerPrefix: `${protocol}-${apiKeys.length ? "keyed" : "anonymous"}`,
     promptCacheKey: false,
+    reasoningSummaries: false,
     upstream: { baseUrl: "https://provider.test/v1", protocol, authType, headers: {}, apiKeys: storedKeys, codex: false },
   }
 }
@@ -412,4 +413,10 @@ test("preserves supported multimodal, tool-call, and reasoning conversions", asy
     reasoning: "Need lookup.",
     tool_calls: [{ id: "call-1", function: { name: "lookup", arguments: JSON.stringify({ query: "weather" }) } }],
   })
+})
+
+test("provider reasoning summaries opt-in yields to combo custom payload reasoning summary", () => {
+  const target = { ...resolved("openai-responses"), reasoningSummaries: true, customPayload: { reasoning: { summary: "concise" } } }
+  const prepared = prepareProviderRequest(new TextEncoder().encode(JSON.stringify(clientRequest("openai-chat"))), target, "openai-chat")
+  expect(JSON.parse(new TextDecoder().decode(prepared.body)).reasoning).toMatchObject({ summary: "concise" })
 })

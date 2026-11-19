@@ -1124,3 +1124,45 @@ test("all budget-denied combo members return the budget error without calling up
   // Restore the default implementation for subsequent tests.
   mocks.getBudgetRequestState.mockResolvedValue({ admission: undefined, usageContext: undefined })
 })
+
+test("provider reasoning summaries opt-in appends summary auto unless request or model settings win", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true, reasoningSummaries: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  const send = (body: Record<string, unknown>) => proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "p/a", input: "hello", ...body }),
+  }))
+  const forwarded = async () => JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.at(-1)?.[1]?.body))
+  await (await send({})).text()
+  expect(await forwarded()).toMatchObject({ reasoning: { summary: "auto" } })
+  await (await send({ reasoning: { effort: "high", summary: "detailed" } })).text()
+  expect(await forwarded()).toMatchObject({ reasoning: { effort: "high", summary: "detailed" } })
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString(), reasoningCapability: { mode: "disabled" } }])
+  await (await send({})).text()
+  expect((await forwarded()).reasoning?.summary).toBeUndefined()
+})
+
+test("chat clients receive upstream thinking summaries when the provider opts in", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true, reasoningSummaries: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({
+    id: "resp_1", object: "response", status: "completed",
+    output: [
+      { id: "rs_1", type: "reasoning", summary: [{ type: "summary_text", text: "**Thinking hard**" }] },
+      { id: "msg_1", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "ok" }] },
+    ],
+    usage: { input_tokens: 1, output_tokens: 2, output_tokens_details: { reasoning_tokens: 1 } },
+  })))
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "p/a", messages: [{ role: "user", content: "hi" }], reasoning_effort: "low" }),
+  }))
+  const chat = await response.json()
+  expect(chat.choices[0].message.reasoning).toBe("**Thinking hard**")
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.at(-1)?.[1]?.body))
+  expect(forwarded).toMatchObject({ reasoning: { effort: "low", summary: "auto" } })
+})

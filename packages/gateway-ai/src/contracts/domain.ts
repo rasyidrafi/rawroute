@@ -16,6 +16,8 @@ export interface Provider {
   headers: Record<string, string>
   /** Derive session prompt cache keys for OpenAI-compatible providers. Codex enables this automatically. */
   supportPromptCacheKey?: boolean
+  /** Opt into upstream thinking summaries (reasoning.summary auto) for OpenAI Responses providers. */
+  reasoningSummaries?: boolean
   enabled: boolean
   createdAt: string
   apiKeyCount: number
