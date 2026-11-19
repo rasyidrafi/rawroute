@@ -10,7 +10,7 @@ import { RequestLogMetadata } from "./request-logs-table"
 import { ServiceTierBadge } from "./service-tier-badge"
 
 export function RequestModelId({ label, value }: { label: string; value?: string }) {
-  return <div className="flex min-h-6 max-w-96 items-center gap-1 text-xs text-muted-foreground">
+  return <div className="flex max-w-96 items-center gap-1 text-xs text-muted-foreground">
     <span className="shrink-0">{label}:</span><span className="min-w-0 whitespace-normal break-all font-mono" title={value === undefined ? "Not recorded" : undefined}>{value ?? "—"}</span>
   </div>
 }

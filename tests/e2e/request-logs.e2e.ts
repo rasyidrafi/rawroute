@@ -209,11 +209,11 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(placeholderRows.first().locator('[data-slot="skeleton"]')).toHaveCount(13)
   await expect(placeholderRows.first().getByRole("cell").nth(1).locator('[data-slot="skeleton"]')).toHaveCount(2)
   await expect(placeholderRows.first().getByRole("cell").nth(2).locator('[data-slot="skeleton"]')).toHaveCount(1)
-  for (const column of [0, 4]) {
+  for (const [column, gap] of [[0, 4], [4, 8]] as const) {
     const bars = placeholderRows.first().getByRole("cell").nth(column).locator('[data-slot="skeleton"]')
     const first = (await bars.nth(0).boundingBox())!
     const second = (await bars.nth(1).boundingBox())!
-    expect(second.y - first.y - first.height).toBe(8)
+    expect(second.y - first.y - first.height).toBe(gap)
   }
   const loadingRowHeight = (await placeholderRows.first().boundingBox())!.height
   const loadingColumns = await loading.getByRole("columnheader").evaluateAll(headers => headers.map(header => header.getBoundingClientRect().width))
