@@ -32,6 +32,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   let cacheRead = 1000
   const models = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
   const recent = page.locator('[data-slot="card"]').filter({ has: page.getByText("Recent Requests", { exact: true }) })
+  const rangeSelect = page.getByRole("combobox", { name: "Range", exact: true })
   const checkLowerPair = async () => {
     for (const width of [1024, 1280, 390]) {
       await page.setViewportSize({ width, height: 844 })
@@ -212,10 +213,10 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await checkLowerPair()
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 844 })
-    expect((await page.getByRole("combobox").boundingBox())!.width).toBeLessThanOrEqual(140)
+    expect((await rangeSelect.boundingBox())!.width).toBeLessThanOrEqual(140)
   }
   await page.setViewportSize({ width: 1280, height: 844 })
-  await page.getByRole("combobox").click()
+  await rangeSelect.click()
   await page.getByRole("option", { name: "7 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(7 * 86_400_000)
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
@@ -227,11 +228,11 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(costRow).toHaveText("Cost$0.50")
   // A late old-period response cannot replace the currently selected range.
   holdNext = true
-  await page.getByRole("combobox").click()
+  await rangeSelect.click()
   await page.getByRole("option", { name: "Past 24h", exact: true }).click()
   await expect.poll(() => !!releaseOld).toBe(true)
   await expect(page.getByText("4.80K", { exact: true })).toHaveCount(0)
-  await page.getByRole("combobox").click()
+  await rangeSelect.click()
   await page.getByRole("option", { name: "30 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(30 * 86_400_000)
   await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
@@ -291,7 +292,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   dense = true
   for (const [period, points] of [["Past 24h", 24], ["30 days", 31]] as const) {
     await page.setViewportSize({ width: 1280, height: 844 })
-    await page.getByRole("combobox").click()
+    await rangeSelect.click()
     await page.getByRole("option", { name: period, exact: true }).click()
     await expect.poll(async () => ((await trend.locator(".recharts-area-curve").first().getAttribute("d"))?.match(/C/g) ?? []).length).toBe(points - 1)
     const ticks = trend.locator(".recharts-xAxis-tick-labels text")
