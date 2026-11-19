@@ -119,7 +119,7 @@ export function stripReasoningFields(payload: Record<string, unknown>) {
   return next
 }
 
-export function applyComboMemberPolicy(payload: Record<string, unknown>, member: ComboMember): { payload: Record<string, unknown>; effort?: string; serviceTierOverride?: "fast"; customPayload?: Record<string, unknown> } {
+export function applyComboMemberPolicy(payload: Record<string, unknown>, member: ComboMember): { payload: Record<string, unknown>; effort?: string; serviceTierOverride?: "fast"; customPayload?: Record<string, unknown>; reasoningPolicy?: boolean } {
   let customPayload = normalizeComboCustomPayload(member.customPayload)
   let merged = mergeComboCustomPayload(payload, customPayload)
   const serviceTierOverride = member.serviceTier === "fast" ? "fast" : undefined
@@ -133,11 +133,11 @@ export function applyComboMemberPolicy(payload: Record<string, unknown>, member:
   const next = stripReasoningFields(merged)
   if (mode !== "override") {
     const providerPayload = customPayload ? stripReasoningFields(customPayload) : undefined
-    return { payload: next, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(providerPayload && Object.keys(providerPayload).length ? { customPayload: providerPayload } : {}) }
+    return { payload: next, reasoningPolicy: true, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(providerPayload && Object.keys(providerPayload).length ? { customPayload: providerPayload } : {}) }
   }
   const effort = cleanReasoningEffort(member.reasoning?.effort)
   if (!effort) throw new Error("Reasoning effort is required when override is enabled.")
-  return { payload: next, effort, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(customPayload ? { customPayload } : {}) }
+  return { payload: next, effort, reasoningPolicy: true, ...(serviceTierOverride ? { serviceTierOverride } : {}), ...(customPayload ? { customPayload } : {}) }
 }
 
 export function applyReasoningOverride(payload: Record<string, unknown>, effort: string | undefined, protocol: Protocol) {

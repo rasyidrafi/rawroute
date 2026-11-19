@@ -632,11 +632,18 @@ function convertRequestBody(body: Uint8Array, resolved: ResolvedGatewayModel, cl
   converted = applyServiceTierOverride(converted, resolved.serviceTierOverride, upstream)
   converted.model = resolved.upstreamModel
   if (upstream === "openai-responses") converted = normalizeResponsesRequest(converted)
-  // Provider opt-in for thinking summaries; explicit request or model/combo
+  // Provider opt-in for thinking summaries; explicit request, model, or combo
   // reasoning settings always win over the provider default.
-  if (upstream === "openai-responses" && resolved.reasoningSummaries && resolved.reasoningCapability?.mode !== "disabled" && resolved.reasoningEffort !== "none") {
-    const reasoning = objectValue(converted.reasoning)
-    if (!reasoning || reasoning.summary === undefined) converted.reasoning = { ...reasoning, summary: "auto" }
+  if (
+    upstream === "openai-responses" &&
+    resolved.reasoningSummaries &&
+    resolved.reasoningCapability?.mode !== "disabled" &&
+    !resolved.reasoningPolicy &&
+    !Object.hasOwn(converted, "reasoning") &&
+    !Object.hasOwn(clientPayload, "reasoning") &&
+    !Object.hasOwn(clientPayload, "reasoning_effort")
+  ) {
+    converted.reasoning = { summary: "auto" }
   }
   const tierProfile = serviceTierProfile(upstream)
   const requestedTier = requestServiceTier(payload, serviceTierProfile(client))

@@ -19,12 +19,14 @@ describe("combo reasoning policies", () => {
       extra_body: { reasoning_effort: "max", keep: true },
     })
     expect(payload).toEqual({ output_config: { verbosity: "low" }, extra_body: { keep: true } })
-    expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "override", effort: "xhigh" } })).toEqual({ payload: {}, effort: "xhigh" })
+    expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "override", effort: "xhigh" } })).toEqual({ payload: {}, effort: "xhigh", reasoningPolicy: true })
   })
 
   test("keeps the original payload for inherit and strips it for provider default", () => {
     expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "inherit" } }).payload).toEqual({ reasoning_effort: "low" })
+    expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "inherit" } }).reasoningPolicy).toBeUndefined()
     expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "provider-default" } }).payload).toEqual({})
+    expect(applyComboMemberPolicy({ reasoning_effort: "low" }, { modelId: "p/a", reasoning: { mode: "provider-default" } }).reasoningPolicy).toBe(true)
   })
 
   test("combo Fast override replaces client and custom tier fields", () => {

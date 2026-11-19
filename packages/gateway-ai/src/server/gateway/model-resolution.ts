@@ -19,6 +19,7 @@ export interface ResolvedGatewayModel {
   promptCacheKey: boolean
   reasoningSummaries: boolean
   reasoningEffort?: string
+  reasoningPolicy?: boolean
   serviceTierOverride?: "fast"
   customPayload?: Record<string, unknown>
   reasoningCapability?: ModelReasoningCapability

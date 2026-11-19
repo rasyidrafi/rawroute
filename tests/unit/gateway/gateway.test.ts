@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, mock, spyOn } from "bun:test"
 import type { Provider, ProviderApiKey } from "../../../packages/gateway-ai/src/contracts/domain"
+import type { ResolvedGatewayModel } from "../../../packages/gateway-ai/src/server/gateway/model-resolution"
 
 const fetchTarget: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
 
@@ -82,6 +83,7 @@ const { BudgetDeniedError, BudgetModelExcludedError } = await import("../../../p
 const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, sharedUsageEventCopies, testComboMemberPolicy } = await import("../../../packages/gateway-ai/src/server/gateway/gateway")
 const { drainBackgroundTasks } = await import("../../../packages/platform/src/server/background-tasks")
 const { resolveGatewayModel } = await import("../../../packages/gateway-ai/src/server/gateway/model-resolution")
+const { prepareProviderRequest } = await import("../../../packages/gateway-ai/src/server/gateway/transport")
 
 test("confirmed unavailable Codex models and their aliases cannot reach inference", async () => {
   mocks.listModels.mockResolvedValue([{ id: "removed", providerId: "codex", gatewayModelId: "codex/gpt-5.5", upstreamModel: "gpt-5.5", name: "Retired", enabled: true, source: "discovered", discovery: { stale: true, accountIds: [] } }])
@@ -250,6 +252,20 @@ test("tests combo member policies with a streaming probe", async () => {
   expect(result.status).toBe("verified")
   const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body))
   expect(forwarded).toMatchObject({ model: "a", input: [{ role: "user", content: "Reply with OK." }], diffusing: true, stream: true })
+})
+
+test("combo member probe uses the provider-default reasoning policy", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true, reasoningSummaries: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response("data: {}\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
+
+  const result = await testComboMemberPolicy({ modelId: "p/a", reasoning: { mode: "provider-default" }, serviceTier: "fast" })
+
+  expect(result.status).toBe("verified")
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+  expect(forwarded).not.toHaveProperty("reasoning")
+  expect(forwarded.service_tier).toBe("priority")
 })
 
 test("records structured request and completion events", async () => {
@@ -710,6 +726,22 @@ test("normalizes reasoning_effort before forwarding Responses requests", async (
   expect(forwarded.max_tokens).toBeUndefined()
 })
 
+test("does not inject a provider summary for an explicit null reasoning_effort", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true, reasoningSummaries: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "p/a", input: "hello", reasoning_effort: null }),
+  }))
+  await response.text()
+
+  const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+  expect(forwarded).not.toHaveProperty("reasoning_effort")
+  expect(forwarded).not.toHaveProperty("reasoning")
+})
+
 test("strips Expect before forwarding a provider request", async () => {
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -1164,5 +1196,39 @@ test("chat clients receive upstream thinking summaries when the provider opts in
   const chat = await response.json()
   expect(chat.choices[0].message.reasoning).toBe("**Thinking hard**")
   const forwarded = JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.at(-1)?.[1]?.body))
-  expect(forwarded).toMatchObject({ reasoning: { effort: "low", summary: "auto" } })
+  expect(forwarded.reasoning).toEqual({ effort: "low" })
+})
+
+test("provider reasoning summaries yield to explicit client and combo reasoning policies", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true, reasoningSummaries: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  const sendCombo = async (member: Record<string, unknown>, body: Record<string, unknown> = {}) => {
+    mocks.listCombos.mockResolvedValue([{ id: "combo-1", combo: "policy-combo", name: "Policy combo", members: [member], createdAt: new Date().toISOString() }])
+    const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+      body: JSON.stringify({ model: "policy-combo", input: "hello", ...body }),
+    }))
+    await response.text()
+    return JSON.parse(String((globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.at(-1)?.[1]?.body)) as { reasoning?: unknown }
+  }
+
+  expect((await sendCombo({ modelId: "p/a", reasoning: { mode: "inherit" } })).reasoning).toEqual({ summary: "auto" })
+  expect((await sendCombo({ modelId: "p/a", reasoning: { mode: "override", effort: "high" } })).reasoning).toEqual({ effort: "high" })
+  expect((await sendCombo({ modelId: "p/a", reasoning: { mode: "provider-default" } })).reasoning).toBeUndefined()
+  expect((await sendCombo({ modelId: "p/a", reasoning: { mode: "inherit" } }, { reasoning: { effort: "none" } })).reasoning).toEqual({ effort: "none" })
+  expect((await sendCombo({ modelId: "p/a", reasoning: { mode: "inherit" } }, { reasoning: null })).reasoning).toBeNull()
+})
+
+test("provider reasoning summaries do not override a resolved model effort or explicit client summary", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", baseUrl: "https://api.example.com", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true, reasoningSummaries: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true, createdAt: new Date().toISOString() }])
+  mocks.listProviderApiKeys.mockResolvedValue([{ id: "key", providerId: "p", name: "Key", key: "secret", enabled: true, createdAt: new Date().toISOString() }])
+  const resolved = await resolveGatewayModel("p/a")
+  const prepare = (body: Record<string, unknown>, model: ResolvedGatewayModel = resolved) =>
+    JSON.parse(new TextDecoder().decode(prepareProviderRequest(new TextEncoder().encode(JSON.stringify(body)), model, "openai-responses").body)) as { reasoning?: unknown }
+  expect(prepare({ model: "p/a", input: "hello" }, { ...resolved, reasoningEffort: "high" }).reasoning).toEqual({ effort: "high" })
+  expect(prepare({ model: "p/a", input: "hello", reasoning: { effort: "high", summary: "detailed" } }).reasoning).toEqual({ effort: "high", summary: "detailed" })
+  expect(prepare({ model: "p/a", input: "hello" }).reasoning).toEqual({ summary: "auto" })
 })

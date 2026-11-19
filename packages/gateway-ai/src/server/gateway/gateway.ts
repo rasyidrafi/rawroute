@@ -141,7 +141,7 @@ export async function testComboMemberPolicy(member: ComboMember): Promise<ComboM
     const applied = applyComboMemberPolicy(probe, { ...member, customPayload: testCustomPayload })
     const payload = { ...applied.payload, model: member.modelId, messages: probe.messages, max_completion_tokens: 8, stream: true }
     const body = new TextEncoder().encode(JSON.stringify(payload))
-    const tested = { ...resolved, reasoningEffort: applied.effort, serviceTierOverride: applied.serviceTierOverride, customPayload: applied.customPayload }
+    const tested = { ...resolved, reasoningEffort: applied.effort, reasoningPolicy: applied.reasoningPolicy, serviceTierOverride: applied.serviceTierOverride, customPayload: applied.customPayload }
     const request = new Request("http://rawroute.internal/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body, signal: AbortSignal.timeout(20_000) })
     const prepared = prepareProviderRequest(body, tested, "openai-chat")
     let response: Response
@@ -280,12 +280,14 @@ export async function proxyGatewayRequestInWorkspace(request: Request, path: str
     if (member.sharedModelId && !resolved) continue
     let memberPayload = payload
     let reasoningEffort: string | undefined
+    let reasoningPolicy: boolean | undefined
     let serviceTierOverride: "fast" | undefined
     let customPayload: Record<string, unknown> | undefined
     try {
       const applied = applyComboMemberPolicy(payload!, member)
       memberPayload = applied.payload
       reasoningEffort = applied.effort
+      reasoningPolicy = applied.reasoningPolicy
       serviceTierOverride = applied.serviceTierOverride
       customPayload = applied.customPayload
     } catch (error) {
@@ -298,7 +300,7 @@ export async function proxyGatewayRequestInWorkspace(request: Request, path: str
       body: JSON.stringify({ ...memberPayload, model: memberModelId }),
       signal: request.signal,
     })
-    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, serviceTierOverride, customPayload } : undefined, requestedModel, { ...attempt, attemptIndex, last: attemptIndex === members.length - 1 }))
+    const response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, reasoningPolicy, serviceTierOverride, customPayload } : undefined, requestedModel, { ...attempt, attemptIndex, last: attemptIndex === members.length - 1 }))
     if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
       return responseWithoutComboHeaders(response)
