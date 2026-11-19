@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test"
-import { getKeyUsagePayload, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
+import { getDashboardPayload, getKeyUsagePayload, invalidateKeyUsageDetail, recordUsageEvent, resetAnalyticsForTests, setBudgetBypassEnabled, updateBudgetWindow, upsertBudget } from "../../packages/gateway-ai/src/server/analytics"
 import { closeLocalDatabase } from "../../packages/platform/src/server/database"
 import { runInWorkspace } from "../../packages/platform/src/server/workspace-context"
-import { _resetMemoryBackend, createApiKey } from "../../packages/gateway-ai/src/server/store"
+import { _resetMemoryBackend, createApiKey, updateApiKeyName } from "../../packages/gateway-ai/src/server/store"
 import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 import { GET } from "../../packages/gateway-ai/src/server/routes/api/admin/usage/keys/by-key/index"
 
@@ -91,3 +91,41 @@ for (const backend of ["memory", "sqlite"] as const) test(`${backend}: key token
   })
 })
 import "../../apps/console/src/server/composition"
+
+for (const backend of ["memory", "sqlite"] as const) test(`${backend}: key detail reflects rename after detail invalidation`, async () => {
+  process.env.STORAGE_BACKEND = backend
+  if (backend === "sqlite") process.env.NODE_ENV = "development"
+  await runInWorkspace({ id: `key-rename-${backend}`, storageMode: "scoped" }, async () => {
+    const key = await createApiKey("Before rename")
+    await recordUsageEvent(attempt("rename-1", key.id, "2026-10-16T11:00:00.000Z", 100), null)
+    expect((await getKeyUsagePayload(key.id)).keys[0]?.label).toBe("Before rename")
+    await updateApiKeyName(key.id, "After rename")
+    invalidateKeyUsageDetail(key.id)
+    expect((await getKeyUsagePayload(key.id)).keys[0]?.label).toBe("After rename")
+  })
+})
+
+for (const backend of ["memory", "sqlite"] as const) test(`${backend}: rename evicts another workspace's cached public key detail`, async () => {
+  process.env.STORAGE_BACKEND = backend
+  if (backend === "sqlite") process.env.NODE_ENV = "development"
+  const ownerWorkspace = { id: `key-rename-owner-${backend}`, storageMode: "scoped" as const }
+  const viewerWorkspace = { id: `key-rename-viewer-${backend}`, storageMode: "scoped" as const }
+  let keyId = ""
+  await runInWorkspace(ownerWorkspace, async () => {
+    const key = await createApiKey("Owner before rename")
+    keyId = key.id
+    await recordUsageEvent(attempt("cross-1", key.id, "2026-10-16T11:00:00.000Z", 100), null)
+  })
+  await runInWorkspace(viewerWorkspace, async () => {
+    const cached = await getDashboardPayload({ preset: "budget", granularity: "daily" }, true, keyId)
+    expect(cached.keys[0]?.label).toBe("Owner before rename")
+  })
+  await runInWorkspace(ownerWorkspace, async () => {
+    await updateApiKeyName(keyId, "Owner after rename")
+    invalidateKeyUsageDetail(keyId)
+  })
+  await runInWorkspace(viewerWorkspace, async () => {
+    const refreshed = await getDashboardPayload({ preset: "budget", granularity: "daily" }, true, keyId)
+    expect(refreshed.keys[0]?.label).toBe("Owner after rename")
+  })
+})

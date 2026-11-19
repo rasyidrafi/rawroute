@@ -5,7 +5,7 @@ import { selectRequestLogGroups, requestLogLatest, requestLogCursor, type Reques
 import { groupRequestLogEvents } from "../contracts/request-logs"
 import { normalizeRequestLogMetadata } from "./request-log-metadata"
 import { createHash } from "node:crypto"
-import { getSqliteDatabase, listLocalDocuments, type SqliteDatabase } from "@rawroute/platform/server/database"
+import { getSqliteDatabase, type SqliteDatabase } from "@rawroute/platform/server/database"
 
 import { localCacheSetIfAbsent } from "@rawroute/platform/server/local-cache"
 import { listAliases, listApiKeys, listIndexedApiKeyNames, listModels } from "./store"
@@ -98,7 +98,6 @@ interface ExpectedCostPrediction {
 }
 
 const usagePredictionSamples = new Map<string, UsagePredictionSamples>()
-let usagePredictionWarmup: Promise<void> | undefined
 const budgetConfigCache = new Map<string, TimedValue<GatewayKeyBudget | null>>()
 const budgetConfigInflight = new Map<string, Promise<GatewayKeyBudget | undefined>>()
 type BudgetUsageValue = { spentMicros: number; lastUsedAt: string | null; available: boolean }
@@ -125,7 +124,10 @@ const codexBudgetWindowSyncAttempts = new Map<string, number>()
 const codexBudgetWindowSyncInflights = new Map<string, Promise<BudgetWindow>>()
 const codexBudgetWindowSyncIntervalMs = 5 * 60_000
 const codexBudgetWindowSyncLockTtlMs = codexBudgetWindowSyncIntervalMs + 60_000
-const budgetCacheGenerations = new Map<string, number>()
+const usageReadGenerations = new Map<string, number>()
+const budgetConfigGenerations = new Map<string, number>()
+const presentationGenerations = new Map<string, number>()
+let analyticsCacheEpoch = 0
 
 function canonicalPredictionModel(gatewayModelId: string) {
   return gatewayModelId.trim().toLowerCase().replace(/^(?:codex|cx)\//, "")
@@ -243,28 +245,7 @@ function historicalOutputPrediction(gatewayKeyId: string | undefined, gatewayMod
   return { value: median(values), sampleCount: values.length }
 }
 
-function eventWorkspaceId(collectionPath: string) {
-  const collectionPrefix = prefix()
-  const match = collectionPath.match(new RegExp(`^${collectionPrefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}_workspaces/([^/]+)/usageEvents$`))
-  return match?.[1]
-}
 
-async function warmUsagePredictionSamples() {
-  if (isMemory() || usagePredictionWarmup) return usagePredictionWarmup
-  usagePredictionWarmup = (async () => {
-    const documents = await listLocalDocuments()
-    const events = documents
-      .filter((document) => document.collection_path.endsWith("/usageEvents"))
-      .map((document) => ({ event: document.data as unknown as UsageEvent, workspaceId: eventWorkspaceId(document.collection_path) }))
-      .filter((entry): entry is { event: UsageEvent; workspaceId: string } => Boolean(entry.workspaceId))
-      .sort((left, right) => Date.parse(left.event.completedAt) - Date.parse(right.event.completedAt))
-    for (const entry of events) rememberUsagePrediction(entry.event, entry.workspaceId)
-  })().catch((error) => {
-    usagePredictionWarmup = undefined
-    recordLog("system.unable.to.warm.usage.prediction.history", { error: error instanceof Error ? error.message : "Unknown error" }, { level: "warn" })
-  })
-  return usagePredictionWarmup
-}
 
 function boundedSet<T>(cache: Map<string, T>, key: string, value: T, maximum = 1_024) {
   if (!cache.has(key) && cache.size >= maximum) {
@@ -288,6 +269,14 @@ function advanceWorkspaceGeneration(generations: Map<string, number>, workspaceI
   generations.set(workspaceId, workspaceGeneration(generations, workspaceId) + 1)
 }
 
+/** Snapshot the revisions a cache fill depends on; stale or pre-cleanup builds must not publish. */
+function capturePublicationGuard(...generations: Map<string, number>[]) {
+  const workspaceId = currentWorkspaceId()
+  const captured = generations.map(generation => workspaceGeneration(generation, workspaceId))
+  const epoch = analyticsCacheEpoch
+  return () => epoch === analyticsCacheEpoch && captured.every((value, index) => value === workspaceGeneration(generations[index]!, workspaceId))
+}
+
 function clearWorkspaceEntries<T>(cache: Map<string, T>, workspaceId: string) {
   const prefix = `${workspaceId}:`
   for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key)
@@ -295,7 +284,7 @@ function clearWorkspaceEntries<T>(cache: Map<string, T>, workspaceId: string) {
 
 function invalidateUsageReadCaches() {
   const workspaceId = currentWorkspaceId()
-  advanceWorkspaceGeneration(budgetCacheGenerations, workspaceId)
+  advanceWorkspaceGeneration(usageReadGenerations, workspaceId)
   clearWorkspaceEntries(budgetUsageCache, workspaceId)
   clearWorkspaceEntries(budgetUsageInflight, workspaceId)
   clearWorkspaceEntries(dashboardCache, workspaceId)
@@ -304,7 +293,8 @@ function invalidateUsageReadCaches() {
 
 function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean } = {}) {
   const workspaceId = currentWorkspaceId()
-  advanceWorkspaceGeneration(budgetCacheGenerations, workspaceId)
+  advanceWorkspaceGeneration(budgetConfigGenerations, workspaceId)
+  advanceWorkspaceGeneration(usageReadGenerations, workspaceId)
   budgetsCaches.delete(workspaceId)
   budgetsInflights.delete(workspaceId)
   budgetWindowCaches.delete(workspaceId)
@@ -325,9 +315,38 @@ function invalidateBudgetReadCaches(options: { preserveWindowInflight?: boolean 
   clearWorkspaceEntries(dashboardInflight, workspaceId)
 }
 
+/** Drop cached key-detail payloads after a gateway key rename, rotation or deletion. */
+export function invalidateKeyUsageDetail(keyId: string) {
+  const workspaceId = currentWorkspaceId()
+  advanceWorkspaceGeneration(presentationGenerations, workspaceId)
+  const identityOf = (key: string) => {
+    const separator = key.indexOf(":")
+    return { owner: key.slice(0, separator), identity: JSON.parse(key.slice(separator + 1)) as unknown[] }
+  }
+  for (const key of dashboardCache.keys()) {
+    const { owner, identity } = identityOf(key)
+    if (identity.at(-1) !== keyId) continue
+    // Public detail can render another workspace's historical key; evict it everywhere.
+    if (identity[0] === true) {
+      advanceWorkspaceGeneration(presentationGenerations, owner)
+      dashboardCache.delete(key)
+    } else if (owner === workspaceId) dashboardCache.delete(key)
+  }
+  for (const key of dashboardInflight.keys()) {
+    const { owner, identity } = identityOf(key)
+    if (identity.at(-1) !== keyId) continue
+    if (identity[0] === true) {
+      // Fence a fill that read the old name before the rename and would publish after it.
+      advanceWorkspaceGeneration(presentationGenerations, owner)
+      dashboardInflight.delete(key)
+    } else if (owner === workspaceId) dashboardInflight.delete(key)
+  }
+}
+
 /** Clear presentation-only Usage caches after aliases or shared models change. */
 export function invalidateDashboardPresentation() {
   const workspaceId = currentWorkspaceId()
+  advanceWorkspaceGeneration(presentationGenerations, workspaceId)
   clearWorkspaceEntries(dashboardCache, workspaceId)
   clearWorkspaceEntries(dashboardInflight, workspaceId)
   dashboardModelLabelCache.delete(workspaceId)
@@ -429,17 +448,16 @@ async function budgetUsageStart(window: BudgetWindow) {
   if (!window.bypassLimits || !window.bypassSessionId) return window.start
   if (isMemory()) return memoryState().bypassSessions.get(window.bypassSessionId)?.startedAt || window.start
   const sessionId = window.bypassSessionId
-  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(sessionId)
   const cached = bypassSessionCache.get(cacheId)
   if (cached && cached.expiresAt > Date.now()) return cached.value?.startedAt || window.start
   const existing = bypassSessionInflight.get(cacheId)
   if (existing) return (await existing)?.startedAt || window.start
 
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = bypassSessionsRef().doc(sessionId).get().then((snapshot) => {
     const session = snapshot.exists ? { ...snapshot.data(), id: snapshot.id } as BudgetBypassSession : undefined
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(bypassSessionCache, cacheId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
+    if (publish()) boundedSet(bypassSessionCache, cacheId, { value: session || null, expiresAt: Date.now() + budgetCacheTtlMs }, 128)
     return session
   }).finally(() => {
     if (bypassSessionInflight.get(cacheId) === promise) bypassSessionInflight.delete(cacheId)
@@ -464,10 +482,10 @@ async function budgetConfig(apiKeyId: string) {
   const existing = budgetConfigInflight.get(cacheId)
   if (existing) return existing
 
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = budgetsRef().doc(apiKeyId).get().then((snapshot) => {
     const budget = snapshot.exists ? currentBudgetConfig(snapshot.id, snapshot.data() as unknown as GatewayKeyBudget) : undefined
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
+    if (publish()) boundedSet(budgetConfigCache, cacheId, { value: budget || null, expiresAt: Date.now() + budgetCacheTtlMs })
     return budget
   }).finally(() => {
     if (budgetConfigInflight.get(cacheId) === promise) budgetConfigInflight.delete(cacheId)
@@ -669,10 +687,10 @@ export async function listBudgets(): Promise<GatewayKeyBudget[]> {
   const budgetsInflight = budgetsInflights.get(workspaceId)
   if (budgetsInflight) return budgetsInflight
 
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = budgetsRef().get().then((snapshot) => {
     const budgets = snapshot.docs.map(document => currentBudgetConfig(document.id, document.data() as unknown as GatewayKeyBudget))
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+    if (publish()) {
       const expiresAt = Date.now() + budgetCacheTtlMs
       boundedSet(budgetsCaches, workspaceId, { value: budgets, expiresAt }, 256)
       for (const budget of budgets) boundedSet(budgetConfigCache, scopedKey(budget.apiKeyId), { value: budget, expiresAt })
@@ -694,7 +712,6 @@ export async function listBudgetBypassSessions(limit = 50, currentWindow?: Budge
   if (window.bypassLimits && !window.bypassSessionId) await setBudgetBypassEnabled(true)
   if (isMemory()) return [...memoryState().bypassSessions.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, limit)
 
-  const workspaceId = currentWorkspaceId()
   const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)))
   const cacheId = scopedKey(`bypass-list:${boundedLimit}`)
   const cached = bypassSessionListCache.get(cacheId)
@@ -702,10 +719,10 @@ export async function listBudgetBypassSessions(limit = 50, currentWindow?: Budge
   const existing = bypassSessionListInflight.get(cacheId)
   if (existing) return existing
 
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = bypassSessionsRef().orderBy("startedAt", "desc").limit(boundedLimit).get().then((snapshot) => {
     const sessions = snapshot.docs.map((document) => ({ ...document.data(), id: document.id } as BudgetBypassSession))
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+    if (publish()) {
       boundedSet(bypassSessionListCache, cacheId, { value: sessions, expiresAt: Date.now() + budgetCacheTtlMs }, 32)
     }
     return sessions
@@ -732,10 +749,10 @@ export async function getBudgetBeyondLimitsSettings(): Promise<BudgetBeyondLimit
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = beyondLimitsInflight.get(workspaceId)
   if (existing) return existing
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = beyondLimitsRef().get().then((snapshot) => {
     const settings = normalizeBeyondLimitsSettings(snapshot.exists ? snapshot.data() as Partial<BudgetBeyondLimitsSettings> : undefined)
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+    if (publish()) {
       boundedSet(beyondLimitsCache, workspaceId, { value: settings, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
     }
     return settings
@@ -774,10 +791,10 @@ export async function getBudgetUnlimitedSettings(): Promise<BudgetUnlimitedSetti
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = unlimitedSettingsInflight.get(workspaceId)
   if (existing) return existing
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = unlimitedSettingsRef().get().then((snapshot) => {
     const settings = normalizeUnlimitedSettings(snapshot.exists ? snapshot.data() as Partial<BudgetUnlimitedSettings> : undefined)
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+    if (publish()) {
       boundedSet(unlimitedSettingsCache, workspaceId, { value: settings, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
     }
     return settings
@@ -921,7 +938,7 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
   const budgetWindowInflight = budgetWindowInflights.get(workspaceId)
   if (budgetWindowInflight) return budgetWindowInflight
 
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(budgetConfigGenerations)
   const promise = (async () => {
     const ref = windowRef()
     const snapshot = await ref.get()
@@ -959,7 +976,7 @@ export async function getBudgetWindow(): Promise<BudgetWindow> {
     }
     return result
   })().then((window) => {
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetWindowCaches, workspaceId, { value: window, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
+    if (publish()) boundedSet(budgetWindowCaches, workspaceId, { value: window, expiresAt: Date.now() + budgetCacheTtlMs }, 256)
     return window
   }).finally(() => {
     if (budgetWindowInflights.get(workspaceId) === promise) budgetWindowInflights.delete(workspaceId)
@@ -1114,7 +1131,6 @@ async function canonicalUsageRange(from: string, to: string, hourly = false, key
 
 async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promise<Map<string, BudgetUsageValue>> {
   const from = await budgetUsageStart(window)
-  const workspaceId = currentWorkspaceId()
   const cacheId = scopedKey(`${from}:${window.end}`)
   if (!bypassCache) {
     const cached = budgetUsageCache.get(cacheId)
@@ -1122,7 +1138,7 @@ async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promis
     const existing = budgetUsageInflight.get(cacheId)
     if (existing) return existing
   }
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(usageReadGenerations)
   const promise = canonicalUsageRange(from, window.end).then(range => {
     const result = new Map<string, BudgetUsageValue>()
     for (const row of range.rows) {
@@ -1134,7 +1150,7 @@ async function getBudgetUsage(window: BudgetWindow, bypassCache = false): Promis
       })
     }
     for (const key of range.financialUnavailableKeys) result.set(key, { spentMicros: result.get(key)?.spentMicros || 0, lastUsedAt: result.get(key)?.lastUsedAt || null, available: false })
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) boundedSet(budgetUsageCache, cacheId, { value: result, expiresAt: Date.now() + dashboardCacheTtlMs }, 128)
+    if (publish()) boundedSet(budgetUsageCache, cacheId, { value: result, expiresAt: Date.now() + dashboardCacheTtlMs }, 128)
     return result
   }).finally(() => {
     if (budgetUsageInflight.get(cacheId) === promise) budgetUsageInflight.delete(cacheId)
@@ -1290,7 +1306,6 @@ export async function getBudgetRequestState(
   requestedCombo?: string,
   tierProfile = serviceTierProfile(protocol),
 ): Promise<BudgetRequestState> {
-  await warmUsagePredictionSamples()
   const budget = await budgetConfig(apiKeyId)
   // Pricing is needed for usage accounting even when a key has no RawRoute
   // budget. A budget is an admission policy, not a prerequisite for billing.
@@ -1434,7 +1449,7 @@ export async function getBudgetAdminData() {
     getBudgetUnlimitedSettings(),
   ])
   const [{ rows }, bypassSessions] = await Promise.all([
-    loadBudgetRows(keys, window, undefined, { freshUsage: true }),
+    loadBudgetRows(keys, window),
     listBudgetBypassSessions(50, window),
   ])
   return {
@@ -1488,6 +1503,20 @@ async function resolveRange(query: DashboardQuery, currentBudgetWindow?: BudgetW
   return { label: "All time", from: new Date("2000-01-01T00:00:00.000Z"), to: now }
 }
 function bucketStart(date: Date, granularity: string) { if (granularity === "hourly") return startOfZonedHour(date); if (granularity === "monthly") return startOfZonedMonth(date); if (granularity === "weekly") return mondayInAppTimeZone(date); return startOfZonedDay(date) }
+
+/** Union of coverage gaps as sorted disjoint intervals, for a linear sweep over chart buckets. */
+function mergedUsageGaps(gaps: Array<{ from: string | null; to: string | null }>) {
+  const intervals = gaps
+    .map(gap => ({ from: gap.from ? Date.parse(gap.from) : Number.NEGATIVE_INFINITY, to: gap.to ? Date.parse(gap.to) : Number.POSITIVE_INFINITY }))
+    .sort((left, right) => left.from - right.from)
+  const merged: Array<{ from: number; to: number }> = []
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1]
+    if (last && interval.from <= last.to) last.to = Math.max(last.to, interval.to)
+    else merged.push({ ...interval })
+  }
+  return merged
+}
 function mask(key: string) { return key.length <= 12 ? `${key.slice(0, 4)}${"•".repeat(Math.max(4, key.length - 4))}` : `${key.slice(0, 7)}${"•".repeat(12)}${key.slice(-4)}` }
 function publicKeyName(key: { name?: string } | undefined, keyId: string, indexedNames: ReadonlyMap<string, string>) {
   return key?.name?.trim() || indexedNames.get(keyId)?.trim() || keyId
@@ -1501,6 +1530,7 @@ export async function loadDashboardModelLabels() {
   const existing = dashboardModelLabelInflight.get(workspaceId)
   if (existing) return existing
 
+  const publish = capturePublicationGuard(presentationGenerations)
   const promise = (async () => {
     const [groups, models, aliases, sharedModels] = await Promise.all([
       listPricingGroups(),
@@ -1543,7 +1573,7 @@ export async function loadDashboardModelLabels() {
       const label = labelsByGatewayModel.get(alias.targetModelId)
       if (label) labelsByGatewayModel.set(alias.alias, label)
     }
-    dashboardModelLabelCache.set(workspaceId, { value: labelsByGatewayModel, expiresAt: Date.now() + dashboardCacheTtlMs })
+    if (publish()) dashboardModelLabelCache.set(workspaceId, { value: labelsByGatewayModel, expiresAt: Date.now() + dashboardCacheTtlMs })
     return labelsByGatewayModel
   })().finally(() => {
     if (dashboardModelLabelInflight.get(workspaceId) === promise) dashboardModelLabelInflight.delete(workspaceId)
@@ -1656,11 +1686,22 @@ async function buildDashboardPayload(query: DashboardQuery, publicView: boolean,
   if (trend.size || !allTime) {
     const first = allTime ? [...trend.keys()].sort()[0]! : chartBucket(from, trendGranularity)
     const last = chartBucket(new Date(Date.parse(toExclusive) - 1).toISOString(), trendGranularity)
+    const mergedGaps = mergedUsageGaps(usage.gaps)
+    let gapIndex = 0
     for (let cursor = new Date(first); cursor.toISOString() <= last; cursor = new Date(chartEnd(cursor.toISOString(), trendGranularity))) {
       const bucket = cursor.toISOString()
       const next = chartEnd(bucket, trendGranularity)
       if (trendGranularity === "weekly" && bucket < from && !trend.has(bucket)) continue
-      if (usage.gaps.some(gap => (!gap.from || gap.from < next) && (!gap.to || gap.to > bucket))) continue
+      const bucketMs = Date.parse(bucket)
+      const nextMs = Date.parse(next)
+      while (gapIndex < mergedGaps.length && mergedGaps[gapIndex]!.to <= bucketMs) gapIndex++
+      let withheld = false
+      for (let index = gapIndex; index < mergedGaps.length; index++) {
+        const gap = mergedGaps[index]!
+        if (gap.from >= nextMs) break
+        if (gap.to > bucketMs) { withheld = true; break }
+      }
+      if (withheld) continue
       if (!trend.has(bucket)) trend.set(bucket, { bucketStart: bucket, label: formatAppTrendBucket(bucket, trendGranularity, compact ? "hour" : undefined), requests: 0, tokens: 0, costMicros: 0 })
     }
   }
@@ -1717,44 +1758,45 @@ function nextBucketStart(value: Date, granularity: string) {
 
 /** Private, workspace-scoped detail using the same canonical data as Usage. */
 export async function getKeyUsagePayload(keyId: string): Promise<DashboardPayload> {
-  return buildDashboardPayload({ preset: "budget", granularity: "daily" }, false, undefined, keyId)
+  return getDashboardPayload({ preset: "budget", granularity: "daily", key: keyId })
 }
 
 /** Public, opaque-ID detail for one key visible in the selected public workspace. */
 export async function getPublicKeyUsageDetail(publicId: string): Promise<{ keyId: string; payload: DashboardPayload } | undefined> {
   if (!/^[a-f0-9]{64}$/.test(publicId)) return undefined
-  let keyId = publicUsageKeyIds.get(currentWorkspaceId())?.get(publicId)
+  const workspaceId = currentWorkspaceId()
+  const mapped = publicUsageKeyIds.get(workspaceId)?.get(publicId)
+  if (mapped) return { keyId: mapped, payload: await getDashboardPayload({ preset: "budget", granularity: "daily" }, true, mapped) }
   const [keys, workspaces, indexedNames] = await Promise.all([listApiKeys(), listWorkspaces(), listIndexedApiKeyNames()])
   const candidates = [
     ...keys.map(key => key.id),
     ...indexedNames.keys(),
-    ...workspaces.filter(workspace => workspace.status === "active" && workspace.id !== currentWorkspaceId()).map(workspace => sharedWorkspaceBudgetId(workspace.id)),
+    ...workspaces.filter(workspace => workspace.status === "active" && workspace.id !== workspaceId).map(workspace => sharedWorkspaceBudgetId(workspace.id)),
   ]
-  keyId ||= candidates.find(candidate => hash(`${currentWorkspaceId()}:${candidate}`) === publicId)
+  let keyId = candidates.find(candidate => hash(`${workspaceId}:${candidate}`) === publicId)
   if (!keyId) {
     await getDashboardPayload({ preset: "all" }, true)
-    keyId = publicUsageKeyIds.get(currentWorkspaceId())?.get(publicId)
+    keyId = publicUsageKeyIds.get(workspaceId)?.get(publicId)
   }
   if (!keyId) return undefined
   return {
     keyId,
-    payload: await buildDashboardPayload({ preset: "budget", granularity: "daily" }, true, undefined, keyId),
+    payload: await getDashboardPayload({ preset: "budget", granularity: "daily" }, true, keyId),
   }
 }
 
-export async function getDashboardPayload(query: DashboardQuery, publicView = false): Promise<DashboardPayload> {
-  const keyId = publicView ? undefined : query.key
+export async function getDashboardPayload(query: DashboardQuery, publicView = false, resolvedKeyId?: string): Promise<DashboardPayload> {
+  const keyId = publicView ? resolvedKeyId : query.key
   if (isMemory()) return buildDashboardPayload(query, publicView, undefined, keyId)
-  const workspaceId = currentWorkspaceId()
   const cacheKey = scopedKey(JSON.stringify([publicView, query.preset || "all", query.from || "", query.to || "", query.granularity || "auto", keyId || ""]))
   const cached = dashboardCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return cached.value
   const existing = dashboardInflight.get(cacheKey)
   if (existing) return existing
 
-  const generation = workspaceGeneration(budgetCacheGenerations, workspaceId)
+  const publish = capturePublicationGuard(usageReadGenerations, budgetConfigGenerations, presentationGenerations)
   const promise = buildDashboardPayload(query, publicView, undefined, keyId).then((payload) => {
-    if (generation === workspaceGeneration(budgetCacheGenerations, workspaceId)) {
+    if (publish()) {
       boundedSet(dashboardCache, cacheKey, { value: payload, expiresAt: Date.now() + dashboardCacheTtlMs }, 32)
     }
     return payload
@@ -1908,7 +1950,6 @@ export function resetAnalyticsForTests() {
 
 function clearWorkspaceAnalyticsCaches() {
   usagePredictionSamples.clear()
-  usagePredictionWarmup = undefined
   pricingCache.clear()
   pricingInflight.clear()
   budgetConfigCache.clear()
@@ -1934,5 +1975,8 @@ function clearWorkspaceAnalyticsCaches() {
   budgetWindowInflights.clear()
   codexBudgetWindowSyncAttempts.clear()
   codexBudgetWindowSyncInflights.clear()
-  budgetCacheGenerations.clear()
+  usageReadGenerations.clear()
+  budgetConfigGenerations.clear()
+  presentationGenerations.clear()
+  analyticsCacheEpoch++
 }

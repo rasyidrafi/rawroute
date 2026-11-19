@@ -22,7 +22,17 @@ function shareId(ownerWorkspaceId: string, sourceModelId: string, recipientWorks
   return `share-${createHash("sha256").update(`${ownerWorkspaceId}:${sourceModelId}:${recipientWorkspaceId}`).digest("hex").slice(0, 24)}`
 }
 
-async function readShares() {
+let sharesCache: { value: ModelShare[]; expiresAt: number } | undefined
+let sharesInflight: Promise<ModelShare[]> | undefined
+let sharesGeneration = 0
+
+function invalidateSharesCache() {
+  sharesGeneration++
+  sharesCache = undefined
+  sharesInflight = undefined
+}
+
+async function loadShares() {
   if (isMemoryBackend()) return [...memoryShares().values()]
   const snapshot = await sharesRef().get()
   return snapshot.docs.map((document) => {
@@ -32,11 +42,35 @@ async function readShares() {
   })
 }
 
+async function readShares() {
+  if (sharesCache && sharesCache.expiresAt > Date.now()) return sharesCache.value
+  if (sharesInflight) return sharesInflight
+  const generation = sharesGeneration
+  const promise = loadShares().then((value) => {
+    if (generation === sharesGeneration) sharesCache = { value, expiresAt: Date.now() + 60_000 }
+    return value
+  }).finally(() => {
+    if (sharesInflight === promise) sharesInflight = undefined
+  })
+  sharesInflight = promise
+  return promise
+}
+
+async function readShare(id: string) {
+  if (isMemoryBackend()) return memoryShares().get(id)
+  const snapshot = await sharesRef().doc(id).get()
+  if (!snapshot.exists) return undefined
+  const share = { ...snapshot.data(), id: snapshot.id } as ModelShare
+  if (typeof share.onlyDuringUnlimited !== "boolean") throw new Error("Model sharing requires the offline model-share-conditions migration.")
+  return share
+}
+
 async function writeShares(shares: ModelShare[]) {
   if (!shares.length) return
   if (isMemoryBackend()) {
     for (const share of shares) memoryShares().set(share.id, share)
     appendMemoryAudit({ resource: "model-sharing", action: "config.update", workspaceId: currentWorkspaceId(), result: "success" })
+    invalidateSharesCache()
     return
   }
   const batch = db().batch()
@@ -45,6 +79,7 @@ async function writeShares(shares: ModelShare[]) {
     batch.set(sharesRef().doc(id), data)
   }
   await batch.commit()
+  invalidateSharesCache()
 }
 
 async function activeSource(share: ModelShare) {
@@ -143,20 +178,20 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
 }
 
 export async function getSharedModelForRecipient(shareIdValue: string, recipientWorkspaceId = currentWorkspaceId()) {
-  const share = (await readShares()).find((entry) => entry.id === shareIdValue)
+  const share = await readShare(shareIdValue)
   if (!share || share.recipientWorkspaceId !== recipientWorkspaceId) return undefined
   return viewFor(share, share.status === "active" ? await activeSource(share) : undefined)
 }
 
 export async function resolveSharedModelForRecipient(shareIdValue: string, recipientWorkspaceId = currentWorkspaceId()) {
-  const share = (await readShares()).find((entry) => entry.id === shareIdValue)
+  const share = await readShare(shareIdValue)
   if (!share || share.recipientWorkspaceId !== recipientWorkspaceId || share.status !== "active") return undefined
   const source = await activeSource(share)
   if (!source || source.paused) return undefined
   return { share, ...source }
 }
 
-export function resetModelSharesForTests() { memoryShares().clear() }
+export function resetModelSharesForTests() { memoryShares().clear(); invalidateSharesCache() }
 
 export async function cleanupWorkspaceModelShares(workspaceId: string) {
   const shares = (await readShares()).filter(share => share.ownerWorkspaceId === workspaceId || share.recipientWorkspaceId === workspaceId)
@@ -167,4 +202,5 @@ export async function cleanupWorkspaceModelShares(workspaceId: string) {
     for (const share of shares) batch.delete(sharesRef().doc(share.id))
     await batch.commit()
   }
+  invalidateSharesCache()
 }

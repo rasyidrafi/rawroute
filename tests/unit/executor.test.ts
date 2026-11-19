@@ -9,7 +9,7 @@ const mocks = {
 }
 
 
-const { executorPathFromRequest, getToolGatewayStatus, proxyExecutorRequest: forwardExecutorRequest } = await import("../../packages/gateway-tools/src/server/runtime")
+const { executorPathFromRequest, getToolGatewayStatus, proxyExecutorRequest: forwardExecutorRequest, resetToolGatewayStatusForTests } = await import("../../packages/gateway-tools/src/server/runtime")
 const proxyExecutorRequest = (request: Request) => forwardExecutorRequest(request, { authenticate: mocks.authenticate, recordLog: mocks.recordLog })
 
 const originalUpstream = process.env.EXECUTOR_UPSTREAM_URL
@@ -25,6 +25,7 @@ function fetchCalls() {
 
 beforeEach(() => {
   mock.clearAllMocks()
+  resetToolGatewayStatusForTests()
   process.env.EXECUTOR_UPSTREAM_URL = "http://executor:4788"
   process.env.EXECUTOR_UPSTREAM_API_KEY = "executor-secret"
   mocks.authenticate.mockResolvedValue({
@@ -242,4 +243,15 @@ describe("Executor HTTP proxy", () => {
     expect(response.status).toBe(401)
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
+})
+
+test("executor status cache key distinguishes basePath/apiKey boundaries", async () => {
+  process.env.EXECUTOR_UPSTREAM_URL = "http://executor:4788/a"
+  process.env.EXECUTOR_UPSTREAM_API_KEY = "b:c"
+  await expect(getToolGatewayStatus()).resolves.toEqual({ state: "available" })
+  process.env.EXECUTOR_UPSTREAM_URL = "http://executor:4788/a:b"
+  process.env.EXECUTOR_UPSTREAM_API_KEY = "c"
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ status: "degraded" }, { status: 503 })))
+  await expect(getToolGatewayStatus()).resolves.toEqual({ state: "unavailable" })
+  expect(fetchCalls()).toHaveLength(2)
 })

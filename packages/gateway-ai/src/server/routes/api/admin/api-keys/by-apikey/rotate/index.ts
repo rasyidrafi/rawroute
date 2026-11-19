@@ -1,5 +1,6 @@
 import { jsonError } from "@rawroute/observability/contracts/http"
 
+import { invalidateKeyUsageDetail } from "../../../../../../analytics"
 import { recordLog } from "../../../../../../logging"
 import { ApiKeyConflictError, rotateApiKey } from "../../../../../../store"
 
@@ -13,6 +14,7 @@ export async function POST(request: Request, params: { apiKeyId: string }) {
   const { apiKeyId } = params
   try {
     const apiKey = await rotateApiKey(apiKeyId, customKey as string | undefined)
+    invalidateKeyUsageDetail(apiKeyId)
     recordLog("admin.gateway.api.key.rotated", { apiKeyId }, { level: "info" })
     return Response.json({ ok: true, apiKey })
   } catch (error) {

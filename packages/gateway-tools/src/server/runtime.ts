@@ -71,10 +71,15 @@ function executorConfig() {
   }
 }
 
-export async function getToolGatewayStatus(): Promise<ToolGatewayStatus> {
-  const config = executorConfig()
-  if (!config) return { state: "disabled" }
+let statusCache: { key: string; value: ToolGatewayStatus; expiresAt: number } | undefined
+let statusInflight: { key: string; promise: Promise<ToolGatewayStatus> } | undefined
 
+export function resetToolGatewayStatusForTests() {
+  statusCache = undefined
+  statusInflight = undefined
+}
+
+async function fetchExecutorStatus(config: Exclude<ReturnType<typeof executorConfig>, undefined>): Promise<ToolGatewayStatus> {
   try {
     const response = await fetch(`${config.origin}${config.basePath}/api/health`, {
       method: "GET",
@@ -90,6 +95,22 @@ export async function getToolGatewayStatus(): Promise<ToolGatewayStatus> {
   } catch {
     return { state: "unavailable" }
   }
+}
+
+export async function getToolGatewayStatus(): Promise<ToolGatewayStatus> {
+  const config = executorConfig()
+  if (!config) return { state: "disabled" }
+  const key = JSON.stringify([config.origin, config.basePath, config.apiKey])
+  if (statusCache && statusCache.key === key && statusCache.expiresAt > Date.now()) return statusCache.value
+  if (statusInflight && statusInflight.key === key) return statusInflight.promise
+  const promise = fetchExecutorStatus(config).then((value) => {
+    if (value.state === "available") statusCache = { key, value, expiresAt: Date.now() + 10_000 }
+    return value
+  }).finally(() => {
+    if (statusInflight?.promise === promise) statusInflight = undefined
+  })
+  statusInflight = { key, promise }
+  return promise
 }
 
 function validExecutorPath(pathname: string) {

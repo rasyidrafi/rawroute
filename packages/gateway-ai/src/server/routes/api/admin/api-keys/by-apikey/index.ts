@@ -1,5 +1,6 @@
 import { jsonError } from "@rawroute/observability/contracts/http"
 
+import { invalidateKeyUsageDetail } from "../../../../../analytics"
 import { recordLog } from "../../../../../logging"
 import { deleteApiKey, updateApiKeyName } from "../../../../../store"
 
@@ -11,6 +12,7 @@ export async function PATCH(request: Request, params: { apiKeyId: string }) {
   const { apiKeyId } = params
   try {
     const apiKey = await updateApiKeyName(apiKeyId, name)
+    invalidateKeyUsageDetail(apiKeyId)
     recordLog("admin.gateway.api.key.renamed", { apiKeyId }, { level: "info" })
     return Response.json({ ok: true, apiKey })
   } catch (error) {
@@ -23,6 +25,7 @@ export async function DELETE(_request: Request, params: { apiKeyId: string }) {
   const { apiKeyId } = params
   try {
     await deleteApiKey(apiKeyId)
+    invalidateKeyUsageDetail(apiKeyId)
     recordLog("admin.gateway.api.key.deleted", { apiKeyId }, { level: "info" })
     return Response.json({ ok: true })
   } catch (error) {

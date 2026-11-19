@@ -131,7 +131,8 @@ function excludeUnknownTokens(result: UsageRangeResult, from: string, to: string
   result.totals.tokenCoveredRequests = 0
   for (const row of result.rows) {
     if (row.tokenCoveredRequests !== row.requests) {
-      const covered = row.provenance === "historical" ? { totalTokens: 0, tokenCoveredRequests: 0 } : readCovered(row, row.bucketStart > from ? row.bucketStart : from, row.bucketEnd < to ? row.bucketEnd : to)
+      // Zero-covered rows contribute no measured tokens; skip the raw re-scan entirely.
+      const covered = row.provenance === "historical" || row.tokenCoveredRequests === 0 ? { totalTokens: 0, tokenCoveredRequests: 0 } : readCovered(row, row.bucketStart > from ? row.bucketStart : from, row.bucketEnd < to ? row.bucketEnd : to)
       row.totalTokens = covered.totalTokens
       row.tokenCoveredRequests = covered.tokenCoveredRequests
     }
