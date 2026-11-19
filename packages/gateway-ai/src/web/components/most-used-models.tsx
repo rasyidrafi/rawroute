@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react"
+import { useState } from "react"
 import { ActivityIcon } from "lucide-react"
 import { Badge } from "@rawroute/ui/badge"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
@@ -13,8 +13,8 @@ type RankMetric = "requests" | "cost" | "tokens"
 const metricNoun: Record<RankMetric, string> = { requests: "requests", cost: "cost", tokens: "tokens" }
 
 /** Shares always use the full period total of the selected metric, including rows outside the limit. */
-export function MostUsedModels({ models, totalRequests = 0, totalCostMicros = 0, totalTokens = 0, error, refreshing, limit, action, className }: {
-  models?: DashboardPayload["models"]; totalRequests?: number; totalCostMicros?: number; totalTokens?: number; error?: boolean; refreshing?: boolean; limit?: number; action?: ReactNode; className?: string
+export function MostUsedModels({ models, totalRequests = 0, totalCostMicros = 0, totalTokens = 0, error, refreshing, limit, className }: {
+  models?: DashboardPayload["models"]; totalRequests?: number; totalCostMicros?: number; totalTokens?: number; error?: boolean; refreshing?: boolean; limit?: number; className?: string
 }) {
   const [metric, setMetric] = useState<RankMetric>("requests")
   const total = metric === "cost" ? totalCostMicros : metric === "tokens" ? totalTokens : totalRequests
@@ -29,7 +29,7 @@ export function MostUsedModels({ models, totalRequests = 0, totalCostMicros = 0,
   return <Card className={cn("relative min-w-0 self-start", className)} aria-busy={refreshing || undefined}>
     {refreshing && <div className="pointer-events-none absolute inset-0 flex items-start justify-end rounded-inherit bg-background/40 p-3 backdrop-blur-scrim"><Badge variant="refreshing"><ActivityIcon className="size-3.5 animate-spin" />Refreshing data...</Badge></div>}
     <Tabs value={metric} onValueChange={value => { if (value === "requests" || value === "cost" || value === "tokens") setMetric(value) }} className="w-full min-w-0">
-      <CardHeader><CardTitle>Most used models</CardTitle><CardDescription>Ranked by recorded {metricNoun[metric]}</CardDescription><CardAction><div className="flex flex-wrap items-center justify-end gap-2"><TabsList aria-label="Most used models metric"><TabsTrigger value="requests">Requests</TabsTrigger><TabsTrigger value="cost">Cost</TabsTrigger><TabsTrigger value="tokens">Token</TabsTrigger></TabsList>{action}</div></CardAction></CardHeader>
+      <CardHeader><CardTitle>Most used models</CardTitle><CardDescription>Ranked by recorded {metricNoun[metric]}</CardDescription><CardAction><TabsList aria-label="Most used models metric"><TabsTrigger value="requests">Requests</TabsTrigger><TabsTrigger value="cost">Cost</TabsTrigger><TabsTrigger value="tokens">Token</TabsTrigger></TabsList></CardAction></CardHeader>
       <TabsContent value={metric} className="mt-0 w-full min-w-0"><CardContent spacing="stack" className="max-h-128 overflow-y-auto">{content}</CardContent></TabsContent>
     </Tabs>
   </Card>

@@ -1,5 +1,4 @@
 import { BudgetUsageCard, QuickAccessCard, RecentRequestsCard } from "./overview-cards"
-import { Link } from "react-router"
 import { ActivityIcon, CheckCircle2Icon, Clock3Icon, CoinsIcon, DatabaseZapIcon, LayersIcon, RefreshCwIcon } from "lucide-react"
 import { OverviewUsageTrend } from "./overview-usage-trend"
 import { DashboardPage } from "@rawroute/ui/page-layout"
@@ -9,7 +8,6 @@ import { MostUsedModels } from "./most-used-models"
 import { Skeleton } from "@rawroute/ui/skeleton"
 import { Alert, AlertDescription } from "@rawroute/ui/alert"
 import { ToggleGroup, ToggleGroupItem } from "@rawroute/ui/toggle-group"
-import { aiPagePaths as pagePaths } from "../../contracts/pages"
 import { useOverview } from "../use-overview"
 import type { OverviewPayload, OverviewPeriod } from "../../contracts/overview"
 import type { RequestLogsPage } from "../../contracts/request-logs"
@@ -66,7 +64,7 @@ function OverviewLayout({ data, period, onPeriod, refresh, busy, error, recent, 
       <div className="flex min-w-0 flex-col gap-4"><BudgetUsageCard data={data?.overview} error={error} /><QuickAccessCard /></div>
     </div>
     <div className="grid gap-4 lg:grid-cols-2">
-      <MostUsedModels className="lg:self-stretch" models={data?.models} totalRequests={data?.summary.requests} totalCostMicros={data?.summary.costMicros} totalTokens={data?.summary.tokens} error={error} limit={3} action={<Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.overviewUsage} />}>View all</Button>} />
+      <MostUsedModels className="lg:self-stretch" models={data?.models} totalRequests={data?.summary.requests} totalCostMicros={data?.summary.costMicros} totalTokens={data?.summary.tokens} error={error} limit={3} />
       <RecentRequestsCard data={recent} loading={recentLoading} error={recentError} retry={retryRecent} />
     </div>
   </DashboardPage>
