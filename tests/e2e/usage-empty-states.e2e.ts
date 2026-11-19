@@ -637,3 +637,33 @@ test("overview usage keeps loading, empty, sparse, and populated panels in sync"
   expect(workspaceHeaders).toHaveLength(5)
   expect(workspaceHeaders).toEqual(["default", "default", "default", "default", "default"])
 })
+
+test("most used models switches ranking between requests, cost and tokens", async ({ page }) => {
+  const payload = dashboardPayload({
+    trend: [{ ...trendRow, requests: 100_000, tokens: 1_000_000, costMicros: 10_000_000 }],
+    models: [
+      { ...modelRow, model: "Requests leader", requests: 50_000, tokens: 1_000, costMicros: 10 },
+      { ...modelRow, model: "Cost leader", requests: 1_000, tokens: 2_000, costMicros: 9_000_000 },
+      { ...modelRow, model: "Token leader", requests: 2_000, tokens: 900_000, costMicros: 20 },
+    ],
+  })
+  await page.route("**/api/public/dashboard?*", route => route.fulfill({ json: payload }))
+  await page.route("**/api/public/workspaces", route => route.fulfill({ json: { workspaces: [{ id: "default", name: "Default", isDefault: true }] } }))
+  await page.goto("/")
+  const card = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
+  const bars = card.getByRole("progressbar")
+  await expect(card.getByText("Ranked by recorded requests", { exact: true })).toBeVisible()
+  await expect(bars.first()).toHaveAttribute("aria-label", "Requests leader: 50.0 percent of requests")
+  await card.getByRole("tab", { name: "Cost", exact: true }).click()
+  await expect(card.getByText("Ranked by recorded cost", { exact: true })).toBeVisible()
+  await expect(bars.first()).toHaveAttribute("aria-label", "Cost leader: 90.0 percent of cost")
+  await expect(card.getByText("90.0% of cost", { exact: true })).toBeVisible()
+  await expect(card.getByText("$9.00", { exact: true })).toBeVisible()
+  await card.getByRole("tab", { name: "Token", exact: true }).click()
+  await expect(card.getByText("Ranked by recorded tokens", { exact: true })).toBeVisible()
+  await expect(bars.first()).toHaveAttribute("aria-label", "Token leader: 90.0 percent of tokens")
+  await expect(card.getByText("90.0% of tokens", { exact: true })).toBeVisible()
+  await card.getByRole("tab", { name: "Requests", exact: true }).click()
+  await expect(card.getByText("Ranked by recorded requests", { exact: true })).toBeVisible()
+  await expect(bars.first()).toHaveAttribute("aria-label", "Requests leader: 50.0 percent of requests")
+})
