@@ -273,6 +273,12 @@ for (const publicView of [false, true]) {
         const controlBounds = (await orderControl.boundingBox())!
         expect(controlBounds.x).toBeGreaterThanOrEqual(labelBounds.x + labelBounds.width)
         expect(Math.abs(labelBounds.y + labelBounds.height / 2 - controlBounds.y - controlBounds.height / 2)).toBeLessThan(1)
+        if (!loading) {
+          const triggerBackground = await orderControl.evaluate(element => getComputedStyle(element).backgroundColor)
+          const refreshBackground = await page.getByRole("button", { name: "Refresh", exact: true }).evaluate(element => getComputedStyle(element).backgroundColor)
+          expect(triggerBackground).not.toBe("rgba(0, 0, 0, 0)")
+          expect(triggerBackground).toBe(refreshBackground)
+        }
         await expect(usageTable).toHaveCSS("height", "640px")
         await expect(usageTable).not.toHaveCSS("box-shadow", "none")
         await expect(usageTable).toHaveCSS("border-radius", "14px")
