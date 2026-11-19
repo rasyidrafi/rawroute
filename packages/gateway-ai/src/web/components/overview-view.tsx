@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@rawr
 import { Button } from "@rawroute/ui/button"
 import { MostUsedModels } from "./most-used-models"
 import { Skeleton } from "@rawroute/ui/skeleton"
+import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
 import { Alert, AlertDescription } from "@rawroute/ui/alert"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger } from "@rawroute/ui/select"
 import { useOverview } from "../use-overview"
@@ -21,7 +22,7 @@ export function OverviewView() {
 
 function OverviewWorkspace() {
   const state = useOverview()
-  return <OverviewLayout data={state.aggregate.error ? undefined : state.aggregate.data} period={state.period} onPeriod={state.setPeriod} refresh={state.refresh} busy={!state.workspaceId || state.aggregate.isValidating || state.recent.isValidating} error={!!state.aggregate.error} recent={state.recent.data} recentError={!!state.recent.error} recentLoading={!state.workspaceId || state.recent.isLoading} retryRecent={() => { void state.recent.mutate() }} />
+  return <OverviewLayout data={state.aggregate.error ? undefined : state.aggregate.data} period={state.period} onPeriod={state.setPeriod} refresh={state.refresh} busy={!state.workspaceId || state.aggregate.isValidating || state.recent.isValidating} refreshing={!state.aggregate.error && !!state.aggregate.data && state.aggregate.isValidating} error={!!state.aggregate.error} recent={state.recent.data} recentError={!!state.recent.error} recentLoading={!state.workspaceId || (!state.recent.data && !state.recent.error)} recentRefreshing={!state.recent.error && !!state.recent.data && state.recent.isValidating} retryRecent={() => { void state.recent.mutate() }} />
 }
 
 /** The route fallback shares the actual layout but never mounts data hooks. */
@@ -45,27 +46,27 @@ function overviewMetrics(data?: OverviewPayload) {
   ]
 }
 
-function OverviewLayout({ data, period, onPeriod, refresh, busy, error, recent, recentError, recentLoading, retryRecent }: {
-  data?: OverviewPayload; period: OverviewPeriod; onPeriod?: (value: OverviewPeriod) => void; refresh?: () => void; busy?: boolean; error?: boolean;
-  recent?: RequestLogsPage; recentError?: boolean; recentLoading?: boolean; retryRecent?: () => void
+function OverviewLayout({ data, period, onPeriod, refresh, busy, refreshing, error, recent, recentError, recentLoading, recentRefreshing, retryRecent }: {
+  data?: OverviewPayload; period: OverviewPeriod; onPeriod?: (value: OverviewPeriod) => void; refresh?: () => void; busy?: boolean; refreshing?: boolean; error?: boolean;
+  recent?: RequestLogsPage; recentError?: boolean; recentLoading?: boolean; recentRefreshing?: boolean; retryRecent?: () => void
 }) {
   const metrics = overviewMetrics(data)
   return <DashboardPage spacing="normal" aria-busy={busy || undefined}>
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div><h2 className="text-2xl font-semibold tracking-tight">Your gateway at a glance</h2><p className="mt-1 text-sm text-muted-foreground">Recorded traffic, reliability, and spend for this workspace.</p></div>
-      <div className="flex flex-wrap items-center gap-2"><div className="flex min-w-0 items-center gap-2"><span id="overview-range-label" className="shrink-0 text-xs font-medium text-muted-foreground">Range</span><Select disabled={!onPeriod} value={period} onValueChange={value => { if (value === "24h" || value === "7d" || value === "30d") onPeriod?.(value) }}><SelectTrigger aria-labelledby="overview-range-label" className="h-8 w-28"><span className="truncate">{period === "24h" ? "Past 24h" : period === "7d" ? "7 days" : "30 days"}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Period</SelectLabel>{(["24h", "7d", "30d"] as const).map(value => <SelectItem key={value} value={value}>{value === "24h" ? "Past 24h" : value === "7d" ? "7 days" : "30 days"}</SelectItem>)}</SelectGroup></SelectContent></Select></div><Button variant="outline" size="sm" disabled={busy || !refresh} onClick={refresh}><RefreshCwIcon data-icon="inline-start" />{busy && refresh ? "Refreshing…" : "Refresh"}</Button></div>
+      <div className="flex flex-wrap items-center gap-2"><div className="flex min-w-0 items-center gap-2"><span id="overview-range-label" className="shrink-0 text-xs font-medium text-muted-foreground">Range</span><Select disabled={!onPeriod} value={period} onValueChange={value => { if (value === "24h" || value === "7d" || value === "30d") onPeriod?.(value) }}><SelectTrigger aria-labelledby="overview-range-label" className="h-8 w-28"><span className="truncate">{period === "24h" ? "Past 24h" : period === "7d" ? "7 days" : "30 days"}</span></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Period</SelectLabel>{(["24h", "7d", "30d"] as const).map(value => <SelectItem key={value} value={value}>{value === "24h" ? "Past 24h" : value === "7d" ? "7 days" : "30 days"}</SelectItem>)}</SelectGroup></SelectContent></Select></div><Button variant="outline" size="sm" disabled={busy || !refresh} onClick={refresh}>{busy && refresh ? <LoadingSpinner /> : <RefreshCwIcon data-icon="inline-start" />}Refresh</Button></div>
     </div>
     {error && <Alert variant="destructive"><AlertDescription>Unable to load overview. <Button variant="link" size="sm" onClick={refresh} disabled={busy}>Retry overview</Button></AlertDescription></Alert>}
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {metrics.map(metric => <Card key={metric.label}><CardHeader><div className="flex items-center justify-between gap-2"><CardDescription>{metric.label}</CardDescription><metric.icon className="size-4 text-muted-foreground" /></div><CardTitle variant="metric">{data ? metric.value : error ? "Unavailable" : <Skeleton className="h-9 w-32" />}</CardTitle></CardHeader><CardContent><p className="text-xs text-muted-foreground">{metric.note}</p></CardContent></Card>)}
     </div>
     <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
-      <OverviewUsageTrend data={data?.trend} period={period} error={error} />
-      <div className="flex min-w-0 flex-col gap-4"><BudgetUsageCard data={data?.overview} error={error} /><QuickAccessCard /></div>
+      <OverviewUsageTrend data={data?.trend} period={period} error={error} refreshing={refreshing} />
+      <div className="flex min-w-0 flex-col gap-4"><BudgetUsageCard data={data?.overview} error={error} refreshing={refreshing} /><QuickAccessCard /></div>
     </div>
     <div className="grid gap-4 lg:grid-cols-2">
-      <MostUsedModels className="lg:self-stretch" models={data?.models} totalRequests={data?.summary.requests} totalCostMicros={data?.summary.costMicros} totalTokens={data?.summary.tokens} error={error} limit={3} />
-      <RecentRequestsCard data={recent} loading={recentLoading} error={recentError} retry={retryRecent} />
+      <MostUsedModels className="lg:self-stretch" models={data?.models} totalRequests={data?.summary.requests} totalCostMicros={data?.summary.costMicros} totalTokens={data?.summary.tokens} error={error} refreshing={refreshing} limit={3} />
+      <RecentRequestsCard data={recent} loading={recentLoading} refreshing={recentRefreshing} error={recentError} retry={retryRecent} />
     </div>
   </DashboardPage>
 }

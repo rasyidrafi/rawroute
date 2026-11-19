@@ -18,7 +18,8 @@ export function useUsageDashboard({ publicView = false, workspaceId, keyId, refr
   const [from, setFrom] = useState("")
   const [to, setTo] = useState("")
   const [granularity, setGranularityState] = useState<NonNullable<DashboardQuery["granularity"]>>(DEFAULT_GRANULARITY)
-  const [pending, startTransition] = useTransition()
+  const [, startTransition] = useTransition()
+  const [userRequest, setUserRequest] = useState<AbortController | null>(null)
   const activeRequest = useRef<AbortController | null>(null)
   const selectedRange = useMemo<DateRange | undefined>(() => {
     if (preset === "budget" && dashboard) return { from: calendarDateFromInstant(dashboard.range.from), to: calendarDateFromInstant(dashboard.range.to) }
@@ -26,8 +27,7 @@ export function useUsageDashboard({ publicView = false, workspaceId, keyId, refr
   }, [dashboard, from, preset, to])
   const activeGranularity = getGranularityOptions(preset).some((option) => option.value === granularity) ? granularity : DEFAULT_GRANULARITY
 
-  const query = useCallback((nextPreset: DashboardQuery["preset"], nextFrom = "", nextTo = "", nextGranularity = DEFAULT_GRANULARITY) => {
-    if (nextPreset === "custom" && (!nextFrom || !nextTo)) return
+  const buildParams = useCallback((nextPreset: DashboardQuery["preset"], nextFrom: string, nextTo: string, nextGranularity: NonNullable<DashboardQuery["granularity"]>) => {
     const effectiveGranularity = getGranularityOptions(nextPreset).some((option) => option.value === nextGranularity) ? nextGranularity : DEFAULT_GRANULARITY
     const params = new URLSearchParams({ preset: nextPreset })
     if (keyId && !publicView) params.set("key", keyId)
@@ -37,6 +37,12 @@ export function useUsageDashboard({ publicView = false, workspaceId, keyId, refr
       params.set("to", nextTo)
     }
     if (effectiveGranularity !== "auto") params.set("granularity", effectiveGranularity)
+    return params
+  }, [keyId, publicView, workspaceId])
+
+  // Updates inside an async transition only flush when it settles, so the
+  // user-visible request mark is set by query() synchronously, not in here.
+  const runFetch = useCallback((params: URLSearchParams, nextPreset: DashboardQuery["preset"]) => {
     activeRequest.current?.abort()
     const controller = new AbortController()
     activeRequest.current = controller
@@ -57,22 +63,36 @@ export function useUsageDashboard({ publicView = false, workspaceId, keyId, refr
         if (activeRequest.current === controller) setError(error)
       } finally {
         if (activeRequest.current === controller) activeRequest.current = null
+        // A superseding user request marks itself synchronously, so only the
+        // tracked controller's own settlement clears the flag.
+        setUserRequest(current => current === controller ? null : current)
       }
     })
-  }, [endpoint, publicView, workspaceId, keyId, apiFetch])
+    return controller
+  }, [endpoint, publicView, apiFetch])
+
+  const query = useCallback((nextPreset: DashboardQuery["preset"], nextFrom = "", nextTo = "", nextGranularity = DEFAULT_GRANULARITY, background = false) => {
+    if (nextPreset === "custom" && (!nextFrom || !nextTo)) return
+    const controller = runFetch(buildParams(nextPreset, nextFrom, nextTo, nextGranularity), nextPreset)
+    // Only user-initiated fetches surface loading UI; interval refreshes stay silent.
+    if (!background) setUserRequest(controller)
+  }, [runFetch, buildParams])
 
   useEffect(() => {
-    query(defaultPreset)
+    // Initial load surfaces skeletons through absent data, not the refreshing flag.
+    runFetch(buildParams(defaultPreset, "", "", DEFAULT_GRANULARITY), defaultPreset)
     return () => activeRequest.current?.abort()
-  }, [defaultPreset, query])
+  }, [defaultPreset, runFetch, buildParams])
 
   const refreshRef = useRef<() => void>(() => {})
   useEffect(() => {
-    refreshRef.current = () => query(preset, from, to, activeGranularity)
+    refreshRef.current = () => query(preset, from, to, activeGranularity, true)
   }, [query, preset, from, to, activeGranularity])
   useEffect(() => {
     if (!refreshIntervalMs) return
-    const id = setInterval(() => refreshRef.current(), refreshIntervalMs)
+    // Skip ticks while any fetch is active: a poll must never abort a user
+    // request (stranding its overlay) or queue catch-up work behind slow responses.
+    const id = setInterval(() => { if (!activeRequest.current) refreshRef.current() }, refreshIntervalMs)
     return () => clearInterval(id)
   }, [refreshIntervalMs])
 
@@ -100,5 +120,5 @@ export function useUsageDashboard({ publicView = false, workspaceId, keyId, refr
     if (nextFrom && nextTo) query("custom", nextFrom, nextTo, activeGranularity)
   }
 
-  return { dashboard, error, loadedPreset, lastBudgetPayload, pending, preset, setPreset, activeGranularity, setGranularity, selectedRange, handleRangeChange, refresh: () => query(preset, from, to, activeGranularity) }
+  return { dashboard, error, loadedPreset, lastBudgetPayload, refreshing: userRequest !== null, preset, setPreset, activeGranularity, setGranularity, selectedRange, handleRangeChange, refresh: () => query(preset, from, to, activeGranularity) }
 }

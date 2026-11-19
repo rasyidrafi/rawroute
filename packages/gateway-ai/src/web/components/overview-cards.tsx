@@ -4,6 +4,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Button } from "@rawroute/ui/button"
 import { Progress } from "@rawroute/ui/progress"
 import { Skeleton } from "@rawroute/ui/skeleton"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { Badge } from "@rawroute/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@rawroute/ui/table"
 import { Alert, AlertDescription } from "@rawroute/ui/alert"
@@ -14,8 +15,9 @@ import { formatCost, formatDuration } from "../../contracts/usage-display"
 import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { RequestLogMetadata, RequestLogMetadataSkeleton, requestLogMetadataDescription } from "./request-logs-table"
 
-export function BudgetUsageCard({ data, error }: { data?: OverviewDetails; error?: boolean }) {
-  return <Card>
+export function BudgetUsageCard({ data, error, refreshing }: { data?: OverviewDetails; error?: boolean; refreshing?: boolean }) {
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
     <CardHeader><CardTitle>Budget Usage</CardTitle><CardDescription>Current budget window, independent of traffic range</CardDescription><CardAction><Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.budgets} />}>Budgets</Button></CardAction></CardHeader>
     <CardContent spacing="compact-stack">
       {error ? <p>Budget usage unavailable.</p> : !data ? <Skeleton className="h-20 w-full" /> : <>
@@ -69,8 +71,9 @@ export function QuickAccessCard() {
   return <Card className="flex-1"><CardHeader><CardTitle>Quick access</CardTitle><CardDescription>Configure how your workspace runs.</CardDescription></CardHeader><CardContent spacing="compact-stack">{[{ label: "Endpoint & API key", to: pagePaths.endpoint }, { label: "Model routing", to: pagePaths.aliases }, { label: "Budgets", to: pagePaths.budgets }].map(item => <Link key={item.to} to={item.to} className="flex items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"><div><p className="text-sm font-medium">{item.label}</p></div><ArrowUpRightIcon className="size-4 shrink-0 text-muted-foreground" /></Link>)}</CardContent></Card>
 }
 
-export function RecentRequestsCard({ data, loading, error, retry }: { data?: RequestLogsPage; loading?: boolean; error?: boolean; retry?: () => void }) {
-  return <Card className="min-w-0">
+export function RecentRequestsCard({ data, loading, refreshing, error, retry }: { data?: RequestLogsPage; loading?: boolean; refreshing?: boolean; error?: boolean; retry?: () => void }) {
+  return <Card className="relative min-w-0" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
     <CardHeader><CardTitle>Recent Requests</CardTitle><CardDescription>Latest saved model attempts</CardDescription><CardAction><Button variant="link" size="sm" nativeButton={false} render={<Link to={pagePaths.requestLogs} />}>View all</Button></CardAction></CardHeader>
     <CardContent className="min-w-0">
       {error ? <Alert variant="destructive"><AlertDescription>Unable to load recent requests. <Button variant="link" size="sm" onClick={retry}>Retry recent requests</Button></AlertDescription></Alert> : <div className="min-w-0 max-w-full" role={loading ? "status" : undefined} aria-label={loading ? "Loading recent requests" : undefined} aria-busy={loading || undefined}><Table className="min-w-max"><TableHeader><TableRow><TableHead className="min-w-40">Request / model</TableHead><TableHead className="min-w-36" title={requestLogMetadataDescription}>Reasoning / tools</TableHead><TableHead className="min-w-32">Key</TableHead><TableHead className="min-w-28">Status</TableHead><TableHead className="min-w-24">Duration</TableHead><TableHead className="min-w-48">Time</TableHead></TableRow></TableHeader><TableBody>

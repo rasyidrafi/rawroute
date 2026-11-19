@@ -25,6 +25,8 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   let holdNext = false
   let releaseOld: (() => void) | undefined
   let heldUrl = ""
+  let holdRecentNext = false
+  let releaseRecentHeld: (() => void) | undefined
   let sparse = false
   let empty = false
   let dense = false
@@ -73,13 +75,16 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
     await route.fulfill({ json: {
       generatedAt: range.to, range: { from: query.get("from"), to: query.get("to"), granularity: "hourly" },
       coverage: { partial: true, excludedSources: 0, tokenCoveredRequests: sparse ? 4000 : 3999, statusCoveredRequests: sparse ? 0 : 4000, costCoveredRequests: 4000, modelCoveredRequests: 4000, keyCoveredRequests: 4000, durationCount: sparse ? 0 : 3800, financialUnavailable: false, unsupportedTrendSources: 0 },
-      summary: { requests: 4000, tokens: held ? 9999 : 4800, costMicros: 2500000, activeKeys: 1, pricedRequests: 2800, unpricedRequests: 1200 },
+      summary: { requests: 4000, tokens: held ? 9999 : Date.parse(query.get("to")!) - Date.parse(query.get("from")!) > 20 * 86_400_000 ? 5200 : 4800, costMicros: 2500000, activeKeys: 1, pricedRequests: 2800, unpricedRequests: 1200 },
       overview: { cacheUsageInputTokens: sparse ? 0 : cacheInput, cacheUsageReadTokens: sparse ? 0 : cacheRead, cacheUsageCoveredRequests: sparse ? 0 : 3999, inputTokens: sparse ? 0 : 4000, cacheReadTokens: sparse ? 0 : 1000, failedRequests: 400, statusCoveredRequests: sparse ? 0 : 4000, durationCount: sparse ? 0 : 3800, durationSumMs: sparse ? 0 : 7600000, budgets: [{ id: "quiet", name: "Quiet key", enabled: true, limitMicros: 10000000, spentMicros: 1000000 }], budgetWindow: { ...range, bypassLimits: false } },
       models: empty ? [] : [{ model: "Expensive model", requests: 400, tokens: 4800, costMicros: 2500000 }, { model: "Popular model", requests: 2000, tokens: 43542, costMicros: 10 }, { model: "Other model", requests: 1000, tokens: 200, costMicros: 0 }, { model: "Hidden model", requests: 600, tokens: 100, costMicros: 0 }], keys: [], trend: dense ? Array.from({ length: Date.parse(query.get("to")!) - Date.parse(query.get("from")!) <= 86_400_000 ? 24 : 31 }, (_, index) => ({ bucketStart: new Date(Date.UTC(2026, 9, 1) + index * (Date.parse(query.get("to")!) - Date.parse(query.get("from")!) <= 86_400_000 ? 3_600_000 : 86_400_000)).toISOString(), tokens: index * 1000, requests: index, costMicros: index * 10000 })) : [{ bucketStart: "2026-10-15T18:00:00.000Z", tokens: 11200000, requests: 1000, costMicros: 500000 }, { bucketStart: "2026-10-15T19:00:00.000Z", tokens: 0, requests: 3000, costMicros: 2000000 }],
     } })
   })
   await page.route("**/api/admin/request-logs?*", async route => {
     recentRanges.push(new URL(route.request().url()).searchParams)
+    const heldRecent = holdRecentNext
+    holdRecentNext = false
+    if (heldRecent) await new Promise<void>(resolve => { releaseRecentHeld = resolve })
     await gate
     if (failRecent) { await route.fulfill({ status: 500, json: { error: { message: "Unavailable" } } }); return }
     await route.fulfill({ json: { events: empty ? [] : Array.from({ length: 25 }, (_, index) => ({ id: `attempt-${index}`, gatewayKeyId: "key", keyName: "Live key", gatewayModelId: "model", modelName: `Live model ${index}`, reasoningEffort: index === 0 ? "high" : undefined, toolCount: index === 0 ? 2 : undefined, status: index ? 200 : 500, durationMs: 250, completedAt: range.to })), models: [], keys: [{ id: "key", name: "Live key" }], ...range, nextCursor: "unused" } })
@@ -94,7 +99,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(firstSkeletonRow.getByRole("cell").nth(2).locator('[data-slot="skeleton"]')).toHaveCount(1)
   await expect(page.locator('[data-slot="card-description"]').filter({ hasText: "Token usage over time" })).toHaveText("Token usage over time")
   await expect(page.locator("body")).not.toContainText(/Asia\/Jakarta|America\/New_York|\b(?:UTC|GMT)\b/)
-  await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled()
   const skeletonHeight = (await page.locator('[data-slot="overview-request-skeleton-row"]').first().boundingBox())!.height
   const bars = page.locator('[data-slot="overview-request-skeleton-row"]').first().getByRole("cell").first().locator('[data-slot="skeleton"]')
   const firstBar = (await bars.nth(0).boundingBox())!
@@ -228,19 +233,35 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(costRow).toHaveText("Cost$0.50")
   // A late old-period response cannot replace the currently selected range.
   holdNext = true
+  holdRecentNext = true
   await rangeSelect.click()
   await page.getByRole("option", { name: "Past 24h", exact: true }).click()
   await expect.poll(() => !!releaseOld).toBe(true)
-  await expect(page.getByText("4.80K", { exact: true })).toHaveCount(0)
+  await expect.poll(() => !!releaseRecentHeld).toBe(true)
+  // Range switches retain the previous payload under the shared refreshing overlay.
+  await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(4)
+  // Recent requests keep their rows while their own replacement is still pending:
+  // SWR marks the new key isLoading even though keepPreviousData returns the payload.
+  await expect(page.locator('[data-slot="overview-request-skeleton-row"]')).toHaveCount(0)
+  await expect(recent.getByText("Live model 0", { exact: true })).toBeVisible()
+  releaseRecentHeld!()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(3)
   await rangeSelect.click()
   await page.getByRole("option", { name: "30 days", exact: true }).click()
   await expect.poll(() => Date.parse(aggregateRanges.at(-1)!.get("to")!) - Date.parse(aggregateRanges.at(-1)!.get("from")!)).toBe(30 * 86_400_000)
-  await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
+  // The 30-day payload carries a distinct token total; wait for it to render
+  // BEFORE releasing the stale 24-hour response, then prove it survives.
+  await expect(page.getByText("5.20K", { exact: true })).toBeVisible()
   const oldResponse = page.waitForResponse(response => response.url() === heldUrl)
   releaseOld!()
   await (await oldResponse).finished()
   await expect(page.getByText("10.00K", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("5.20K", { exact: true })).toBeVisible()
   await chart.focus()
+  // The retained chart keeps its blurred keyboard index; ArrowRight reactivates
+  // the tooltip before ArrowLeft returns to the first bucket.
+  await page.keyboard.press("ArrowRight")
   await page.keyboard.press("ArrowLeft")
   await expect(tooltip.getByText("15 Oct 2026", { exact: true })).toBeVisible()
   await expect(tooltip).not.toContainText(/\d{2}:\d{2}/)
@@ -250,7 +271,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByRole("button", { name: "Retry recent requests" })).toBeVisible()
   await checkLowerPair()
-  await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
+  await expect(page.getByText("5.20K", { exact: true })).toBeVisible()
   sparse = true
   cacheRead = 0
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
@@ -274,10 +295,10 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await expect(page.getByRole("button", { name: "Retry overview" })).toBeVisible()
   await checkLowerPair()
-  await expect(page.getByText("4.80K", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("5.20K", { exact: true })).toHaveCount(0)
   fail = false
   await page.getByRole("button", { name: "Retry overview" }).click()
-  await expect(page.getByText("4.80K", { exact: true })).toBeVisible()
+  await expect(page.getByText("5.20K", { exact: true })).toBeVisible()
   await page.setViewportSize({ width: 390, height: 844 })
   await expect.poll(async () => (await chart.boundingBox())!.height).toBeGreaterThanOrEqual(288)
   expect((await chart.boundingBox())!.width).toBeLessThanOrEqual(390)

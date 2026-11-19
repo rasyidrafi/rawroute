@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
+import { EmptyState } from "@rawroute/ui/empty-state"
 import { UsageTable } from "../../src/web/components/usage-panels"
 import { formatKeyTickLabel } from "../../src/web/components/usage-utils"
 import type { DashboardPayload } from "../../src/contracts/domain"
@@ -71,4 +72,22 @@ test("public usage table actions link to the public detail route and keep worksp
   expect(markup).toContain(`href="/usage/keys/${"a".repeat(64)}?workspace=workspace_1"`)
   expect(markup).toContain('aria-label="View usage for Public API key"')
   expect(markup).not.toContain("internal-key-id")
+})
+
+test("refreshing usage table keeps its rows under the shared spinner overlay", () => {
+  const markup = renderToStaticMarkup(<MemoryRouter><UsageTable keys={[key]} refreshing workspaceId="workspace_1" /></MemoryRouter>)
+  expect(markup).toContain("Public API key")
+  expect(markup).toContain("Refreshing data...")
+  expect(markup).toContain('aria-busy="true"')
+  expect(markup).toContain("animate-spin")
+  expect(render(false)).not.toContain("Refreshing data...")
+})
+
+test("retained empty states carry the same refreshing overlay", () => {
+  const markup = renderToStaticMarkup(<EmptyState title="No trend data" description="No usage buckets were found for this range." refreshing />)
+  expect(markup).toContain("No trend data")
+  expect(markup).toContain("Refreshing data...")
+  expect(markup).toContain('aria-busy="true"')
+  const idle = renderToStaticMarkup(<EmptyState title="No trend data" description="No usage buckets were found for this range." />)
+  expect(idle).not.toContain("Refreshing data...")
 })

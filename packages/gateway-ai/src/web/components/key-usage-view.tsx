@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { ArrowLeftIcon, KeyRoundIcon, RefreshCwIcon } from "lucide-react"
 import { Link, useParams } from "react-router"
 import useSWR from "swr"
@@ -6,6 +7,8 @@ import { DashboardPage } from "@rawroute/ui/page-layout"
 import { Alert, AlertDescription } from "@rawroute/ui/alert"
 import { Button } from "@rawroute/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
+import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
 import { Progress } from "@rawroute/ui/progress"
 import { Separator } from "@rawroute/ui/separator"
 import type { DashboardKeyBudget, DashboardPayload } from "../../contracts/domain"
@@ -29,11 +32,12 @@ export function KeyUsageView({ publicView = false, workspaceId }: { publicView?:
 function usePublicKeyUsage(keyId: string, workspaceId: string | undefined, apiFetch: ReturnType<typeof useDashboardApi>["apiFetch"]) {
   const url = `/api/public/usage/keys/${encodeURIComponent(keyId)}?workspace=${encodeURIComponent(workspaceId || "default")}`
   const usage = useSWR<PublicKeyUsageDetail>(workspaceId ? [workspaceId, "public-key-usage", keyId] : null, () => apiFetch<PublicKeyUsageDetail>(url), { revalidateOnFocus: false, refreshInterval: 15_000 })
+  const [refreshing, setRefreshing] = useState(false)
   return {
     data: usage.data?.usage,
     error: usage.error,
-    isValidating: usage.isValidating,
-    refresh: () => { void usage.mutate().catch(() => undefined) },
+    refreshing,
+    refresh: () => { setRefreshing(true); void usage.mutate().catch(() => undefined).finally(() => setRefreshing(false)) },
     recentData: usage.data?.recent,
     recentError: usage.error,
   }
@@ -55,7 +59,7 @@ function BackLink({ publicView, workspaceId }: { publicView?: boolean; workspace
 function KeyHeader({ label, sub, busy, onRefresh }: { label: string; sub: string; busy: boolean; onRefresh: () => void }) {
   return <div className="flex flex-wrap items-start justify-between gap-4">
     <div className="flex min-w-0 items-start gap-3"><div className="flex size-11 shrink-0 items-center justify-center rounded-lg border bg-muted/30"><KeyRoundIcon className="size-5" /></div><div className="min-w-0"><h2 className="break-words text-2xl font-semibold tracking-tight">{label}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{sub}</p></div></div>
-    <Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}><RefreshCwIcon data-icon="inline-start" />Refresh</Button>
+    <Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}>{busy ? <LoadingSpinner /> : <RefreshCwIcon data-icon="inline-start" />}Refresh</Button>
   </div>
 }
 
@@ -68,16 +72,16 @@ function RecentRequests({ recentData, recentError }: { recentData?: { events: Re
 
 function PublicKeyUsageContent({ keyId, workspaceId }: { keyId: string; workspaceId?: string }) {
   const { apiFetch } = useDashboardApi()
-  const { data, error, isValidating, refresh, recentData, recentError } = usePublicKeyUsage(keyId, workspaceId, apiFetch)
+  const { data, error, refreshing, refresh, recentData, recentError } = usePublicKeyUsage(keyId, workspaceId, apiFetch)
   if (!data && !error) return <KeyUsageSkeleton rangeControls={false} />
   return <DashboardPage spacing="normal">
     <BackLink publicView workspaceId={workspaceId} />
-    <KeyHeader label={data?.keys[0]?.label || keyDisplayLabel(null, keyId)} sub={data?.keys[0]?.maskedKey === "deleted" ? "Deleted key" : "Public key usage"} busy={isValidating} onRefresh={refresh} />
+    <KeyHeader label={data?.keys[0]?.label || keyDisplayLabel(null, keyId)} sub={data?.keys[0]?.maskedKey === "deleted" ? "Deleted key" : "Public key usage"} busy={refreshing} onRefresh={refresh} />
     {!!error && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && <>
       <div><h3 className="text-lg font-medium">Budget & spend</h3><p className="mt-1 text-sm text-muted-foreground">{formatAppDateTime(data.range.from)} – {formatAppDateTime(data.range.to)}</p></div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} /></div>
-      <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={data} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} refreshing={refreshing} /></div>
+      <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} refreshing={refreshing} /><UsageProfile data={data} refreshing={refreshing} /></div>
       <RecentRequests recentData={recentData} recentError={recentError} />
     </>}
   </DashboardPage>
@@ -94,16 +98,23 @@ function useDashboardKeyUsage(keyId: string) {
   }, { revalidateOnFocus: false, refreshInterval: 15_000 })
   const data = range.dashboard
   const budgetData = range.loadedPreset === "budget" ? data : budgetQuery.data ?? range.lastBudgetPayload
-  const refresh = () => { range.refresh(); void budgetQuery.mutate().catch(() => undefined); void recent.mutate().catch(() => undefined) }
-  return { range, data, budgetData, recent, refresh, failed: Boolean(range.error || budgetQuery.error), label: budgetData?.keys[0]?.label || data?.keys[0]?.label || keyDisplayLabel(null, keyId), deleted: (budgetData?.keys[0]?.maskedKey ?? data?.keys[0]?.maskedKey) === "deleted" }
+  const [manualPending, setManualPending] = useState(false)
+  const refresh = () => {
+    setManualPending(true)
+    range.refresh()
+    // The button stays busy until every manually refreshed query settles, even
+    // when the range payload lands before budget or recent requests.
+    void Promise.allSettled([budgetQuery.mutate(), recent.mutate()]).then(() => setManualPending(false))
+  }
+  return { range, data, budgetData, recent, refresh, manualPending, failed: Boolean(range.error || budgetQuery.error), label: budgetData?.keys[0]?.label || data?.keys[0]?.label || keyDisplayLabel(null, keyId), deleted: (budgetData?.keys[0]?.maskedKey ?? data?.keys[0]?.maskedKey) === "deleted" }
 }
 
 function DashboardKeyUsageContent({ keyId }: { keyId: string }) {
-  const { range, data, budgetData, recent, refresh, failed, label, deleted } = useDashboardKeyUsage(keyId)
+  const { range, data, budgetData, recent, refresh, manualPending, failed, label, deleted } = useDashboardKeyUsage(keyId)
   if ((!data || !budgetData) && !failed) return <KeyUsageSkeleton />
   return <DashboardPage spacing="normal">
     <BackLink />
-    <KeyHeader label={label} sub={deleted ? "Deleted key" : "Key usage"} busy={range.pending} onRefresh={refresh} />
+    <KeyHeader label={label} sub={deleted ? "Deleted key" : "Key usage"} busy={range.refreshing || manualPending} onRefresh={refresh} />
     {failed && <Alert variant="destructive"><AlertDescription>Unable to load key usage. Try refreshing.{data && " Showing the last loaded data."}</AlertDescription></Alert>}
     {data && budgetData && <DashboardKeyUsageBody data={data} budgetData={budgetData} range={range} recent={recent} />}
   </DashboardPage>
@@ -112,16 +123,16 @@ function DashboardKeyUsageContent({ keyId }: { keyId: string }) {
 function DashboardKeyUsageBody({ data, budgetData, range, recent }: { data: DashboardPayload; budgetData: DashboardPayload; range: ReturnType<typeof useUsageDashboard>; recent: { data?: RequestLogsPage; error: unknown } }) {
   return <>
     <UsageRangeToolbar preset={range.preset} setPreset={range.setPreset} granularity={range.activeGranularity} setGranularity={range.setGranularity} selectedRange={range.preset === "custom" ? range.selectedRange : { from: calendarDateFromInstant(data.range.from), to: calendarDateFromInstant(data.range.to) }} onRangeChange={range.handleRangeChange} />
-    <RangeSummary data={data} />
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={budgetData} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} /></div>
-    <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} /><UsageProfile data={data} /></div>
+    <RangeSummary data={data} refreshing={range.refreshing} />
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"><BudgetBalance data={budgetData} /><KeyUsageTrend data={data} unavailable={trendUnavailable(data)} refreshing={range.refreshing} /></div>
+    <div className="grid gap-4 lg:grid-cols-2"><KeyModelSpend data={data} refreshing={range.refreshing} /><UsageProfile data={data} refreshing={range.refreshing} /></div>
     <RecentRequests recentData={recent.data} recentError={recent.error} />
   </>
 }
 
-function RangeSummary({ data }: { data: DashboardPayload }) {
+function RangeSummary({ data, refreshing }: { data: DashboardPayload; refreshing?: boolean }) {
   const tokensUnavailable = data.summary.requests > 0 && data.coverage?.tokenCoveredRequests === 0
-  return <div className="flex flex-wrap gap-x-8 gap-y-2">
+  return <div className="flex flex-wrap gap-x-8 gap-y-2" aria-busy={refreshing || undefined}>
     <div><p className="text-lg font-semibold tabular-nums">{formatRequestCount(data.summary.requests)}</p><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requests</p></div>
     <div><p className="text-lg font-semibold tabular-nums">{tokensUnavailable ? "Unavailable" : formatTokenCount(data.summary.tokens)}</p><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tokens</p></div>
     <div><p className="text-lg font-semibold tabular-nums">{costUnavailable(data) ? "Unavailable" : formatCost(data.summary.costMicros)}</p><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cost</p></div>
@@ -157,9 +168,9 @@ function BudgetBalance({ data }: { data: DashboardPayload }) {
   </CardContent></Card>
 }
 
-function KeyModelSpend({ data }: { data: DashboardPayload }) {
+function KeyModelSpend({ data, refreshing }: { data: DashboardPayload; refreshing?: boolean }) {
   const unavailable = costUnavailable(data)
-  return <Card className="min-w-0 self-start lg:self-stretch"><CardHeader><CardTitle>Where the spend goes</CardTitle><CardDescription>Resolved models used by this key</CardDescription></CardHeader><CardContent spacing="stack" className="max-h-128 overflow-y-auto">
+  return <Card className="relative min-w-0 self-start lg:self-stretch" aria-busy={refreshing || undefined}>{refreshing && <RefreshScrim />}<CardHeader><CardTitle>Where the spend goes</CardTitle><CardDescription>Resolved models used by this key</CardDescription></CardHeader><CardContent spacing="stack" className="max-h-128 overflow-y-auto">
     {!data.models.length ? <p className="text-sm text-muted-foreground">{unavailable ? "Model usage unavailable." : "No model usage in this window."}</p> : data.models.map(model => {
       const share = data.summary.costMicros > 0 ? model.costMicros / data.summary.costMicros * 100 : 0
       return <div key={model.model} className="flex flex-col gap-2"><div className="flex items-center justify-between gap-4"><div className="min-w-0"><p className="truncate font-medium" title={model.model}>{model.model}</p><p className="text-xs text-muted-foreground">{formatRequestCount(model.requests)} requests · {formatTokenCount(model.tokens)} tokens</p></div><div className="shrink-0 text-right"><p className="font-medium">{unavailable ? "Unavailable" : formatCost(model.costMicros)}</p>{!unavailable && <p className="text-xs text-muted-foreground">{share.toFixed(1)}% of spend</p>}</div></div>{!unavailable && <Progress value={share} aria-label={`${model.model}: ${share.toFixed(1)} percent of spend`} />}</div>
@@ -167,12 +178,12 @@ function KeyModelSpend({ data }: { data: DashboardPayload }) {
   </CardContent></Card>
 }
 
-function UsageProfile({ data }: { data: DashboardPayload }) {
+function UsageProfile({ data, refreshing }: { data: DashboardPayload; refreshing?: boolean }) {
   const unavailable = costUnavailable(data)
   const average = data.summary.requests ? data.summary.costMicros / data.summary.requests : 0
   const top = data.models[0]
   const tokensUnavailable = data.coverage ? data.coverage.tokenCoveredRequests === 0 : data.summary.requests === 0
-  return <Card><CardHeader><CardTitle>Usage profile</CardTitle><CardDescription>How this key uses the gateway</CardDescription></CardHeader><CardContent spacing="stack">
+  return <Card className="relative" aria-busy={refreshing || undefined}>{refreshing && <RefreshScrim />}<CardHeader><CardTitle>Usage profile</CardTitle><CardDescription>How this key uses the gateway</CardDescription></CardHeader><CardContent spacing="stack">
     <div><p className="text-3xl font-semibold tabular-nums">{unavailable || !data.summary.requests ? "Unavailable" : formatCost(average)}</p><p className="mt-1 text-xs text-muted-foreground">Average cost per recorded request</p></div>
     <Separator />
     <div className="grid grid-cols-2 gap-4"><div><p className="text-lg font-medium">{formatRequestCount(data.summary.requests)}</p><p className="text-xs text-muted-foreground">Recorded requests</p></div><div><p className="text-lg font-medium">{tokensUnavailable ? "Unavailable" : formatTokenCount(data.summary.tokens)}</p><p className="text-xs text-muted-foreground">Tokens processed</p></div></div>

@@ -11,7 +11,7 @@ export function useOverview() {
   const params = new URLSearchParams(range)
   const url = `/api/admin/overview?${params}`
   const recentUrl = `/api/admin/request-logs?${params}`
-  const options = { keepPreviousData: false, revalidateOnFocus: false, shouldRetryOnError: false }
+  const options = { keepPreviousData: true, revalidateOnFocus: false, shouldRetryOnError: false }
   const aggregate = useSWR<OverviewPayload>(workspaceId ? [workspaceId, url] : null, () => fetcher<OverviewPayload>(url), options)
   const recent = useSWR<RequestLogsPage>(workspaceId ? [workspaceId, recentUrl] : null, () => fetcher<RequestLogsPage>(recentUrl), options)
   return {

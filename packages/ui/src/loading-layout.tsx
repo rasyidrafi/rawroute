@@ -1,8 +1,15 @@
+import { Badge } from "./badge"
 import { Label } from "./label"
 import type { ReactNode } from "react"
+import { LoadingSpinner } from "./loading-spinner"
 import { Skeleton } from "./skeleton"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "./card"
 import { Table, TableBody, TableCell, TableColumns, TableRow } from "./table"
+
+/** Marks retained data as stale during a user-initiated refetch. The parent card must be positioned; background polling must not render this. */
+export function RefreshScrim({ label = "Refreshing data..." }: { label?: string }) {
+  return <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-end rounded-inherit bg-background/40 p-3 backdrop-blur-scrim"><Badge variant="refreshing"><LoadingSpinner className="size-3.5" />{label}</Badge></div>
+}
 
 export function LoadingCard({ title, description, action = false, children, className }: { title: ReactNode; description?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return <Card className={className}><CardHeader><CardTitle variant={typeof title === "string" ? "default" : "icon"}>{title}</CardTitle>{description && <CardDescription>{description}</CardDescription>}{action && <CardAction>{action === true ? <Skeleton className="h-8 w-28" /> : action}</CardAction>}</CardHeader><CardContent spacing="stack">{children}</CardContent></Card>

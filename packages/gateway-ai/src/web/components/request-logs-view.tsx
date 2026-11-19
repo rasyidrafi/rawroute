@@ -59,7 +59,10 @@ function RequestLogsWorkspace() {
         </div>
         <p className="text-xs text-muted-foreground">Updates every 3 seconds. Browsing older logs pauses live updates. Status filters use the final request outcome; expand a request to see failed attempts.</p>
         {error && <Alert variant="destructive"><AlertDescription>Unable to load request logs. Try refreshing. Existing entries may be stale.</AlertDescription></Alert>}
-        <RequestLogResults data={data} loading={isLoading || !workspaceId} failed={!!error} />
+        {/* The hook discards snapshots whose query no longer matches. While a replacement
+            fetch is active that gap reads as loading; a settled pause (freeze aborts the
+            fetch and writes the old snapshot) must not strand skeleton rows. */}
+        <RequestLogResults data={data} loading={isLoading || !workspaceId || (!data && !error && isValidating)} failed={!!error} />
       </CardContent>
       <CardFooter><div className="flex w-full flex-wrap justify-between gap-2"><span className="text-xs text-muted-foreground">Newest first · 25 requests per page</span><div className="flex gap-2"><Button variant="outline" size="sm" disabled={!hasNewer || isLoading} onClick={newer}>Newer</Button><Button variant="outline" size="sm" disabled={!data?.nextCursor || !!error || isLoading} onClick={older}>Older</Button></div></div></CardFooter>
     </Card>

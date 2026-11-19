@@ -662,3 +662,39 @@ test("most used models switches ranking between requests, cost and tokens", asyn
   await expect(card.getByText("Ranked by recorded requests", { exact: true })).toBeVisible()
   await expect(bars.first()).toHaveAttribute("aria-label", "Requests leader: 50.0 percent of requests")
 })
+
+test("retained empty usage results keep their conclusions under the refreshing overlay", async ({ page }) => {
+  const payloads = [dashboardPayload(), dashboardPayload(), dashboardPayload({ keys: [keyRow] }), dashboardPayload({ trend: [trendRow], keys: [keyRow], models: [modelRow] })]
+  let index = 0
+  let gate: Promise<void> | null = null
+  let release!: () => void
+  const armGate = () => { gate = new Promise<void>(resolve => { release = resolve }) }
+  await page.route("**/api/admin/usage?*", async route => {
+    const current = index++
+    if (current >= 1) { const held = gate; if (held) await held }
+    return route.fulfill({ json: payloads[Math.min(current, payloads.length - 1)] })
+  })
+  await authenticate(page)
+  await page.goto("/dashboard/ai/overview/usage")
+  await expect(page.getByText("No usage yet", { exact: true })).toBeVisible()
+  armGate()
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(1)
+  await expect(page.getByText("No usage yet", { exact: true })).toBeVisible()
+  release()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+  armGate()
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(1)
+  release()
+  await expect(page.getByText("No trend data", { exact: true })).toBeVisible()
+  await expect(page.getByText("No model usage", { exact: true })).toBeVisible()
+  armGate()
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  // Both populated key panels and both retained empty panels show the overlay.
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(4)
+  await expect(page.getByText("No trend data", { exact: true })).toBeVisible()
+  release()
+  await expect(page.getByText("No trend data", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+})

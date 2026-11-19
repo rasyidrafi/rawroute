@@ -99,10 +99,17 @@ test("key detail range toolbar scopes trend and summary while budget and recent 
   await expect.poll(() => Boolean(releaseBudget)).toBe(true)
   await expect(stat("Requests")).toHaveText(formatRequestCount(96))
   expect(await card("Budget balance").innerText()).toBe(budgetText)
+  // Range refetches keep the previous payload under the shared overlay; the
+  // range-independent budget balance and recent requests stay untouched.
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(3)
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled()
+  await expect(card("Budget balance").getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+  await expect(card("Recent requests").getByText("Refreshing data...", { exact: true })).toHaveCount(0)
   releaseBudget!()
   gateActive = false
   await expect(stat("Requests")).toHaveText(formatRequestCount(1284))
   expect(await card("Budget balance").innerText()).toBe(budgetText)
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
 
   await rangeSelect.click()
   await page.getByRole("option", { name: "Custom", exact: true }).click()
@@ -143,4 +150,60 @@ test("key detail range toolbar scopes trend and summary while budget and recent 
   const advanced = recentParams.at(-1)!
   expect(Date.parse(advanced.to) - Date.parse(advanced.from)).toBe(7 * 86_400_000)
   expect(Date.parse(advanced.to)).toBeGreaterThan(Date.parse(lastRecentTo))
+})
+
+test("key detail background polling stays silent while manual refresh shows the overlay", async ({ page }) => {
+  await authenticate(page)
+  let dashCalls = 0
+  let holdPoll = false
+  let holdManual = false
+  let holdRecent = false
+  let releasePoll!: () => void
+  let releaseManual!: () => void
+  let releaseRecent!: () => void
+  const pollGate = new Promise<void>(resolve => { releasePoll = resolve })
+  const manualGate = new Promise<void>(resolve => { releaseManual = resolve })
+  const recentGate = new Promise<void>(resolve => { releaseRecent = resolve })
+  await page.route("**/api/admin/usage?*", async route => {
+    dashCalls++
+    if (holdPoll) await pollGate
+    if (holdManual) await manualGate
+    return route.fulfill({ json: budgetPayload })
+  })
+  await page.route("**/api/admin/usage/keys/range-e2e-key", route => route.fulfill({ json: budgetPayload }))
+  await page.route("**/api/admin/request-logs?*", async route => {
+    if (holdRecent) await recentGate
+    const params = new URL(route.request().url()).searchParams
+    return route.fulfill({ json: { events: [], models: [], keys: [{ id: "range-e2e-key", name: "Range E2E Key" }], nextCursor: null, from: params.get("from"), to: params.get("to") } })
+  })
+  await page.clock.install({ time: new Date("2026-11-19T12:00:00.000Z") })
+  await page.goto("/dashboard/ai/overview/usage/keys/range-e2e-key")
+  await expect(page.getByRole("heading", { name: "Range E2E Key", exact: true })).toBeVisible()
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+  const baseline = dashCalls
+  holdPoll = true
+  await page.clock.runFor(16_000)
+  await expect.poll(() => dashCalls).toBeGreaterThan(baseline)
+  // The poll is still pending: background refreshes never surface loading UI.
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
+  releasePoll()
+  holdPoll = false
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+  holdManual = true
+  holdRecent = true
+  const beforeManual = dashCalls
+  await page.getByRole("button", { name: "Refresh", exact: true }).click()
+  await expect.poll(() => dashCalls).toBeGreaterThan(beforeManual)
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(3)
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled()
+  releaseManual()
+  holdManual = false
+  // The range payload landed but the manually refreshed recent requests are still
+  // pending: panels clear, yet the button stays busy until every query settles.
+  await expect(page.getByText("Refreshing data...", { exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled()
+  releaseRecent()
+  holdRecent = false
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
 })

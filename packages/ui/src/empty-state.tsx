@@ -3,6 +3,7 @@ import { InboxIcon } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./empty"
+import { RefreshScrim } from "./loading-layout"
 import { cn } from "./utils"
 
 export type EmptyStateProps = {
@@ -14,6 +15,7 @@ export type EmptyStateProps = {
   treatment?: "card" | "embedded" | "table"
   tone?: "default" | "console"
   className?: string
+  refreshing?: boolean
 }
 
 function EmptyStateContent({ title, description, icon: Icon, compact, tone }: {
@@ -36,19 +38,20 @@ function EmptyStateContent({ title, description, icon: Icon, compact, tone }: {
   </EmptyHeader>
 }
 
-export function EmptyState({ title, description, icon: Icon = InboxIcon, action, variant = "default", treatment = "card", tone = "default", className }: EmptyStateProps) {
+export function EmptyState({ title, description, icon: Icon = InboxIcon, action, variant = "default", treatment = "card", tone = "default", className, refreshing }: EmptyStateProps) {
   const compact = variant === "compact"
 
   return <Empty
     role="status"
     aria-live="polite"
     aria-atomic="true"
+    aria-busy={refreshing || undefined}
     data-slot="empty-state"
     data-variant={variant}
     data-treatment={treatment}
     data-tone={tone}
     className={cn(
-      "gap-4",
+      "relative gap-4",
       treatment === "card" && "min-h-56 rounded-xl border border-border/70 bg-card/90 p-8 sm:p-10",
       treatment === "embedded" && "min-h-36 rounded-none border-0 bg-transparent p-4",
       treatment === "table" && "min-h-32 rounded-none border-0 bg-transparent p-3",
@@ -58,6 +61,7 @@ export function EmptyState({ title, description, icon: Icon = InboxIcon, action,
       className,
     )}
   >
+    {refreshing && <RefreshScrim />}
     <EmptyStateContent title={title} description={description} icon={Icon} compact={compact} tone={tone} />
     {action && <EmptyContent className="flex-row justify-center">{action}</EmptyContent>}
   </Empty>

@@ -174,7 +174,7 @@ test("public loading matches the loaded header and summary at every responsive w
   await page.setViewportSize({ width: widths[0]!, height: 1000 })
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await refreshing.reached
-  await expect(page.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeDisabled()
   await expect(page.locator('[data-slot="dashboard-content-skeleton"]')).toHaveCount(0)
   for (const width of widths) {
     await page.setViewportSize({ width, height: 1000 })

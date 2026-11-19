@@ -70,3 +70,14 @@ test("key usage trend renders the unavailable message for withheld history and t
   })
   expect(renderToStaticMarkup(<KeyUsageTrend data={idle} unavailable={trendUnavailable(idle)} />)).toContain("No usage recorded in this window.")
 })
+
+test("key usage trend shows the shared refreshing overlay only while a user refetch is in flight", () => {
+  const data = payload({ trend: [point] })
+  const refreshing = renderToStaticMarkup(<KeyUsageTrend data={data} unavailable={false} refreshing />)
+  expect(refreshing).toContain("Refreshing data...")
+  expect(refreshing).toContain('aria-busy="true"')
+  expect(refreshing).toContain("animate-spin")
+  const idle = renderToStaticMarkup(<KeyUsageTrend data={data} unavailable={false} />)
+  expect(idle).not.toContain("Refreshing data...")
+  expect(idle).not.toContain('aria-busy="true"')
+})

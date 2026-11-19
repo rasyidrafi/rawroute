@@ -511,3 +511,41 @@ test("live snapshots roll, pause safely for history, retain rows on failure and 
   // The workspace change cancels the old filtered request before mock-route cleanup.
   expect(maxActive).toBeLessThanOrEqual(2)
 })
+
+test("filter changes show loading rows, not the empty state, while the new query is in flight", async ({ page, emptyWorkspaceId }) => {
+  expect(emptyWorkspaceId).toBeTruthy()
+  const at = new Date().toISOString()
+  const event = { id: "attempt-filter", requestId: "chain-filter", requestFinal: true, attemptIndex: 0, requestedModel: "astra", gatewayKeyId: "key", keyName: "Rizky", modelName: "Astra", gatewayModelId: "provider/astra", routing: { modelId: "provider/astra", modelName: "Astra", routeName: "Clever" }, startedAt: at, completedAt: at, durationMs: 30, status: 200, usageAvailable: true, totalTokens: 100, inputTokens: 80, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costMicros: 12, pricingConfidence: "exact", reasoningEffort: "low", toolCount: 0 }
+  let gate: Promise<void> | null = null
+  let release!: () => void
+  const armGate = () => { gate = new Promise<void>(resolve => { release = resolve }) }
+  armGate()
+  await page.route("**/api/admin/request-logs?*", async route => {
+    const params = new URL(route.request().url()).searchParams
+    if (params.get("status") === "failed") {
+      const current = gate
+      if (current) await current
+      if (route.request().failure()) return
+    }
+    return route.fulfill({ json: { events: params.get("status") === "failed" ? [] : [event], models: [], keys: [{ id: "key", name: "Rizky" }], nextCursor: null, from: params.get("from"), to: params.get("to") } })
+  })
+  await page.goto("/dashboard/ai/overview/request-logs")
+  await expect(page.locator("tbody tr")).toHaveCount(1)
+  await page.getByRole("combobox", { name: "Status", exact: true }).click()
+  await page.getByRole("option", { name: "Failed", exact: true }).click()
+  // The discarded snapshot must read as loading while its replacement is in flight.
+  await expect(page.getByRole("status", { name: "Loading request logs" })).toBeVisible()
+  await expect(page.getByText("No recorded attempts", { exact: true })).toHaveCount(0)
+  // Pausing mid-fetch settles the view instead of stranding skeleton rows.
+  await page.getByRole("checkbox").click()
+  await expect(page.getByRole("status", { name: "Loading request logs" })).toHaveCount(0)
+  await expect(page.getByText("No recorded attempts", { exact: true })).toBeVisible()
+  release()
+  // Resuming refetches the selected filter; the frozen mismatched snapshot is
+  // cached, so only the active-fetch discriminator can surface loading again.
+  armGate()
+  await page.getByRole("checkbox").click()
+  await expect(page.getByRole("status", { name: "Loading request logs" })).toBeVisible()
+  release()
+  await expect(page.getByText("No recorded attempts", { exact: true })).toBeVisible()
+})
