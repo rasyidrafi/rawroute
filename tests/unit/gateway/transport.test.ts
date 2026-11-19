@@ -383,6 +383,33 @@ test("drains comment-only SSE frames and multiline events across split CRLF/LF c
   expect(usage).toMatchObject({ terminalEventSeen: true, usage: { input: 10, output: 2, cached: 3, cacheCreation: 2 } })
 })
 
+test("derives the chat choice count from the forwarded request", () => {
+  const chat = resolved("openai-chat")
+  const single = prepareProviderRequest(new TextEncoder().encode(JSON.stringify(clientRequest("openai-chat"))), chat, "openai-chat")
+  expect(single.chatChoiceCount).toBe(1)
+  const multiple = prepareProviderRequest(new TextEncoder().encode(JSON.stringify({ ...clientRequest("openai-chat"), n: 2 })), chat, "openai-chat")
+  expect(multiple.chatChoiceCount).toBe(2)
+  expect(JSON.parse(new TextDecoder().decode(multiple.body)).n).toBe(2)
+  const responses = prepareProviderRequest(new TextEncoder().encode(JSON.stringify(clientRequest("openai-responses"))), resolved("openai-responses"), "openai-responses")
+  expect(responses.chatChoiceCount).toBeUndefined()
+})
+
+test("settles native chat streams against every requested choice", async () => {
+  const target = resolved("openai-chat")
+  const body = { ...clientRequest("openai-chat", "client-model", true), n: 2 }
+  const choiceFrame = (index: number, finishReason: string | null) => `data: ${JSON.stringify({ id: "chatcmpl-n", object: "chat.completion.chunk", created: 1, model, choices: [{ index, delta: {}, finish_reason: finishReason }] })}\n\n`
+  fetchMock.mockResolvedValueOnce(new Response(choiceFrame(0, "stop"), { headers: { "content-type": "text/event-stream" } }))
+  const partial = await proxyToProvider(requestFor("openai-chat", body), target, prepareProviderRequest(new TextEncoder().encode(JSON.stringify(body)), target, "openai-chat"), "openai-chat")
+  await partial.response.text()
+  await expect(partial.streamUsage).resolves.toMatchObject({ completedNormally: false, terminalEventSeen: false })
+
+  fetchMock.mockResolvedValueOnce(new Response(choiceFrame(0, "stop") + choiceFrame(1, "tool_calls"), { headers: { "content-type": "text/event-stream" } }))
+  const complete = await proxyToProvider(requestFor("openai-chat", body), target, prepareProviderRequest(new TextEncoder().encode(JSON.stringify(body)), target, "openai-chat"), "openai-chat")
+  await complete.response.text()
+  await expect(complete.streamUsage).resolves.toMatchObject({ completedNormally: true, terminalEventSeen: false })
+  expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).n)).toEqual([2, 2])
+})
+
 test("preserves supported multimodal, tool-call, and reasoning conversions", async () => {
   const target = resolved("anthropic-messages")
   const body = {

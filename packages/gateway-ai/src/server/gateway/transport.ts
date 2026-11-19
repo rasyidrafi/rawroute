@@ -653,7 +653,10 @@ function convertRequestBody(body: Uint8Array, resolved: ResolvedGatewayModel, cl
     converted.stream_options = { ...objectValue(converted.stream_options), include_usage: true }
   }
   const includeChatStreamUsage = client === "openai-chat" && payload.stream === true && objectValue(payload.stream_options)?.include_usage === true
-  return { body: new TextEncoder().encode(JSON.stringify(converted)), converter, includeChatStreamUsage }
+  const chatChoiceCount = upstream === "openai-chat"
+    ? typeof converted.n === "number" && Number.isInteger(converted.n) && converted.n >= 1 ? converted.n : 1
+    : undefined
+  return { body: new TextEncoder().encode(JSON.stringify(converted)), converter, includeChatStreamUsage, chatChoiceCount }
 }
 
 export type PreparedProviderRequest = ReturnType<typeof convertRequestBody>
@@ -1224,7 +1227,7 @@ async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayM
     if (isEventStream && response.body) {
       const codexCapture = codexResponseCaptures.get(response)
       const [clientBody, accountingBody] = response.body.tee()
-      const streamUsage = collectStreamUsage(accountingBody, upstream.protocol === "anthropic-messages" ? "anthropic" : "openai")
+      const streamUsage = collectStreamUsage(accountingBody, upstream.protocol === "anthropic-messages" ? "anthropic" : "openai", converted.chatChoiceCount)
       const observedBody = codexCapture ? observeCodexResponseIds(clientBody, abort, codexCapture) : clientBody
       const outputBody = converted.converter
         ? convertStreamBody(observedBody, converted.converter, clientProtocol, abort, converted.includeChatStreamUsage)
@@ -1438,7 +1441,7 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
           : undefined
         const lifetimeBody = providerBodyLifetime(response.body, abort, lease, observer)
         const [clientBody, accountingBody] = lifetimeBody.tee()
-        const streamUsage = collectStreamUsage(accountingBody, upstream.protocol === "anthropic-messages" ? "anthropic" : "openai")
+        const streamUsage = collectStreamUsage(accountingBody, upstream.protocol === "anthropic-messages" ? "anthropic" : "openai", prepared.chatChoiceCount)
         const outputBody = prepared.converter
           ? convertStreamBody(clientBody, prepared.converter, clientProtocol, abort, prepared.includeChatStreamUsage)
           : clientProtocol === "openai-chat" && upstream.protocol === "openai-chat" && !prepared.includeChatStreamUsage

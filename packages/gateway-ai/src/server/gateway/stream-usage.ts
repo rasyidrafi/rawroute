@@ -10,21 +10,20 @@ export function isTerminalStreamEvent(eventName: string, parsed: Record<string, 
   if (["message_stop", "response.completed", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "response.done", "message.completed", "message.done", "done", "error"].includes(normalizedEvent)) return true
   const type = typeof parsed?.type === "string" ? parsed.type.trim().toLowerCase() : ""
   if (["response.completed", "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "response.done", "message_stop", "message.completed", "message.done", "done", "error"].includes(type)) return true
-  // OpenAI-chat providers may close the stream without [DONE]; a non-null
-  // finish_reason marks the final choice chunk of a completed response.
-  const choices = Array.isArray(parsed?.choices) ? parsed.choices : []
-  if (choices.some((choice) => objectValue(choice)?.finish_reason != null)) return true
   const response = objectValue(parsed?.response)
   return response?.status === "completed" || response?.status === "complete" || response?.status === "incomplete" || response?.status === "failed" || response?.status === "cancelled" || response?.status === "canceled"
 }
 
-export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profile: ServiceTierProfile = "openai") {
+export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profile: ServiceTierProfile = "openai", chatChoiceCount?: number) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
   let usage: UsageMetrics | undefined
   let terminalEventSeen = false
   let failedEventSeen = false
+  let readFailed = false
+  let malformedDataSeen = false
+  const finishedChoices = new Set<number>()
   let firstByteAt: number | undefined
   const readTimeoutMs = 300_000
   const deadline = Date.now() + readTimeoutMs
@@ -56,12 +55,24 @@ export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profi
     try {
       const parsed = JSON.parse(payload) as Record<string, unknown>
       terminalEventSeen ||= isTerminalStreamEvent(event, parsed)
+      if (chatChoiceCount !== undefined && Array.isArray(parsed.choices)) {
+        parsed.choices.forEach((choice, position) => {
+          const value = objectValue(choice)
+          if (!value || value.finish_reason == null) return
+          const rawIndex = value.index
+          const index = rawIndex === undefined ? position : (typeof rawIndex === "number" && Number.isInteger(rawIndex) ? rawIndex : undefined)
+          if (index !== undefined && index >= 0 && index < chatChoiceCount) finishedChoices.add(index)
+        })
+      }
       const type = typeof parsed.type === "string" ? parsed.type.trim().toLowerCase() : ""
       const response = objectValue(parsed.response)
       failedEventSeen ||= event.trim().toLowerCase() === "error" || ["error", "response.failed", "response.cancelled", "response.canceled"].includes(type) || ["failed", "cancelled", "canceled"].includes(String(response?.status))
       usage = mergeUsage(usage, extractUsageMetrics(parsed, profile))
     } catch {
-      // A provider may emit non-JSON comments or partial events; keep reading.
+      // A malformed data frame means the stream can no longer be trusted to
+      // have ended cleanly; keep reading so explicit terminal markers and
+      // usage still settle it.
+      malformedDataSeen = true
     }
   }
   const consumeLine = (line: string) => {
@@ -100,10 +111,14 @@ export async function collectStreamUsage(body: ReadableStream<Uint8Array>, profi
   } catch {
     // Preserve any usage observed before an upstream disconnect/timeout. The
     // caller will settle the remaining amount conservatively when needed.
+    readFailed = true
     await reader.cancel().catch(() => undefined)
   }
   buffer += decoder.decode()
   consumeBufferedLines(true)
   consumeEvent()
-  return { usage, completedNormally: terminalEventSeen && !failedEventSeen, terminalEventSeen, firstByteAt }
+  // OpenAI-chat providers may close the stream without [DONE]; the response
+  // completed only once every requested choice reported a finish_reason.
+  const fallbackComplete = chatChoiceCount !== undefined && finishedChoices.size === chatChoiceCount
+  return { usage, completedNormally: (terminalEventSeen || (fallbackComplete && !readFailed && !malformedDataSeen)) && !failedEventSeen, terminalEventSeen, firstByteAt }
 }
