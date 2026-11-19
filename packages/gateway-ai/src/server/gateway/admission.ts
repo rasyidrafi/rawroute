@@ -1,6 +1,6 @@
 /** Tracks inference and account-redemption work so shutdown can drain before SQLite closes. */
-const runtime = globalThis as typeof globalThis & { rawrouteGatewayAdmission?: { draining: boolean; executions: number } }
-const state = runtime.rawrouteGatewayAdmission ??= { draining: false, executions: 0 }
+const runtime = globalThis as typeof globalThis & { rawrouteGatewayAdmission?: { draining: boolean; executions: number; controller: AbortController } }
+const state = runtime.rawrouteGatewayAdmission ??= { draining: false, executions: 0, controller: new AbortController() }
 
 export class GatewayDrainConflict extends Error {
   readonly status = 503
@@ -9,6 +9,8 @@ export class GatewayDrainConflict extends Error {
 export function activeGatewayExecutions() {
   return state.executions
 }
+
+export function gatewayDrainSignal() { return state.controller.signal }
 
 export function admitGatewayExecution() {
   if (state.draining) throw new GatewayDrainConflict("Gateway is shutting down. Retry shortly.")
@@ -23,6 +25,7 @@ export function admitGatewayExecution() {
 
 export async function drainGatewayExecutions(timeoutMs = 30_000) {
   state.draining = true
+  state.controller.abort(new GatewayDrainConflict("Gateway is shutting down. Retry shortly."))
   const deadline = Date.now() + timeoutMs
   while (state.executions) {
     if (Date.now() >= deadline) throw new GatewayDrainConflict("Gateway requests are still running; shutdown cannot close the database yet.")
@@ -32,4 +35,5 @@ export async function drainGatewayExecutions(timeoutMs = 30_000) {
 
 export function resumeGatewayExecutions() {
   state.draining = false
+  state.controller = new AbortController()
 }

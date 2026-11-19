@@ -80,7 +80,7 @@ mock.module("../../../packages/platform/src/server/runtime", () => ({
 }))
 
 const { BudgetDeniedError, BudgetModelExcludedError } = await import("../../../packages/gateway-ai/src/server/analytics")
-const { collectStreamUsage, isTerminalStreamEvent, proxyGatewayRequest, sharedUsageEventCopies, testComboMemberPolicy } = await import("../../../packages/gateway-ai/src/server/gateway/gateway")
+const { collectStreamUsage, isTerminalStreamEvent, normalizeRoutingFailure, proxyGatewayRequest, sharedUsageEventCopies, testComboMemberPolicy } = await import("../../../packages/gateway-ai/src/server/gateway/gateway")
 const { drainBackgroundTasks } = await import("../../../packages/platform/src/server/background-tasks")
 const { resolveGatewayModel } = await import("../../../packages/gateway-ai/src/server/gateway/model-resolution")
 const { prepareProviderRequest } = await import("../../../packages/gateway-ai/src/server/gateway/transport")
@@ -614,7 +614,7 @@ test("does not expose Codex cooldown retry instructions", async () => {
 test("preserves Retry-After only for an upstream rate limit", async () => {
   spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
     error: { code: "rate_limit_exceeded", message: "Requests per minute exceeded" },
-  }, { status: 429, headers: { "retry-after": "12" } })))
+  }, { status: 429, headers: { "retry-after": "120" } })))
 
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
     method: "POST",
@@ -623,7 +623,29 @@ test("preserves Retry-After only for an upstream rate limit", async () => {
   }))
 
   expect(response.status).toBe(429)
-  expect(response.headers.get("retry-after")).toBe("12")
+  expect(response.headers.get("retry-after")).toBe("120")
+})
+
+test("does not forward caller routing control headers to the provider", async () => {
+  let forwarded: Headers | undefined
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    forwarded = new Headers(init?.headers)
+    return Response.json({ id: "response", output: [] })
+  }))
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer gateway-secret", "content-type": "application/json", "X-Rawroute-Combo-Terminal": "1" },
+    body: JSON.stringify({ model: "codex/gpt-5", input: "hello" }),
+  }))
+  expect(response.status).toBe(200)
+  expect(forwarded?.has("x-rawroute-combo-terminal")).toBe(false)
+  expect(response.headers.has("x-rawroute-combo-terminal")).toBe(false)
+})
+
+test("retry deadline terminal marker does not turn an unclassified 429 into a quota limit", async () => {
+  const response = await normalizeRoutingFailure(Response.json({ error: { message: "temporary failure" } }, { status: 429, headers: { "retry-after": "120", "x-rawroute-combo-terminal": "1", "x-rawroute-retry-deadline": "1" } }))
+  expect(response.status).toBe(503)
+  expect(response.headers.has("retry-after")).toBe(false)
 })
 
 test("does not trust an unclassified upstream 429 as proof of exhausted usage", async () => {
@@ -1050,7 +1072,7 @@ test("preserves an Anthropic rate-limit classification and Retry-After across Ch
   mocks.listModels.mockResolvedValue([{ id: "a-model", providerId: "anthropic", gatewayModelId: "a/model", name: "Model", upstreamModel: "model", enabled: true }])
   spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => new Response(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "Please wait before trying again." } }), {
     status: 429,
-    headers: { "content-type": "application/json", "retry-after": "8" },
+    headers: { "content-type": "application/json", "retry-after": "80" },
   })))
   const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
     method: "POST",
@@ -1058,7 +1080,7 @@ test("preserves an Anthropic rate-limit classification and Retry-After across Ch
     body: JSON.stringify({ model: "a/model", messages: [{ role: "user", content: "hello" }] }),
   }))
   expect(response.status).toBe(429)
-  expect(response.headers.get("retry-after")).toBe("8")
+  expect(response.headers.get("retry-after")).toBe("80")
   await expect(response.json()).resolves.toMatchObject({ error: { type: "rate_limit_error", message: "Please wait before trying again." } })
 })
 

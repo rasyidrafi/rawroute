@@ -187,7 +187,7 @@ test("consumer fallback remains grouped while shared owner sees only its executi
   expect((await runInWorkspace(consumer, () => listRequestLogs({ ...logQuery(), status: "recovered" }))).events).toHaveLength(2)
 })
 
-workspaceTest("a dispatched provider 503 stops combo fallback and records one final attempt", async () => {
+workspaceTest("a provider 503 falls back and records the recovered request", async () => {
   const first = await pricedModel("temporarily-unavailable")
   const second = await pricedModel("must-not-run")
   const key = await createApiKey("Consumer key")
@@ -196,9 +196,10 @@ workspaceTest("a dispatched provider 503 stops combo fallback and records one fi
 
   const response = await proxyGatewayRequest(request(key.key, "no-retry"))
 
-  expect(response.status).toBe(503)
-  expect(upstream).toHaveBeenCalledTimes(1)
+  expect(response.status).toBe(200)
+  expect(upstream).toHaveBeenCalledTimes(2)
   const events = await listRequestLogs(logQuery())
-  expect(events.events).toHaveLength(1)
-  expect(events.events[0]).toMatchObject({ gatewayModelId: first.gatewayModelId, attemptIndex: 0, requestFinal: true, status: 503 })
+  expect(events.events).toHaveLength(2)
+  expect(events.events[0]).toMatchObject({ gatewayModelId: first.gatewayModelId, attemptIndex: 0, requestFinal: false, status: 503 })
+  expect(events.events[1]).toMatchObject({ gatewayModelId: second.gatewayModelId, attemptIndex: 1, requestFinal: true, status: 200 })
 })

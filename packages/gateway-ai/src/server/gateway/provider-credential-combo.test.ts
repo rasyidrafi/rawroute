@@ -8,6 +8,7 @@ import { resetModelSharesForTests, setModelShareTargets } from "../model-shares"
 import { proxyGatewayRequestInWorkspace, testComboMemberPolicy } from "./gateway"
 import { resumeGatewayExecutions } from "./admission"
 import { providerCredentialScheduler } from "./provider-credential-scheduler"
+import { listUsageEvents } from "../analytics"
 
 const workspace = { id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" as const }
 const originalFetch = globalThis.fetch
@@ -64,6 +65,109 @@ afterEach(async () => {
   resetModelSharesForTests()
   await resetWorkspacesForTests()
   _resetMemoryBackend()
+})
+
+test("tries alternate credentials and combo members before repeating a failed target", async () => {
+  await runInWorkspace(workspace, async () => {
+    const first = await providerModel("Retry first")
+    await upsertProviderApiKey(first.provider.id, { name: "Second key", key: "second-synthetic-key", enabled: true })
+    const second = await providerModel("Retry second")
+    await upsertCombo({ combo: "retry-combo", name: "Retry", members: [{ modelId: first.modelId }, { modelId: second.modelId }] })
+  })
+  const calls: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${String(input)} ${new Headers(init?.headers).get("authorization")}`)
+    return calls.length < 3
+      ? Response.json({ error: { message: "unavailable" } }, { status: 503, headers: { "retry-after": "3600", "x-rawroute-combo-terminal": "1" } })
+      : chatResponse()
+  }) as unknown as typeof fetch
+  const response = await comboRequest("retry-combo")
+  expect(response.status).toBe(200)
+  expect(calls).toHaveLength(3)
+  expect(calls[0]).toContain("retry-first.synthetic.invalid")
+  expect(calls[1]).toContain("retry-first.synthetic.invalid")
+  expect(calls[0]).not.toBe(calls[1])
+  expect(calls[2]).toContain("retry-second.synthetic.invalid")
+})
+
+test("retries a single target after a transient 403", async () => {
+  const target = await runInWorkspace(workspace, () => providerModel("Retry single"))
+  let calls = 0
+  globalThis.fetch = (async () => ++calls === 1
+    ? Response.json({ error: { message: "permission denied" } }, { status: 403 })
+    : chatResponse()) as unknown as typeof fetch
+  const response = await comboRequest(target.modelId)
+  expect(response.status).toBe(200)
+  expect(calls).toBe(2)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([false, true])
+})
+
+test("marks an exhausted combo as failed and bounds same-target dispatches", async () => {
+  await runInWorkspace(workspace, async () => {
+    const target = await providerModel("Retry exhausted")
+    await upsertCombo({ combo: "retry-exhausted", name: "Retry", members: [{ modelId: target.modelId }] })
+  })
+  let calls = 0
+  globalThis.fetch = (async () => { calls++; return Response.json({ error: { message: "unavailable" } }, { status: 503 }) }) as unknown as typeof fetch
+  const response = await comboRequest("retry-exhausted")
+  expect(response.status).toBe(503)
+  expect(calls).toBe(3)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === "retry-exhausted").map(event => event.requestFinal)).toEqual([false, false, true])
+})
+
+test("retries a pinned Responses continuation only on its original credential", async () => {
+  const target = await runInWorkspace(workspace, async () => {
+    const provider = await upsertProvider({ name: "Pinned", prefix: "pinned", baseUrl: "https://pinned.synthetic.invalid", protocol: "openai-responses", authType: "bearer", headers: {}, enabled: true })
+    await upsertProviderApiKey(provider.id, { name: "one", key: "pinned-one", enabled: true })
+    await upsertProviderApiKey(provider.id, { name: "two", key: "pinned-two", enabled: true })
+    await upsertModel(provider.id, { gatewayModelId: "pinned/model", name: "Pinned", upstreamModel: "pinned/model", enabled: true })
+    return "pinned/model"
+  })
+  const calls: string[] = []
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(new Headers(init?.headers).get("authorization") || "")
+    if (calls.length === 2) return Response.json({ error: { message: "temporary" } }, { status: 503 })
+    return Response.json({ id: calls.length === 1 ? "pinned-response" : "pinned-next", output: [] })
+  }) as unknown as typeof fetch
+  const send = (payload: Record<string, unknown>) => runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(new Request("http://rawroute.test/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: target, ...payload }) }), "/v1/responses", { id: "pinned-gateway-key" }))
+  expect((await send({ input: "hello" })).status).toBe(200)
+  expect((await send({ previous_response_id: "pinned-response", input: "continue" })).status).toBe(200)
+  expect(calls).toHaveLength(3)
+  expect(new Set(calls).size).toBe(1)
+})
+
+test("records a completed upstream failure when the client cancels during backoff", async () => {
+  const target = await runInWorkspace(workspace, () => providerModel("Retry cancelled"))
+  const controller = new AbortController()
+  let calls = 0
+  globalThis.fetch = (async () => {
+    calls++
+    setTimeout(() => controller.abort(), 10)
+    return Response.json({ error: { message: "unavailable" } }, { status: 503, headers: { "retry-after": "2" } })
+  }) as unknown as typeof fetch
+  const request = new Request("http://rawroute.test/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: target.modelId, messages: [{ role: "user", content: "hello" }] }), signal: controller.signal })
+  await expect(runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(request, "/v1/chat/completions", { id: "synthetic-gateway-key" }))).rejects.toBeDefined()
+  expect(calls).toBe(1)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([true])
+})
+
+test("records the preceding failure when cancellation interrupts the next dispatch", async () => {
+  const target = await runInWorkspace(workspace, () => providerModel("Retry interrupted"))
+  const controller = new AbortController()
+  let calls = 0
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (++calls === 1) return Response.json({ error: { message: "unavailable" } }, { status: 503 })
+    controller.abort()
+    throw init?.signal?.reason
+  }) as unknown as typeof fetch
+  const request = new Request("http://rawroute.test/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: target.modelId, messages: [{ role: "user", content: "hello" }] }), signal: controller.signal })
+  await expect(runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(request, "/v1/chat/completions", { id: "synthetic-gateway-key" }))).rejects.toBeDefined()
+  expect(calls).toBe(2)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([true])
 })
 
 test("combo routing retries local RPM capacity but stops on ambiguous provider outcomes", async () => {

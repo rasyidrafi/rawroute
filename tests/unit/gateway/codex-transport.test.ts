@@ -8,6 +8,7 @@ import { registerCodexCredential } from "../../../packages/gateway-ai/src/server
 import { setCodexOAuthFetchForTests } from "../../../packages/gateway-ai/src/server/codex/login"
 import { prepareProviderRequest, proxyToProvider } from "../../../packages/gateway-ai/src/server/gateway/transport"
 import type { ResolvedGatewayModel } from "../../../packages/gateway-ai/src/server/gateway/model-resolution"
+import { GatewayRetry } from "../../../packages/gateway-ai/src/server/gateway/retry"
 
 const workspace = { id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" as const }
 let originalFetch: typeof fetch
@@ -93,6 +94,34 @@ afterEach(async () => {
   setCodexOAuthFetchForTests(undefined)
   await closeLocalDatabase()
   await closeLocalCache()
+})
+
+test("returns the prior rate limit when a Codex retry expires during preparation", async () => {
+  const first = await runInWorkspace(workspace, () => addAccount("acct-deadline-a", "first-token"))
+  const second = await runInWorkspace(workspace, () => addAccount("acct-deadline-b", "expired-token", new Date(Date.now() - 60_000).toISOString()))
+  const target = resolved(first)
+  target.upstream!.apiKeys = [first, second]
+  const retry = new GatewayRetry()
+  const realNow = Date.now
+  let offset = 0
+  Date.now = () => realNow() + offset
+  let posts = 0
+  setCodexOAuthFetchForTests((async () => {
+    offset = 31_000
+    return Response.json({ access_token: "refreshed", refresh_token: "next", id_token: idToken("acct-deadline-b"), expires_in: 3600 })
+  }) as unknown as typeof fetch)
+  globalThis.fetch = mock(async (input, init) => {
+    if (String(input).includes("/models")) return Response.json({ object: "list", data: [] })
+    if (init?.method === "POST") { posts++; return Response.json({ error: { code: "rate_limit_exceeded" } }, { status: 429, headers: { "retry-after": "120" } }) }
+    return Response.json({})
+  }) as unknown as typeof fetch
+  try {
+    const body = { model: "gpt-5", input: "hello" }
+    const result = await runInWorkspace(workspace, () => proxyToProvider(request(body), target, prepareProviderRequest(new TextEncoder().encode(JSON.stringify(body)), target, "openai-responses"), "openai-responses", { workspaceId: workspace.id, gatewayKeyId: "deadline-key" }, undefined, retry))
+    expect(posts).toBe(1)
+    expect(result.response.status).toBe(429)
+    expect(result.response.headers.get("retry-after")).toBe("120")
+  } finally { Date.now = realNow }
 })
 
 test("refreshes an expired Codex session before direct execution", async () => {

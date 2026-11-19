@@ -523,7 +523,7 @@ describe("ordinary provider credential transport", () => {
     expect(ambiguousCalls).toBe(1)
   })
 
-  test("marks non-safe upstream responses terminal for combo routing", async () => {
+  test("allows upstream server errors to fall back across credentials", async () => {
     let calls = 0
     globalThis.fetch = (async () => {
       calls++
@@ -531,8 +531,8 @@ describe("ordinary provider credential transport", () => {
     }) as unknown as typeof fetch
     const failed = await invoke({ model: "synthetic/model", input: "server error" })
     expect(failed.response.status).toBe(500)
-    expect(failed.response.headers.get("x-rawroute-combo-terminal")).toBe("1")
-    expect(calls).toBe(1)
+    expect(failed.response.headers.get("x-rawroute-combo-terminal")).toBeNull()
+    expect(calls).toBe(2)
   })
 
   test("pre-dispatch failure refunds RPM, while local RPM blocking keeps a computed retry and normalizes as 429", async () => {
