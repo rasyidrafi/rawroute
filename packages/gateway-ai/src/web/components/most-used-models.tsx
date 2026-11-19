@@ -28,9 +28,9 @@ export function MostUsedModels({ models, totalRequests = 0, totalCostMicros = 0,
   })}</>
   return <Card className={cn("relative min-w-0 self-start", className)} aria-busy={refreshing || undefined}>
     {refreshing && <div className="pointer-events-none absolute inset-0 flex items-start justify-end rounded-inherit bg-background/40 p-3 backdrop-blur-scrim"><Badge variant="refreshing"><ActivityIcon className="size-3.5 animate-spin" />Refreshing data...</Badge></div>}
-    <Tabs value={metric} onValueChange={value => { if (value === "requests" || value === "cost" || value === "tokens") setMetric(value) }} className="w-full min-w-0">
+    <Tabs value={metric} onValueChange={value => { if (value === "requests" || value === "cost" || value === "tokens") setMetric(value) }} className="w-full min-w-0 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
       <CardHeader><CardTitle>Most used models</CardTitle><CardDescription>Ranked by recorded {metricNoun[metric]}</CardDescription><CardAction><TabsList aria-label="Most used models metric"><TabsTrigger value="requests">Requests</TabsTrigger><TabsTrigger value="cost">Cost</TabsTrigger><TabsTrigger value="tokens">Token</TabsTrigger></TabsList></CardAction></CardHeader>
-      <TabsContent value={metric} className="mt-0 w-full min-w-0"><CardContent spacing="stack" className="max-h-128 overflow-y-auto">{content}</CardContent></TabsContent>
+      <TabsContent value={metric} className="mt-0 w-full min-w-0 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"><CardContent spacing="stack" className="max-h-128 overflow-y-auto lg:min-h-0 lg:flex-1 xl:max-h-none">{content}</CardContent></TabsContent>
     </Tabs>
   </Card>
 }

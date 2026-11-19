@@ -241,6 +241,13 @@ for (const publicView of [false, true]) {
             expect(Math.abs(left.height - right.height)).toBeLessThan(1)
             expect(right.x).toBeGreaterThanOrEqual(left.x + left.width)
             expect(right.width).toBeGreaterThanOrEqual(360)
+            if (rightTitle === "Most used models") {
+              const deadSpace = await card(rightTitle).evaluate(element => {
+                const content = element.querySelector('[data-slot="card-content"]')!
+                return Math.abs(content.getBoundingClientRect().bottom - (element.getBoundingClientRect().bottom - 16))
+              })
+              expect(deadSpace).toBeLessThanOrEqual(2)
+            }
           } else {
             expect(right.y).toBeGreaterThanOrEqual(left.y + left.height)
             expect(Math.abs(left.x - right.x)).toBeLessThan(1)
