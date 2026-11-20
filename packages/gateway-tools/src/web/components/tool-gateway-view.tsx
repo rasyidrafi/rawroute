@@ -52,7 +52,7 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2"><CardTitle>Executor integration</CardTitle><Badge variant={status.variant}>{status.label}</Badge><Badge variant="secondary">API-only</Badge><Badge variant="outline">Shared deployment</Badge></div>
-          <CardDescription>RawRoute exposes Executor only through its authenticated public API proxy. Executor&apos;s browser UI, OAuth callbacks, and MCP endpoints are not available here.</CardDescription>
+          <CardDescription>Connect to Executor with a RawRoute gateway key. Browser sign-in and MCP aren’t available here.</CardDescription>
         </CardHeader>
         <CardContent spacing="compact-stack">
           {available ? <>
@@ -68,7 +68,7 @@ export function ToolGatewayView({ page }: { page: ToolGatewayPage }) {
       {available && (page === "overview" ? <Card>
         <CardHeader>
           <CardTitle>Tool Gateway overview</CardTitle>
-          <CardDescription>Use the API proxy with a RawRoute gateway key. This dashboard provides deployment context only and does not report live Executor state.</CardDescription>
+          <CardDescription>Live Executor status isn’t available here.</CardDescription>
         </CardHeader>
         <CardContent spacing="compact-flow" className="grid sm:grid-cols-2">
           {toolNavigation.filter((item) => item.href !== pagePaths.tools).map((item) => <Link key={item.href} to={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">

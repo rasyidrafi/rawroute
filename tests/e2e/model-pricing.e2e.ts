@@ -95,7 +95,7 @@ test("pricing dialogs preserve existing context rates and save edited drafts", a
     else await route.continue()
   })
   await row.getByRole("button", { name: "Models", exact: true }).click()
-  await page.getByRole("button", { name: /Select canonical model/ }).click()
+  await page.getByRole("button", { name: /Select pricing reference model/ }).click()
   await page.getByRole("option", { name: /Canonical tier test/ }).click()
   await expect(page.getByText("From 32,000 input tokens").first()).toBeVisible()
   await page.getByRole("button", { name: "Save", exact: true }).click()

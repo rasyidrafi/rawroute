@@ -33,7 +33,7 @@ export function ProviderApiKeyForm({ providers, apiKey, onSave }: { providers: P
   return <form onSubmit={submit}>
     <DialogHeader>
       <DialogTitle>{apiKey ? "Edit provider API key" : "Add provider API key"}</DialogTitle>
-      <DialogDescription>The credential value is never returned to the browser after saving.</DialogDescription>
+      <DialogDescription>You can’t view this key after saving.</DialogDescription>
     </DialogHeader>
     <div className="grid gap-4 py-4">
       <FormField label="Provider">

@@ -11,7 +11,7 @@ test("providers use a list page and a dynamic detail page", () => {
   expect(routes).toContain('providerId="codex"')
   expect(list).toContain("providerPagePath(provider.id)")
   expect(detail).toContain('buttonLabel="Delete provider"')
-  expect(detail).toContain("Expose upstream models behind your provider prefix.")
+  expect(detail).toContain("Choose which models your apps can use.")
   expect(detail).toContain('isOAuthProvider ? "Accounts" : "API keys"')
   expect(detail).not.toContain('apiKey.credentialKind === "codex-oauth" ? null')
   expect(detail).toContain("moveProviderApiKey(index, -1)")

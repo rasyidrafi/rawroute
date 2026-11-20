@@ -5,7 +5,8 @@ import { useCodexLogin } from "../use-codex-login"
 import { CodexLoginDialog } from "./codex-login-dialog"
 import { CodexResetCreditsInfo } from "./codex-reset-credits"
 import { useCallback, useState } from "react"
-import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, KeyRoundIcon, LogInIcon, PencilIcon, PlusIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftIcon, BoxesIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, InfoIcon, KeyRoundIcon, LogInIcon, PencilIcon, PlusIcon, PowerIcon, RotateCcwIcon, Trash2Icon } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@rawroute/ui/popover"
 import { Link, useNavigate } from "react-router"
 import useSWR, { useSWRConfig, type KeyedMutator } from "swr"
 import { toast } from "sonner"
@@ -35,7 +36,7 @@ import type { CodexAutoRedeemResponse, CodexAutoRedeemSettings } from "../../con
 import { modelUnavailable } from "../../contracts/catalog"
 import { Checkbox } from "@rawroute/ui/checkbox"
 
-type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: Model[]; discovery?: CodexDiscoveryStatus }
+type ProviderDetailResponse = { provider: Provider; apiKeys: ProviderApiKey[]; models: (Model & { removalBlockers?: string[] })[]; discovery?: CodexDiscoveryStatus }
 const providerKey = (providerId: string) => `/api/admin/providers/${encodeURIComponent(providerId)}`
 const providerUsageKey = (provider: Provider) => provider.prefix === "codex" ? "/api/admin/oauth-providers/usage" : null
 const usesOAuthCredentials = (provider: Provider) => provider.prefix === "codex"
@@ -196,7 +197,8 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
       <CardDescription>Automatically use reset credits for your Codex accounts.</CardDescription>
     </CardHeader>
     <CardContent>
-      <div className="space-y-4">
+      <div className="@container space-y-4">
+      <div className="grid gap-4 @xl:grid-cols-2">
       <label className="flex items-start gap-3 text-sm">
         <Checkbox aria-label="Redeem reset credits expiring within one hour" checked={settings.expiryEnabled} disabled={saving || !data} onCheckedChange={checked => toggleSetting("expiryEnabled", checked === true)} />
         <span className="grid gap-1"><span className="font-medium">Before credits expire</span><span className="text-muted-foreground">Redeem eligible credits within 1 hour of expiry.</span></span>
@@ -205,19 +207,17 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
         <Checkbox aria-label="Also redeem when weekly quota is exhausted" checked={settings.weeklyExhaustionEnabled} disabled={saving || !data} onCheckedChange={checked => toggleSetting("weeklyExhaustionEnabled", checked === true)} />
         <span className="grid gap-1"><span className="font-medium">When weekly quota runs out</span><span className="text-muted-foreground">Use a reset credit when weekly remaining quota reaches 0%.</span></span>
       </label>
-      <div className="space-y-2 border-t pt-3">
+      </div>
+      <div className="border-t pt-3">
         <h3 className="text-sm font-medium">Account status</h3>
         {!codexAccounts.length && <p className="text-sm text-muted-foreground">Connect a Codex account to get started.</p>}
         {codexAccounts.map(account => {
           const status = data?.accounts[account.id]
           const unknown = status?.phase === "unknown"
           const badge = unknown ? "Outcome unknown" : status?.phase === "redeemed" ? "Redeemed" : status?.phase === "checking" ? "Checking" : status?.phase === "pending" ? "Pending" : !account.enabled ? "Disabled" : "Waiting"
-          const message = !account.enabled
-            ? "Auto-redeem checks enabled accounts only."
-            : unknown ? "Redemption could not be confirmed. Further redemptions are paused." : status?.lastMessage || "Waiting for the next check."
-          return <div key={account.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 rounded-md border px-3 py-2 text-sm">
-            <span className="font-medium">{account.name}</span>
-            <span className="flex flex-wrap items-center gap-2"><Badge variant={unknown ? "outline" : "secondary"}>{badge}</Badge><span className="text-muted-foreground">{message}</span></span>
+          return <div key={account.id} className="flex items-center justify-between gap-3 border-b py-2 text-sm last:border-b-0">
+            <span className="min-w-0 break-all font-medium">{account.name}</span>
+            <span className="flex shrink-0 items-center gap-1"><Badge variant={unknown ? "outline" : "secondary"}>{unknown ? "Retries paused" : badge}</Badge><RedeemStatusInfo status={badge} account={account.name} /></span>
           </div>
         })}
       </div>
@@ -240,6 +240,26 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
       </AlertDialogContent>
     </AlertDialog>
   </Card>
+}
+
+const redeemStatusHints = {
+  Waiting: "Waiting for a reset rule to apply.",
+  Redeemed: "A reset credit was used successfully.",
+  Checking: "Checking whether a reset credit can be used.",
+  Pending: "Reset requested. Awaiting confirmation.",
+  Disabled: "This account is excluded from automatic checks.",
+  "Outcome unknown": "The last reset could not be confirmed.",
+}
+
+function RedeemStatusInfo({ status, account }: { status: keyof typeof redeemStatusHints; account: string }) {
+  const [open, setOpen] = useState(false)
+  const label = `${status} status for ${account}`
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger openOnHover render={<Button variant="ghost" size="icon-xs" aria-label={label} onFocus={event => {
+      if (event.currentTarget.matches(":focus-visible")) setOpen(true)
+    }}><InfoIcon /></Button>} />
+    <PopoverContent aria-label={label} align="end" initialFocus={false} finalFocus={false} className="w-fit max-w-64">{redeemStatusHints[status]}</PopoverContent>
+  </Popover>
 }
 
 function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData, usageError, usageLoading, isPending, actions, login, providerKeyOpen, setProviderKeyOpen, editingProviderApiKey, setEditingProviderApiKey, setToggleAccount, setResetAccount, refreshing }: {
@@ -310,6 +330,7 @@ function ProviderModelsCard({ data, mutate, refreshing }: { data: ProviderDetail
   const copy = useDashboardClipboard()
   const { apiPost, apiDelete } = useDashboardApi()
   const { provider, models } = data
+  const showProtocol = provider.prefix !== "codex"
   const { mutate: refreshCachedResource } = useSWRConfig()
   const [pending, setPending] = useState<Set<string>>(() => new Set())
   const isPending = (key: string) => pending.has(key)
@@ -369,7 +390,7 @@ function ProviderModelsCard({ data, mutate, refreshing }: { data: ProviderDetail
         {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle variant="icon"><BoxesIcon className="size-5" />Models</CardTitle>
-          <CardDescription>{provider.prefix === "codex" ? <>Models are discovered from connected Codex accounts. Custom mappings are preserved. {data.discovery?.succeededAt ? `Last synced: ${formatAppDate(data.discovery.succeededAt)}.` : "Waiting for first sync."}{data.discovery?.error && <span className="block text-destructive">{data.discovery.error}</span>}</> : "Expose upstream models behind your provider prefix."}</CardDescription>
+          <CardDescription>{provider.prefix === "codex" ? <>{data.discovery?.succeededAt ? `Last synced: ${formatAppDate(data.discovery.succeededAt)}.` : "Waiting for first sync."}{data.discovery?.error && <details className="text-destructive"><summary>Couldn’t refresh models. Try again.</summary>{data.discovery.error}</details>}</> : "Choose which models your apps can use."}</CardDescription>
           <CardAction><div className="flex gap-2">{provider.prefix === "codex" && <Button variant="outline" disabled={refreshingModels} onClick={() => void refreshModels()}>{refreshingModels ? <LoadingSpinner /> : <RotateCcwIcon />}Refresh models</Button>}<Button onClick={() => { setEditingModel(null); setModelOpen(true) }}><PlusIcon />Add model</Button></div></CardAction>
         </CardHeader>
         <Dialog open={modelOpen} onOpenChange={(open) => { setModelOpen(open); if (!open) setEditingModel(null) }}>
@@ -379,22 +400,24 @@ function ProviderModelsCard({ data, mutate, refreshing }: { data: ProviderDetail
         </Dialog>
         <CardContent>
           <Table>
-            <TableColumns columns={[{ id: "Model", label: "Model" }, { id: "Gateway ID", label: "Gateway ID" }, { id: "Upstream model", label: "Upstream model" }, { id: "Provider protocol", label: "Provider protocol" }, { id: "Status", label: "Status" }, { id: "actions" }]} />
+            <TableColumns columns={[{ id: "Model", label: "Model" }, { id: "Gateway ID", label: "Gateway ID" }, { id: "Provider model ID", label: "Provider model ID" }, ...(showProtocol ? [{ id: "Provider protocol", label: "Provider protocol" }] : []), { id: "Status", label: "Status" }, { id: "actions" }]} />
             <TableBody>
               {models.map((model) => {
                 const pendingKey = `delete-model:${model.id}`
                 const gatewayModelId = model.gatewayModelId || model.id
                 const discovered = model.source === "discovered"
+                const unavailable = modelUnavailable(model)
+                const status = unavailable ? "Unavailable" : !model.enabled || !provider.enabled ? "Disabled" : model.discovery?.stale ? "Not confirmed" : "Available"
                 return <TableRow key={model.id} variant={model.enabled ? "default" : "disabled"}>
                   <TableCell text="label">{model.name}</TableCell>
                   <TableCell><div className="flex items-center justify-between gap-2"><div className="min-w-0 font-mono text-xs font-medium"><span className="break-all">{gatewayModelId}</span></div><Button aria-label={`Copy gateway ID ${gatewayModelId}`} size="icon-sm" variant="outline" className="shrink-0" onClick={() => { void copy(gatewayModelId, "Gateway ID copied") }}><CopyIcon /></Button></div></TableCell>
                   <TableCell>{model.upstreamModel}</TableCell>
-                  <TableCell>{protocolLabels[provider.protocol]}</TableCell>
-                  <TableCell><div className="flex items-center gap-2"><Badge variant={discovered ? "secondary" : "outline"}>{discovered ? "Auto-discovered" : "Custom"}</Badge><Badge variant={model.enabled ? "secondary" : "outline"}>{model.enabled ? "Enabled" : "Disabled"}</Badge>{model.discovery?.stale && <Badge variant="outline">{modelUnavailable(model) ? "Unavailable upstream" : "Not recently observed"}</Badge>}{model.source === "discovered" && <Button size="icon-sm" variant="outline" aria-label={`${model.enabled ? "Disable" : "Enable"} ${model.name}`} onClick={() => void toggleDiscoveredModel(model)}><PowerIcon /></Button>}</div></TableCell>
-                  <TableCell><div className="flex justify-end gap-1"><ModelShareButton modelId={model.id} modelName={model.name} disabled={!model.enabled || modelUnavailable(model) || !provider.enabled} onSaved={mutate} />{!discovered && <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="outline" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
+                  {showProtocol && <TableCell>{protocolLabels[provider.protocol]}</TableCell>}
+                  <TableCell><Badge variant={status === "Available" ? "secondary" : "outline"}>{status}</Badge>{unavailable && <span title="No connected account currently lists this model." aria-label="No connected account currently lists this model." tabIndex={0}><InfoIcon className="ml-1 inline size-3.5 text-muted-foreground" /></span>}</TableCell>
+                  <TableCell><div className="flex items-center justify-end gap-1">{discovered && !unavailable && <Button size="icon-sm" variant="outline" aria-label={`${model.enabled ? "Disable" : "Enable"} ${model.name}`} aria-pressed={model.enabled} onClick={() => void toggleDiscoveredModel(model)}><PowerIcon /></Button>}<ModelShareButton modelId={model.id} modelName={model.name} disabled={!model.enabled || unavailable || !provider.enabled} onSaved={mutate} />{unavailable && (model.removalBlockers?.length ? <span className="max-w-60 whitespace-normal text-xs text-muted-foreground">Remove from {model.removalBlockers.join(", ")} first.</span> : <ConfirmAction title={`Remove ${model.name} from this list?`} buttonLabel="Remove" description="Past requests, usage, and costs will be kept." pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)} />)}{!discovered && <><Button aria-label={`Edit ${model.name}`} size="icon-sm" variant="outline" onClick={() => { setEditingModel(model); setModelOpen(true) }}><PencilIcon /></Button><ConfirmAction title={`Delete ${model.name}?`} description={`This permanently removes the ${model.name} mapping.`} pending={isPending(pendingKey)} onConfirm={() => deleteModel(model)}><Trash2Icon /></ConfirmAction></>}</div></TableCell>
                 </TableRow>
               })}
-              {!models.length && <EmptyTableRow title="No models yet" description="Add a model mapping to expose an upstream model through this provider." icon={BoxesIcon} colSpan={6} />}
+              {!models.length && <EmptyTableRow title="No models yet" description="Add a model mapping to expose an upstream model through this provider." icon={BoxesIcon} colSpan={showProtocol ? 6 : 5} />}
             </TableBody>
           </Table>
         </CardContent>
@@ -574,7 +597,7 @@ function ProviderCredentialsHeader({ provider, isOAuthProvider, login, onAdd }: 
   const { device, starting, connect } = login
   return <CardHeader>
           <CardTitle variant="icon"><KeyRoundIcon className="size-5" />{isOAuthProvider ? "Accounts" : "API keys"}</CardTitle>
-          <CardDescription>{provider.prefix === "codex" ? "Codex accounts are tried in priority order. Requests fall back when an account is unavailable." : "Sessions reuse an available key; other requests favor current load. Key order breaks ties."}</CardDescription>
+          <CardDescription>{provider.prefix === "codex" ? "Accounts are tried from top to bottom." : "Keys are selected automatically. When keys are equally busy, higher keys are preferred."}</CardDescription>
           <CardAction>{provider.prefix === "codex" ? <Button aria-busy={starting} onClick={() => void connect()} disabled={starting || Boolean(device)}>{starting ? <LoadingSpinner /> : <LogInIcon />}Add Codex Account</Button> : <Button disabled={provider.authType === "none"} onClick={onAdd}><PlusIcon />Add API key</Button>}</CardAction>
         </CardHeader>
 }

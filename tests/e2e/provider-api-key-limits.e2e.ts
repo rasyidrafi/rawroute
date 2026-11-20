@@ -39,7 +39,7 @@ test("provider API key limits are optional local settings and can be preserved o
 
     await page.goto(`/dashboard/ai/providers/${providerId}`)
     await expect(page.getByRole("columnheader", { name: "Local limits" })).toBeVisible()
-    await expect(page.getByText("Sessions reuse an available key; other requests favor current load. Key order breaks ties.")).toBeVisible()
+    await expect(page.getByText("Keys are selected automatically. When keys are equally busy, higher keys are preferred.")).toBeVisible()
 
     await page.getByRole("button", { name: "Add API key", exact: true }).click()
     let dialog = page.getByRole("dialog")

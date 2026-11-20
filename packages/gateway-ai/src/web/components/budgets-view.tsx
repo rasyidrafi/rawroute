@@ -328,7 +328,7 @@ function BudgetWindowCard({ data, onSaved, refreshing }: { data: Pick<BudgetsRes
 
   return <Card className="relative" aria-busy={refreshing}>
       <RefreshScrim refreshing={refreshing} />
-      <CardHeader><CardTitle variant="icon"><Clock3Icon className="size-5" />Budget window</CardTitle><CardDescription>Choose the shared accounting window used by every gateway key.</CardDescription></CardHeader>
+      <CardHeader><CardTitle variant="icon"><Clock3Icon className="size-5" />Budget reset</CardTitle><CardDescription>Choose when budgets reset for all keys.</CardDescription></CardHeader>
       <CardContent>
         <div className="flex flex-col gap-4"><BudgetWindowSummary window={data.window} /><div className="flex flex-wrap items-end gap-3"><BudgetWindowSource anchor={windowAnchor} accountId={codexAccountId} accounts={codexAccounts} pending={pending} onAnchorChange={setWindowAnchorOverride} onAccountChange={setCodexAccountOverride} />{windowAnchor === "custom" && <CustomBudgetRange customRange={customRange} customTime={customTime} customRangeValid={customRangeValid} setCustomRangeOverride={setCustomRangeOverride} setCustomTimeOverride={setCustomTimeOverride} data={data} pending={pending} windowOpen={windowOpen} setWindowOpen={setWindowOpen} />}<Button className="w-full sm:w-auto" aria-busy={pending} disabled={pending || (windowAnchor === "codex" ? !codexAccountId : !customRangeValid)} onClick={() => void saveWindow()}>{pending && <LoadingSpinner />}Save window</Button></div></div>
       </CardContent>

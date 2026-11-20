@@ -221,8 +221,8 @@ test("routing, budgets, pricing, and tools expose specific empty states in Chrom
   await expect(page.getByRole("heading", { name: "No repricing history yet" })).toBeVisible()
   await page.getByRole("button", { name: "New custom group" }).click()
   await expect(page.getByRole("heading", { name: "No available models" })).toBeVisible()
-  await page.getByRole("button", { name: /Select canonical model/ }).click()
-  await expect(page.getByRole("heading", { name: "No canonical models available" })).toBeVisible()
+  await page.getByRole("button", { name: /Select pricing reference model/ }).click()
+  await expect(page.getByRole("heading", { name: "No pricing reference models available" })).toBeVisible()
   await page.keyboard.press("Escape")
   await page.getByRole("button", { name: "Cancel" }).click()
 

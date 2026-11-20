@@ -110,6 +110,16 @@ test("retains absent discovered records without breaking aliases", async () => {
   await refreshCodexModels(true)
   expect((await listProviderModels(provider.id)).find(entry => entry.id === old.id)).toMatchObject({ source: "discovered", discovery: { stale: true } })
   expect(await listAliases()).toMatchObject([{ targetModelId: old.gatewayModelId }])
+  const { DELETE } = await import("../../../packages/gateway-ai/src/server/routes/api/admin/providers/by-provider/models/by-model/index")
+  const remove = () => DELETE(new Request("http://localhost"), { providerId: provider.id, modelId: encodeURIComponent(old.id) })
+  expect((await remove()).status).toBe(409)
+  const { deleteAlias } = await import("../../../packages/gateway-ai/src/server/store")
+  await deleteAlias((await listAliases())[0]!.id)
+  expect((await remove()).status).toBe(200)
+  expect((await listProviderModels(provider.id)).some(model => model.id === old.id)).toBe(false)
+  mocks.upstream.mockImplementation(async () => Response.json({ models: [{ slug: "old-model" }] }))
+  await refreshCodexModels(true)
+  expect((await listProviderModels(provider.id)).find(model => model.gatewayModelId === old.gatewayModelId)?.discovery?.stale).toBe(false)
 })
 
 for (const payload of [{}, { models: [] }, { models: [{ slug: 42 }] }]) test(`keeps last-good data on invalid/empty catalogs: ${JSON.stringify(payload)}`, async () => {

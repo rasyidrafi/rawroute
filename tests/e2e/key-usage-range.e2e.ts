@@ -85,7 +85,7 @@ test("key detail range toolbar scopes trend and summary while budget and recent 
   gateBudgetActive = false
   await expect(stat("Tokens")).toHaveText(formatTokenCount(31_000_000))
   await expect(stat("Cost")).toHaveText(formatCost(1_860_000))
-  await expect(card("Where the spend goes").getByText(formatCost(1_860_000), { exact: true })).toBeVisible()
+  await expect(card("Spending by model").getByText(formatCost(1_860_000), { exact: true })).toBeVisible()
   await expect(card("Usage profile").getByText("Recorded requests", { exact: true }).locator("..").locator("p").first()).toHaveText(formatRequestCount(96))
   expect(budgetCalls).toBeGreaterThan(0)
   expect(await card("Budget balance").innerText()).toBe(budgetText)

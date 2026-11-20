@@ -121,6 +121,7 @@ export async function listSharedModelsForRecipient(recipientWorkspaceId = curren
 
 export async function listModelSharesForSourceModel(sourceModelId: string, ownerWorkspaceId = currentWorkspaceId()) {
   const shares = (await readShares()).filter((share) => share.ownerWorkspaceId === ownerWorkspaceId && share.sourceModelId === sourceModelId)
+  if (!shares.length) return []
   const workspaces = new Map((await listWorkspaces()).map((workspace) => [workspace.id, workspace]))
   return shares.map((share) => ({ ...share, recipientWorkspaceName: workspaces.get(share.recipientWorkspaceId)?.name || share.recipientWorkspaceId }))
     .sort((left, right) => left.recipientWorkspaceName.localeCompare(right.recipientWorkspaceName))
@@ -139,7 +140,7 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
   const [models, providers, workspaces, current] = await Promise.all([listModels(), listProviders(), listWorkspaces(), listModelSharesForSourceModel(sourceModelId, ownerWorkspaceId)])
   const model = models.find((entry) => entry.id === sourceModelId)
   const provider = model ? providers.find((entry) => entry.id === model.providerId) : undefined
-  if (!model || !provider || !model.enabled || modelUnavailable(model) || provider.enabled === false) throw new Error("Only available enabled models on enabled providers can be shared.")
+  if (!model || !provider) throw new Error("Model not found.")
   const activeWorkspaceIds = new Set(workspaces.filter((workspace) => workspace.status === "active").map((workspace) => workspace.id))
   const recipients = [...new Set(recipientWorkspaceIds.filter((id): id is string => typeof id === "string"))]
   if (recipients.some((id) => id === ownerWorkspaceId)) throw new Error("A model cannot be shared with its own workspace.")
@@ -149,6 +150,10 @@ export async function setModelShareTargets(sourceModelId: string, recipientWorks
   if ([...conditional].some(id => typeof id !== "string" || !selected.has(id))) throw new Error("Unlimited Mode conditions must refer to selected workspaces.")
   const now = new Date().toISOString()
   const currentByRecipient = new Map(current.map((share) => [share.recipientWorkspaceId, share]))
+  if ((!model.enabled || modelUnavailable(model) || !provider.enabled) && recipients.some(id => {
+    const existing = currentByRecipient.get(id)
+    return existing?.status !== "active" || Boolean(existing.onlyDuringUnlimited) !== conditional.has(id)
+  })) throw new Error("Only available enabled models on enabled providers can be shared.")
   const writes: ModelShare[] = []
   for (const recipientWorkspaceId of new Set([...currentByRecipient.keys(), ...selected])) {
     if (!activeWorkspaceIds.has(recipientWorkspaceId)) continue

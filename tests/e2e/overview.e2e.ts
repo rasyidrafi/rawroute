@@ -33,7 +33,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   let cacheInput = 4000
   let cacheRead = 1000
   const models = page.locator('[data-slot="card"]').filter({ has: page.getByText("Most used models", { exact: true }) })
-  const recent = page.locator('[data-slot="card"]').filter({ has: page.getByText("Recent Requests", { exact: true }) })
+  const recent = page.locator('[data-slot="card"]').filter({ has: page.getByText("Recent model attempts", { exact: true }) })
   const rangeSelect = page.getByRole("combobox", { name: "Range", exact: true })
   const checkLowerPair = async () => {
     for (const width of [1024, 1280, 390]) {
@@ -91,7 +91,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   })
   await page.goto("/dashboard/ai/overview")
   await expect(page.locator('[data-slot="overview-request-skeleton-row"]')).toHaveCount(4)
-  await expect(recent.locator('[data-slot="card-description"]')).toHaveText("Latest saved model attempts")
+  await expect(recent.locator('[data-slot="card-description"]')).toHaveCount(0)
   await expect(page.getByRole("columnheader")).toHaveText(["Request / model", "Reasoning / tools", "Key", "Status", "Duration", "Time"])
   const firstSkeletonRow = page.locator('[data-slot="overview-request-skeleton-row"]').first()
   await expect(firstSkeletonRow.getByRole("cell")).toHaveCount(6)
@@ -208,7 +208,7 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   await expect(page.locator('[data-slot="card-description"]').filter({ hasText: "Token usage over time" })).toHaveText("Token usage over time")
   await expect(page.locator("body")).not.toContainText(/Asia\/Jakarta|America\/New_York|\b(?:UTC|GMT)\b/)
   await expect(recent.getByRole("row")).toHaveCount(5)
-  await expect(recent.locator('[data-slot="card-description"]')).toHaveText("Latest saved model attempts")
+  await expect(recent.locator('[data-slot="card-description"]')).toHaveCount(0)
   await expect(recent.getByRole("cell", { name: "250 ms", exact: true })).toHaveCount(4)
   expect(Math.abs((await recent.getByRole("row").nth(1).boundingBox())!.height - skeletonHeight)).toBeLessThanOrEqual(2)
   await expect(recent.getByText("Live model 3", { exact: true })).toBeVisible()

@@ -21,10 +21,10 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
   const [draft, setDraft] = useState<ShareTarget[] | null>(null)
   const [saving, setSaving] = useState(false)
   const { data, error, isLoading, mutate } = useSWR<ShareData>(`/api/admin/model-shares?modelId=${encodeURIComponent(modelId)}`, fetcher)
-  const sharedTargetIds = data?.targets.filter((target) => target.shared).map((target) => target.id) || []
+  const sharedTargets = new Map(data?.targets.filter(target => target.shared).map(target => [target.id, target]))
   const targets = draft || data?.targets || []
   const selectedIds = targets.filter(target => target.shared).map(target => target.id)
-  const isShared = sharedTargetIds.length > 0
+  const isShared = sharedTargets.size > 0
 
   async function save() {
     setSaving(true)
@@ -51,8 +51,9 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
     setDraft(current => (current || data?.targets || []).map(target => target.id === id ? { ...target, ...update } : target))
   }
 
+  if (disabled && !isShared) return null
   return <>
-    <Button size="sm" variant="outline" disabled={disabled} onClick={openDialog}><Share2Icon />{isShared ? "Manage Share" : "Share"}</Button>
+    <Button size="sm" variant="outline" onClick={openDialog}><Share2Icon />{isShared ? "Manage Share" : "Share"}</Button>
     <Dialog open={open} onOpenChange={(next) => { if (!saving) setOpen(next) }}>
       <DialogContent>
         <DialogHeader>
@@ -64,10 +65,7 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
           {isLoading
             ? Array.from({ length: 3 }).map((_, index) => <div key={index} className="flex items-center gap-3 rounded-lg border p-3"><Skeleton className="size-4" /><Skeleton className="h-5 w-40" /></div>)
             : data?.targets.length
-              ? targets.map((target) => <div key={target.id} className="space-y-3 rounded-lg border p-3">
-                <label className="flex cursor-pointer items-center gap-3"><Checkbox checked={target.shared} disabled={saving} onCheckedChange={checked => updateTarget(target.id, { shared: checked === true, ...(checked !== true ? { onlyDuringUnlimited: false } : {}) })} /><span className="text-sm font-medium">{target.name}</span></label>
-                {target.shared && <label className="ml-7 flex cursor-pointer items-center justify-between gap-3 text-sm"><span>Only during Unlimited Mode<span className="sr-only"> for {target.name}</span></span><Switch title="Follows this workspace's Unlimited Mode" checked={target.onlyDuringUnlimited} disabled={saving} onCheckedChange={checked => updateTarget(target.id, { onlyDuringUnlimited: checked })} /></label>}
-              </div>)
+              ? targets.map(target => <ShareTargetRow key={target.id} target={target} original={sharedTargets.get(target.id)} saving={saving} revokeOnly={disabled} update={updateTarget} />)
               : data && <EmptyState title="No other active workspaces" description="Model sharing requires at least one other active workspace." icon={SearchIcon} variant="compact" treatment="embedded" />}
         </div>
         <DialogFooter>
@@ -77,4 +75,11 @@ export function ModelShareButton({ modelId, modelName, disabled = false, onSaved
       </DialogContent>
     </Dialog>
   </>
+}
+
+function ShareTargetRow({ target, original, saving, revokeOnly, update }: { target: ShareTarget; original?: ShareTarget; saving: boolean; revokeOnly: boolean; update: (id: string, patch: Partial<ShareTarget>) => void }) {
+  return <div className="space-y-3 rounded-lg border p-3">
+    <label className="flex cursor-pointer items-center gap-3"><Checkbox checked={target.shared} disabled={saving || (revokeOnly && !original)} onCheckedChange={checked => update(target.id, { shared: checked === true, onlyDuringUnlimited: checked === true && Boolean(original?.onlyDuringUnlimited) })} /><span className="text-sm font-medium">{target.name}</span></label>
+    {target.shared && <label className="ml-7 flex cursor-pointer items-center justify-between gap-3 text-sm"><span>Only during Unlimited Mode<span className="sr-only"> for {target.name}</span></span><Switch title="Follows this workspace's Unlimited Mode" checked={target.onlyDuringUnlimited} disabled={saving || revokeOnly} onCheckedChange={checked => update(target.id, { onlyDuringUnlimited: checked })} /></label>}
+  </div>
 }

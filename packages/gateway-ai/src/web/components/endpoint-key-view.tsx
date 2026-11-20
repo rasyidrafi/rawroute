@@ -126,7 +126,7 @@ export function EndpointKeyView() {
         {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle>Gateway API keys</CardTitle>
-          <CardDescription>Clients use these keys to access every proxy endpoint.</CardDescription>
+          <CardDescription>Use a workspace API key to connect your app.</CardDescription>
           <CardAction><Button onClick={() => setKeyOpen(true)}><PlusIcon />Create key</Button></CardAction>
         </CardHeader>
       <Dialog open={keyOpen} onOpenChange={setKeyOpen}><DialogContent><ApiKeyForm onSave={createKey} /></DialogContent></Dialog>

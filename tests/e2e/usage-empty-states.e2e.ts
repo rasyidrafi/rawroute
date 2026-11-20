@@ -224,7 +224,8 @@ for (const publicView of [false, true]) {
         if (publicView) await expect(page.locator('[data-slot="sidebar"]')).toHaveCount(0)
         const card = (title: string) => page.locator('[data-slot="card"]').filter({ has: page.getByText(title, { exact: true }) })
         expect(await card("Most used models").evaluate(element => getComputedStyle(element).alignSelf)).toBe(width >= 1280 ? "stretch" : "flex-start")
-        for (const [title, description] of [["Usage Trend", "Token usage over time"], ["Top keys by cost", "Concentration"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
+        await expect(card("Top keys by cost").locator('[data-slot="card-description"]')).toHaveCount(0)
+        for (const [title, description] of [["Usage Trend", "Token usage over time"], ["Usage table", "Per-key detail"], ["Most used models", "Ranked by recorded requests"]] as const) {
           const header = card(title).locator('[data-slot="card-header"]')
           await expect(header.locator('[data-slot="card-title"]')).toHaveText(title)
           await expect(header.locator('[data-slot="card-description"]')).toHaveText(description)
@@ -355,7 +356,7 @@ test("usage row opens live key detail with matching cards, chart tooltips and bu
   await expect(averageTokens.locator("p").last()).toHaveText("240")
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
-    for (const [first, second] of [["Budget balance", "Usage Trend"], ["Where the spend goes", "Usage profile"]]) {
+    for (const [first, second] of [["Budget balance", "Usage Trend"], ["Spending by model", "Usage profile"]]) {
       if (width >= 1024) {
         await expect.poll(async () => {
           const [left, right] = await Promise.all([card(first!).boundingBox(), card(second!).boundingBox()])

@@ -181,7 +181,7 @@ export function ModelPricingView() {
         <GroupSaveActions pending={pending} isNew={groupDialog === "new"} name={groupName} pricing={canonicalModel || editingGroup?.currentVersion} onCancel={() => setGroupDialog(undefined)} onSave={() => void saveGroup()} onReprice={() => setRepriceGroupOpen(true)} />
       </DialogContent>
     </Dialog>
-    <Dialog open={repriceGroupOpen} onOpenChange={(open) => { if (!pending) setRepriceGroupOpen(open) }}><DialogContent><DialogHeader><DialogTitle>Reprice historical usage?</DialogTitle><DialogDescription>This saves the group, replaces its active pricing with the selected canonical rates and context tiers, and applies those rates to every stored request in this group. Without a canonical model, the current rates are used. Requests without recorded token usage remain unpriced.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRepriceGroupOpen(false)} disabled={pending}>Cancel</Button><Button variant="destructive" onClick={() => void saveGroup(true)} disabled={pending}>{pending && <LoadingSpinner />}Save and reprice</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={repriceGroupOpen} onOpenChange={(open) => { if (!pending) setRepriceGroupOpen(open) }}><DialogContent><DialogHeader><DialogTitle>Reprice historical usage?</DialogTitle><DialogDescription>This saves the group, replaces its active pricing with the selected reference rates and context tiers, and applies those rates to every stored request in this group. Without a pricing reference model, the current rates are used. Requests without recorded token usage remain unpriced.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRepriceGroupOpen(false)} disabled={pending}>Cancel</Button><Button variant="destructive" onClick={() => void saveGroup(true)} disabled={pending}>{pending && <LoadingSpinner />}Save and reprice</Button></DialogFooter></DialogContent></Dialog>
     {pricingGroup && <PricingVersionDialog key={pricingGroup.id} group={pricingGroup} onClose={() => setPricingDialog(undefined)} onSaved={refreshPricing} />}
   </Panel>
 }
@@ -250,7 +250,7 @@ function CanonicalModelPicker({ pending, groupName, setGroupName, canonicalModel
       <div className="text-sm font-medium">Canonical upstream</div>
       <div className="text-xs text-muted-foreground">Link this group to shared model metadata and catalog pricing.</div>
       <Popover open={catalog.open} onOpenChange={catalog.onOpenChange}>
-        <PopoverTrigger render={<Button variant="outline" size="picker" className="min-h-10 w-full justify-between text-left" disabled={pending}><span className="min-w-0"><span className="block truncate font-medium">{canonicalModel?.name || canonicalModelId || "Select canonical model"}</span><span className="block truncate text-xs text-muted-foreground">{canonicalModel?.id || "Search model ID, name, or provider"}</span></span><ChevronsUpDownIcon className="size-4 shrink-0 opacity-50" /></Button>} />
+        <PopoverTrigger render={<Button variant="outline" size="picker" className="min-h-10 w-full justify-between text-left" disabled={pending}><span className="min-w-0"><span className="block truncate font-medium">{canonicalModel?.name || canonicalModelId || "Select pricing reference model"}</span><span className="block truncate text-xs text-muted-foreground">{canonicalModel?.id || "Search model ID, name, or provider"}</span></span><ChevronsUpDownIcon className="size-4 shrink-0 opacity-50" /></Button>} />
         <PopoverContent side="bottom" align="start" sideOffset={6} padding="none" className="w-(--anchor-width) min-w-0 max-w-[calc(100vw-2rem)] overflow-hidden">
           <div className="flex h-72 max-h-[calc(100vh-8rem)] min-h-0">
             <Command variant="embedded" className="min-h-0 flex-1" shouldFilter={false}>
@@ -292,7 +292,7 @@ function useCanonicalModelCatalog(apiFetch: ReturnType<typeof useDashboardApi>["
     const query = new URLSearchParams({ catalog: "models.dev", q: debouncedSearch, limit: "100" })
     void apiFetch<CanonicalModelsResponse>(`/api/admin/model-pricing?${query}`, { signal: controller.signal })
       .then((result) => setModels(Array.isArray(result.models) ? result.models : []))
-      .catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Unable to load canonical models") })
+      .catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Unable to load pricing reference models") })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [debouncedSearch, open, apiFetch])
@@ -317,7 +317,7 @@ function useCanonicalModelCatalog(apiFetch: ReturnType<typeof useDashboardApi>["
 
 function CanonicalModelResults({ catalog, selectedModelId, onSelect }: { catalog: CanonicalModelCatalog; selectedModelId: string; onSelect: (model: CanonicalModelSummary) => void }) {
   if (catalog.loading) return (
-    <CommandGroup heading="Canonical models" variant="flush" aria-busy="true" aria-label="Loading canonical models">
+    <CommandGroup heading="Pricing reference models" variant="flush" aria-busy="true" aria-label="Loading pricing reference models">
       {Array.from({ length: 2 }, (_, index) => (
         <div key={index} className="flex flex-col gap-2 rounded-md px-3 py-3" aria-hidden="true">
           <Skeleton className="h-4 w-40 max-w-full" />
@@ -332,8 +332,8 @@ function CanonicalModelResults({ catalog, selectedModelId, onSelect }: { catalog
     </CommandGroup>
   )
   if (catalog.error) return <div role="alert" className="px-3 py-2 text-sm text-destructive">{catalog.error}</div>
-  if (!catalog.models.length) return <EmptyState title={catalog.search.trim() ? "No canonical models match your search" : "No canonical models available"} description={catalog.search.trim() ? `Try another search for "${catalog.search.trim()}".` : "The canonical model catalog has no results to show."} icon={SearchIcon} variant="compact" treatment="embedded" />
-  return <CommandGroup heading={`Canonical models (${catalog.models.length})`} variant="flush">{catalog.models.map((model) => <CommandItem key={model.id} value={`${model.name} ${model.id} ${model.provider}`} variant="detail" onSelect={() => onSelect(model)}><div className="min-w-0 flex-1"><div className="truncate font-medium">{model.name}</div><div className="truncate text-xs text-muted-foreground">{model.id} · {model.provider}</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground"><span>Input {formatCanonicalRate(model.pricing.inputMicrosPerMillion)}</span><span>Output {formatCanonicalRate(model.pricing.outputMicrosPerMillion)}</span><span>Cache read {formatCanonicalRate(model.pricing.cacheReadMicrosPerMillion)}</span></div></div>{selectedModelId === model.id && <CheckIcon className="mt-1 size-4 text-primary" />}</CommandItem>)}</CommandGroup>
+  if (!catalog.models.length) return <EmptyState title={catalog.search.trim() ? "No pricing reference models match your search" : "No pricing reference models available"} description={catalog.search.trim() ? `Try another search for "${catalog.search.trim()}".` : "The pricing reference model catalog has no results to show."} icon={SearchIcon} variant="compact" treatment="embedded" />
+  return <CommandGroup heading={`Pricing reference models (${catalog.models.length})`} variant="flush">{catalog.models.map((model) => <CommandItem key={model.id} value={`${model.name} ${model.id} ${model.provider}`} variant="detail" onSelect={() => onSelect(model)}><div className="min-w-0 flex-1"><div className="truncate font-medium">{model.name}</div><div className="truncate text-xs text-muted-foreground">{model.id} · {model.provider}</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground"><span>Input {formatCanonicalRate(model.pricing.inputMicrosPerMillion)}</span><span>Output {formatCanonicalRate(model.pricing.outputMicrosPerMillion)}</span><span>Cache read {formatCanonicalRate(model.pricing.cacheReadMicrosPerMillion)}</span></div></div>{selectedModelId === model.id && <CheckIcon className="mt-1 size-4 text-primary" />}</CommandItem>)}</CommandGroup>
 }
 
 function CanonicalModelPreview({ model }: { model: CanonicalModelSummary }) {

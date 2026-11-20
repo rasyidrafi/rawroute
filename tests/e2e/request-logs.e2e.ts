@@ -207,7 +207,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(refresh.locator("svg")).toHaveClass(/animate-spin/)
   const controls = refresh.locator("..")
   expect(await controls.evaluate(element => Math.abs(element.getBoundingClientRect().right - element.parentElement!.getBoundingClientRect().right))).toBeLessThanOrEqual(1)
-  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace requests with their recorded main and fallback attempts.")
+  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Open a request to see which models were tried.")
   await expect(loading).toHaveAttribute("aria-busy", "true")
   await expect(loading.getByRole("columnheader")).toHaveText(["Request / model", "Reasoning / tools", "Key", "Status", "Tokens", "Cost", "Duration", "Time"])
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
@@ -252,7 +252,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.locator("body")).not.toContainText(/Asia\/(?:Jakarta|Tokyo)|\b(?:UTC|GMT)\b/)
   await expect(page.getByText("Newest first · 25 requests per page", { exact: true })).toBeVisible()
   await expect(loading).toHaveCount(0)
-  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Workspace requests with their recorded main and fallback attempts.")
+  await expect(page.locator('[data-slot="card-description"]')).toHaveText("Open a request to see which models were tried.")
   await expect(page.locator('[data-slot="request-log-skeleton-row"]')).toHaveCount(0)
   const loadedRowHeight = (await page.getByRole("row").nth(1).boundingBox())!.height
   expect(Math.abs(loadedRowHeight - loadingRowHeight)).toBeLessThanOrEqual(2)
@@ -303,7 +303,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   const previousTo = requests.at(-1)!.get("to")
   mode = "error"
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
-  await expect(page.getByText("Unable to load request logs. Try refreshing. Existing entries may be stale.")).toBeVisible()
+  await expect(page.getByText("Couldn’t load requests. Try refreshing.")).toBeVisible()
   expect(requests.at(-1)!.get("to")).not.toBe(previousTo)
   await expect(page.getByRole("row")).toHaveCount(0)
 })

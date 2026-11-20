@@ -41,7 +41,7 @@ test("budget controls and loading layout fit mobile, medium, and desktop widths"
     expect(Math.abs(labelBox.y + labelBox.height / 2 - orderBox.y - orderBox.height / 2)).toBeLessThan(1)
     await expect(page.locator("tbody tr").first()).toContainText("Configured gateway key")
     await expectNoCardOverflow(page)
-    const windowCard = page.locator('[data-slot="card"]').filter({ has: page.getByText("Budget window", { exact: true }) })
+    const windowCard = page.locator('[data-slot="card"]').filter({ has: page.getByText("Budget reset", { exact: true }) })
     for (const control of await windowCard.locator("button").all()) {
       const box = await control.boundingBox()
       expect(box).not.toBeNull()

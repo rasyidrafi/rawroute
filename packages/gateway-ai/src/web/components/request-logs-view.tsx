@@ -46,7 +46,7 @@ function RequestLogsWorkspace() {
   const { data, error, isLoading, isValidating, live, toggleLive, refresh, older, newer, hasNewer } = useRequestLogs(days, status, model, keyId)
   return <DashboardPage spacing="normal">
     <Card>
-      <CardHeader><CardTitle variant="icon"><ListChecksIcon aria-hidden="true" />Request Logs</CardTitle><CardDescription>Workspace requests with their recorded main and fallback attempts.</CardDescription></CardHeader>
+      <CardHeader><CardTitle variant="icon"><ListChecksIcon aria-hidden="true" />Request Logs</CardTitle><CardDescription>Open a request to see which models were tried.</CardDescription></CardHeader>
       <CardContent spacing="flow" className="flex flex-col">
         <div className="flex flex-wrap items-center gap-2">
           <Filter label="Date range" value={days} options={[{ id: "1", name: "Last 24 hours" }, { id: "7", name: "Last 7 days" }]} onChange={setDays} />
@@ -59,7 +59,7 @@ function RequestLogsWorkspace() {
           </div>
         </div>
         <p className="text-xs text-muted-foreground">Updates every 3 seconds. Browsing older logs pauses live updates. Status filters use the final request outcome; expand a request to see failed attempts.</p>
-        {error && <Alert variant="destructive"><AlertDescription>Unable to load request logs. Try refreshing. Existing entries may be stale.</AlertDescription></Alert>}
+        {error && <Alert variant="destructive"><AlertDescription>{data?.events.length ? "Couldn’t refresh. Showing the last loaded requests." : "Couldn’t load requests. Try refreshing."}</AlertDescription></Alert>}
         {/* The hook discards snapshots whose query no longer matches. While a replacement
             fetch is active that gap reads as loading; a settled pause (freeze aborts the
             fetch and writes the old snapshot) must not strand skeleton rows. */}

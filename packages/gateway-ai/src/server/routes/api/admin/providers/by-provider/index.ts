@@ -1,5 +1,7 @@
 import { ensureCodexProvider } from "../../../../../codex/oauth"
 import { codexDiscoveryStatus } from "../../../../../codex/model-discovery"
+import { codexRemovalBlockers } from "../../../../../codex/model-removal"
+import { modelUnavailable } from "../../../../../../contracts/catalog"
 import { scheduleCodexModelRefresh } from "../../../../../codex/model-refresh"
 import { jsonError } from "@rawroute/observability/contracts/http"
 
@@ -31,7 +33,7 @@ export async function GET(_request: Request, params: { providerId: string }) {
     discovery: provider.prefix === "codex" ? await codexDiscoveryStatus() : undefined,
     provider,
     apiKeys: apiKeys.map((apiKey) => ({ ...apiKey, key: maskApiKey(apiKey.key) })),
-    models: models.map(stripUnprefixed),
+    models: await Promise.all(models.map(async model => modelUnavailable(model) ? { ...stripUnprefixed(model), removalBlockers: await codexRemovalBlockers(model) } : stripUnprefixed(model))),
   })
 }
 

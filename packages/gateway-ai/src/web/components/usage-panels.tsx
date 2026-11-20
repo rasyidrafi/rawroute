@@ -66,7 +66,7 @@ export function TopKeys({ keys, refreshing }: { keys: KeyRow[]; refreshing: bool
   const config = { cost: { label: "Cost" } } satisfies ChartConfig
   return <Card variant="dashboard" className="relative h-140 overflow-hidden" aria-busy={refreshing || undefined}>
     {refreshing && <RefreshScrim />}
-    <CardHeader><CardTitle>Top keys by cost</CardTitle><CardDescription>Concentration</CardDescription></CardHeader>
+    <CardHeader><CardTitle>Top keys by cost</CardTitle></CardHeader>
     <CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col">
       <ChartContainer config={config} className="h-[220px] aspect-auto w-full shrink-0">
         <BarChart data={chartRows} layout="vertical" margin={{ top: 5, bottom: 5, left: 4, right: 4 }}>

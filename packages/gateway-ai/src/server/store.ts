@@ -5,6 +5,7 @@ import { initializeAiPersistence } from "./local-db"
 import { collectionPrefix, isMemoryBackend } from "@rawroute/platform/server/storage-config"
 
 import { gatewayModelId, cleanAliasId } from "./model-identifiers"
+import { modelUnavailable } from "../contracts/catalog"
 import { localCacheDelete, localCacheGet, localCacheSet } from "@rawroute/platform/server/local-cache"
 import type { ApiKey, AppData, Model, ModelAlias, ModelCombo, Provider, ProviderApiKey, ProviderApiKeyInput } from "../contracts/domain"
 import { DEFAULT_WORKSPACE_ID, type WorkspaceStorageMode } from "@rawroute/platform/contracts/workspace"
@@ -1678,7 +1679,7 @@ async function sqliteDeleteModel(providerId: string, modelId: string): Promise<v
     const snapshot = await transaction.get(ref)
     if (!snapshot.exists) return
     const model = modelFromSnapshot(snapshot, providerId)
-    if (model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
+    if (model.source === "discovered" && !modelUnavailable(model)) throw new Error("This model is still listed; disable it instead.")
     const reservation = await sqliteGatewayIdReservation(transaction, model.gatewayModelId || model.id, gatewayIdOwner("model", `${providerId}:${model.id}`))
     transaction.delete(ref)
     releaseSqliteGatewayId(transaction, reservation)
@@ -2101,7 +2102,7 @@ function memoryDeleteModel(providerId: string, modelId: string): void {
   const slot = state.models.get(providerId)
   const model = slot?.get(modelId)
   if (!model || !slot) return
-  if (model.source === "discovered") throw new Error("Managed models cannot be deleted; disable them instead.")
+  if (model.source === "discovered" && !modelUnavailable(model)) throw new Error("This model is still listed; disable it instead.")
   slot.delete(modelId)
   releaseMemoryGatewayId(state, normalizedGatewayId(model.gatewayModelId || model.id), gatewayIdOwner("model", `${providerId}:${model.id}`))
   state.providers.set(providerId, {

@@ -113,7 +113,7 @@ export function ProvidersView() {
         {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle variant="icon"><LinkIcon className="size-5" />Codex Providers</CardTitle>
-          <CardDescription>Manage Codex accounts separately from ordinary provider API keys.</CardDescription>
+          <CardDescription>Connect or manage your Codex accounts.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
