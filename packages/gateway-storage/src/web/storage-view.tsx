@@ -1,7 +1,6 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react"
-import { Link } from "react-router"
 import useSWR from "swr"
-import { ArrowRightIcon, CheckCircle2Icon, CircleAlertIcon, CopyIcon, DatabaseIcon, HardDriveIcon, KeyRoundIcon, PencilIcon, PlugIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
+import { CheckCircle2Icon, CircleAlertIcon, CopyIcon, DatabaseIcon, KeyRoundIcon, PencilIcon, PlugIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
 import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { useDashboardClipboard } from "@rawroute/platform/web/use-dashboard-clipboard"
 import { NotFoundPage } from "@rawroute/platform/web/pages/not-found"
@@ -23,7 +22,9 @@ import { DashboardPage } from "@rawroute/ui/page-layout"
 import { useStorageStatus } from "./availability"
 import { StorageRouteSkeleton } from "./skeletons"
 import { storageActions, type CapabilityStatus, type StorageClientKey, type StorageConnection, type StorageDashboard, type StorageMultipart } from "../contracts"
-import { storagePagePaths, storagePages } from "../contracts/pages"
+import { storagePages } from "../contracts/pages"
+
+import { StorageGuideCards } from "./storage-guide-cards"
 
 type StoragePage = "overview" | "connections" | "buckets" | "keys"
 type Feedback = { message: string; kind: "success" | "error" }
@@ -271,16 +272,10 @@ function MultipartRecovery({ data, busy, refreshing, send, clearFeedback }: { da
 
 function Overview({ data, busy, isLoading, refreshing, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; isLoading: boolean; refreshing: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
   const activeKeys = data.keys.filter(key => !key.revokedAt).length
-  const shortcuts = [
-    { href: storagePagePaths.storageConnections, label: "Connections", description: "Configure upstream services.", icon: PlugIcon },
-    { href: storagePagePaths.storageBuckets, label: "Buckets", description: "Attach existing buckets.", icon: DatabaseIcon },
-    { href: storagePagePaths.storageKeys, label: "Client keys", description: "Control client access.", icon: KeyRoundIcon },
-  ]
   return <>
     <div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-2xl font-semibold tracking-tight">{pageDetails.overview.title}</h2><p className="mt-1 text-sm text-muted-foreground">{pageDetails.overview.description}</p></div><Button variant="outline" size="sm" disabled={busy || isLoading || refreshing} onClick={onRefresh}>{refreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></div>
     <div className="grid gap-4 sm:grid-cols-3">{[{ label: "Connections", value: data.connections.length }, { label: "Attached buckets", value: data.buckets.length }, { label: "Active client keys", value: activeKeys }].map(item => <Card key={item.label} className="relative" aria-busy={refreshing || undefined}>{refreshing && <RefreshScrim />}<CardHeader><CardDescription>{item.label}</CardDescription><CardTitle variant="metric">{item.value}</CardTitle></CardHeader></Card>)}</div>
-    <Card><CardHeader><CardTitle variant="icon"><HardDriveIcon className="size-5" />Connect an S3 client</CardTitle><CardDescription>Clients use the Storage S3 endpoint configured for this deployment, separate from the dashboard address.</CardDescription></CardHeader><CardContent className="flex flex-col" spacing="compact-flow"><p className="text-sm text-muted-foreground">Sign requests for region <code className="rounded bg-muted px-1 py-0.5">us-east-1</code>. Use path-style bucket addressing. Unsupported S3 features are rejected rather than silently ignored.</p><p className="text-sm text-muted-foreground">Start by adding a connection, attach an existing bucket, then issue a client key with only the access it needs.</p></CardContent></Card>
-    <Card><CardHeader><CardTitle>Manage storage</CardTitle></CardHeader><CardContent spacing="compact-flow" className="grid sm:grid-cols-3">{shortcuts.map(item => <Link key={item.href} to={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><div className="flex items-center gap-2 font-medium"><item.icon className="size-4" />{item.label}<ArrowRightIcon className="ml-auto size-4" /></div><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></Link>)}</CardContent></Card>
+    <StorageGuideCards />
     <MultipartRecovery data={data} busy={busy} refreshing={refreshing} send={send} clearFeedback={clearFeedback} />
   </>
 }

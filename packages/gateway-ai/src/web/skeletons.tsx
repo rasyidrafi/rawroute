@@ -33,7 +33,7 @@ function StandardDashboardSkeleton({ variant }: { variant: Exclude<DashboardSkel
     "provider-detail": <ProviderDetailSkeleton codex={false} />,
     "codex-detail": <ProviderDetailSkeleton codex />,
     "budgets": <BudgetsSkeleton />,
-    "model-pricing": <LoadingCard title={<><DollarSignIcon />Model pricing</>} description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage."><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-medium">Model groups</div><div className="text-sm text-muted-foreground">Fixed groups are refreshed from configured models; custom groups collect models you choose.</div></div><Skeleton className="h-8 w-36" /></div><LoadingTable columns={["Group", "Type", "Models", "Current pricing", ""]} /></LoadingCard>,
+    "model-pricing": <LoadingCard title={<><DollarSignIcon />Model pricing</>} description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage."><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-medium">Model groups</div><div className="text-sm text-muted-foreground">Fixed groups are refreshed from configured models; custom groups collect models you choose.</div></div><Skeleton className="h-8 w-36" /></div><LoadingTable columns={["Group", "Type", "Models", "Current pricing", ""]} /><div className="space-y-3 rounded-lg border p-4"><div className="font-medium">Repricing history</div><div className="text-sm text-muted-foreground">Replacing a current version recalculates historical events in the background.</div><Skeleton className="h-4 w-40" /></div></LoadingCard>,
   }
   const normal = ["budgets", "model-pricing"].includes(variant)
   return <DashboardPage spacing={normal ? "normal" : "wide"} width="default" aria-busy="true" aria-label="Loading dashboard" data-slot="dashboard-content-skeleton" data-variant={variant}>
@@ -47,7 +47,7 @@ function EndpointKeySkeleton() {
 }
 
 function ProvidersSkeleton() {
-  return <><LoadingCard title="Providers" description="Choose a provider to manage its connection settings and upstream API keys." action={<Button disabled><PlusIcon />Add provider</Button>}><LoadingTable columns={["Provider", "Prefix", "Protocol", "Origin", "API keys", "Models", ""]} /></LoadingCard><LoadingCard title={<><LinkIcon className="size-5" />Codex Providers</>} description="Connect or manage your Codex accounts."><LoadingTable columns={["Provider", "Prefix", "Protocol", "Accounts", "Models", ""]} rows={1} /><p className="text-sm text-muted-foreground">Open the Codex provider page to add an account.</p></LoadingCard></>
+  return <><LoadingCard title="Providers" description="Choose a provider to manage its connection settings and upstream API keys." action={<Button disabled><PlusIcon />Add provider</Button>}><LoadingTable columns={["Provider", "Prefix", "Protocol", "Origin", "API keys", "Models", ""]} /></LoadingCard><LoadingCard title={<><LinkIcon className="size-5" />Codex Providers</>} description="Connect or manage your Codex accounts."><LoadingTable columns={["Provider", "Prefix", "Protocol", "Accounts", "Models", ""]} rows={1} /></LoadingCard></>
 }
 
 function AliasesSkeleton() {
@@ -55,7 +55,18 @@ function AliasesSkeleton() {
 }
 
 function ProviderDetailSkeleton({ codex }: { codex: boolean }) {
-  return <><div><Skeleton className="mb-3 h-8 w-28" /><Skeleton className="h-8 w-56 max-w-full" /><Skeleton className="mt-1 h-5 w-40" /></div><LoadingCard title="Provider details" action={!codex} description={<Skeleton className="h-5 w-64 max-w-full" />}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(120px,1fr))]">{["Gateway prefix", "Authentication", "Protocol", "Prompt cache key", codex ? "Configured accounts" : "Configured keys", "Configured models"].map(label => <div key={label} className="rounded-lg border bg-muted/20 p-4"><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div><Skeleton className="mt-2 h-5 w-24 max-w-full" /></div>)}</div></LoadingCard>{codex && <LoadingCard title="Codex reset automation" description="Configure expiry-based automatic reset-credit redemption."><Skeleton className="h-12 w-full" /></LoadingCard>}<LoadingCard title={<><KeyRoundIcon className="size-5" />{codex ? "Accounts" : "API keys"}</>} description={codex ? "Accounts are tried from top to bottom." : "Keys are selected automatically. When keys are equally busy, higher keys are preferred."} action><LoadingTable columns={codex ? ["", "Name", "Plan", "Status", "Usage Limits", "Unused Resets", "Created", ""] : ["", "Name", "Local limits", "Status", "Created", ""]} /></LoadingCard><LoadingCard title={<><BoxesIcon className="size-5" />Models</>} description={codex ? "Waiting for first sync." : "Choose which models your apps can use."} action><LoadingTable columns={["Model", "Gateway ID", "Provider model ID", "Provider protocol", "Status", ""]} /></LoadingCard></>
+  return <>
+    <div><Skeleton className="mb-3 h-8 w-28" /><Skeleton className="h-8 w-56 max-w-full" /><Skeleton className="mt-1 h-5 w-40" /></div>
+    <LoadingCard title="Provider details" action={!codex} description={<Skeleton className="h-5 w-64 max-w-full" />}>
+      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">{["Gateway prefix", "Protocol", "Authentication", "Prompt cache key", ...(codex ? ["Reasoning summaries"] : []), codex ? "Configured accounts" : "Configured keys", "Configured models"].map(label => <div key={label}><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div><Skeleton className="mt-1 h-5 w-24 max-w-full" /></div>)}</div>
+    </LoadingCard>
+    {codex && <LoadingCard title="Auto redeem" description="Automatically use reset credits for your Codex accounts."><div className="@container space-y-4">
+      <div className="grid gap-4 @xl:grid-cols-2">{["Before credits expire", "When weekly quota runs out"].map(label => <div key={label} className="flex items-start gap-3 text-sm"><Skeleton className="size-4 shrink-0" /><div className="grid flex-1 gap-1"><span className="font-medium">{label}</span><Skeleton className="h-5 w-full" /></div></div>)}</div>
+      <div className="border-t pt-3"><h3 className="text-sm font-medium">Account status</h3><div className="flex items-center justify-between gap-3 py-2"><Skeleton className="h-5 w-32" /><Skeleton className="h-5 w-20" /></div></div>
+    </div></LoadingCard>}
+    <LoadingCard title={<><KeyRoundIcon className="size-5" />{codex ? "Accounts" : "API keys"}</>} description={codex ? "Accounts are tried from top to bottom." : "Keys are selected automatically. When keys are equally busy, higher keys are preferred."} action><LoadingTable columns={codex ? ["", "Name", "Plan", "Status", "Usage Limits", "Unused Resets", "Created", ""] : ["", "Name", "Local limits", "Status", "Created", ""]} /></LoadingCard>
+    <LoadingCard title={<><BoxesIcon className="size-5" />Models</>} description={codex ? <Skeleton className="h-5 w-48" /> : "Choose which models your apps can use."} action><LoadingTable columns={["Model", "Gateway ID", "Provider model ID", ...(codex ? [] : ["Provider protocol"]), "Status", ""]} /></LoadingCard>
+  </>
 }
 
 function BudgetsSkeleton() {

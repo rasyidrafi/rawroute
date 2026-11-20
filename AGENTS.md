@@ -9,6 +9,10 @@
   to act (for example, an API key or model ID they must copy). Keep optional
   explanations in contextual help. Keep essential consequences, warnings and recovery
   actions visible, and place confirmation-specific details in confirmation dialogs.
+- When a UI changes shape, update its route, initial-data and inline loading states
+  in the same change. Prefer sharing the rendered layout; match section order,
+  controls, table columns and responsive breakpoints. Test the actual route fallback,
+  not just the skeleton component, and never show sample data as a loading result.
 - Omakase: avoid user choices and configuration unless genuinely necessary or required.
   Implementation details use fixed owner defaults, not deployment knobs. Generate
   and persist internal secrets automatically; only external credentials and genuine

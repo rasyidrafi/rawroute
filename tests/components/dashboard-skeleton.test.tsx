@@ -2,7 +2,8 @@ import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
 
-import { DashboardContentSkeleton, DashboardRouteSkeleton } from "../../apps/console/src/frontend/route-skeleton"
+import { DashboardRouteSkeleton } from "../../apps/console/src/frontend/route-skeleton"
+import { AiContentSkeleton as DashboardContentSkeleton } from "../../packages/gateway-ai/src/web/skeletons"
 import { UsageSummary } from "../../packages/gateway-ai/src/web/components/usage-summary"
 
 for (const [path, heading] of [
@@ -13,10 +14,17 @@ for (const [path, heading] of [
   ["/dashboard/ai/codex-providers", "Usage Limits"],
   ["/dashboard/ai/budgets", "Budget reset"],
   ["/dashboard/tools/overview", "Executor integration"],
+  ["/dashboard/storage/connections", "Capability checks"],
+  ["/dashboard/storage/buckets", "Upstream bucket"],
+  ["/dashboard/storage/keys", "Access key ID"],
 ]) {
   test(`route loading preserves the content for ${path}`, () => {
     const markup = renderToStaticMarkup(<MemoryRouter initialEntries={[path!]}><DashboardRouteSkeleton /></MemoryRouter>)
     expect(markup).toContain(heading!)
+    if (path === "/dashboard/ai/codex-providers") {
+      for (const label of ["Auto redeem", "Before credits expire", "When weekly quota runs out", "Account status"]) expect(markup).toContain(label)
+      expect(markup).not.toContain("Provider protocol")
+    }
     if (path === "/dashboard/ai/overview/request-logs") {
       expect(markup).toMatch(/data-slot="card-description"[^>]*>Open a request to see which models were tried\.<\/div>/)
     }
