@@ -89,7 +89,7 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
           <FormField label="Prefix"><Input name="prefix" defaultValue={provider?.prefix} placeholder="oa" required /></FormField>
           <FormField label="Default protocol">
             <Select value={protocol} onValueChange={(value) => { if (value) setProtocolAndAuth(value as Protocol) }} itemToStringLabel={(value) => protocolLabels[value as Protocol] || String(value)}>
-              <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>{protocols.map((item) => <SelectItem key={item} value={item}>{protocolLabels[item]}</SelectItem>)}</SelectContent>
             </Select>
           </FormField>
@@ -97,7 +97,7 @@ export function ProviderForm({ provider, onSave }: { provider: Provider | null; 
         <FormField label="Base URL"><Input name="baseUrl" value={baseUrl} onChange={(event) => setBaseUrlAndAuth(event.target.value)} type="url" placeholder={protocol === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.openai.com/v1"} required /></FormField>
         <FormField label="Authentication">
           <Select value={authType} onValueChange={(value) => { if (value) setAuthType(value as AuthType) }} itemToStringLabel={(value) => authLabels[value as AuthType] || String(value)}>
-            <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>{authOptions.map((item) => <SelectItem key={item} value={item}>{authLabels[item]}</SelectItem>)}</SelectContent>
           </Select>
         </FormField>

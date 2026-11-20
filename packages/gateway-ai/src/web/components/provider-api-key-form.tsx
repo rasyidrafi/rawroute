@@ -37,7 +37,7 @@ export function ProviderApiKeyForm({ providers, apiKey, onSave }: { providers: P
     </DialogHeader>
     <div className="grid gap-4 py-4">
       <FormField label="Provider">
-        {scopedProvider ? <><Input value={scopedProvider.name} readOnly variant="muted" /><input type="hidden" name="providerId" value={scopedProvider.id} /></> : <Select name="providerId" defaultValue={apiKey?.providerId || providers[0]?.id} itemToStringLabel={(value) => providers.find((provider) => provider.id === value)?.name || String(value)}><SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger><SelectContent>{providers.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent></Select>}
+        {scopedProvider ? <><Input value={scopedProvider.name} readOnly variant="muted" /><input type="hidden" name="providerId" value={scopedProvider.id} /></> : <Select name="providerId" defaultValue={apiKey?.providerId || providers[0]?.id} itemToStringLabel={(value) => providers.find((provider) => provider.id === value)?.name || String(value)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{providers.map((provider) => <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>)}</SelectContent></Select>}
       </FormField>
       <FormField label="Key name"><Input name="name" defaultValue={apiKey?.name} maxLength={80} placeholder="Production key A" required /></FormField>
       <FormField label="API key"><Input name="key" type="password" autoComplete="off" placeholder={apiKey ? "Leave blank to keep the current key" : "Enter upstream API key"} required={!apiKey} /></FormField>

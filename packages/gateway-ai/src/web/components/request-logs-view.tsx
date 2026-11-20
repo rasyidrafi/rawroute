@@ -21,7 +21,7 @@ function Filter({ label, value, options, onChange }: { label: string; value: str
   return <div className="flex min-w-0 max-w-full items-center gap-2">
     <label htmlFor={id} className="shrink-0 text-xs font-medium text-muted-foreground">{label}</label>
     <Select value={value} onValueChange={value => { if (value !== null) onChange(value) }}>
-    <SelectTrigger id={id} aria-label={label} className="min-w-0"><SelectValue>{options.find(option => option.id === value)?.name || value}</SelectValue></SelectTrigger>
+    <SelectTrigger id={id} aria-label={label} size="sm" className="min-w-0"><SelectValue>{options.find(option => option.id === value)?.name || value}</SelectValue></SelectTrigger>
     <SelectContent><SelectGroup>{options.map(option => <SelectItem key={option.id} value={option.id}>{option.name}</SelectItem>)}</SelectGroup></SelectContent>
     </Select>
   </div>

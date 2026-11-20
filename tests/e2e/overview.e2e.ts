@@ -219,6 +219,8 @@ test("Overview loads scoped aggregates and four compact recent attempts with ret
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 844 })
     expect((await rangeSelect.boundingBox())!.width).toBeLessThanOrEqual(140)
+    const refresh = page.getByRole("button", { name: "Refresh", exact: true })
+    await expect(rangeSelect).toHaveCSS("height", await refresh.evaluate(button => getComputedStyle(button).height))
   }
   await page.setViewportSize({ width: 1280, height: 844 })
   await rangeSelect.click()
