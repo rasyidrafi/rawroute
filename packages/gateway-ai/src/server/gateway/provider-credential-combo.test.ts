@@ -3,12 +3,12 @@ import { DEFAULT_WORKSPACE_ID } from "@rawroute/platform/contracts/workspace"
 import { closeLocalDatabase } from "@rawroute/platform/server/database"
 import { configurePlatformServer, createWorkspace, resetWorkspacesForTests } from "@rawroute/platform/server/runtime"
 import { runInWorkspace } from "@rawroute/platform/server/workspace-context"
-import { _resetMemoryBackend, listProviderApiKeys, upsertCombo, upsertModel, upsertProvider, upsertProviderApiKey } from "../store"
+import { _resetMemoryBackend, deleteProviderApiKey, listProviderApiKeys, upsertCombo, upsertModel, upsertProvider, upsertProviderApiKey } from "../store"
 import { resetModelSharesForTests, setModelShareTargets } from "../model-shares"
-import { proxyGatewayRequestInWorkspace, testComboMemberPolicy } from "./gateway"
+import { normalizeRoutingFailure, proxyGatewayRequestInWorkspace, setGatewayRetryOptionsForTests, testComboMemberPolicy } from "./gateway"
 import { resumeGatewayExecutions } from "./admission"
 import { providerCredentialScheduler } from "./provider-credential-scheduler"
-import { listUsageEvents } from "../analytics"
+import { listUsageEvents, resetAnalyticsForTests } from "../analytics"
 
 const workspace = { id: DEFAULT_WORKSPACE_ID, storageMode: "scoped" as const }
 const originalFetch = globalThis.fetch
@@ -52,6 +52,7 @@ beforeEach(async () => {
   await closeLocalDatabase()
   Object.assign(process.env, { NODE_ENV: "test", STORAGE_BACKEND: "memory", SQLITE_PATH: ":memory:" })
   _resetMemoryBackend()
+  resetAnalyticsForTests()
   configurePlatformServer({ identity: { initialize: () => {}, changed: () => {} }, participants: [] })
   await resetWorkspacesForTests()
   resetModelSharesForTests()
@@ -59,6 +60,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  setGatewayRetryOptionsForTests()
   globalThis.fetch = originalFetch
   resumeGatewayExecutions()
   await closeLocalDatabase()
@@ -66,6 +68,11 @@ afterEach(async () => {
   await resetWorkspacesForTests()
   _resetMemoryBackend()
 })
+
+function instantRetries() {
+  let now = 0
+  setGatewayRetryOptionsForTests({ now: () => now, random: () => 0, wait: async ms => { now += ms } })
+}
 
 test("tries alternate credentials and combo members before repeating a failed target", async () => {
   await runInWorkspace(workspace, async () => {
@@ -114,6 +121,7 @@ test("classifies original provider failures before conversion and tries combo al
 })
 
 test("preserves a cross-protocol quota failure when no alternative succeeds", async () => {
+  instantRetries()
   const model = await runInWorkspace(workspace, async () => {
     const provider = await upsertProvider({ name: "Anthropic quota", prefix: "anthropic-quota", baseUrl: "https://quota.synthetic.invalid", protocol: "anthropic-messages", authType: "bearer", headers: {}, enabled: true })
     await upsertProviderApiKey(provider.id, { name: "key", key: "synthetic-key", enabled: true })
@@ -128,7 +136,8 @@ test("preserves a cross-protocol quota failure when no alternative succeeds", as
   }) as unknown as typeof fetch
   const response = await comboRequest(model)
   expect(response.status).toBe(429)
-  expect(calls).toBe(1)
+  expect(calls).toBe(24)
+  expect(await response.json()).toMatchObject({ error: { message: "See billing" } })
 })
 
 test("retries a single target after a transient 403", async () => {
@@ -144,7 +153,93 @@ test("retries a single target after a transient 403", async () => {
   expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([false, true])
 })
 
+for (const combo of [false, true]) test(`${combo ? "combo" : "direct"} settles when its only credential is removed during backoff`, async () => {
+  const target = await runInWorkspace(workspace, async () => {
+    const target = await providerModel("Removed credential")
+    if (combo) await upsertCombo({ combo: "removed-combo", name: "Removed", members: [{ modelId: target.modelId }] })
+    return target
+  })
+  let now = 0
+  let waits = 0
+  setGatewayRetryOptionsForTests({ now: () => now, random: () => 0, wait: async ms => {
+    if (++waits === 1) await runInWorkspace(workspace, () => deleteProviderApiKey(target.provider.id, target.credential.id))
+    now += ms
+  } })
+  let calls = 0
+  globalThis.fetch = (async () => { calls++; return Response.json({ error: { message: "unavailable" } }, { status: 503 }) }) as unknown as typeof fetch
+  const model = combo ? "removed-combo" : target.modelId
+  const response = await comboRequest(model)
+  expect(response.status).toBe(503)
+  expect(await response.json()).toMatchObject({ error: { message: "unavailable" } })
+  expect(calls).toBe(1)
+  expect(waits).toBe(1)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === model).map(event => ({ final: event.requestFinal, status: event.status }))).toEqual([{ final: true, status: 503 }])
+})
+
+test("combo retires a removed target while another member remains concurrency blocked", async () => {
+  const { first, second } = await runInWorkspace(workspace, async () => {
+    const first = await providerModel("Removed primary")
+    const second = await providerModel("Blocked fallback", { maxConcurrency: 1 })
+    await upsertCombo({ combo: "removed-and-blocked", name: "Removed and blocked", members: [{ modelId: first.modelId }, { modelId: second.modelId }] })
+    return { first, second }
+  })
+  const lease = providerCredentialScheduler.acquire({ ownerWorkspaceId: workspace.id, providerId: second.provider.id, credentials: [second.credential] })
+  expect(lease.ok).toBe(true)
+  if (!lease.ok) throw new Error("Expected a held concurrency slot.")
+  lease.markDispatched()
+  let now = 0
+  const waits: number[] = []
+  setGatewayRetryOptionsForTests({ now: () => now, random: () => 0, wait: async ms => {
+    waits.push(ms)
+    if (waits.length === 1) await runInWorkspace(workspace, () => deleteProviderApiKey(first.provider.id, first.credential.id))
+    now += ms
+  } })
+  let calls = 0
+  globalThis.fetch = (async () => { calls++; return Response.json({ error: { message: "unavailable" } }, { status: 503 }) }) as unknown as typeof fetch
+  try {
+    const response = await comboRequest("removed-and-blocked")
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({ error: { message: "unavailable" } })
+    expect(calls).toBe(1)
+    expect(waits).toEqual([250, 250, 500, 1000])
+    const events = await runInWorkspace(workspace, () => listUsageEvents())
+    expect(events.filter(event => event.requestedModel === "removed-and-blocked").map(event => ({ final: event.requestFinal, status: event.status }))).toEqual([{ final: true, status: 503 }])
+  } finally { lease.release() }
+})
+
+for (const combo of [false, true]) for (const afterFailure of [false, true]) test(`${combo ? "combo" : "direct"} settles a cancelled dispatched fetch${afterFailure ? " after a failure" : ""}`, async () => {
+  instantRetries()
+  const target = await runInWorkspace(workspace, async () => {
+    const target = await providerModel("Cancelled fetch")
+    if (combo) await upsertCombo({ combo: "cancelled-combo", name: "Cancelled", members: [{ modelId: target.modelId }] })
+    return target
+  })
+  const controller = new AbortController()
+  let started!: () => void
+  const pendingFetch = new Promise<void>(resolve => { started = resolve })
+  let calls = 0
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls++
+    if (afterFailure && calls === 1) return Response.json({ error: { message: "unavailable" } }, { status: 503 })
+    started()
+    return await new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true }))
+  }) as typeof fetch
+  const model = combo ? "cancelled-combo" : target.modelId
+  const request = runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(new Request("http://rawroute.test/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "hello" }] }),
+  }), "/v1/chat/completions", { id: "synthetic-gateway-key" }))
+  await pendingFetch
+  controller.abort()
+  await expect(request).rejects.toThrow()
+  expect(calls).toBe(afterFailure ? 2 : 1)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === model).sort((a, b) => (a.attemptIndex ?? 0) - (b.attemptIndex ?? 0)).map(event => ({ final: event.requestFinal, status: event.status }))).toEqual(afterFailure ? [{ final: false, status: 503 }, { final: true, status: 502 }] : [{ final: true, status: 502 }])
+})
+
 test("marks an exhausted combo as failed and bounds same-target dispatches", async () => {
+  instantRetries()
   await runInWorkspace(workspace, async () => {
     const target = await providerModel("Retry exhausted")
     await upsertCombo({ combo: "retry-exhausted", name: "Retry", members: [{ modelId: target.modelId }] })
@@ -153,9 +248,10 @@ test("marks an exhausted combo as failed and bounds same-target dispatches", asy
   globalThis.fetch = (async () => { calls++; return Response.json({ error: { message: "unavailable" } }, { status: 503 }) }) as unknown as typeof fetch
   const response = await comboRequest("retry-exhausted")
   expect(response.status).toBe(503)
-  expect(calls).toBe(5)
+  expect(calls).toBe(24)
+  expect(await response.json()).toMatchObject({ error: { message: "unavailable" } })
   const events = await runInWorkspace(workspace, () => listUsageEvents())
-  expect(events.filter(event => event.requestedModel === "retry-exhausted").map(event => event.requestFinal)).toEqual([false, false, false, false, true])
+  expect(events.filter(event => event.requestedModel === "retry-exhausted").map(event => event.requestFinal)).toEqual([...Array(23).fill(false), true])
 }, 15_000)
 
 test("retries a pinned Responses continuation only on its original credential", async () => {
@@ -195,7 +291,7 @@ test("records a completed upstream failure when the client cancels during backof
   expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([true])
 })
 
-test("records the preceding failure when cancellation interrupts the next dispatch", async () => {
+test("records both attempts when cancellation interrupts the next dispatch", async () => {
   const target = await runInWorkspace(workspace, () => providerModel("Retry interrupted"))
   const controller = new AbortController()
   let calls = 0
@@ -208,7 +304,7 @@ test("records the preceding failure when cancellation interrupts the next dispat
   await expect(runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(request, "/v1/chat/completions", { id: "synthetic-gateway-key" }))).rejects.toBeDefined()
   expect(calls).toBe(2)
   const events = await runInWorkspace(workspace, () => listUsageEvents())
-  expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([true])
+  expect(events.filter(event => event.requestedModel === target.modelId).sort((a, b) => (a.attemptIndex ?? 0) - (b.attemptIndex ?? 0)).map(event => ({ final: event.requestFinal, status: event.status }))).toEqual([{ final: false, status: 503 }, { final: true, status: 502 }])
 })
 
 test("combo routing retries local RPM capacity but stops on ambiguous provider outcomes", async () => {
@@ -291,19 +387,21 @@ test("retries after concurrency admission clears without recording local poll at
   }
 })
 
-test("does not dispatch the first request after its gateway deadline", async () => {
-  const target = await runInWorkspace(workspace, () => providerModel("Expired deadline"))
+test("shapes an exhausted unclassified 429 as a public 503", async () => {
+  instantRetries()
+  const target = await runInWorkspace(workspace, () => providerModel("Unclassified failure"))
   let calls = 0
-  globalThis.fetch = (async () => { calls++; return chatResponse() }) as unknown as typeof fetch
-  const response = await runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(new Request("http://rawroute.test/v1/chat/completions", {
+  globalThis.fetch = (async () => { calls++; return Response.json({ error: { message: "temporary failure" } }, { status: 429, headers: { "retry-after": "120" } }) }) as unknown as typeof fetch
+  const response = await normalizeRoutingFailure(await runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(new Request("http://rawroute.test/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: target.modelId, messages: [{ role: "user", content: "hello" }] }),
-  }), "/v1/chat/completions", { id: "synthetic-gateway-key" }, Date.now() - 1))
+  }), "/v1/chat/completions", { id: "synthetic-gateway-key" })))
   expect(response.status).toBe(503)
-  expect(calls).toBe(0)
+  expect(calls).toBe(24)
+  expect(response.headers.has("retry-after")).toBe(false)
   const events = await runInWorkspace(workspace, () => listUsageEvents())
-  expect(events.filter(event => event.requestedModel === target.modelId)).toHaveLength(0)
+  expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.requestFinal)).toEqual([...Array(23).fill(false), true])
 })
 
 test("combo-member policy probes use provider admission without a caller identity", async () => {

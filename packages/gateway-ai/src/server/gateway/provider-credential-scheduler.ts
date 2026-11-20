@@ -55,6 +55,8 @@ export type ProviderCredentialAdmission =
     }
 
 export interface ProviderCredentialScheduler {
+  /** Snapshot capacity without charging or changing scheduler state. */
+  isAdmissible(input: { ownerWorkspaceId: string; providerId: string; credential: ProviderApiKey }): boolean
   /** Synchronously selects and acquires one eligible credential, or explains why none fit. */
   acquire(input: ProviderCredentialAdmissionInput): ProviderCredentialAdmission
 }
@@ -157,6 +159,19 @@ export function createProviderCredentialScheduler(options: { now?: () => number 
       if (oldest === undefined) break
       affinities.delete(oldest)
     }
+  }
+
+  function isAdmissible(input: { ownerWorkspaceId: string; providerId: string; credential: ProviderApiKey }) {
+    const { credential } = input
+    if (!credential.enabled || credential.credentialKind === "codex-oauth" || !credential.key.trim()) return false
+    const observed = clock()
+    if (!Number.isFinite(observed)) throw new RangeError("Provider scheduler clock must return a finite number.")
+    const now = Math.max(lastNow, observed)
+    const state = credentials.get(poolKey(input.ownerWorkspaceId, input.providerId, credential.id))
+    const rpmLimit = positiveLimit(credential.rpmLimit)
+    const concurrencyLimit = positiveLimit(credential.maxConcurrency)
+    return (rpmLimit === undefined || (state?.requestTimes.filter(time => time > now - RPM_WINDOW_MS).length ?? 0) < rpmLimit)
+      && (concurrencyLimit === undefined || (state?.activeRequests ?? 0) < concurrencyLimit)
   }
 
   function acquire(input: ProviderCredentialAdmissionInput): ProviderCredentialAdmission {
@@ -293,7 +308,7 @@ export function createProviderCredentialScheduler(options: { now?: () => number 
     }
   }
 
-  return { acquire }
+  return { acquire, isAdmissible }
 }
 
 /** Shared by gateway transports. Restarting the process resets only this local RPM history. */

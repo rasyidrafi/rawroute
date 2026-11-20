@@ -96,7 +96,7 @@ afterEach(async () => {
   await closeLocalCache()
 })
 
-test("returns the prior rate limit when a Codex retry expires during preparation", async () => {
+test("continues a Codex retry after slow preparation", async () => {
   const first = await runInWorkspace(workspace, () => addAccount("acct-deadline-a", "first-token"))
   const second = await runInWorkspace(workspace, () => addAccount("acct-deadline-b", "expired-token", new Date(Date.now() - 60_000).toISOString()))
   const target = resolved(first)
@@ -118,7 +118,7 @@ test("returns the prior rate limit when a Codex retry expires during preparation
   try {
     const body = { model: "gpt-5", input: "hello" }
     const result = await runInWorkspace(workspace, () => proxyToProvider(request(body), target, prepareProviderRequest(new TextEncoder().encode(JSON.stringify(body)), target, "openai-responses"), "openai-responses", { workspaceId: workspace.id, gatewayKeyId: "deadline-key" }, undefined, retry))
-    expect(posts).toBe(1)
+    expect(posts).toBe(2)
     expect(result.response.status).toBe(429)
     expect(result.response.headers.get("retry-after")).toBe("120")
   } finally { Date.now = realNow }

@@ -45,30 +45,43 @@ async function deleteProvider(request: APIRequestContext, providerId: string, he
   expect(response.ok(), await response.text()).toBe(true)
 }
 
-test("provider quota cooldown never exposes a long retry delay", async ({ request }) => {
+test("provider quota cooldown retries within the dispatch budget without exposing its delay", async ({ request }) => {
+  test.setTimeout(270_000)
   const setup = await providerModels(request)
   await request.post("http://127.0.0.1:3211/routing-mode", { data: { mode: "always-cooldown" } })
   try {
     const response = await request.post("/v1/responses", {
       headers: setup.headers,
       data: { model: setup.models[0], input: "hello", stream: true },
+      timeout: 270_000,
     })
     expect(response.status()).toBe(503)
     expect(response.headers()["retry-after"]).toBeUndefined()
     await expect(response.json()).resolves.toMatchObject({ error: { code: "upstream_unavailable" } })
+    const debug = await request.get("http://127.0.0.1:3211/debug")
+    const { routingAttempts } = await debug.json()
+    expect(routingAttempts).toBeGreaterThan(1)
+    expect(routingAttempts).toBeLessThanOrEqual(24)
   } finally { await deleteProvider(request, setup.providerId, setup.workspaceHeaders) }
 })
 
-test("ambiguous upstream 429 cannot impose a retry deadline", async ({ request }) => {
+test("ambiguous upstream 429 retries within the dispatch budget without exposing its deadline", async ({ request }) => {
+  test.setTimeout(270_000)
   const setup = await providerModels(request)
   await request.post("http://127.0.0.1:3211/routing-mode", { data: { mode: "ambiguous-429" } })
   try {
     const response = await request.post("/v1/responses", {
       headers: setup.headers,
       data: { model: setup.models[0], input: "hello", stream: true },
+      timeout: 270_000,
     })
     expect(response.status()).toBe(503)
     expect(response.headers()["retry-after"]).toBeUndefined()
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "upstream_unavailable" } })
+    const debug = await request.get("http://127.0.0.1:3211/debug")
+    const { routingAttempts } = await debug.json()
+    expect(routingAttempts).toBeGreaterThan(1)
+    expect(routingAttempts).toBeLessThanOrEqual(24)
   } finally { await deleteProvider(request, setup.providerId, setup.workspaceHeaders) }
 })
 

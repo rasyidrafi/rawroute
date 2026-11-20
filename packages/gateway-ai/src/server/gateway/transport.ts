@@ -247,7 +247,6 @@ function codexReplayTransport(request: Request, resolved: ResolvedGatewayModel, 
         const context = init?.signal ? codexRetrySignals.get(init.signal) : undefined
         if (init?.method?.toUpperCase() === "POST") {
           if (gatewayDrainSignal().aborted) throw new CodexPreDispatchError("drain")
-          if (context && !context.retry.withinDeadline()) throw new CodexPreDispatchError("deadline")
           if (context && !context.retry.canDispatch(context.target)) throw new CodexPreDispatchError("unavailable")
           if (context) context.retry.dispatched(context.target)
         }
@@ -265,7 +264,7 @@ function codexReplayTransport(request: Request, resolved: ResolvedGatewayModel, 
 }
 
 class CodexPreDispatchError extends Error {
-  constructor(readonly reason: "drain" | "deadline" | "unavailable") { super(reason) }
+  constructor(readonly reason: "drain" | "unavailable") { super(reason) }
 }
 
 function rememberCodexResponse(capture: CodexReplayCapture | undefined, value: unknown) {
@@ -748,6 +747,10 @@ function eligibleCredentials(resolved: ResolvedGatewayModel): Array<ProviderApiK
   return upstream.apiKeys.filter((key) => key.enabled && key.credentialKind !== "codex-oauth" && key.key.trim())
 }
 
+export function gatewayMemberTargetKeys(resolved: ResolvedGatewayModel, retry: GatewayRetry) {
+  return eligibleCredentials(resolved).map(credential => retry.key(resolved.shared?.ownerWorkspaceId || currentWorkspaceId(), resolved.providerId || "", resolved.upstreamModel, credential?.id || "__none__"))
+}
+
 function expired(expiresAt: string | undefined) {
   if (!expiresAt) return false
   const expiry = Date.parse(expiresAt)
@@ -1173,6 +1176,7 @@ export interface GatewayUpstreamResponse {
   response: Response
   usage?: UsageMetrics
   streamUsage?: ReturnType<typeof collectStreamUsage>
+  probe?: { key: string; memberKeys: string[]; isAdmissible?: () => boolean }
 }
 
 type ProviderFailure = { status: number; statusText: string; headers: Headers; body: Uint8Array }
@@ -1235,11 +1239,7 @@ function providerConfigurationMatches(provider: Provider, resolved: ResolvedGate
     && promptCacheKey === resolved.promptCacheKey
 }
 
-function safeCredentialFallback(failureClass: ReturnType<typeof classifyUpstreamFailure>) {
-  return failureClass === "retryable" || failureClass === "quota"
-}
-
-async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayModel, converted: PreparedProviderRequest, clientProtocol: Protocol, caller?: GatewayCaller, retry?: GatewayRetry): Promise<GatewayUpstreamResponse> {
+async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayModel, converted: PreparedProviderRequest, clientProtocol: Protocol, caller?: GatewayCaller, retry?: GatewayRetry, probeKey?: string): Promise<GatewayUpstreamResponse> {
   const upstream = resolved.upstream!
   const credentials = eligibleCredentials(resolved).filter((credential): credential is ProviderApiKey => credential !== undefined)
   if (!credentials.length) return { response: localProviderError(503, "provider_credentials_unavailable", "No enabled Codex accounts are available.") }
@@ -1255,7 +1255,11 @@ async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayM
   const dispatchesBefore = retry?.count
   let skippedByRetry = false
   const pinned = preferred?.continuation === true
-  for (const [index, credential] of credentials.entries()) {
+  const targetKey = (credential: ProviderApiKey) => retry!.key(resolved.shared?.ownerWorkspaceId || currentWorkspaceId(), resolved.providerId || "", resolved.upstreamModel, credential.id)
+  const orderedCredentials = retry ? retry.orderedTargets(credentials.map(targetKey)).map(key => credentials.find(credential => targetKey(credential) === key)!) : credentials
+  if (probeKey && retry) orderedCredentials.sort((a, b) => Number(targetKey(b) === probeKey) - Number(targetKey(a) === probeKey))
+  const memberKeys = retry ? credentials.filter(credential => !pinned || credential.id === preferred?.credentialId).map(targetKey) : []
+  for (const [index, credential] of orderedCredentials.entries()) {
     if (request.signal.aborted) throw request.signal.reason
     if (retry && gatewayDrainSignal().aborted) return { response: localProviderError(503, "gateway_draining", "Gateway is draining requests for maintenance.", { terminal: true }) }
     if (pinned && credential.id !== preferred?.credentialId) continue
@@ -1263,22 +1267,19 @@ async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayM
     if (pinned && retry && target) retry.pin(target)
     if (retry && target && !retry.canDispatch(target)) { skippedByRetry = true; continue }
     const abort = new AbortController()
+    const dispatchesBeforeCredential = retry?.count
     let response: Response
     try { response = await makeUpstreamResponse(request, resolved, credential, converted.body, abort, caller, retry, target) }
     catch (error) {
       abort.abort()
       if (request.signal.aborted) throw request.signal.reason
       if (error instanceof CodexPreDispatchError) {
-        if (error.reason === "deadline") {
-          recordLog("gateway.retry.stopped", { reason: "deadline" })
-          const prior = retry?.previousFailure() || localProviderError(503, "retry_deadline", "The retry window expired.")
-          if (retry && retry.count === dispatchesBefore && retry.previousFailure()) prior.headers.set("x-rawroute-no-dispatch", "1")
-          prior.headers.set("x-rawroute-combo-terminal", "1")
-          prior.headers.set("x-rawroute-retry-deadline", "1")
-          return { response: prior }
-        }
         if (error.reason === "unavailable") { skippedByRetry = true; continue }
         return { response: localProviderError(503, "gateway_draining", "Gateway is draining requests for maintenance.", { terminal: true }) }
+      }
+      if (!pinned && probeKey && retry && target === probeKey && retry.count === dispatchesBeforeCredential) {
+        probeKey = undefined
+        continue
       }
       if (error instanceof Error && error.message === "No enabled Codex credentials are available.") {
         return { response: lastFailure
@@ -1293,17 +1294,15 @@ async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayM
       catch { abort.abort(); return { response: ambiguousProviderFailure() } }
       const failure = { status: response.status, statusText: response.statusText, headers: providerResponseHeaders(response.headers), body }
       lastFailure = failure
-      const failureClass = classifyUpstreamFailure(response.status, body)
-      const safeFallback = safeCredentialFallback(failureClass)
       if (retry && target) {
         const details = await upstreamFailure(new Response(Buffer.from(body), { headers: failure.headers }))
         if (details.retrySeconds && !failure.headers.has("retry-after")) failure.headers.set("retry-after", String(details.retrySeconds))
-        if (retry.failed(target, response.status, failure.headers, failureClass)) recordLog("gateway.retry.scheduled", { reason: "upstream_failure" })
-        else recordLog("gateway.retry.stopped", { reason: failureClass === "quota" ? "quota_exhausted" : "non_retryable_failure" })
+        if (retry.failed(target, response.status, failure.headers)) recordLog("gateway.retry.scheduled", { reason: "upstream_failure" })
         retry.rememberFailure(responseFromProviderFailure(failure, clientProtocol, upstream.protocol).response)
+        if (retry.preferredProbe(memberKeys) === target) return { ...responseFromProviderFailure(failure, clientProtocol, upstream.protocol), probe: { key: target, memberKeys } }
       }
-      if (!pinned && safeFallback && index < credentials.length - 1) continue
-      return responseFromProviderFailure(failure, clientProtocol, upstream.protocol, failureClass === "non-retryable" || (pinned && !retry))
+      if (!pinned && index < orderedCredentials.length - 1) continue
+      return responseFromProviderFailure(failure, clientProtocol, upstream.protocol, pinned && !retry)
     }
 
     const isEventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true
@@ -1346,14 +1345,14 @@ async function proxyToCodexProvider(request: Request, resolved: ResolvedGatewayM
     }
   }
   if (skippedByRetry && retry && retry.count === dispatchesBefore) {
-    return { response: noDispatch(retry.previousFailure() || localProviderError(503, "retry_deadline", "The retry window expired.", { terminal: true })) }
+    return { response: noDispatch(retry.previousFailure() || localProviderError(503, "provider_credentials_unavailable", "Provider credentials are unavailable.")) }
   }
   return lastFailure
     ? responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol)
     : { response: localProviderError(503, "provider_credentials_unavailable", "Provider credentials are unavailable.") }
 }
 
-async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatewayModel, prepared: PreparedProviderRequest, clientProtocol: Protocol, caller: GatewayCaller | undefined, scheduler: ProviderCredentialScheduler, retry?: GatewayRetry): Promise<GatewayUpstreamResponse> {
+async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatewayModel, prepared: PreparedProviderRequest, clientProtocol: Protocol, caller: GatewayCaller | undefined, scheduler: ProviderCredentialScheduler, retry?: GatewayRetry, probeKey?: string): Promise<GatewayUpstreamResponse> {
   const upstream = resolved.upstream!
   if (!resolved.providerId) return { response: localProviderError(503, "provider_configuration_unavailable", "Provider configuration is temporarily unavailable.") }
   const body = Buffer.from(prepared.body)
@@ -1368,9 +1367,11 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
   const sessionScopeHash = caller ? sessionPromptCacheScope(request.headers, caller.workspaceId, caller.gatewayKeyId) : undefined
   const targetKey = (credential: ProviderApiKey | undefined) => retry?.key(resolved.shared?.ownerWorkspaceId || currentWorkspaceId(), resolved.providerId!, resolved.upstreamModel, credential?.id || "__none__")
   let lastFailure: ProviderFailure | undefined
+  let override = probeKey
   const dispatchesAtEntry = retry?.count
   let skippedByRetry = false
   let skippedFailure: Response | undefined
+  let memberKeys: string[] = []
 
   while (true) {
     if (request.signal.aborted) throw request.signal.reason
@@ -1383,9 +1384,6 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
     let dispatch: DispatchResult
     try {
       dispatch = await withProviderCredentialRoutingSnapshot(resolved.providerId, (snapshot): DispatchResult => {
-        if (retry && !retry.withinDeadline()) {
-          return { kind: "blocked", response: noDispatch(retry.previousFailure() || localProviderError(503, "retry_deadline", "The retry window expired.")) }
-        }
         if (!snapshot.provider || !providerConfigurationMatches(snapshot.provider, resolved)) {
           if (lastFailure) return { kind: "blocked", response: responseFromProviderFailure(lastFailure, clientProtocol, upstream.protocol).response }
           return {
@@ -1425,6 +1423,7 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
           if (retry) retry.pin(retry.key(resolved.shared?.ownerWorkspaceId || currentWorkspaceId(), resolved.providerId!, resolved.upstreamModel, continuation.credential.credentialId || "__none__"))
         }
 
+        if (retry) memberKeys = credentials.filter(candidate => !continuation.credential || (candidate?.id || null) === continuation.credential.credentialId).map(candidate => targetKey(candidate)!)
         if (retry) for (const candidate of credentials) {
           const key = targetKey(candidate)!
           if (!retry.canDispatch(key)) {
@@ -1440,14 +1439,29 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
         let credential: ProviderApiKey | undefined
         let lease: Extract<ProviderCredentialAdmission, { ok: true }> | undefined
         if (usesCredentialScheduler) {
-          const admission = scheduler.acquire({
-            ownerWorkspaceId: resolved.shared?.ownerWorkspaceId || currentWorkspaceId(),
-            providerId: resolved.providerId!,
-            credentials: credentials.filter((value): value is ProviderApiKey => value !== undefined),
-            ...(sessionScopeHash ? { sessionScopeHash } : {}),
-            excludedCredentialIds: attemptedCredentialIds,
-            ...(continuation.credential?.credentialId ? { requiredCredentialId: continuation.credential.credentialId } : {}),
-          })
+          const eligible = credentials.filter((value): value is ProviderApiKey => value !== undefined)
+          const rotate = retry && (override !== undefined || retry.hasDispatched(eligible.map(candidate => targetKey(candidate)!)))
+          const ordered = rotate && retry
+            ? retry.orderedTargets(eligible.map(candidate => targetKey(candidate)!)).map(key => eligible.find(candidate => targetKey(candidate) === key)!)
+            : eligible
+          if (override) ordered.sort((a, b) => Number(targetKey(b) === override) - Number(targetKey(a) === override))
+          override = undefined
+          let admission: ProviderCredentialAdmission
+          do {
+            const candidate = rotate ? ordered.find(item => !attemptedCredentialIds.has(item.id)) : undefined
+            admission = scheduler.acquire({
+              ownerWorkspaceId: resolved.shared?.ownerWorkspaceId || currentWorkspaceId(),
+              providerId: resolved.providerId!,
+              credentials: eligible,
+              ...(sessionScopeHash ? { sessionScopeHash } : {}),
+              excludedCredentialIds: attemptedCredentialIds,
+              ...(continuation.credential?.credentialId ? { requiredCredentialId: continuation.credential.credentialId } : candidate ? { requiredCredentialId: candidate.id } : {}),
+            })
+            if (admission.ok || !candidate || continuation.continuation || admission.reason === "no_eligible_credentials" || admission.reason === "required_credential_unavailable") break
+            retry!.scheduleAdmission(admission.reason, admission.retryAfterMs, [targetKey(candidate)!])
+            recordLog("gateway.retry.scheduled", { reason: admission.reason })
+            attemptedCredentialIds.add(candidate.id)
+          } while (ordered.some(item => !attemptedCredentialIds.has(item.id)))
           if (!admission.ok) {
             if (retry && admission.reason !== "no_eligible_credentials" && admission.reason !== "required_credential_unavailable") {
               retry.scheduleAdmission(admission.reason, admission.retryAfterMs, credentials.filter(candidate => !attemptedCredentialIds.has(candidate?.id || "__none__")).map(candidate => targetKey(candidate)!))
@@ -1488,10 +1502,9 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
           }
         }
 
-        if (request.signal.aborted || (retry && gatewayDrainSignal().aborted) || (retry && !retry.withinDeadline()) || (retry && retry.count >= 24)) {
+        if (request.signal.aborted || (retry && gatewayDrainSignal().aborted) || (retry && retry.count >= 24)) {
           lease?.cancelBeforeDispatch()
           if (!request.signal.aborted && retry && retry.count >= 24) return { kind: "blocked", response: noDispatch(lastProviderFailure(retry, localProviderError(503, "retry_dispatch_limit", "The retry dispatch limit was reached."))) }
-          if (!request.signal.aborted && retry && !retry.withinDeadline()) return { kind: "blocked", response: noDispatch(lastProviderFailure(retry, localProviderError(503, "retry_deadline", "The retry window expired."))) }
           if (!request.signal.aborted) return { kind: "blocked", response: localProviderError(503, "gateway_draining", "Gateway is draining requests for maintenance.", { terminal: true }) }
           return { kind: "aborted" }
         }
@@ -1528,9 +1541,9 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
         : localProviderError(503, "provider_configuration_unavailable", "Provider configuration is temporarily unavailable.", { terminal: continuation.continuation }) }
     }
     if (dispatch.kind === "blocked") {
-      if (retry && retry.count === dispatchesAtEntry && skippedByRetry) recordLog("gateway.retry.stopped", { reason: retry.quotaFailure() ? "quota_exhausted" : "no_retryable_targets" })
+      if (retry && retry.count === dispatchesAtEntry && skippedByRetry) recordLog("gateway.retry.stopped", { reason: "no_retryable_targets" })
       const response = retry && retry.count === dispatchesAtEntry ? skippedFailure || retry.previousFailure() || dispatch.response : dispatch.response
-      return { response: retry && retry.count === dispatchesAtEntry && (skippedByRetry || response.headers.get("x-rawroute-no-dispatch") === "1") ? noDispatch(response) : response }
+      return { response: retry && retry.count === dispatchesAtEntry && (skippedByRetry || dispatch.response.headers.get("x-rawroute-no-dispatch") === "1") ? noDispatch(response) : response }
     }
     if (dispatch.kind === "aborted") throw request.signal.reason
     if (dispatch.kind === "retry") continue
@@ -1551,18 +1564,19 @@ async function proxyToOrdinaryProvider(request: Request, resolved: ResolvedGatew
       lease?.release()
       const failure = { status: response.status, statusText: response.statusText, headers: providerResponseHeaders(response.headers), body: responseBody }
       lastFailure = failure
-      const failureClass = classifyUpstreamFailure(response.status, responseBody)
-      const safeFallback = safeCredentialFallback(failureClass)
       const key = targetKey(credential)
       if (retry && key) {
         const details = await upstreamFailure(new Response(Buffer.from(responseBody), { headers: failure.headers }))
         if (details.retrySeconds && !failure.headers.has("retry-after")) failure.headers.set("retry-after", String(details.retrySeconds))
-        if (retry.failed(key, response.status, failure.headers, failureClass)) recordLog("gateway.retry.scheduled", { reason: "upstream_failure" })
-        else recordLog("gateway.retry.stopped", { reason: failureClass === "quota" ? "quota_exhausted" : "non_retryable_failure" })
+        if (retry.failed(key, response.status, failure.headers)) recordLog("gateway.retry.scheduled", { reason: "upstream_failure" })
         retry.rememberFailure(responseFromProviderFailure(failure, clientProtocol, upstream.protocol).response)
+        if (retry.preferredProbe(memberKeys) === key) return {
+          ...responseFromProviderFailure(failure, clientProtocol, upstream.protocol),
+          probe: { key, memberKeys, ...(credential ? { isAdmissible: () => scheduler.isAdmissible({ ownerWorkspaceId: resolved.shared?.ownerWorkspaceId || currentWorkspaceId(), providerId: resolved.providerId!, credential }) } : {}) },
+        }
       }
-      if (continuation.continuation || !safeFallback) {
-        return responseFromProviderFailure(failure, clientProtocol, upstream.protocol, failureClass === "non-retryable" || (continuation.continuation && !retry))
+      if (continuation.continuation) {
+        return responseFromProviderFailure(failure, clientProtocol, upstream.protocol, continuation.continuation && !retry)
       }
       continue
     }
@@ -1633,9 +1647,10 @@ export async function proxyToProvider(
   caller?: GatewayCaller,
   scheduler: ProviderCredentialScheduler = providerCredentialScheduler,
   retry?: GatewayRetry,
+  probeKey?: string,
 ): Promise<GatewayUpstreamResponse> {
   const upstream = resolved.upstream
   if (!upstream) return { response: Response.json({ error: { message: "Provider configuration is unavailable." } }, { status: 503 }) }
-  if (upstream.codex) return proxyToCodexProvider(request, resolved, prepared, clientProtocol, caller, retry)
-  return proxyToOrdinaryProvider(request, resolved, prepared, clientProtocol, caller, scheduler, retry)
+  if (upstream.codex) return proxyToCodexProvider(request, resolved, prepared, clientProtocol, caller, retry, probeKey)
+  return proxyToOrdinaryProvider(request, resolved, prepared, clientProtocol, caller, scheduler, retry, probeKey)
 }

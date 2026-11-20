@@ -80,7 +80,7 @@ mock.module("../../../packages/platform/src/server/runtime", () => ({
 }))
 
 const { BudgetDeniedError, BudgetModelExcludedError } = await import("../../../packages/gateway-ai/src/server/analytics")
-const { collectStreamUsage, isTerminalStreamEvent, normalizeRoutingFailure, proxyGatewayRequest, sharedUsageEventCopies, testComboMemberPolicy } = await import("../../../packages/gateway-ai/src/server/gateway/gateway")
+const { collectStreamUsage, isTerminalStreamEvent, normalizeRoutingFailure, proxyGatewayRequest, setGatewayRetryOptionsForTests, sharedUsageEventCopies, testComboMemberPolicy } = await import("../../../packages/gateway-ai/src/server/gateway/gateway")
 const { drainBackgroundTasks } = await import("../../../packages/platform/src/server/background-tasks")
 const { resolveGatewayModel } = await import("../../../packages/gateway-ai/src/server/gateway/model-resolution")
 const { prepareProviderRequest } = await import("../../../packages/gateway-ai/src/server/gateway/transport")
@@ -94,6 +94,8 @@ test("confirmed unavailable Codex models and their aliases cannot reach inferenc
 })
 
 beforeEach(() => {
+  let now = 0
+  setGatewayRetryOptionsForTests({ now: () => now, random: () => 0, wait: async ms => { now += ms } })
   mock.clearAllMocks()
   mocks.authenticateProxyKey.mockResolvedValue({
     workspace: { id: "default", storageMode: "scoped" },
@@ -124,6 +126,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  setGatewayRetryOptionsForTests()
   await drainBackgroundTasks()
   mock.restore()
 })
@@ -434,6 +437,8 @@ test("tries combo members in order after an upstream failure", async () => {
 })
 
 test("public combo response preserves converted quota status and hides its internal marker", async () => {
+  let now = 0
+  setGatewayRetryOptionsForTests({ now: () => now, random: () => 0, wait: async ms => { now += ms } })
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "anthropic-messages", enabled: true }])
   mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true }])
   mocks.listCombos.mockResolvedValue([{ id: "combo", combo: "quota", name: "Quota", members: [{ modelId: "p/a" }] }])
@@ -443,7 +448,7 @@ test("public combo response preserves converted quota status and hides its inter
     body: JSON.stringify({ model: "quota", messages: [{ role: "user", content: "hello" }] }),
   }))
   expect(response.status).toBe(429)
-  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(fetchMock).toHaveBeenCalledTimes(24)
   expect(response.headers.has("x-rawroute-quota-failure")).toBe(false)
   expect(await response.json()).toMatchObject({ error: { message: "See billing" } })
 })
@@ -595,7 +600,7 @@ test("treats provider model cooldown as an immediate fallback signal", async () 
 })
 
 test("does not expose a synthetic cooldown or non-limit Retry-After to clients", async () => {
-  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({
     error: { code: "model_cooldown", message: "All credentials for model codex/gpt-5 are cooling down" },
   }, { status: 429, headers: { "retry-after": "3700" } })))
 
@@ -611,7 +616,7 @@ test("does not expose a synthetic cooldown or non-limit Retry-After to clients",
 })
 
 test("does not expose Codex cooldown retry instructions", async () => {
-  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({
     error: { code: "codex_cooldown", message: "Codex cooldown is still active." },
   }, { status: 429, headers: { "retry-after": "3700" } })))
 
@@ -627,7 +632,7 @@ test("does not expose Codex cooldown retry instructions", async () => {
 })
 
 test("preserves Retry-After only for an upstream rate limit", async () => {
-  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({
     error: { code: "rate_limit_exceeded", message: "Requests per minute exceeded" },
   }, { status: 429, headers: { "retry-after": "120" } })))
 
@@ -657,14 +662,14 @@ test("does not forward caller routing control headers to the provider", async ()
   expect(response.headers.has("x-rawroute-combo-terminal")).toBe(false)
 })
 
-test("retry deadline terminal marker does not turn an unclassified 429 into a quota limit", async () => {
-  const response = await normalizeRoutingFailure(Response.json({ error: { message: "temporary failure" } }, { status: 429, headers: { "retry-after": "120", "x-rawroute-combo-terminal": "1", "x-rawroute-retry-deadline": "1" } }))
+test("unclassified 429 is shaped as a 503 without Retry-After", async () => {
+  const response = await normalizeRoutingFailure(Response.json({ error: { message: "temporary failure" } }, { status: 429, headers: { "retry-after": "120" } }))
   expect(response.status).toBe(503)
   expect(response.headers.has("retry-after")).toBe(false)
 })
 
 test("does not trust an unclassified upstream 429 as proof of exhausted usage", async () => {
-  spyOn(fetchTarget, "fetch").mockImplementation(mock().mockResolvedValue(Response.json({
+  spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({
     error: { code: "upstream_error", message: "Temporary provider failure" },
   }, { status: 429, headers: { "retry-after": "3700" } })))
 

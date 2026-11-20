@@ -17,9 +17,10 @@ import { apiRoutes } from "../../apps/console/src/server/routes"
 import { logs } from "../../packages/observability/src/server/store"
 import { requestContext } from "../../packages/observability/src/server/request-context"
 import { resetAnalyticsForTests, recordGatewayUsage, getDashboardPayload } from "../../packages/gateway-ai/src/server/analytics"
+import * as analytics from "../../packages/gateway-ai/src/server/analytics"
 import { resetModelSharesForTests, setModelShareTargets, listSharedModelsForRecipient } from "../../packages/gateway-ai/src/server/model-shares"
 import { resetWorkspacesForTests } from "../../packages/platform/src/server/runtime"
-import { proxyGatewayRequest } from "../../packages/gateway-ai/src/server/gateway/gateway"
+import { proxyGatewayRequest, setGatewayRetryOptionsForTests } from "../../packages/gateway-ai/src/server/gateway/gateway"
 import { providerCredentialScheduler } from "../../packages/gateway-ai/src/server/gateway/provider-credential-scheduler"
 import { redeemCodexReset, setCodexResetApiCallForTests } from "../../packages/gateway-ai/src/server/codex/reset"
 import { setCodexUsageApiCallForTests } from "../../packages/gateway-ai/src/server/codex/usage"
@@ -55,6 +56,7 @@ beforeEach(async () => {
   await resetWorkspacesForTests()
 })
 afterEach(async () => {
+  setGatewayRetryOptionsForTests()
   await drainBackgroundTasks()
   await closeLocalDatabase()
   await closeLocalCache()
@@ -63,6 +65,56 @@ afterEach(async () => {
   rmSync(directory, { recursive: true, force: true })
   for (const key of Object.keys(process.env)) if (!(key in environment)) delete process.env[key]
   Object.assign(process.env, environment)
+})
+
+test("workspace deletion waits for admission exhaustion and settles only the dispatched failure", async () => {
+  const repo = repository()
+  const selected = await workspace(repo, "Blocked retry")
+  const { provider, credential, key } = await runInWorkspace(selected, async () => {
+    const provider = await upsertProvider({ name: "Blocked", prefix: "blocked", baseUrl: "https://blocked.invalid", protocol: "openai-chat", authType: "bearer", enabled: true })
+    const credential = await upsertProviderApiKey(provider.id, { name: "key", key: "provider-key", maxConcurrency: 1 })
+    await upsertModel(provider.id, { name: "Blocked", gatewayModelId: "blocked/model", upstreamModel: "model", enabled: true })
+    const key = await createApiKey("Gateway", "blocked-gateway-key")
+    return { provider, credential, key }
+  })
+  const blocked = deferred()
+  const resume = deferred()
+  let now = 0
+  let release: (() => void) | undefined
+  setGatewayRetryOptionsForTests({ now: () => now, random: () => 0, wait: async ms => {
+    if (!release) {
+      const lease = providerCredentialScheduler.acquire({ ownerWorkspaceId: selected.id, providerId: provider.id, credentials: [credential] })
+      expect(lease.ok).toBe(true)
+      if (!lease.ok) throw new Error("Expected credential lease")
+      release = lease.cancelBeforeDispatch
+    } else if (ms === 250) {
+      blocked.resolve()
+      await resume.promise
+    }
+    now += ms
+  } })
+  const target: { fetch: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> } = globalThis
+  const upstream = spyOn(target, "fetch").mockImplementation(async () => Response.json({ error: { message: "unavailable" } }, { status: 503 }))
+  const record = spyOn(analytics, "recordUsageEvent")
+  try {
+    const request = proxyGatewayRequest(new Request("https://gateway.test/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${key.key}`, "content-type": "application/json" }, body: JSON.stringify({ model: "blocked/model", messages: [{ role: "user", content: "hello" }] }) }))
+    await blocked.promise
+    let deleted = false
+    const deletion = repo.deleteWorkspace(selected.id, selected.name).then(() => { deleted = true })
+    await tick()
+    expect(deleted).toBe(false)
+    resume.resolve()
+    expect((await request).status).toBe(503)
+    await deletion
+    expect(record.mock.calls.map(([event]) => ({ final: event.requestFinal, status: event.status }))).toEqual([{ final: true, status: 503 }])
+    expect(upstream).toHaveBeenCalledTimes(1)
+    expect(await repo.getWorkspace(selected.id)).toBeUndefined()
+  } finally {
+    resume.resolve()
+    release?.()
+    upstream.mockRestore()
+    record.mockRestore()
+  }
 })
 
 function deferred() {

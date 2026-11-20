@@ -1,229 +1,233 @@
 import { expect, test } from "bun:test"
 import { classifyUpstreamFailure, GatewayRetry } from "../src/server/gateway/retry"
 
-const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
-
-test("classifies broad 4xx and 5xx errors as retryable except explicit quota and payment failures", () => {
-  expect(classifyUpstreamFailure(400, json({ error: { code: "invalid_request_error", message: "Bad input" } }))).toBe("retryable")
-  expect(classifyUpstreamFailure(418, new Uint8Array())).toBe("retryable")
-  expect(classifyUpstreamFailure(503, json({ error: { message: "Unavailable" } }))).toBe("retryable")
-  expect(classifyUpstreamFailure(402, new Uint8Array())).toBe("quota")
-  expect(classifyUpstreamFailure(429, json({ error: { code: "insufficient-quota" } }))).toBe("quota")
-  expect(classifyUpstreamFailure(429, json({ error: { message: "Your quota has been exhausted" } }))).toBe("quota")
-  expect(classifyUpstreamFailure(429, json({ error: { code: "rate_limit_exceeded", message: "Per-minute usage limit reached. Retry in 1 second." } }))).toBe("retryable")
-  expect(classifyUpstreamFailure(429, json({ error: { code: "rate_limit_exceeded", message: "Per-minute quota exceeded. Retry in 1 second." } }))).toBe("retryable")
-  expect(classifyUpstreamFailure(429, json({ error: { code: "rate_limit_exceeded", message: "Per-minute quota exceeded. Retry in 1 second." } }))).toBe("retryable")
-  expect(classifyUpstreamFailure(429, json({ error: { type: "insufficient_quota" } }))).toBe("quota")
-  expect(classifyUpstreamFailure(200, new Uint8Array())).toBe("non-retryable")
-})
-
-test("admission delays previously dispatched targets without spinning or blocking other targets", async () => {
-  let now = 0
-  const retry = new GatewayRetry({ deadlineAt: 10_000, now: () => now, random: () => 0, wait: async ms => { now += ms } })
-  retry.dispatched("a")
-  retry.failed("a", 503, new Headers())
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  for (const expected of [750, 1250, 2250]) {
-    retry.scheduleAdmission("concurrency_limit", undefined, ["a"])
-    expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-    expect(now).toBe(expected)
-  }
-  retry.scheduleAdmission("concurrency_limit", undefined, ["a"])
-  expect(await retry.nextRound(new AbortController().signal)).toBe(false)
-})
-
-test("quota on one target does not suppress a deferred RPM alternative", async () => {
-  let now = 0
-  const retry = new GatewayRetry({ deadlineAt: 10_000, now: () => now, wait: async ms => { now += ms } })
-  retry.dispatched("a")
-  retry.failed("a", 402, new Headers(), "quota")
-  retry.scheduleAdmission("rpm_limit", 2000, ["b"])
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(now).toBe(2000)
-  expect(retry.canDispatch("a")).toBe(false)
-  expect(retry.canDispatch("b")).toBe(true)
-})
-
-test("defers previously dispatched capacity-blocked targets and preserves independent RPM wakes", async () => {
-  let now = 0
-  const retry = new GatewayRetry({ deadlineAt: 10_000, now: () => now, random: () => 0, wait: async ms => { now += ms } })
-  retry.dispatched("a")
-  retry.failed("a", 503, new Headers())
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  for (const elapsed of [750, 1_250, 2_250]) {
-    retry.scheduleAdmission("concurrency_limit", undefined, ["a"])
-    expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-    expect(now).toBe(elapsed)
-  }
-  retry.scheduleAdmission("concurrency_limit", undefined, ["a"])
-  expect(await retry.nextRound(new AbortController().signal)).toBe(false)
-
-  const quota = new GatewayRetry({ deadlineAt: 10_000, now: () => now, wait: async ms => { now += ms } })
-  quota.dispatched("a")
-  quota.failed("a", 402, new Headers(), "quota")
-  quota.scheduleAdmission("rpm_limit", 2_000, ["b"])
-  expect(await quota.nextRound(new AbortController().signal)).toBe(true)
-  expect(now).toBe(4_250)
-  expect(quota.canDispatch("a")).toBe(false)
-  expect(quota.canDispatch("b")).toBe(true)
-})
-
-test("recognizes Anthropic nested details.error_code and bounds parsing", () => {
-  expect(classifyUpstreamFailure(400, json({
-    type: "error",
-    error: { type: "billing_error", details: { error_code: "usage_limit_reached" } },
-  }))).toBe("quota")
-  expect(classifyUpstreamFailure(400, "{".repeat(8_193))).toBe("retryable")
-  expect(classifyUpstreamFailure(400, new TextEncoder().encode("{".repeat(9_000)))).toBe("retryable")
-})
-
-test("coordinator retires classified quota failures but retries other completed 4xx responses", async () => {
-  let now = 0
-  const retry = new GatewayRetry({ deadlineAt: 10_000, now: () => now, random: () => 0, wait: async (milliseconds) => { now += milliseconds } })
-  const quota = retry.key("workspace", "provider", "model", "quota-key")
-  retry.dispatched(quota)
-  expect(retry.failed(quota, 429, new Headers(), classifyUpstreamFailure(429, json({ error: { code: "insufficient_quota" } })))).toBe(false)
-  expect(await retry.nextRound(new AbortController().signal)).toBe(false)
-
-  const ordinary = retry.key("workspace", "provider", "model", "ordinary-key")
-  retry.dispatched(ordinary)
-  expect(retry.failed(ordinary, 400, new Headers(), classifyUpstreamFailure(400, json({ error: { code: "invalid_request_error" } })))).toBe(true)
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(retry.canDispatch(ordinary)).toBe(true)
-})
-
-test("injects time and jitter for deterministic exponential backoff and ignores malformed hints", async () => {
+function clock(inputTokens = 0, random = 0) {
   let now = 0
   const waits: number[] = []
-  const retry = new GatewayRetry({
-    deadlineAt: 20_000,
-    now: () => now,
-    random: () => 0.5,
-    wait: async (milliseconds) => { waits.push(milliseconds); now += milliseconds },
-  })
-  const key = retry.key("workspace", "provider", "model", "credential")
+  const retry = new GatewayRetry({ inputTokens, now: () => now, random: () => random, wait: async ms => { waits.push(ms); now += ms } })
+  return { retry, waits, time: () => now }
+}
+const signal = () => new AbortController().signal
+const fail = (retry: GatewayRetry, key: string, hint?: string) => {
   retry.dispatched(key)
-  expect(retry.failed(key, 503, new Headers({ "retry-after": "nonsense" }))).toBe(true)
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(waits).toEqual([550])
+  expect(retry.failed(key, 402, new Headers(hint === undefined ? {} : { "retry-after": hint }), "quota")).toBe(true)
+}
 
-  retry.dispatched(key)
-  retry.failed(key, 503, new Headers())
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
+test("classification remains available for response shaping", () => {
+  expect(classifyUpstreamFailure(402, "")).toBe("quota")
+  expect(classifyUpstreamFailure(400, "{}")).toBe("retryable")
+  expect(classifyUpstreamFailure(307, "")).toBe("non-retryable")
+})
+
+test("first failure probes on normal backoff, second respects seconds and HTTP dates", async () => {
+  const { retry, waits } = clock()
+  fail(retry, "a", "10")
+  expect(await retry.nextRound(signal())).toBe(true)
+  fail(retry, "a", new Date(10_500).toUTCString())
+  expect(await retry.nextRound(signal())).toBe(true)
+  expect(waits).toEqual([500, 9_500])
+  fail(retry, "a", "3")
+  await retry.nextRound(signal())
+  expect(waits.at(-1)).toBe(3_000)
+})
+
+test.each([undefined, "0", "nonsense", "2099.5", new Date(0).toUTCString()])("invalid or elapsed hint %s retains backoff floor", async hint => {
+  const { retry, waits } = clock(0, 0.5)
+  fail(retry, "a", hint)
+  await retry.nextRound(signal())
+  fail(retry, "a", hint)
+  await retry.nextRound(signal())
   expect(waits).toEqual([550, 1_050])
 })
 
-test("honors full Retry-After delays and HTTP dates", async () => {
-  let now = 1_000
-  const waits: number[] = []
-  const retry = new GatewayRetry({
-    deadlineAt: 250_000,
-    now: () => now,
-    random: () => 0,
-    wait: async (milliseconds) => { waits.push(milliseconds); now += milliseconds },
-  })
-  const key = retry.key("workspace", "provider", "model", "credential")
-  retry.dispatched(key)
-  retry.failed(key, 503, new Headers({ "retry-after": "120" }))
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(waits).toEqual([120_000])
-
-  retry.dispatched(key)
-  retry.failed(key, 503, new Headers({ "retry-after": new Date(now + 10_000).toUTCString() }))
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(waits).toEqual([120_000, 10_000])
+test("context threshold selects preferential probe and patience", async () => {
+  for (const [tokens, preferred, secondWait] of [[79_999, undefined, 15_000], [80_000, "a", 30_000]] as const) {
+    const { retry, waits } = clock(tokens)
+    fail(retry, "a", "30")
+    expect(retry.preferredProbe(["a", "b"])).toBe(preferred)
+    await retry.nextRound(signal())
+    fail(retry, "a", "30")
+    await retry.nextRound(signal())
+    expect(waits).toEqual([500, secondWait])
+  }
 })
 
-test("does not interpret fractional numeric Retry-After as an HTTP date", async () => {
+test("inverted jitter does not invert actual dispatch order", async () => {
   let now = 0
-  const retry = new GatewayRetry({ deadlineAt: 10_000, now: () => now, random: () => 0, wait: async (milliseconds) => { now += milliseconds } })
-  const key = retry.key("workspace", "provider", "model", "credential")
-  retry.dispatched(key)
-  retry.failed(key, 503, new Headers({ "retry-after": "2099.5" }))
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(now).toBe(500)
+  let calls = 0
+  const retry = new GatewayRetry({ now: () => now, random: () => calls++ % 2 === 0 ? 0.99 : 0, wait: async ms => { now += ms } })
+  const wire: string[] = []
+  for (let i = 0; i < 8; i++) {
+    let key = retry.orderedTargets(["a", "b"]).find(candidate => retry.canDispatch(candidate))
+    if (!key) {
+      expect(await retry.nextRound(signal())).toBe(true)
+      key = retry.orderedTargets(["a", "b"]).find(candidate => retry.canDispatch(candidate))
+    }
+    expect(key).toBeDefined()
+    wire.push(key!)
+    fail(retry, key!)
+  }
+  expect(wire).toEqual(["a", "b", "a", "b", "a", "b", "a", "b"])
 })
 
-test("schedules RPM expiry and at most three concurrency admission polls", async () => {
+test("preference waits permit dispatch, yield to admission, and distinguish hint patience", async () => {
+  const { retry, waits } = clock(80_000)
+  fail(retry, "a", "30")
+  expect(retry.preferredProbe(["a", "b"])).toBe("a")
+  expect(await retry.waitForProbe("a", signal(), ["a", "b"])).toBe(true)
+  expect(retry.canDispatch("a")).toBe(true)
+  fail(retry, "a", "30")
+  expect(retry.preferredProbe(["a", "b"])).toBe("a")
+  expect(await retry.waitForProbe("a", signal(), ["a", "b"])).toBe(true)
+  expect(retry.canDispatch("a")).toBe(true)
+  expect(waits).toEqual([500, 30_000])
+  fail(retry, "a", "61")
+  expect(retry.preferredProbe(["a", "b"])).toBeUndefined()
+  expect(retry.canDispatch("b")).toBe(true)
+  retry.scheduleAdmission("rpm_limit", 1_000, ["a"])
+  expect(retry.preferredProbe(["a", "b"])).toBeUndefined()
+})
+
+test("same over-patience hint waits for sole target but yields to an alternate", async () => {
+  const { retry, waits } = clock(79_999)
+  fail(retry, "a", "30"); await retry.nextRound(signal())
+  fail(retry, "a", "30")
+  expect(retry.preferredProbe(["a", "b"])).toBeUndefined()
+  expect(retry.canDispatch("b")).toBe(true)
+  await retry.nextRound(signal())
+  expect(waits).toEqual([500, 15_000])
+})
+
+test("short context does not prefer a cheap second hint over a ready alternate", async () => {
+  const { retry, waits } = clock(79_999)
+  fail(retry, "a", "5")
+  await retry.nextRound(signal())
+  fail(retry, "a", "5")
+  expect(retry.preferredProbe(["a", "b"])).toBeUndefined()
+  expect(retry.canDispatch("b")).toBe(true)
+  fail(retry, "b")
+  expect(waits).toEqual([500])
+})
+
+test("mixed hinted and ordinary cooldowns debit against the hint-free cursor successor", async () => {
   let now = 0
   const waits: number[] = []
-  const retry = new GatewayRetry({ deadlineAt: 70_000, now: () => now, wait: async (milliseconds) => { waits.push(milliseconds); now += milliseconds } })
-  retry.scheduleAdmission("rpm_limit", 60_000)
-  expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  expect(waits).toEqual([60_000])
+  const retry = new GatewayRetry({ inputTokens: 80_000, now: () => now, random: () => 0, wait: async ms => { waits.push(ms); now += ms } })
+  fail(retry, "a", "60")
+  fail(retry, "b")
+  await retry.nextRound(signal())
+  fail(retry, "a", "60")
+  now += 1_000
+  fail(retry, "b")
+  await retry.nextRound(signal())
+  expect(waits.at(-1)).toBe(1_000)
+  // B's backoff is 1s while A was already normal-ready; expose the debit.
+  retry.block("b")
+  for (let i = 0; i < 3; i++) { fail(retry, "a", "60"); await retry.nextRound(signal()) }
+  expect(waits.at(-1)).toBe(9_000)
+})
 
-  now = 0
-  const polls = new GatewayRetry({ deadlineAt: 10_000, now: () => now, wait: async (milliseconds) => { waits.push(milliseconds); now += milliseconds } })
-  for (const wait of [250, 500, 1_000]) {
-    polls.scheduleAdmission("concurrency_limit", undefined)
-    expect(await polls.nextRound(new AbortController().signal)).toBe(true)
-    expect(waits.at(-1)).toBe(wait)
-  }
-  polls.scheduleAdmission("concurrency_limit", undefined)
-  expect(await polls.nextRound(new AbortController().signal)).toBe(false)
-
-  now = 0
-  const mixed = new GatewayRetry({ deadlineAt: 70_000, now: () => now, wait: async (milliseconds) => { waits.push(milliseconds); now += milliseconds } })
-  for (const wait of [250, 500, 1_000]) {
-    mixed.scheduleAdmission("mixed_limits", 60_000)
-    expect(await mixed.nextRound(new AbortController().signal)).toBe(true)
-    expect(waits.at(-1)).toBe(wait)
-  }
-  mixed.scheduleAdmission("mixed_limits", 60_000)
-  expect(await mixed.nextRound(new AbortController().signal)).toBe(true)
-  expect(waits.at(-1)).toBe(58_250)
-
-  now = 0
-  const mixedPolls = new GatewayRetry({ deadlineAt: 70_000, now: () => now, wait: async (milliseconds) => { waits.push(milliseconds); now += milliseconds } })
-  for (const wait of [250, 500, 1_000]) {
-    mixedPolls.scheduleAdmission("mixed_limits", 60_000)
-    expect(await mixedPolls.nextRound(new AbortController().signal)).toBe(true)
-    expect(waits.at(-1)).toBe(wait)
+test("probe wait charges only time holding a ready alternate", async () => {
+  for (const [keys, expectedLast] of [[ ["a"], 7_000 ], [ ["a", "b"], 6_500 ]] as const) {
+    const { retry, waits } = clock(80_000)
+    fail(retry, "a", "60")
+    expect(await retry.waitForProbe("a", signal(), [...keys])).toBe(true)
+    for (let i = 0; i < 3; i++) { fail(retry, "a", "60"); await retry.nextRound(signal()) }
+    expect(waits.at(-1)).toBe(expectedLast)
   }
 })
 
-test("cancels a scheduled retry wait", async () => {
-  const retry = new GatewayRetry({
-    deadlineAt: 10_000,
-    now: () => 0,
-    wait: (_milliseconds, signal) => new Promise<void>((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true })
-    }),
-  })
-  const key = retry.key("workspace", "provider", "model", "credential")
-  retry.dispatched(key)
-  retry.failed(key, 503, new Headers())
+test("elapsed local admission does not consume allowance or erase a hint", async () => {
+  const { retry, waits } = clock(80_000)
+  fail(retry, "a", "60"); await retry.nextRound(signal())
+  fail(retry, "a", "60")
+  retry.scheduleAdmission("rpm_limit", 30_000, ["a"])
+  await retry.nextRound(signal())
+  expect(retry.canDispatch("a")).toBe(false)
+  await retry.nextRound(signal())
+  expect(waits).toEqual([500, 30_000, 30_000])
+  for (let i = 0; i < 2; i++) { fail(retry, "a", "60"); await retry.nextRound(signal()) }
+  expect(waits.at(-1)).toBe(36_000)
+})
+
+test("elapsed dispatch time preserves allowance and remaining hint cooldown", async () => {
+  let now = 0
+  const waits: number[] = []
+  const retry = new GatewayRetry({ inputTokens: 80_000, now: () => now, random: () => 0, wait: async ms => { waits.push(ms); now += ms } })
+  fail(retry, "a", "60"); await retry.nextRound(signal())
+  fail(retry, "a", "60")
+  now += 30_000
+  expect(retry.canDispatch("a")).toBe(false)
+  await retry.nextRound(signal())
+  expect(waits).toEqual([500, 30_000])
+  for (let i = 0; i < 2; i++) { fail(retry, "a", "60"); await retry.nextRound(signal()) }
+  expect(waits.at(-1)).toBe(36_000)
+})
+
+test("allowance is clamped before sleep and exhausted allowance falls back to normal pacing", async () => {
+  const { retry, waits } = clock(80_000)
+  fail(retry, "a", "60")
+  await retry.nextRound(signal())
+  for (let i = 0; i < 3; i++) { fail(retry, "a", "60"); await retry.nextRound(signal()) }
+  expect(waits).toEqual([500, 60_000, 60_000, 7_000])
+  fail(retry, "a", "60")
+  await retry.nextRound(signal())
+  expect(waits.at(-1)).toBe(4_000)
+})
+
+test("overlapping cooldowns debit one sleep and rotation follows dispatch order", async () => {
+  const { retry, waits } = clock(80_000)
+  fail(retry, "a", "10"); fail(retry, "b", "10")
+  expect(retry.orderedTargets(["a", "b", "c"])).toEqual(["c", "a", "b"])
+  await retry.nextRound(signal())
+  fail(retry, "a", "10"); fail(retry, "b", "10")
+  await retry.nextRound(signal())
+  expect(waits).toEqual([500, 10_000])
+})
+
+test("RPM overlap does not spend extra hint allowance and wakes are bounded", async () => {
+  const { retry, waits } = clock(80_000)
+  fail(retry, "a", "10"); await retry.nextRound(signal())
+  fail(retry, "a", "10")
+  retry.scheduleAdmission("rpm_limit", 5_000, ["a"])
+  expect(await retry.nextRound(signal())).toBe(true)
+  expect(waits).toEqual([500, 5_000])
+  retry.scheduleAdmission("rpm_limit", 5_000, ["a"])
+  expect(await retry.nextRound(signal())).toBe(false)
+  retry.dispatched("a")
+  retry.scheduleAdmission("rpm_limit", 2_000, ["a"])
+  expect(await retry.nextRound(signal())).toBe(true)
+})
+
+test("concurrency polls are request-wide and exhaust without progress", async () => {
+  const { retry, waits } = clock()
+  for (let i = 0; i < 3; i++) {
+    retry.scheduleAdmission("concurrency_limit", undefined)
+    expect(await retry.nextRound(signal())).toBe(true)
+  }
+  retry.scheduleAdmission("concurrency_limit", undefined)
+  expect(await retry.nextRound(signal())).toBe(false)
+  expect(waits).toEqual([250, 500, 1_000])
+})
+
+test("24 dispatches stop without another sleep or dispatch", async () => {
+  const { retry, waits } = clock()
+  for (let i = 0; i < 24; i++) {
+    expect(retry.canDispatch("a")).toBe(true)
+    fail(retry, "a")
+    if (i < 23) expect(await retry.nextRound(signal())).toBe(true)
+  }
+  expect(await retry.nextRound(signal())).toBe(false)
+  expect(retry.stopReason()).toBe("dispatch_limit")
+  expect(retry.canDispatch("a")).toBe(false)
+  expect(waits).toHaveLength(23)
+})
+
+test("abort cancels a scheduled wait", async () => {
+  const retry = new GatewayRetry({ now: () => 0, wait: (_ms, s) => new Promise<void>((_resolve, reject) => { s.addEventListener("abort", () => reject(s.reason), { once: true }) }) })
+  fail(retry, "a")
   const controller = new AbortController()
   const waiting = retry.nextRound(controller.signal)
   controller.abort(new Error("cancel retry"))
   await expect(waiting).rejects.toThrow("cancel retry")
-})
-
-test("enforces five dispatches per target, 24 per request, and the deadline", async () => {
-  let now = 0
-  const retry = new GatewayRetry({
-    deadlineAt: 100_000,
-    now: () => now,
-    random: () => 0,
-    wait: async (milliseconds) => { now += milliseconds },
-  })
-  const key = retry.key("workspace", "provider", "model", "credential")
-  for (let dispatch = 1; dispatch <= 5; dispatch++) {
-    expect(retry.canDispatch(key)).toBe(true)
-    retry.dispatched(key)
-    retry.failed(key, 500, new Headers())
-    if (dispatch < 5) expect(await retry.nextRound(new AbortController().signal)).toBe(true)
-  }
-  expect(retry.count).toBe(5)
-  expect(await retry.nextRound(new AbortController().signal)).toBe(false)
-  expect(retry.canDispatch(key)).toBe(false)
-
-  const requestLimited = new GatewayRetry({ deadlineAt: 10_000, now: () => 0 })
-  for (let dispatch = 0; dispatch < 24; dispatch++) {
-    expect(requestLimited.canDispatch(`target-${dispatch}`)).toBe(true)
-    requestLimited.dispatched(`target-${dispatch}`)
-  }
-  expect(requestLimited.count).toBe(24)
-  expect(requestLimited.canDispatch("target-24")).toBe(false)
-  expect(new GatewayRetry({ deadlineAt: 0, now: () => 0 }).canDispatch("first")).toBe(false)
 })

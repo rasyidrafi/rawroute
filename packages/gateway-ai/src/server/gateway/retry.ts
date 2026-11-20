@@ -1,18 +1,15 @@
-const RETRY_WINDOW_MS = 50_000
 const MAX_DISPATCHES = 24
-const MAX_TARGET_DISPATCHES = 5
 const BACKOFF_MS = [500, 1_000, 2_000, 4_000] as const
 const CONCURRENCY_POLL_MS = [250, 500, 1_000] as const
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const LONG_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
-type Target = { count: number; readyAt: number; retryable: boolean }
+type Target = { count: number; normalAt: number; hintAt: number; hintDelay: number; patience: number; probePending: boolean }
 
 export type UpstreamFailureClass = "quota" | "retryable" | "non-retryable"
 
 export type GatewayRetryOptions = {
-  /** Absolute deadline, normally captured at gateway HTTP entry. */
-  deadlineAt?: number
+  inputTokens?: number
   /** Injectable clock and jitter source for deterministic policy tests. */
   now?: () => number
   random?: () => number
@@ -78,107 +75,136 @@ export function classifyUpstreamFailure(status: number, body: Uint8Array | strin
   return inspect(payload, 0) ? "quota" : "retryable"
 }
 
-/** Request-local dispatch limits. The deadline limits retries, not a successful stream. */
+/** Request-local retry and admission pacing. */
 export class GatewayRetry {
-  private readonly deadline: number
   private readonly now: () => number
   private readonly random: () => number
   private readonly wait: (milliseconds: number, signal: AbortSignal) => Promise<void>
   private readonly targets = new Map<string, Target>()
   private dispatches = 0
+  private cursor: string | undefined
+  private wakeTarget: string | undefined
+  private inputTokens: number
+  private allowance = 120_000
   private pinned: string | undefined
   private pinnedMember: number | undefined
   private lastFailure: Response | undefined
   private rpmWakeAt: number | undefined
+  private rpmWakeUsed = false
   private concurrencyPolls = 0
   private concurrencyBlocked = false
   private readonly admissionBlockedTargets = new Set<string>()
   private stopReasonValue = "no_retryable_targets"
-  private failureWasQuota = false
-  private admissionWakeAt: number | undefined
   round = 0
   private readonly blocked = new Set<string>()
 
   constructor(options: GatewayRetryOptions = {}) {
     this.now = options.now || Date.now
     this.random = options.random || Math.random
+    this.inputTokens = options.inputTokens ?? 0
     this.wait = options.wait || ((milliseconds, signal) => new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve() }, milliseconds)
       const abort = () => { clearTimeout(timer); reject(signal.reason) }
       signal.addEventListener("abort", abort, { once: true })
       if (signal.aborted) abort()
     }))
-    this.deadline = options.deadlineAt ?? this.now() + RETRY_WINDOW_MS
   }
-
-  static defaultDeadlineAt(startedAt = Date.now()) { return startedAt + RETRY_WINDOW_MS }
 
   get count() { return this.dispatches }
   rememberFailure(response: Response) { this.lastFailure = response }
-  quotaFailure() { return this.failureWasQuota }
   previousFailure() { return this.lastFailure?.clone() }
-
+  setInputTokens(inputTokens: number) { this.inputTokens = inputTokens }
   key(owner: string, provider: string, model: string, credential: string) {
     return JSON.stringify([owner, provider, model, credential])
   }
 
+  private readyAt(target: Target) {
+    if (target.count < 2 || this.allowance <= 0) return target.normalAt
+    return Math.max(target.normalAt, Math.min(target.hintAt, target.hintAt - target.hintDelay + target.patience))
+  }
+
   canDispatch(key: string) {
-    const target = this.targets.get(key)
     if (this.pinned && this.pinned !== key) return false
-    if (this.dispatches >= MAX_DISPATCHES || this.now() >= this.deadline) return false
+    if (this.dispatches >= MAX_DISPATCHES || this.blocked.has(key) || this.admissionBlockedTargets.has(key)) return false
+    const target = this.targets.get(key)
     if (!target) return true
-    return this.round > 0 && target.retryable && !this.blocked.has(key) && target.count < MAX_TARGET_DISPATCHES && target.readyAt <= this.now()
+    if (this.round === 0 || target.normalAt > this.now()) return false
+    if (this.wakeTarget === key) return true
+    const successor = this.orderedTargets([...this.targets.keys()]).find(candidate => {
+      const item = this.targets.get(candidate)!
+      return (!this.pinned || this.pinned === candidate) && !this.blocked.has(candidate) && !this.admissionBlockedTargets.has(candidate)
+        && (item.count < 2 || this.readyAt(item) <= item.normalAt || this.readyAt(item) <= this.now())
+    })
+    return (this.readyAt(target) <= this.now() || this.allowance <= 0) && (successor === undefined || successor === key || this.targets.get(successor)!.normalAt <= this.now())
+  }
+
+  hasDispatched(keys: string[]) { return keys.some(key => this.targets.has(key)) }
+
+  /** Rotate a caller's stable scheduler order after the most recent dispatch. */
+  orderedTargets(keys: string[]) {
+    const index = this.cursor === undefined ? -1 : keys.indexOf(this.cursor)
+    return index < 0 ? keys : [...keys.slice(index + 1), ...keys.slice(0, index + 1)]
+  }
+
+  /** Identify an affinity wait; callers must perform fresh admission afterwards. */
+  preferredProbe(keys: string[]) {
+    if (!this.cursor || !keys.includes(this.cursor) || this.blocked.has(this.cursor) || this.admissionBlockedTargets.has(this.cursor)) return undefined
+    const target = this.targets.get(this.cursor)
+    if (!target || target.patience !== 60_000 || (this.pinned && this.pinned !== this.cursor)) return undefined
+    if (target.probePending) return this.cursor
+    return target.count >= 2 && target.hintDelay > 0 && target.hintDelay <= target.patience && this.readyAt(target) - this.now() <= this.allowance ? this.cursor : undefined
+  }
+
+  async waitForProbe(key: string, signal: AbortSignal, keys: string[] = [key]) {
+    const target = this.targets.get(key)
+    if (!target || this.preferredProbe([key]) !== key || this.dispatches >= MAX_DISPATCHES) return false
+    if (signal.aborted) throw signal.reason
+    const now = this.now()
+    const ordinaryAt = Math.min(...keys.filter(candidate => candidate !== key && (!this.pinned || this.pinned === candidate) && !this.blocked.has(candidate) && !this.admissionBlockedTargets.has(candidate)).map(candidate => this.targets.get(candidate)?.normalAt ?? now), target.normalAt)
+    const preferredAt = target.count === 1 ? target.normalAt : this.readyAt(target)
+    const extra = Math.max(0, preferredAt - Math.max(now, ordinaryAt))
+    if (extra > this.allowance) return false
+    const delay = Math.ceil(Math.max(0, preferredAt - now))
+    if (delay) await this.wait(delay, signal)
+    this.allowance -= extra
+    this.wakeTarget = key
+    this.round++
+    return !signal.aborted
   }
 
   dispatched(key: string) {
     const target = this.targets.get(key)
-    this.targets.set(key, { count: (target?.count || 0) + 1, readyAt: 0, retryable: false })
+    this.targets.set(key, { count: (target?.count || 0) + 1, normalAt: 0, hintAt: 0, hintDelay: 0, patience: target?.patience ?? (this.inputTokens >= 80_000 ? 60_000 : 15_000), probePending: false })
+    this.cursor = key
+    this.wakeTarget = undefined
     this.dispatches++
+    this.rpmWakeUsed = false
+    this.rpmWakeAt = undefined
   }
 
   block(key: string) { this.blocked.add(key) }
-
   pin(key: string) { this.pinned = key }
-
   get isPinned() { return this.pinned !== undefined }
   useMember(index: number) { return this.pinnedMember === undefined || this.pinnedMember === index }
   rememberMember(index: number) { if (this.isPinned && this.pinnedMember === undefined) this.pinnedMember = index }
-
-  readyTargets() {
-    return [...this.targets.entries()].filter(([key, target]) => !this.blocked.has(key) && target.retryable && target.readyAt <= this.now()).map(([key]) => key)
-  }
-
-  retireReady(keys: string[]) {
-    for (const key of keys) this.blocked.add(key)
-  }
-
-  withinDeadline() { return this.now() < this.deadline }
-
+  readyTargets() { return this.orderedTargets([...this.targets.keys()]).filter(key => this.canDispatch(key)) }
+  retireReady(keys: string[]) { for (const key of keys) this.blocked.add(key) }
+  retireUnadmittedReady(keys: string[]) { this.retireReady(keys.filter(key => !this.admissionBlockedTargets.has(key))) }
   stopReason() { return this.stopReasonValue }
 
   scheduleAdmission(reason: "rpm_limit" | "concurrency_limit" | "mixed_limits", retryAfterMs: number | undefined, targetKeys: string[] = []) {
-    const now = this.now()
     for (const key of targetKeys) this.admissionBlockedTargets.add(key)
-    if ((reason === "rpm_limit" || reason === "mixed_limits") && retryAfterMs !== undefined && retryAfterMs >= 0) {
-      const wakeAt = now + retryAfterMs
-      this.rpmWakeAt = Math.min(this.rpmWakeAt ?? Number.POSITIVE_INFINITY, wakeAt)
+    if (reason !== "concurrency_limit" && !this.rpmWakeUsed && retryAfterMs !== undefined && retryAfterMs >= 0) {
+      this.rpmWakeAt = Math.min(this.rpmWakeAt ?? Number.POSITIVE_INFINITY, this.now() + retryAfterMs)
     }
-    if (reason === "rpm_limit") for (const key of targetKeys) {
-      const target = this.targets.get(key)
-      if (target) target.readyAt = Math.max(target.readyAt, this.rpmWakeAt ?? now)
-    }
-    else this.concurrencyBlocked = true
+    if (reason !== "rpm_limit") this.concurrencyBlocked = true
   }
 
   failed(key: string, status: number, headers: Headers, failureClass?: UpstreamFailureClass) {
+    void status
+    void failureClass
     const target = this.targets.get(key)
     if (!target) return false
-    target.retryable = failureClass
-      ? failureClass === "retryable"
-      : status !== 402 && status >= 400 && status <= 599
-    if (!target.retryable && failureClass === "quota") { this.stopReasonValue = "quota_exhausted"; this.failureWasQuota = true }
-    if (target.retryable) this.failureWasQuota = false
-    if (!target.retryable && failureClass === "non-retryable") this.stopReasonValue = "non_retryable_failure"
     const raw = headers.get("retry-after")?.trim()
     const seconds = raw && /^\d+$/.test(raw) ? Number(raw) : undefined
     const httpDate = raw && seconds === undefined && (
@@ -195,55 +221,42 @@ export class GatewayRetry {
       : Number.isFinite(date) ? Math.max(0, date - this.now()) : 0
     const delay = Number.isFinite(requestedDelay) ? requestedDelay : Number.MAX_VALUE - this.now()
     const backoff = BACKOFF_MS[Math.min(target.count - 1, BACKOFF_MS.length - 1)]! + this.random() * 100
-    target.readyAt = this.now() + Math.max(delay, backoff)
-    return target.retryable
+    target.normalAt = this.now() + backoff
+    target.hintAt = this.now() + delay
+    target.hintDelay = delay
+    target.probePending = target.count === 1 && delay > 0
+    return true
   }
 
   async nextRound(signal: AbortSignal) {
     if (signal.aborted) throw signal.reason
-    if (!this.withinDeadline()) { this.stopReasonValue = "deadline"; return false }
     if (this.dispatches >= MAX_DISPATCHES) { this.stopReasonValue = "dispatch_limit"; return false }
-    if (this.failureWasQuota && ![...this.targets.values()].some((target) => target.retryable) && !this.concurrencyBlocked && this.rpmWakeAt === undefined) { this.stopReasonValue = "quota_exhausted"; return false }
+    const now = this.now()
     let pollAt: number | undefined
-    if (this.concurrencyBlocked) {
-      if (this.concurrencyPolls < CONCURRENCY_POLL_MS.length) {
-        this.concurrencyPolls++
-        pollAt = this.now() + CONCURRENCY_POLL_MS[this.concurrencyPolls - 1]!
-        const deferUntil = Math.min(pollAt, this.rpmWakeAt ?? Number.POSITIVE_INFINITY)
-        for (const key of this.admissionBlockedTargets) {
-          const target = this.targets.get(key)
-          if (target) target.readyAt = Math.max(target.readyAt, deferUntil)
-        }
-      } else if (this.rpmWakeAt !== undefined && this.rpmWakeAt > this.now()) {
-        for (const key of this.admissionBlockedTargets) {
-          const target = this.targets.get(key)
-          if (target) target.readyAt = Math.max(target.readyAt, this.rpmWakeAt)
-        }
-      } else {
-        for (const key of this.admissionBlockedTargets) {
-          const target = this.targets.get(key)
-          if (target) target.retryable = false
-          this.blocked.add(key)
-        }
-      }
+    if (this.concurrencyBlocked && this.concurrencyPolls < CONCURRENCY_POLL_MS.length) {
+      pollAt = now + CONCURRENCY_POLL_MS[this.concurrencyPolls]!
     }
+    const admissionAt = Math.min(pollAt ?? Infinity, this.rpmWakeAt ?? Infinity)
+    const candidates = this.orderedTargets([...this.targets.keys()]).filter(key => (!this.pinned || this.pinned === key) && !this.blocked.has(key) && !this.admissionBlockedTargets.has(key))
+    // Ordinary backoff follows the cursor, not whichever independent jitter is smallest.
+    const normalKey = candidates.find(key => this.readyAt(this.targets.get(key)!) <= this.targets.get(key)!.normalAt)
+    const ordinaryAt = Math.min(candidates.length ? this.targets.get(candidates[0]!)!.normalAt : Infinity, admissionAt)
+    const hinted = candidates.map(key => ({ key, at: this.readyAt(this.targets.get(key)!) }))
+    const normal = normalKey ? { key: normalKey, at: this.targets.get(normalKey)!.normalAt } : undefined
+    const first = hinted.filter(item => item.at > this.targets.get(item.key)!.normalAt).reduce<{ key: string; at: number } | undefined>((best, item) => !best || item.at < best.at ? item : best, normal)
+    const proposedAt = Math.min(first?.at ?? Infinity, admissionAt)
+    const wakeAt = Math.min(proposedAt, Math.max(now, ordinaryAt) + this.allowance)
     this.concurrencyBlocked = false
     this.admissionBlockedTargets.clear()
-    const candidates = [...this.targets.entries()].filter(([key, target]) => (!this.pinned || this.pinned === key) && !this.blocked.has(key) && target.retryable && target.count < MAX_TARGET_DISPATCHES).map(([, target]) => target.readyAt)
-    if (pollAt !== undefined) candidates.push(pollAt)
-    if (this.rpmWakeAt !== undefined) candidates.push(this.rpmWakeAt)
-    if (!candidates.length) {
-      this.stopReasonValue = "no_retryable_targets"
-      return false
-    }
-    const wakeAt = Math.min(...candidates)
-    const wait = Math.ceil(Math.max(0, wakeAt - this.now()))
-    if (this.now() + wait >= this.deadline) { this.stopReasonValue = "deadline"; return false }
-    if (wait) await this.wait(wait, signal)
-    if (this.rpmWakeAt !== undefined && this.rpmWakeAt <= this.now()) this.rpmWakeAt = undefined
+    if (!Number.isFinite(wakeAt)) { this.stopReasonValue = "no_retryable_targets"; return false }
+    const delay = Math.ceil(Math.max(0, wakeAt - now))
+    const extra = Math.max(0, wakeAt - Math.max(now, ordinaryAt))
+    if (delay) await this.wait(delay, signal)
+    this.allowance -= extra
+    this.wakeTarget = first && wakeAt < admissionAt ? first.key : undefined
+    if (pollAt !== undefined && pollAt <= this.now()) this.concurrencyPolls++
+    if (this.rpmWakeAt !== undefined && this.rpmWakeAt <= this.now()) { this.rpmWakeAt = undefined; this.rpmWakeUsed = true }
     this.round++
-    if (this.now() >= this.deadline) { this.stopReasonValue = "deadline"; return false }
     return !signal.aborted
   }
-
 }
