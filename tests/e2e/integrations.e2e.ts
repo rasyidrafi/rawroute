@@ -82,7 +82,7 @@ test("integration copy actions use the current origin and placeholder configurat
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("http://127.0.0.1:3100/v1")
   for (const [name, path] of [["Chat Completions", "/chat/completions"], ["Responses", "/responses"], ["Messages", "/messages"]]) {
     const copy = page.getByRole("button", { name: `Copy ${name} endpoint`, exact: true })
-    await expect(copy.locator("..").locator("code")).toHaveText(path!)
+    await expect(copy.locator("..").locator("code")).toHaveText(`http://127.0.0.1:3100/v1${path}`)
     await copy.click()
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`http://127.0.0.1:3100/v1${path}`)
   }
