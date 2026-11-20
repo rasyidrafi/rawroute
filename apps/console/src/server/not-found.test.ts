@@ -9,7 +9,8 @@ for (const path of ["/missing-page", "/dashboard/ai/usage", "/dashboard/missing"
     const body = await response.text()
     expect(body).toContain("<!doctype html>")
     expect(body).toContain("Page not found")
-    expect(body).toContain('href="/dashboard/ai/overview"')
+    expect(body).toContain('href="/">Back to home')
+    expect(body).not.toContain('href="/dashboard/ai/overview"')
     expect(body).not.toContain("<script")
   })
 }

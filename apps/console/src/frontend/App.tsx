@@ -52,6 +52,6 @@ export function App() {
     <Route element={<SessionGate />}>
       {Object.entries(dashboardViews).map(([page, element]) => <Route key={page} path={dashboardPages[page as DashboardPage].path} element={element} />)}
     </Route>
-    <Route path="*" element={<NotFoundPage defaultLanding={pagePaths.overview} />} />
+    <Route path="*" element={<NotFoundPage />} />
   </Routes></Suspense></BrowserRouter></ConsoleWebComposition>
 }
