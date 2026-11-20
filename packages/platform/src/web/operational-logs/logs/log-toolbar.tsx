@@ -3,6 +3,7 @@ import { Input } from "@rawroute/ui/input"
 import { Checkbox } from "@rawroute/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@rawroute/ui/select"
 import type { LogLevel } from "@rawroute/observability/contracts/types"
+import { useId } from "react"
 
 export function LogToolbar({ level, setLevel, query, setQuery, source, setSource, sources, live, setLive, disabled = false }: {
   disabled?: boolean
@@ -11,10 +12,11 @@ export function LogToolbar({ level, setLevel, query, setQuery, source, setSource
   source: string; setSource: (value: string) => void; sources: string[]
   live: boolean; setLive: (value: boolean) => void
 }) {
+  const sourceId = useId()
   return <div className="flex shrink-0 flex-col gap-3 border-y py-4 xl:flex-row xl:items-center xl:justify-between">
     <div className="flex flex-wrap items-center gap-3">
       <div className="flex gap-2" aria-label="Log severity">{(["all", "error", "warn", "info"] as const).map(item => <Button disabled={disabled} key={item} size="sm" variant={level === item ? "default" : "outline"} onClick={() => setLevel(item)}>{item === "all" ? "All" : item[0].toUpperCase() + item.slice(1)}</Button>)}</div>
-      {sources.length > 1 && <Select disabled={disabled} value={source} onValueChange={value => setSource(value ?? "all")}><SelectTrigger size="sm" aria-label="Log source"><SelectValue placeholder="All sources" /></SelectTrigger><SelectContent><SelectItem value="all">All sources</SelectItem>{sources.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select>}
+      {sources.length > 1 && <div className="flex items-center gap-2"><label htmlFor={sourceId} className="text-sm text-muted-foreground">Source</label><Select disabled={disabled} value={source} onValueChange={value => setSource(value ?? "all")}><SelectTrigger id={sourceId} size="sm"><SelectValue>{source === "all" ? "All" : source}</SelectValue></SelectTrigger><SelectContent><SelectItem value="all">All sources</SelectItem>{sources.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select></div>}
     </div>
     <div className="flex min-w-0 items-center gap-3 xl:ml-auto xl:w-full xl:max-w-md">
       <Input disabled={disabled} aria-label="Search logs" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search log text..." className="min-w-0 flex-1" />
