@@ -60,6 +60,12 @@ test("model picker groups duplicate names, searches, and selects by keyboard wit
   expect(popupBox.width).toBeLessThanOrEqual(288)
   expect(popupBox.x).toBeGreaterThanOrEqual(0)
   expect(popupBox.x + popupBox.width).toBeLessThanOrEqual(320)
+  const allRow = popup.getByRole("option", { name: "All models" })
+  const check = allRow.locator("svg")
+  await expect(check).toHaveCount(1)
+  const rowBox = (await allRow.boundingBox())!
+  const checkBox = (await check.boundingBox())!
+  expect(rowBox.x + rowBox.width - checkBox.x - checkBox.width).toBeLessThanOrEqual(12)
   // Duplicate display names stay distinguishable by provider group and gateway ID.
   await expect(popup.getByText("OpenAI (2)", { exact: true })).toBeVisible()
   await expect(popup.getByText("Team B (1)", { exact: true })).toBeVisible()

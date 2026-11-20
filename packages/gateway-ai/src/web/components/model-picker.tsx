@@ -33,15 +33,15 @@ export function ModelPicker({ label, value, options, onChange }: { label: string
     <label htmlFor={id} className="shrink-0 text-xs font-medium text-muted-foreground">{label}</label>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={<Button id={id} aria-label={label} variant="outline" size="sm" className="min-w-0 max-w-64 justify-between"><span className="min-w-0 flex-1 truncate">{selected?.name || value || "All models"}</span>{selected?.provider && <Badge variant="outline" className="max-w-28"><span className="truncate">{selected.provider}</span></Badge>}<ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-50" /></Button>} />
-      <PopoverContent side="bottom" align="start" sideOffset={4} padding="none" className="w-88 max-w-[calc(100vw-2rem)] overflow-hidden">
-        <Command variant="embedded">
+      <PopoverContent side="bottom" align="start" sideOffset={4} padding="none" className="w-80 max-w-[calc(100vw-2rem)] overflow-hidden">
+        <Command variant="embedded" className="h-auto max-h-(--available-height)">
           <CommandInput placeholder="Search name, ID, or provider..." aria-label={`Search ${label.toLowerCase()}`} />
           <CommandList variant="padded">
-            <CommandItem value="all models" forceMount onSelect={() => select("")}>All models{!value && <CheckIcon className="ml-auto size-4 text-primary" />}</CommandItem>
-            {groups.map(group => <CommandGroup key={group.provider} heading={`${group.provider} (${group.models.length})`}>
-              {group.models.map(model => <CommandItem key={model.id} value={`${model.name} ${model.id} ${model.provider || ""}`} variant="detail" onSelect={() => select(model.id)}>
+            <CommandItem value="all models" forceMount onSelect={() => select("")}>All models{!value && <CheckIcon aria-hidden className="ml-auto size-4" />}</CommandItem>
+            {groups.map(group => <CommandGroup variant="flush" key={group.provider} heading={groups.length > 1 || group.provider !== "Other models" ? `${group.provider} (${group.models.length})` : undefined}>
+              {group.models.map(model => <CommandItem key={model.id} value={`${model.name} ${model.id} ${model.provider || ""}`} onSelect={() => select(model.id)}>
                 <div className="min-w-0 flex-1"><div className="truncate font-medium">{model.name}</div>{model.name !== model.id && <div className="truncate font-mono text-xs text-muted-foreground">{model.id}</div>}</div>
-                {value === model.id && <CheckIcon className="mt-1 size-4 text-primary" />}
+                {value === model.id && <CheckIcon aria-hidden className="size-4" />}
               </CommandItem>)}
             </CommandGroup>)}
             <CommandEmpty>No models match your search.</CommandEmpty>

@@ -28,6 +28,9 @@ test("provider API keys toggle from the row with confirmation, fade when disable
   const edit = page.getByRole("button", { name: "Edit Toggle E2E", exact: true })
   const toggle = page.getByRole("button", { name: "Disable Toggle E2E", exact: true })
   const remove = page.getByRole("button", { name: "Delete Toggle E2E?", exact: true })
+  for (const property of ["background-color", "border-color", "border-width", "border-radius"]) {
+    await expect(edit).toHaveCSS(property, await toggle.evaluate((button, name) => getComputedStyle(button).getPropertyValue(name), property))
+  }
   expect((await edit.boundingBox())!.x).toBeLessThan((await toggle.boundingBox())!.x)
   expect((await toggle.boundingBox())!.x).toBeLessThan((await remove.boundingBox())!.x)
   await toggle.click()

@@ -94,7 +94,7 @@ export function AliasesView() {
               {member.validation?.status && (member.reasoning?.mode === "override" || member.serviceTier || member.customPayload) && <span className="shrink-0 text-muted-foreground">{member.validation.status}</span>}
               {index === visibleMembers.length - 1 && hiddenCount > 0 && <Badge variant="secondary">+{hiddenCount} more</Badge>}
             </li>)}</ol></TableCell>
-            <TableCell><div className="flex justify-end gap-1"><Button aria-label={`Edit ${combo.name || combo.combo}`} size="icon-sm" variant="ghost" onClick={() => editCombo(combo)}><PencilIcon /></Button><ConfirmAction title={`Delete ${combo.name || combo.combo}?`} description={`Requests using "${combo.combo}" will stop resolving. The member models are not affected.`} pending={pending.has(`delete-combo:${combo.id}`)} onConfirm={() => deleteCombo(combo)}><Trash2Icon /></ConfirmAction></div></TableCell>
+            <TableCell><div className="flex justify-end gap-1"><Button aria-label={`Edit ${combo.name || combo.combo}`} size="icon-sm" variant="outline" onClick={() => editCombo(combo)}><PencilIcon /></Button><ConfirmAction title={`Delete ${combo.name || combo.combo}?`} description={`Requests using "${combo.combo}" will stop resolving. The member models are not affected.`} pending={pending.has(`delete-combo:${combo.id}`)} onConfirm={() => deleteCombo(combo)}><Trash2Icon /></ConfirmAction></div></TableCell>
           </TableRow>
         })}{!data.combos.length && <EmptyRow label="No combos yet. Add one model for an alias, or multiple models for fallback." colSpan={4} />}</TableBody>
       </Table></CardContent>

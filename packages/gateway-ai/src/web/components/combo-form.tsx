@@ -1,7 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react"
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core"
-import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
-import { CSS } from "@dnd-kit/utilities"
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { BoxesIcon, BracesIcon, ChevronDownIcon, GripVerticalIcon, PlusIcon, SearchIcon, TestTube2Icon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
@@ -58,7 +57,7 @@ function SortableMemberCard({ member, index, open, effortOptions, protocol, payl
   const panelId = `combo-member-${index}`
   const configured = memberIsConfigured(member, mode)
 
-  return <div ref={setNodeRef} style={{ "--sort-transform": CSS.Transform.toString(transform) || "none", "--sort-transition": transition } as React.CSSProperties} className={cn("sortable-member rounded-lg border bg-background shadow-sm", isDragging && "relative z-20 shadow-lg ring-2 ring-ring/30")}>
+  return <div ref={setNodeRef} style={{ "--sort-transform": transform ? `translateY(${transform.y}px)` : "none", "--sort-transition": transition } as React.CSSProperties} className={cn("sortable-member rounded-lg border bg-background shadow-sm", isDragging && "relative z-20 shadow-lg ring-2 ring-ring/30")}>
     <div className="flex min-h-12 items-center gap-2 px-2 py-2 sm:px-3">
       <Button {...attributes} {...listeners} type="button" size="icon-sm" variant="muted-ghost" className="cursor-grab touch-none active:cursor-grabbing" aria-label={`Drag ${member.modelId} to reorder`}><GripVerticalIcon /></Button>
       <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted-foreground">{index + 1}</span>
@@ -187,7 +186,7 @@ export function ComboForm({ combo, models, sharedModels, onSave }: { combo: Mode
       <div className="grid gap-4 sm:grid-cols-2"><FormField label="Gateway ID"><Input name="combo" defaultValue={combo?.combo} placeholder="auto" pattern="[a-z0-9._/-]+" required /></FormField><FormField label="Name"><Input name="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Automatic fallback" maxLength={80} required /></FormField></div>
       <FormField label="Models / fallback order"><div className="grid gap-2"><div className="flex gap-2"><Select value={selectedModel} onValueChange={setSelectedModel} itemToStringLabel={(value) => targetById.get(String(value))?.label || String(value)}><SelectTrigger className="flex-1"><SelectValue placeholder="Select a local or shared model" /></SelectTrigger><SelectContent>{selectableTargets.map((target) => <SelectItem key={target.id} value={target.id}><span className="font-mono">{target.label}</span><span className="ml-2 text-xs text-muted-foreground">{target.detail}</span>{target.shared && <Badge variant="secondary" className="ml-2">Shared</Badge>}</SelectItem>)}</SelectContent></Select><Button type="button" variant="outline" disabled={!selectedModel || members.length >= 8} onClick={addMember}><PlusIcon />Add model</Button></div>{!selectableTargets.length && <EmptyState title={targets.length ? "All available models are selected" : "No eligible models"} description={targets.length ? "Remove a member to make it available for selection again." : "Enable a provider model or use a model shared into this workspace."} icon={targets.length ? SearchIcon : BoxesIcon} variant="compact" treatment="embedded" />}</div></FormField>
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={reorderMembers}>
-        <SortableContext items={members.map((member) => member.modelId)} strategy={rectSortingStrategy}>
+        <SortableContext items={members.map((member) => member.modelId)} strategy={verticalListSortingStrategy}>
           <div className="grid gap-2">{members.map((member, index) => <SortableMemberCard key={member.modelId} member={member} index={index} open={openMembers.has(member.modelId)} effortOptions={targetById.get(member.modelId)?.efforts || [...standardReasoningEfforts]} protocol={targetById.get(member.modelId)?.protocol} payloadDraft={payloadDrafts[member.modelId] ?? JSON.stringify(member.customPayload || {}, null, 2)} payloadError={payloadErrors[member.modelId]} testing={testing.has(member.modelId)} onToggle={() => toggleMember(member.modelId)} onRemove={() => removeMember(member.modelId)} onUpdate={(update) => updateMember(member.modelId, update)} onPayloadChange={(value) => updateCustomPayload(member.modelId, value)} onFormatPayload={() => formatCustomPayload(member.modelId)} onTest={() => void testMember(member.modelId)} />)}{!members.length && <EmptyState title="No models selected" description="Choose a model above, then add it. One model creates an alias; additional models provide fallback." icon={BoxesIcon} variant="compact" treatment="embedded" />}</div>
         </SortableContext>
       </DndContext>

@@ -175,6 +175,13 @@ test("Model routing keeps open and closed fallback cards stable when reordered i
     const activeCenterOffset = sourceCardBox.height / 2 - (sourceHandleBox!.y + sourceHandleBox!.height / 2 - sourceCardBox.top)
     const targetPointerY = targetBox!.y + targetBox!.height / 2 - activeCenterOffset
     await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetPointerY, { steps: 16 })
+    const dragged = cards.nth(currentOrder.indexOf(sourceId))
+    await expect(dragged).toHaveClass(/z-20/)
+    // Inspect the live drag, not just the settled DOM after pointer release.
+    for (const card of await cards.all()) {
+      await expect.poll(() => card.evaluate(element => Math.abs(element.getBoundingClientRect().height - (element as HTMLElement).offsetHeight))).toBeLessThan(1)
+    }
+    await dialog.screenshot({ path: test.info().outputPath(`drag-${sourceId.endsWith("-2") ? "collapsed" : "expanded"}.png`) })
     await page.mouse.up()
     const expectedOrder = [...currentOrder]
     const sourceIndex = expectedOrder.indexOf(sourceId)

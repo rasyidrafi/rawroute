@@ -40,7 +40,7 @@ function ResetCreditDetails({ usage }: { usage: CodexUsageResult }) {
 export function CodexResetCreditsInfo({ usage }: { usage: CodexUsageResult }) {
   const [open, setOpen] = useState(false)
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger openOnHover render={<Button variant="ghost" size="icon-xs" aria-label="View reset expiry" onFocus={event => {
+    <PopoverTrigger openOnHover render={<Button variant="outline" size="icon-xs" aria-label="View reset expiry" onFocus={event => {
       if (event.currentTarget.matches(":focus-visible")) setOpen(true)
     }}><InfoIcon /></Button>} />
     <PopoverContent initialFocus={false} finalFocus={false} align="start" className="w-80 max-w-[calc(100vw-2rem)]">

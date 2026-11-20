@@ -93,13 +93,13 @@ export function ProvidersView() {
                   <TableCell><Badge variant="secondary">{provider.prefix}/</Badge></TableCell>
                   <TableCell>{protocolLabels[provider.protocol]}</TableCell>
                   <TableCell text="code-truncate" className="max-w-64">{provider.baseUrl}</TableCell>
-                  <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.apiKeyCount}</span><span className="text-xs text-muted-foreground">configured</span>{provider.authType !== "none" && provider.enabledApiKeyCount !== provider.apiKeyCount && <Badge variant="outline">{provider.enabledApiKeyCount} enabled</Badge>}</div></TableCell>
-                  <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.modelCount}</span><span className="text-xs text-muted-foreground">configured</span>{provider.enabledModelCount !== provider.modelCount && <Badge variant="outline">{provider.enabledModelCount} enabled</Badge>}</div></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.apiKeyCount}</span><span className="text-xs text-muted-foreground">configured</span></div></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><span className="font-medium tabular-nums">{provider.modelCount}</span><span className="text-xs text-muted-foreground">configured</span></div></TableCell>
                   <TableCell onClick={(event) => event.stopPropagation()}>
                     <div className="flex justify-end gap-1">
-                      <Button aria-label={`Edit ${provider.name}`} size="icon-sm" variant="ghost" onClick={() => { setEditingProvider(provider); setProviderOpen(true) }}><PencilIcon /></Button>
+                      <Button aria-label={`Edit ${provider.name}`} size="icon-sm" variant="outline" onClick={() => { setEditingProvider(provider); setProviderOpen(true) }}><PencilIcon /></Button>
                       {provider.prefix !== "codex" && <ConfirmAction title={`Delete ${provider.name}?`} description={`This permanently deletes ${provider.apiKeyCount} API keys and ${provider.modelCount} models attached to this provider.`} pending={isPending(pendingKey)} onConfirm={() => deleteProvider(provider)}><Trash2Icon /></ConfirmAction>}
-                      <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="ghost" render={<Link to={providerPagePath(provider.id)} />}><ChevronRightIcon /></Button>
+                      <Button nativeButton={false} aria-label={`Open ${provider.name}`} size="icon-sm" variant="outline" render={<Link to={providerPagePath(provider.id)} />}><ChevronRightIcon /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -122,7 +122,7 @@ export function ProvidersView() {
               {codexProvider && <TableRow className="cursor-pointer" onClick={() => navigate(pagePaths.codex)}>
                 <TableCell text="label">Codex Providers</TableCell><TableCell><Badge variant="secondary">codex/</Badge></TableCell><TableCell>OpenAI Responses</TableCell>
                 <TableCell><span className="font-medium tabular-nums">{codexProvider.apiKeyCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell><TableCell><span className="font-medium tabular-nums">{codexProvider.modelCount}</span><span className="ml-2 text-xs text-muted-foreground">configured</span></TableCell>
-                <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="ghost" render={<Link to={pagePaths.codex} />}><ChevronRightIcon /></Button></TableCell>
+                <TableCell><Button nativeButton={false} aria-label="Open Codex Providers" size="icon-sm" variant="outline" render={<Link to={pagePaths.codex} />}><ChevronRightIcon /></Button></TableCell>
               </TableRow>}
               {!codexProvider && <EmptyTableRow title="Codex Providers are not configured yet" description="Open the Codex provider page to connect an account." icon={LinkIcon} colSpan={6} />}
             </TableBody>
