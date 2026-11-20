@@ -4,14 +4,21 @@ import { currentWorkspaceId } from "@rawroute/platform/server/workspace-context"
 import { jsonError } from "@rawroute/observability/contracts/http"
 
 import { requestLogKeyLabel } from "../../../../../contracts/request-logs"
-import { listApiKeys, listDeletedApiKeyNames } from "../../../../store"
+import { listApiKeys, listDeletedApiKeyNames, listProviders } from "../../../../store"
 
 export async function GET(request: Request) {
   let query
   try { query = parseRequestLogQuery(new URL(request.url).searchParams, currentWorkspaceId()) }
   catch { return jsonError("Invalid request log range, filters or cursor.", 400) }
   try {
-    const [page, modelNames, keys, deletedNames] = await Promise.all([listRequestLogs(query), loadDashboardModelLabels(), listApiKeys(), listDeletedApiKeyNames(currentWorkspaceId())])
+    const [page, modelNames, keys, deletedNames, providers] = await Promise.all([listRequestLogs(query), loadDashboardModelLabels(), listApiKeys(), listDeletedApiKeyNames(currentWorkspaceId()), listProviders()])
+    const providerNames = new Map(providers.map(provider => [provider.id, provider.name]))
+    const modelProviders = new Map<string, string>()
+    for (const event of page.events) {
+      if (!event.providerId) continue
+      if (event.routing) modelProviders.set(event.routing.modelId, event.providerId)
+      modelProviders.set(event.gatewayModelId, event.providerId)
+    }
     const keyNames = new Map(keys.map(key => [key.id, key.name]))
     for (const [id, name] of deletedNames) if (!keyNames.has(id)) keyNames.set(id, name)
     const modelOptions = new Map(modelNames)
@@ -24,6 +31,6 @@ export async function GET(request: Request) {
       if (event.routing) modelOptions.set(event.routing.modelId, event.routing.modelName)
       if (!keyOptions.has(event.gatewayKeyId)) keyOptions.set(event.gatewayKeyId, requestLogKeyLabel(event))
     }
-    return Response.json({ ...page, events: page.events.map(event => ({ ...event, keyName: keyNames.get(event.gatewayKeyId) || null, modelName: event.routing?.modelName || modelNames.get(event.gatewayModelId) || null })), models: [...modelOptions].map(([id, name]) => ({ id, name })), keys: [...keyOptions].map(([id, name]) => ({ id, name })) })
+    return Response.json({ ...page, events: page.events.map(event => ({ ...event, keyName: keyNames.get(event.gatewayKeyId) || null, modelName: event.routing?.modelName || modelNames.get(event.gatewayModelId) || null })), models: [...modelOptions].map(([id, name]) => ({ id, name, provider: providerNames.get(modelProviders.get(id) ?? "") ?? null })), keys: [...keyOptions].map(([id, name]) => ({ id, name })) })
   } catch { return jsonError("Unable to load request logs.", 500) }
 }

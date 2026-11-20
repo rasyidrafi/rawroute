@@ -114,7 +114,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
                 <DropdownMenuGroup>
                   <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
                   <DropdownMenuRadioGroup value={workspace?.id} onValueChange={switchWorkspace}>
-                    {workspaces.map((entry) => <DropdownMenuRadioItem key={entry.id} value={entry.id}><div className="flex size-7 items-center justify-center rounded-md border bg-background"><RouteIcon className="size-3.5" /></div><span>{entry.name}</span></DropdownMenuRadioItem>)}
+                    {workspaces.map((entry) => <DropdownMenuRadioItem key={entry.id} value={entry.id}><div className="flex size-7 items-center justify-center rounded-md border bg-background"><RouteIcon className="size-3.5" /></div><span className="min-w-0 flex-1 truncate">{entry.name}</span></DropdownMenuRadioItem>)}
                   </DropdownMenuRadioGroup>
                   <DropdownMenuItem onClick={() => { setName(""); setCreateOpen(true) }}><div className="flex size-7 items-center justify-center rounded-md border bg-background"><PlusIcon className="size-4" /></div><span>Add New Workspace</span></DropdownMenuItem>
                   <DropdownMenuItem disabled={!workspace || workspace.isDefault} onClick={() => { setName(workspace?.name ?? ""); setRenameOpen(true) }}><div className="flex size-7 items-center justify-center rounded-md border bg-background"><PencilIcon className="size-4" /></div><span>Rename Workspace</span></DropdownMenuItem>

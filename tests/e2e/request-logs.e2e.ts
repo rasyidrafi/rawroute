@@ -184,7 +184,7 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
     await page.setViewportSize({ width, height: 900 })
     for (const name of ["Date range", "Status", "Key", "Model"]) {
       const label = page.locator("label").filter({ hasText: new RegExp(`^${name}$`) })
-      const trigger = page.getByRole("combobox", { name, exact: true })
+      const trigger = name === "Model" ? page.getByRole("button", { name, exact: true }) : page.getByRole("combobox", { name, exact: true })
       await expect(label).toBeVisible()
       await expect(label).toHaveAttribute("for", (await trigger.getAttribute("id"))!)
       const left = (await label.boundingBox())!
@@ -277,8 +277,8 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await expect(page.getByRole("row")).toHaveCount(26)
   expect(requests.at(-1)!.get("key")).toBe("")
   expect(requests.at(-1)!.has("cursor")).toBe(false)
-  await page.getByRole("combobox", { name: "Model", exact: true }).click()
-  await page.getByRole("option", { name: "Demo model", exact: true }).click()
+  await page.getByRole("button", { name: "Model", exact: true }).click()
+  await page.getByRole("option", { name: "Demo model", exact: false }).click()
   await expect(page.getByRole("row")).toHaveCount(26)
   expect(requests.at(-1)!.get("model")).toBe("old-model")
   expect(requests.at(-1)!.has("cursor")).toBe(false)
@@ -289,8 +289,8 @@ test("request log filters, pagination, refresh and feedback states", async ({ pa
   await page.getByRole("combobox", { name: "Date range" }).click()
   await page.getByRole("option", { name: "Last 7 days" }).click()
   await expect.poll(() => Number(new Date(requests.at(-1)!.get("to")!)) - Number(new Date(requests.at(-1)!.get("from")!))).toBe(7 * 86_400_000)
-  await page.getByRole("combobox", { name: "Model", exact: true }).click()
-  await page.getByRole("option", { name: "Demo model", exact: true }).click()
+  await page.getByRole("button", { name: "Model", exact: true }).click()
+  await page.getByRole("option", { name: "Demo model", exact: false }).click()
   await expect.poll(() => requests.at(-1)!.get("model")).toBe("old-model")
   const previousTo = requests.at(-1)!.get("to")
   mode = "error"

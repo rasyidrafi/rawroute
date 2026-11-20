@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { TableBody } from "@rawroute/ui/table"
 import { RequestLogsTable } from "./request-logs-table"
 import { RequestLogGroup } from "./request-log-rows"
+import { ModelPicker } from "./model-picker"
 import { groupRequestLogEvents, keyDisplayLabel, requestLogGroupId, type RequestLogDisplayEvent } from "../../contracts/request-logs"
 
 function Filter({ label, value, options, onChange }: { label: string; value: string; options: { id: string; name: string }[]; onChange: (value: string) => void }) {
@@ -26,7 +27,7 @@ function Filter({ label, value, options, onChange }: { label: string; value: str
   </div>
 }
 
-function requestLogOptions(allLabel: string, selected: string, options: { id: string; name: string }[] = [], missingName?: (id: string) => string) {
+function requestLogOptions<T extends { id: string; name: string }>(allLabel: string, selected: string, options: T[] = [], missingName?: (id: string) => string): (T | { id: string; name: string })[] {
   const missing = selected && !options.some(option => option.id === selected) ? [{ id: selected, name: missingName?.(selected) ?? selected }] : []
   return [{ id: "", name: allLabel }, ...options, ...missing]
 }
@@ -51,7 +52,7 @@ function RequestLogsWorkspace() {
           <Filter label="Date range" value={days} options={[{ id: "1", name: "Last 24 hours" }, { id: "7", name: "Last 7 days" }]} onChange={setDays} />
           <Filter label="Status" value={status} options={[{ id: "all", name: "All statuses" }, { id: "success", name: "Success" }, { id: "failed", name: "Failed" }, { id: "recovered", name: "Recovered by fallback" }, { id: "incomplete", name: "Pending / incomplete" }]} onChange={setStatus} />
           <Filter label="Key" value={keyId} options={requestLogOptions("All keys", keyId, data?.keys, id => keyDisplayLabel(null, id))} onChange={setKeyId} />
-          <Filter label="Model" value={model} options={requestLogOptions("All models", model, data?.models)} onChange={setModel} />
+          <ModelPicker label="Model" value={model} options={requestLogOptions("All models", model, data?.models)} onChange={setModel} />
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button variant="outline" size="sm" focusableWhenDisabled disabled={!workspaceId || isValidating} onClick={refresh}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon data-icon="inline-start" />}Refresh</Button>
             <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm"><Checkbox checked={live} onCheckedChange={toggleLive} /><span aria-hidden="true" className={live ? "size-2 rounded-full bg-success" : "size-2 rounded-full bg-muted-foreground"} />{live ? "Live" : "Paused"}</label>

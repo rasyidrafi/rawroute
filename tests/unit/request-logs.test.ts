@@ -117,7 +117,7 @@ test("request log API limits requests rather than attempts and exposes payload-m
     const first = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
     expect(first.events).toHaveLength(50)
     expect(groupRequestLogEvents(first.events)).toHaveLength(25)
-    expect(first.models).toContainEqual({ id: "payload-combo", name: "payload-combo" })
+    expect(first.models).toContainEqual({ id: "payload-combo", name: "payload-combo", provider: null })
     expect(first.nextCursor).toBeString()
     params.set("cursor", first.nextCursor!)
     const second = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
@@ -135,13 +135,13 @@ test("request history and filters use resolved group names for gateway, upstream
     await updatePricingGroup(group.id, group.memberModelIds, undefined, "GPT-6.1 Sol")
     await upsertAlias({ alias: "sol-alias", name: "Alias label", targetModelId: model.gatewayModelId })
     const ids = [model.gatewayModelId, model.upstreamModel, "sol-alias"]
-    for (const [index, gatewayModelId] of ids.entries()) await recordUsageEvent(event(`resolved-${index}`, { gatewayModelId }), null)
+    for (const [index, gatewayModelId] of ids.entries()) await recordUsageEvent(event(`resolved-${index}`, { gatewayModelId, providerId: provider.id }), null)
     const response = await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))
     expect(response.status).toBe(200)
     const page = await response.json() as RequestLogsPage
     expect(page.events).toHaveLength(3)
     expect(page.events.every(row => row.modelName === "GPT-6.1 Sol")).toBe(true)
-    for (const id of ids) expect(page.models).toContainEqual({ id, name: "GPT-6.1 Sol" })
+    for (const id of ids) expect(page.models).toContainEqual({ id, name: "GPT-6.1 Sol", provider: "Provider" })
   })
 })
 
@@ -153,7 +153,7 @@ test("endpoint exposes historical model options from returned rows and filters b
     await recordUsageEvent(event("another-model", { gatewayModelId: "shared/model", gatewayKeyId: "deleted-key" }), null)
     const params = new URLSearchParams(query)
     const page = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
-    expect(page.models.filter(model => model.id === "removed/model")).toEqual([{ id: "removed/model", name: "removed/model" }])
+    expect(page.models.filter(model => model.id === "removed/model")).toEqual([{ id: "removed/model", name: "removed/model", provider: null }])
     expect(page.events.find(row => row.gatewayModelId === "removed/model")?.modelName).toBeNull()
     expect(page.keys).toContainEqual({ id: "deleted-key", name: "Unknown key · deleted-" })
     expect(page.keys).toContainEqual({ id: configuredKey.id, name: configuredKey.name })
@@ -175,7 +175,7 @@ test("endpoint exposes historical model options from returned rows and filters b
     params.set("model", "removed/model")
     const filtered = await (await GET(new Request(`http://localhost/api/admin/request-logs?${params}`))).json() as RequestLogsPage
     expect(filtered.events.map(row => row.id)).toEqual(["historical-one", "historical-two"])
-    expect(filtered.models).toContainEqual({ id: "removed/model", name: "removed/model" })
+    expect(filtered.models).toContainEqual({ id: "removed/model", name: "removed/model", provider: null })
   })
 })
 
@@ -326,6 +326,6 @@ test("shared source is named in request-log keys and snapshots survive current c
     const page = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
     expect(page.events[0]).toMatchObject({ modelName: "Original Luna", routing: { routeName: "Clever" }, requestId: "ingress" })
     expect(page.keys).toContainEqual({ id: "shared-workspace:consumer", name: "Shared usage · HT Non SHI" })
-    expect(page.models).toContainEqual({ id: "codex/luna", name: "Original Luna" })
+    expect(page.models).toContainEqual({ id: "codex/luna", name: "Original Luna", provider: null })
   })
 })

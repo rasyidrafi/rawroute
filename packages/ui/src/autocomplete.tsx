@@ -27,7 +27,7 @@ function AutocompletePositioner({ className, side = "bottom", sideOffset = 4, ..
 }
 
 function AutocompletePopup({ className, ...props }: AutocompletePrimitive.Popup.Props) {
-  return <AutocompletePrimitive.Popup data-slot="autocomplete-popup" className={cn("z-50 max-h-(--available-height) w-(--anchor-width) min-w-32 overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none", className)} {...props} />
+  return <AutocompletePrimitive.Popup data-slot="autocomplete-popup" className={cn("z-50 max-h-(--available-height) w-max min-w-(--anchor-width) max-w-(--available-width) overflow-hidden rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none", className)} {...props} />
 }
 
 function AutocompleteEmpty({ className, ...props }: AutocompletePrimitive.Empty.Props) {
