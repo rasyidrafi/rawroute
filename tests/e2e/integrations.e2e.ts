@@ -23,6 +23,7 @@ for (const width of [390, 1440]) {
     for (const name of ["OpenCode", "Codex", "Claude Code", "Cursor", "Continue", "OpenAI-compatible apps"]) {
       const card = page.locator('[data-slot="card"]').filter({ has: page.getByRole("heading", { name, exact: true }) })
       const logo = card.locator('[data-slot="card-header"] svg')
+      await expect(card.locator('[data-slot="card-header"] [data-slot="badge"]')).toHaveCount(0)
       await expect(logo).toHaveCount(1)
       await expect(logo).toHaveAttribute("fill", "currentColor")
       await expect(logo).toHaveAttribute("aria-hidden", "true")
@@ -39,26 +40,20 @@ for (const width of [390, 1440]) {
       expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
       await page.getByRole("link", { name: `View ${name} setup guide` }).click()
       await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
-      const guideHeader = page.locator('[data-slot="card-header"]').filter({ has: page.getByRole("heading", { name, exact: true }) })
+      const guideHeader = page.locator('header').filter({ has: page.getByRole("heading", { name: `Set up ${name}`, exact: true }) })
       await expect(guideHeader.locator('[data-slot="badge"]')).toHaveCount(0)
       const logoBounds = (await guideHeader.locator("svg").boundingBox())!
-      const titleBounds = (await guideHeader.getByRole("heading", { name, exact: true }).boundingBox())!
-      const descriptionBounds = (await guideHeader.locator('[data-slot="card-description"]').boundingBox())!
+      const titleBounds = (await guideHeader.getByRole("heading", { name: `Set up ${name}`, exact: true }).boundingBox())!
+      const descriptionBounds = (await guideHeader.locator('p').boundingBox())!
       expect(titleBounds.x).toBeGreaterThan(logoBounds.x + logoBounds.width)
       expect(descriptionBounds.x).toBe(titleBounds.x)
       expect(descriptionBounds.y).toBeGreaterThanOrEqual(titleBounds.y + titleBounds.height)
       await expect(page.getByRole("heading", { name: `Set up ${name}`, exact: true })).toBeVisible()
-      await expect(page.getByRole("note")).toContainText("placeholders")
       await page.reload()
-      await expect(page.getByRole("heading", { name: "Provider configuration", exact: true })).toBeVisible()
-      const connectionCards = page.locator('main [data-slot="card-content"] > .grid > [data-slot="card"]')
-      await expect(connectionCards).toHaveCount(3)
-      // Card rings extend one pixel outside their box and must fit inside the scroll container.
-      expect(await connectionCards.evaluateAll(cards => cards.every(card => {
-        const bounds = card.getBoundingClientRect()
-        const content = card.parentElement!.parentElement!.getBoundingClientRect()
-        return bounds.top - content.top >= 1 && content.bottom - bounds.bottom >= 1
-      }))).toBe(true)
+      const steps = page.locator('main ol > li')
+      await expect(steps).toHaveCount(3)
+      await expect(steps.nth(1).getByRole("heading", { name: "Configure your provider" })).toBeVisible()
+      await expect(steps.nth(1).getByRole("button", { name: /^Copy / })).toBeVisible()
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       await page.screenshot({ path: testInfo.outputPath(`${name.toLowerCase()}-${width}.png`), fullPage: true })
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
@@ -78,11 +73,16 @@ test("integration copy actions use the current origin and placeholder configurat
   await authenticate(page)
   await context.grantPermissions(["clipboard-read", "clipboard-write"])
   await page.goto("/dashboard/ai/integrations")
-  await page.getByRole("button", { name: "Copy base URL", exact: true }).click()
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("http://127.0.0.1:3100/v1")
+  for (const [protocol, suffix] of [["OpenAI", "/v1"], ["Anthropic", ""]]) {
+    const copy = page.getByRole("button", { name: `Copy ${protocol} SDK base URL`, exact: true })
+    const url = `http://127.0.0.1:3100${suffix}`
+    await expect(copy.locator("..").locator("code")).toHaveText(url)
+    await copy.click()
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(url)
+  }
   for (const [name, path] of [["Chat Completions", "/chat/completions"], ["Responses", "/responses"], ["Messages", "/messages"]]) {
     const copy = page.getByRole("button", { name: `Copy ${name} endpoint`, exact: true })
-    await expect(copy.locator("..").locator("code")).toHaveText(`{BASE_URL}${path}`)
+    await expect(copy.locator("..").locator("code")).toHaveText(`http://{BASE_URL}/v1${path}`)
     await copy.click()
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`http://127.0.0.1:3100/v1${path}`)
   }

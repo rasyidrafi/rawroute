@@ -28,13 +28,8 @@ export const integrationGuides = {
     category: "Terminal & editor",
     description: "One custom provider for your workspace models. Configure OpenCode, choose a model, and start a coding session.",
     configPath: "~/.config/opencode/opencode.json",
-    protocol: "Chat Completions",
-    steps: [
-      { title: "Get a workspace key", description: "Create or copy a gateway key from Endpoint & Key in the workspace you want to use." },
-      { title: "Add the RawRoute provider", description: "Merge the provider configuration into your OpenCode config, keeping your existing settings." },
-      { title: "Choose your model", description: "Replace YOUR_MODEL_ID with a model or alias from Model routing that supports Chat Completions." },
-      { title: "Set your key and launch", description: "Export RAWROUTE_API_KEY in your terminal, then open OpenCode and select the RawRoute model." },
-    ],
+    configHint: "Replace YOUR_MODEL_ID with a workspace model or alias that supports Chat Completions.",
+    launchHint: "Replace the placeholder with your workspace key. Run the command, then launch OpenCode in the same terminal and select the RawRoute model.",
   },
   codex: {
     name: "Codex",
@@ -42,13 +37,8 @@ export const integrationGuides = {
     category: "Terminal",
     description: "Route your Codex sessions through RawRoute with a custom provider and a workspace gateway key.",
     configPath: "~/.codex/config.toml",
-    protocol: "Responses",
-    steps: [
-      { title: "Get a workspace key", description: "Create or copy a gateway key from Endpoint & Key in the workspace you want to use." },
-      { title: "Define your provider", description: "Merge the RawRoute provider into config.toml and select it as your model provider." },
-      { title: "Check your model", description: "The configuration uses gpt-6-luna with xhigh reasoning. Make sure this model is available in your workspace routing." },
-      { title: "Set your key and launch", description: "Replace PUT_TOKEN_HERE in config.toml with your workspace gateway key, then start a new Codex session." },
-    ],
+    configHint: "Replace PUT_TOKEN_HERE with your workspace key and choose a model that supports Responses. This example disables sandboxing and approval prompts; keep your existing security settings unless you intend to change them.",
+    launchHint: "Save the file, then start a new Codex session to load the RawRoute provider.",
   },
 } as const
 

@@ -16,6 +16,9 @@ const endpoints = [
 
 export function IntegrationsView() {
   const baseUrl = useIntegrationBaseUrl()
+  const { hostname } = new URL(baseUrl)
+  const local = hostname === "localhost" || hostname.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(hostname) || hostname === "[::1]"
+  const scheme = local ? "http" : "https"
   return <DashboardPage spacing="normal">
     <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
       <div className="min-w-0">
@@ -27,15 +30,17 @@ export function IntegrationsView() {
     <Card>
       <CardHeader><CardTitle variant="icon"><RouteIcon className="size-5" /><h3>Your gateway connection</h3></CardTitle><CardDescription>Use a workspace gateway key and the endpoint that matches your client and model.</CardDescription></CardHeader>
       <CardContent><div className="flex flex-col gap-5">
-        <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4">
-          <div className="min-w-0"><p className="mb-1 text-xs text-muted-foreground">Base URL</p><code className="break-all text-sm">{baseUrl}</code></div>
-          <IntegrationCopyButton compact value={baseUrl} label="Copy base URL" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[["OpenAI", baseUrl], ["Anthropic", new URL(baseUrl).origin]].map(([protocol, url]) => <div key={protocol} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border bg-muted/30 p-4">
+            <div className="min-w-0"><p className="mb-1 text-xs text-muted-foreground">{protocol} SDK base URL</p><code className="break-all text-sm">{url}</code></div>
+            <IntegrationCopyButton compact value={url} label={`Copy ${protocol} SDK base URL`} />
+          </div>)}
         </div>
         <div className="grid gap-4 lg:grid-cols-3">
           {endpoints.map(endpoint => <div key={endpoint.path} className="flex min-w-0 flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-medium">{endpoint.name}</h4><Badge variant="outline">{endpoint.protocol}</Badge></div>
             <p className="text-xs text-muted-foreground">{endpoint.description}</p>
-            <div className="flex min-w-0 items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{"{BASE_URL}"}{endpoint.path}</code><IntegrationCopyButton compact value={`${baseUrl}${endpoint.path}`} label={`Copy ${endpoint.name} endpoint`} /></div>
+            <div className="flex min-w-0 items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{scheme}://{"{BASE_URL}"}/v1{endpoint.path}</code><IntegrationCopyButton compact value={`${baseUrl}${endpoint.path}`} label={`Copy ${endpoint.name} endpoint`} /></div>
           </div>)}
         </div>
       </div></CardContent>
@@ -50,7 +55,7 @@ export function IntegrationsView() {
 function IntegrationCard({ integration }: { integration: Integration }) {
   const Icon = integration.icon
   return <Card className="h-full">
-    <CardHeader><div className="mb-3 flex items-center justify-between gap-3"><div className="flex size-10 items-center justify-center rounded-lg border bg-muted/30"><Icon className="size-5" /></div><Badge variant={integration.href ? "secondary" : "outline"}>{integration.href ? "Guide preview" : "Coming soon"}</Badge></div><CardTitle><h4>{integration.name}</h4></CardTitle><CardDescription>{integration.category}</CardDescription></CardHeader>
+    <CardHeader><div className="mb-3 flex size-10 items-center justify-center rounded-lg border bg-muted/30"><Icon className="size-5" /></div><CardTitle><h4>{integration.name}</h4></CardTitle><CardDescription>{integration.category}</CardDescription></CardHeader>
     <CardContent className="flex-1"><p className="text-sm text-muted-foreground">{integration.description}</p></CardContent>
     <div className="px-4"><Separator /></div>
     <CardContent>{integration.href ? <Button className="w-full justify-between" variant="outline" nativeButton={false} role="link" render={<Link to={integration.href} />} aria-label={`View ${integration.name} setup guide`}>View setup guide<ArrowRightIcon data-icon="inline-end" /></Button> : <Button className="w-full" variant="outline" disabled>Guide coming soon</Button>}</CardContent>

@@ -135,6 +135,9 @@ test("request history and filters use resolved group names for gateway, upstream
     await updatePricingGroup(group.id, group.memberModelIds, undefined, "GPT-6.1 Sol")
     await upsertAlias({ alias: "sol-alias", name: "Alias label", targetModelId: model.gatewayModelId })
     const ids = [model.gatewayModelId, model.upstreamModel, "sol-alias"]
+    const empty = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
+    expect(empty.events).toHaveLength(0)
+    for (const id of ids) expect(empty.models).toContainEqual({ id, name: "GPT-6.1 Sol", provider: "Provider" })
     for (const [index, gatewayModelId] of ids.entries()) await recordUsageEvent(event(`resolved-${index}`, { gatewayModelId, providerId: provider.id }), null)
     const response = await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))
     expect(response.status).toBe(200)

@@ -38,7 +38,7 @@ export function ModelPicker({ label, value, options, onChange }: { label: string
           <CommandInput placeholder="Search name, ID, or provider..." aria-label={`Search ${label.toLowerCase()}`} />
           <CommandList variant="padded">
             <CommandItem value="all models" forceMount onSelect={() => select("")}>All models{!value && <CheckIcon aria-hidden className="ml-auto size-4" />}</CommandItem>
-            {groups.map(group => <CommandGroup variant="flush" key={group.provider} heading={groups.length > 1 || group.provider !== "Other models" ? `${group.provider} (${group.models.length})` : undefined}>
+            {groups.map(group => <CommandGroup variant="flush" key={group.provider} heading={`${group.provider} (${group.models.length})`}>
               {group.models.map(model => <CommandItem key={model.id} value={`${model.name} ${model.id} ${model.provider || ""}`} onSelect={() => select(model.id)}>
                 <div className="min-w-0 flex-1"><div className="truncate font-medium">{model.name}</div>{model.name !== model.id && <div className="truncate font-mono text-xs text-muted-foreground">{model.id}</div>}</div>
                 {value === model.id && <CheckIcon aria-hidden className="size-4" />}
