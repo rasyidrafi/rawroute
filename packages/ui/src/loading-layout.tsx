@@ -6,8 +6,9 @@ import { Skeleton } from "./skeleton"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "./card"
 import { Table, TableBody, TableCell, TableColumns, TableRow } from "./table"
 
-/** Marks retained data as stale during a user-initiated refetch. The parent card must be positioned; background polling must not render this. */
-export function RefreshScrim({ label = "Refreshing data..." }: { label?: string }) {
+/** Marks retained data as stale during a user-initiated refetch. The parent card must be positioned; background polling must not render this. Pass `refreshing` to gate it without a branch at the call site. */
+export function RefreshScrim({ refreshing = true, label = "Refreshing data..." }: { refreshing?: boolean; label?: string }) {
+  if (!refreshing) return null
   return <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-end rounded-inherit bg-background/40 p-3 backdrop-blur-scrim"><Badge variant="refreshing"><LoadingSpinner className="size-3.5" />{label}</Badge></div>
 }
 

@@ -22,6 +22,7 @@ import { Input } from "@rawroute/ui/input"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@rawroute/ui/alert-dialog"
 import { AiContentSkeleton as DashboardContentSkeleton } from "../skeletons"
 import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { Badge } from "@rawroute/ui/badge"
 import { Button } from "@rawroute/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
@@ -113,7 +114,7 @@ function createProviderDetailActions({ provider, providerId, apiKeys, apiPost, a
   }
 }
 
-function ProviderDetailContent({ providerId, data, mutate }: { providerId: string; data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse> }) {
+function ProviderDetailContent({ providerId, data, mutate, refreshing }: { providerId: string; data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse>; refreshing: boolean }) {
   const { fetcher, apiPost, apiDelete, apiPatch } = useDashboardApi()
   const { mutate: refreshCachedResource } = useSWRConfig()
   const usageKey = providerUsageKey(data.provider)
@@ -143,12 +144,12 @@ function ProviderDetailContent({ providerId, data, mutate }: { providerId: strin
 
   return <DashboardPage>
       <ProviderHeading provider={provider} credentialCount={apiKeys.length} isOAuthProvider={isOAuthProvider} />
-      <ProviderDetailsCard data={data} isOAuthProvider={isOAuthProvider} mutate={mutate} />
+      <ProviderDetailsCard data={data} isOAuthProvider={isOAuthProvider} mutate={mutate} refreshing={refreshing} />
       {provider.prefix === "codex" && <CodexAutoRedeemCard accounts={apiKeys} />}
-      <ProviderCredentialsCard provider={provider} apiKeys={apiKeys} isOAuthProvider={isOAuthProvider} usageData={usageData} usageError={usageError} usageLoading={usageLoading} isPending={isPending} actions={actions} login={login} providerKeyOpen={providerKeyOpen} setProviderKeyOpen={setProviderKeyOpen} editingProviderApiKey={editingProviderApiKey} setEditingProviderApiKey={setEditingProviderApiKey} setToggleAccount={setToggleAccount} setResetAccount={setResetAccount} />
+      <ProviderCredentialsCard provider={provider} apiKeys={apiKeys} isOAuthProvider={isOAuthProvider} usageData={usageData} usageError={usageError} usageLoading={usageLoading} isPending={isPending} actions={actions} login={login} providerKeyOpen={providerKeyOpen} setProviderKeyOpen={setProviderKeyOpen} editingProviderApiKey={editingProviderApiKey} setEditingProviderApiKey={setEditingProviderApiKey} setToggleAccount={setToggleAccount} setResetAccount={setResetAccount} refreshing={refreshing} />
       <CodexResetDialog resetAccount={resetAccount} setResetAccount={setResetAccount} resetConfirmation={resetConfirmation} setResetConfirmation={setResetConfirmation} isPending={isPending} redeemReset={actions.redeemReset} />
       <CredentialToggleDialog toggleAccount={toggleAccount} setToggleAccount={setToggleAccount} isPending={isPending} onToggle={(account) => account.credentialKind === "codex-oauth" ? actions.setCodexAccountEnabled(account) : actions.setProviderApiKeyEnabled(account)} />
-      <ProviderModelsCard data={data} mutate={mutate} />
+      <ProviderModelsCard data={data} mutate={mutate} refreshing={refreshing} />
     </DashboardPage>
 }
 
@@ -161,6 +162,9 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
     dedupingInterval: 15_000,
   })
   const [saving, setSaving] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  // Saving settings refetches under the overlay; the 60s status poll stays silent.
+  const refreshSettings = () => { setRefreshing(true); return mutate().finally(() => setRefreshing(false)) }
   const [enableSetting, setEnableSetting] = useState<keyof CodexAutoRedeemSettings | null>(null)
   const settings = data?.settings || { expiryEnabled: true, weeklyExhaustionEnabled: false }
   const codexAccounts = accounts.filter(account => account.credentialKind === "codex-oauth")
@@ -169,7 +173,7 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
     setSaving(true)
     try {
       await apiPatch(codexAutoRedeemKey, input)
-      await mutate()
+      await refreshSettings()
       toast.success("Codex reset automation settings saved")
       return true
     } catch (error) {
@@ -185,7 +189,8 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
     else void updateSetting({ [setting]: false })
   }
 
-  return <Card>
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
     <CardHeader>
       <CardTitle variant="icon"><RotateCcwIcon className="size-5" />Auto redeem</CardTitle>
       <CardDescription>Automatically use reset credits for your Codex accounts.</CardDescription>
@@ -237,7 +242,7 @@ function CodexAutoRedeemCard({ accounts }: { accounts: ProviderApiKey[] }) {
   </Card>
 }
 
-function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData, usageError, usageLoading, isPending, actions, login, providerKeyOpen, setProviderKeyOpen, editingProviderApiKey, setEditingProviderApiKey, setToggleAccount, setResetAccount }: {
+function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData, usageError, usageLoading, isPending, actions, login, providerKeyOpen, setProviderKeyOpen, editingProviderApiKey, setEditingProviderApiKey, setToggleAccount, setResetAccount, refreshing }: {
   provider: Provider
   apiKeys: ProviderApiKey[]
   isOAuthProvider: boolean
@@ -253,8 +258,10 @@ function ProviderCredentialsCard({ provider, apiKeys, isOAuthProvider, usageData
   setEditingProviderApiKey: React.Dispatch<React.SetStateAction<ProviderApiKey | null>>
   setToggleAccount: (account: ProviderApiKey) => void
   setResetAccount: (account: ProviderApiKey) => void
+  refreshing: boolean
 }) {
-  return <Card>
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
     <ProviderCredentialsHeader provider={provider} isOAuthProvider={isOAuthProvider} login={login} onAdd={() => { setEditingProviderApiKey(null); setProviderKeyOpen(true) }} />
     <Dialog open={providerKeyOpen} onOpenChange={(open) => { setProviderKeyOpen(open); if (!open) setEditingProviderApiKey(null) }}>
       <DialogContent>
@@ -299,7 +306,7 @@ function ProviderHeading({ provider, credentialCount, isOAuthProvider }: { provi
   </div>
 }
 
-function ProviderModelsCard({ data, mutate }: { data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse> }) {
+function ProviderModelsCard({ data, mutate, refreshing }: { data: ProviderDetailResponse; mutate: KeyedMutator<ProviderDetailResponse>; refreshing: boolean }) {
   const copy = useDashboardClipboard()
   const { apiPost, apiDelete } = useDashboardApi()
   const { provider, models } = data
@@ -358,7 +365,8 @@ function ProviderModelsCard({ data, mutate }: { data: ProviderDetailResponse; mu
       setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
     }
   }
-  return <Card>
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+        {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle variant="icon"><BoxesIcon className="size-5" />Models</CardTitle>
           <CardDescription>{provider.prefix === "codex" ? <>Models are discovered from connected Codex accounts. Custom mappings are preserved. {data.discovery?.succeededAt ? `Last synced: ${formatAppDate(data.discovery.succeededAt)}.` : "Waiting for first sync."}{data.discovery?.error && <span className="block text-destructive">{data.discovery.error}</span>}</> : "Expose upstream models behind your provider prefix."}</CardDescription>
@@ -480,7 +488,7 @@ function AccountResetCell({ apiKey, usageData, isPending, setResetAccount }: Pic
   return <TableCell className="align-middle">{(accountUsage?.unusedResetCredits ?? 0) > 0 ? <div className="flex items-center gap-2"><span className="tabular-nums">{accountUsage?.unusedResetCredits}</span>{accountUsage && <CodexResetCreditsInfo usage={accountUsage} />}{apiKey.credentialKind === "codex-oauth" && <Button aria-busy={isPending(`reset:${apiKey.id}`)} size="sm" variant="outline" disabled={accountUsage?.weekly?.remainingPercent !== 0 || isPending(`reset:${apiKey.id}`)} title="Requires an exhausted weekly quota" onClick={() => setResetAccount(apiKey)}>{isPending(`reset:${apiKey.id}`) ? <LoadingSpinner /> : <RotateCcwIcon />}Redeem</Button>}</div> : <span className="text-muted-foreground">Not Available</span>}</TableCell>
 }
 
-function ProviderDetailsCard({ data, isOAuthProvider, mutate }: { data: ProviderDetailResponse; isOAuthProvider: boolean; mutate: KeyedMutator<ProviderDetailResponse> }) {
+function ProviderDetailsCard({ data, isOAuthProvider, mutate, refreshing }: { data: ProviderDetailResponse; isOAuthProvider: boolean; mutate: KeyedMutator<ProviderDetailResponse>; refreshing: boolean }) {
   const { apiPost, apiDelete } = useDashboardApi()
   const { provider, apiKeys, models } = data
   const apiKeyCounts = { configured: apiKeys.length }
@@ -522,7 +530,8 @@ function ProviderDetailsCard({ data, isOAuthProvider, mutate }: { data: Provider
       setPending((current) => { const next = new Set(current); next.delete(pendingKey); return next })
     }
   }
-  return <Card>
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+        {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle>Provider details</CardTitle>
           <CardDescription><span className="font-mono">{provider.baseUrl}</span></CardDescription>
@@ -578,7 +587,10 @@ function ProviderKeyMetadata({ apiKey, isOAuthProvider, accountUsage, usageLoadi
 export function ProviderDetailView({ providerId }: { providerId: string }) {
   const { fetcher } = useDashboardApi()
   const { data, error, isLoading, mutate } = useSWR<ProviderDetailResponse>(providerKey(providerId), fetcher, { refreshInterval: providerId === "codex" ? 15000 : 0 })
+  const [refreshing, setRefreshing] = useState(false)
+  // Action-driven refetches surface the overlay; the Codex interval poll stays silent.
+  const refreshProvider = () => { setRefreshing(true); return mutate().finally(() => setRefreshing(false)) }
   if (error) return <NotFoundState backHref={pagePaths.providers} />
   if (isLoading || !data) return <DashboardContentSkeleton variant={providerId === "codex" ? "codex-detail" : "provider-detail"} />
-  return <ProviderDetailContent providerId={providerId} data={data} mutate={mutate} />
+  return <ProviderDetailContent providerId={providerId} data={data} mutate={refreshProvider} refreshing={refreshing} />
 }

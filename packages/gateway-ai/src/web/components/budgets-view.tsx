@@ -13,6 +13,7 @@ import { withPendingAction } from "@rawroute/ui/pending-action"
 import { ConfirmAction, EmptyTableRow } from "@rawroute/ui/resource-feedback"
 import { AiContentSkeleton as DashboardContentSkeleton } from "../skeletons"
 import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@rawroute/ui/alert-dialog"
 import { Badge } from "@rawroute/ui/badge"
 import { Button } from "@rawroute/ui/button"
@@ -133,7 +134,7 @@ export function createBudgetActions({ apiPost, apiDelete, apiPatch, mutate, setP
 
 export function BudgetsView() {
   const { fetcher, apiPost, apiDelete, apiPatch } = useDashboardApi()
-  const { data, mutate, isLoading, isValidating } = useSWR<BudgetsResponse>("/api/admin/budgets", fetcher, {
+  const { data, mutate, isLoading } = useSWR<BudgetsResponse>("/api/admin/budgets", fetcher, {
     refreshInterval: 300000,
     dedupingInterval: 300000,
     revalidateOnFocus: false,
@@ -145,6 +146,10 @@ export function BudgetsView() {
   const [bypassDialogOpen, setBypassDialogOpen] = useState(false)
   const [activationAutoDeactivate, setActivationAutoDeactivate] = useState(false)
   const [pending, setPending] = useState<Set<string>>(() => new Set())
+  const [refreshing, setRefreshing] = useState(false)
+  // Only user-initiated fetches surface the overlay; the interval and window-end
+  // polls keep refreshing retained data silently.
+  const refreshBudgets = () => { setRefreshing(true); return mutate().finally(() => setRefreshing(false)) }
   const bypass = data?.window.bypassLimits ?? false
   const isPending = (key: string) => pending.has(key)
   const totalAllocatedMicros = useMemo(() => (data?.budgets || []).reduce((total, budget) => total + budget.weeklyLimitMicros, 0), [data?.budgets])
@@ -152,16 +157,17 @@ export function BudgetsView() {
   const totalUsagePercent = budgetUsagePercent(totalAllocatedMicros, totalSpentMicros)
   const usageUnavailable = data?.budgets.some(budget => budget.usageAvailable === false || budget.spentMicros === null)
   const availableApiKeys = (data?.apiKeys || []).filter((key) => !data?.budgets.some((budget) => budget.apiKeyId === key.id))
-  const actions = createBudgetActions({ apiPost, apiDelete, apiPatch, mutate: () => mutate(), setPending, clearSelectedApiKey: () => setApiKeyId("") })
+  const actions = createBudgetActions({ apiPost, apiDelete, apiPatch, mutate: refreshBudgets, setPending, clearSelectedApiKey: () => setApiKeyId("") })
   const sortedBudgets = useMemo(() => sortBudgetEntries(data?.budgets || [], sortBy), [data?.budgets, sortBy])
   useBudgetAutoRefresh(data?.window, mutate)
 
   if (isLoading || !data) return <DashboardContentSkeleton variant="budgets" />
 
   return <DashboardPage spacing="normal">
-    <BudgetWindowCard data={data} onSaved={mutate} />
-    <Card>
-      <CardHeader><CardTitle variant="icon"><WalletCardsIcon className="size-5" />Budgets</CardTitle><CardDescription>Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured.</CardDescription><CardAction><Button aria-busy={isValidating} variant="outline" onClick={() => void mutate()} disabled={isValidating}>{isValidating ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></CardAction></CardHeader>
+    <BudgetWindowCard data={data} onSaved={refreshBudgets} refreshing={refreshing} />
+    <Card className="relative" aria-busy={refreshing}>
+      <RefreshScrim refreshing={refreshing} />
+      <CardHeader><CardTitle variant="icon"><WalletCardsIcon className="size-5" />Budgets</CardTitle><CardDescription>Weekly USD limits for gateway API keys. Existing keys remain unlimited until configured.</CardDescription><CardAction><Button aria-busy={refreshing} variant="outline" onClick={() => void refreshBudgets()} disabled={refreshing}>{refreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></CardAction></CardHeader>
       <CardContent spacing="stack">
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl border bg-muted/20 p-4">
@@ -287,7 +293,7 @@ function UnlimitedActivation({ active, dialogOpen, togglePending, excludedModelI
   return <AlertDialog open={dialogOpen} onOpenChange={onDialogOpenChange}><Button aria-busy={togglePending} variant={active ? "unlimited" : "unlimited-idle"} className="h-9 min-w-40" disabled={togglePending} onClick={() => onDialogOpenChange(true)}>{togglePending ? <LoadingSpinner /> : <SparklesIcon className="size-4" />}{active ? "Deactivate" : "Activate"}</Button><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{active ? "Deactivate Unlimited Mode?" : "Activate Unlimited Mode?"}</AlertDialogTitle><AlertDialogDescription>{active ? "Budget enforcement will resume immediately for every gateway key." : "Configured gateway keys will bypass their budget limits. Excluded models will stay blocked."}</AlertDialogDescription></AlertDialogHeader>{!active && <div className="space-y-3"><div className={cn("rounded-lg border p-3 text-sm", excludedModelIds.length ? "bg-muted/25" : "border-warning/30 bg-warning/5")}><div className="font-medium">{excludedModelIds.length ? `${excludedModelIds.length} model${excludedModelIds.length === 1 ? "" : "s"} will stay blocked` : "No models are excluded"}</div><div className="mt-1 text-xs text-muted-foreground">{excludedModelIds.length ? "These exclusions will be saved before activation. You can update them during the session." : "Every available model can be used during this session."}</div></div><div className="flex items-start gap-3 rounded-lg border p-3"><Checkbox id="unlimited-auto-deactivate-activation" checked={activationAutoDeactivate} onCheckedChange={(checked) => onActivationAutoDeactivateChange(checked === true)} disabled={togglePending} /><label htmlFor="unlimited-auto-deactivate-activation" className="cursor-pointer text-sm"><span className="block font-medium">Auto-deactivate at budget window end</span><span className="block text-xs text-muted-foreground">Stop this session on {endLabel}.</span></label></div></div>}<AlertDialogFooter><AlertDialogCancel disabled={togglePending}>Cancel</AlertDialogCancel><AlertDialogAction aria-busy={togglePending} disabled={togglePending} onClick={async () => { if (await onToggle(!active, activationAutoDeactivate, excludedModelIds)) onDialogOpenChange(false) }}>{togglePending && <LoadingSpinner />}{active ? "Deactivate" : "Activate Unlimited Mode"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
 }
 
-function BudgetWindowCard({ data, onSaved }: { data: Pick<BudgetsResponse, "window" | "codexAccounts">; onSaved: () => Promise<unknown> }) {
+function BudgetWindowCard({ data, onSaved, refreshing }: { data: Pick<BudgetsResponse, "window" | "codexAccounts">; onSaved: () => Promise<unknown>; refreshing: boolean }) {
   const { apiPatch } = useDashboardApi()
   const [pending, setPending] = useState(false)
   const [windowAnchorOverride, setWindowAnchorOverride] = useState<BudgetWindowAnchor | null>(null)
@@ -320,7 +326,8 @@ function BudgetWindowCard({ data, onSaved }: { data: Pick<BudgetsResponse, "wind
   }
   const customRangeValid = Boolean(customRange?.from && customRange.to && dateToAppDateTime(customRange.from, customTime) < dateToAppDateTime(customRange.to, customTime))
 
-  return <Card>
+  return <Card className="relative" aria-busy={refreshing}>
+      <RefreshScrim refreshing={refreshing} />
       <CardHeader><CardTitle variant="icon"><Clock3Icon className="size-5" />Budget window</CardTitle><CardDescription>Choose the shared accounting window used by every gateway key.</CardDescription></CardHeader>
       <CardContent>
         <div className="flex flex-col gap-4"><BudgetWindowSummary window={data.window} /><div className="flex flex-wrap items-end gap-3"><BudgetWindowSource anchor={windowAnchor} accountId={codexAccountId} accounts={codexAccounts} pending={pending} onAnchorChange={setWindowAnchorOverride} onAccountChange={setCodexAccountOverride} />{windowAnchor === "custom" && <CustomBudgetRange customRange={customRange} customTime={customTime} customRangeValid={customRangeValid} setCustomRangeOverride={setCustomRangeOverride} setCustomTimeOverride={setCustomTimeOverride} data={data} pending={pending} windowOpen={windowOpen} setWindowOpen={setWindowOpen} />}<Button className="w-full sm:w-auto" aria-busy={pending} disabled={pending || (windowAnchor === "codex" ? !codexAccountId : !customRangeValid)} onClick={() => void saveWindow()}>{pending && <LoadingSpinner />}Save window</Button></div></div>

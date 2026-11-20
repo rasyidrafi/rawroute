@@ -10,6 +10,7 @@ export function useConsoleLogs(live: boolean, scope: LogScope) {
   const pending = useRef<AbortController | null>(null)
   const [clearing, setClearing] = useState<string | null>(null)
   const [clearError, setClearError] = useState<{ scopeKey: string; message: string } | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const load = useCallback(async (method = "GET"): Promise<LogSnapshot> => {
     pending.current?.abort()
     const controller = new AbortController()
@@ -44,12 +45,15 @@ export function useConsoleLogs(live: boolean, scope: LogScope) {
       return false
     } finally { setClearing(null) }
   }
+  const snapshot = data?.workspaceId === workspaceId ? data : null
   return {
-    snapshot: data?.workspaceId === workspaceId ? data : null,
+    snapshot,
     error: error instanceof Error ? error.message : null,
     clearError: clearError?.scopeKey === scopeKey ? clearError.message : null,
     busy: isValidating || clearing === scopeKey, isInitialLoading: isLoading,
-    isRefreshing: isValidating, isClearing: clearing === scopeKey,
-    refresh: () => mutate(), clear,
+    // Only a user refetch with retained data surfaces the overlay. A retry after a
+    // failed initial load has no snapshot and keeps the skeleton; the live poll stays silent.
+    isRefreshing: refreshing && snapshot !== null, isClearing: clearing === scopeKey,
+    refresh: () => { setRefreshing(true); return mutate().finally(() => setRefreshing(false)) }, clear,
   }
 }

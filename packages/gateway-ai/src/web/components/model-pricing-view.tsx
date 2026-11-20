@@ -82,6 +82,10 @@ export function ModelPricingView() {
     dedupingInterval: 2000,
   })
   const [pending, setPending] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  // Save/delete refetches surface the overlay; the mount catalog sync and the
+  // repricing-job poll keep refreshing retained data silently.
+  const refreshPricing = () => { setRefreshing(true); return mutate().finally(() => setRefreshing(false)) }
   const [groupDialog, setGroupDialog] = useState<string | "new">()
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [groupName, setGroupName] = useState("")
@@ -121,14 +125,14 @@ export function ModelPricingView() {
       if (pricing) await apiPost("/api/admin/model-pricing", pricing)
       setRepriceGroupOpen(false); setGroupDialog(undefined)
       toast.success(reprice ? "Group saved; historical usage is being repriced." : "Group saved. Pricing applies to future requests only.")
-      void refreshPricingAfterSave(mutate)
+      void refreshPricingAfterSave(refreshPricing)
     } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to save model group") }
     finally { setPending(false) }
   }
 
   async function deleteGroup(id: string) {
     setPending(true)
-    try { await apiPost("/api/admin/model-pricing", { action: "delete-group", groupId: id }); await mutate(); return true }
+    try { await apiPost("/api/admin/model-pricing", { action: "delete-group", groupId: id }); await refreshPricing(); return true }
     catch (error) { toast.error(error instanceof Error ? error.message : "Unable to delete model group"); return false }
     finally { setPending(false) }
   }
@@ -153,7 +157,7 @@ export function ModelPricingView() {
   if (!data) return <DashboardContentSkeleton variant="model-pricing" />
   const pricingGroup = groupById(pricingDialog || "")
 
-  return <Panel title="Model pricing" description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage." icon={<DollarSignIcon />}>
+  return <Panel title="Model pricing" description="Group compatible gateway models, version their rates, and optionally apply a replacement rate to all stored usage." icon={<DollarSignIcon />} refreshing={refreshing}>
     <UngroupedModelsNotice count={data.ungroupedModels.length} />
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-medium">Model groups</div><div className="text-sm text-muted-foreground">Fixed groups are refreshed from configured models; custom groups collect models you choose.</div></div><Button size="sm" onClick={() => startGroupEdit("new")}><PlusIcon />New custom group</Button></div>
     <Table><TableColumns columns={[{ id: "Group", label: "Group" }, { id: "Type", label: "Type" }, { id: "Models", label: "Models" }, { id: "Current pricing", label: "Current pricing" }, { id: "actions" }]} /><TableBody>{sortPricingGroups(data.groups).map((group) => <PricingGroupTableRow key={group.id} group={group} members={modelsForGroup(group)} pending={pending} startGroupEdit={startGroupEdit} startPricingEdit={setPricingDialog} deleteGroup={deleteGroup} />)}{!data.groups.length && <EmptyTableRow title="No model groups found" description="Refresh to scan configured models or create a custom group." icon={DollarSignIcon} colSpan={5} />}</TableBody></Table>
@@ -178,7 +182,7 @@ export function ModelPricingView() {
       </DialogContent>
     </Dialog>
     <Dialog open={repriceGroupOpen} onOpenChange={(open) => { if (!pending) setRepriceGroupOpen(open) }}><DialogContent><DialogHeader><DialogTitle>Reprice historical usage?</DialogTitle><DialogDescription>This saves the group, replaces its active pricing with the selected canonical rates and context tiers, and applies those rates to every stored request in this group. Without a canonical model, the current rates are used. Requests without recorded token usage remain unpriced.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setRepriceGroupOpen(false)} disabled={pending}>Cancel</Button><Button variant="destructive" onClick={() => void saveGroup(true)} disabled={pending}>{pending && <LoadingSpinner />}Save and reprice</Button></DialogFooter></DialogContent></Dialog>
-    {pricingGroup && <PricingVersionDialog key={pricingGroup.id} group={pricingGroup} onClose={() => setPricingDialog(undefined)} onSaved={mutate} />}
+    {pricingGroup && <PricingVersionDialog key={pricingGroup.id} group={pricingGroup} onClose={() => setPricingDialog(undefined)} onSaved={refreshPricing} />}
   </Panel>
 }
 

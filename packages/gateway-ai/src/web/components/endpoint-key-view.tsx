@@ -16,6 +16,7 @@ import { Button } from "@rawroute/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@rawroute/ui/dialog"
 import { EmptyState } from "@rawroute/ui/empty-state"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { Input } from "@rawroute/ui/input"
 import type { ApiKey } from "../../contracts/domain"
 
@@ -34,6 +35,7 @@ export function EndpointKeyView() {
 
   if (error) return <LoadError title="Dashboard unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="endpoint-key" />
+  const refreshing = isValidating
 
   const isPending = (key: string) => pending.has(key)
 
@@ -120,7 +122,8 @@ export function EndpointKeyView() {
           </div>
         </CardContent>
       </Card>
-      <Card>
+      <Card className="relative" aria-busy={refreshing || undefined}>
+        {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle>Gateway API keys</CardTitle>
           <CardDescription>Clients use these keys to access every proxy endpoint.</CardDescription>
@@ -131,7 +134,7 @@ export function EndpointKeyView() {
       <Dialog open={Boolean(editingKey)} onOpenChange={(open) => { if (!open) setEditingKey(null) }}><DialogContent><form onSubmit={(event) => { event.preventDefault(); void renameKey() }}><DialogHeader><DialogTitle>Edit API key name</DialogTitle><DialogDescription>The key value cannot be changed.</DialogDescription></DialogHeader><div className="py-5"><label htmlFor="gateway-api-key-name" className="text-sm font-medium">Key Name</label><Input id="gateway-api-key-name" value={editingName} onChange={(event) => setEditingName(event.target.value)} maxLength={80} autoFocus className="mt-2" /></div><DialogFooter><Button type="button" variant="outline" disabled={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} onClick={() => setEditingKey(null)}>Cancel</Button><Button type="submit" aria-busy={Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))} disabled={!editingName.trim() || Boolean(editingKey && isPending(`rename-api-key:${editingKey.id}`))}>{editingKey && isPending(`rename-api-key:${editingKey.id}`) && <LoadingSpinner />}Save name</Button></DialogFooter></form></DialogContent></Dialog>
       <Dialog open={Boolean(revealedKey)} onOpenChange={(open) => { if (!open) setRevealedKey(undefined) }}><DialogContent><DialogHeader><DialogTitle>{revealedKey?.title}</DialogTitle><DialogDescription>{revealedKey?.description}</DialogDescription></DialogHeader><div className="flex items-center gap-2 py-5"><code className="min-w-0 flex-1 rounded-md border bg-muted/30 p-3 text-xs break-all">{revealedKey?.value}</code><Button aria-label="Copy revealed API key" size="icon-sm" variant="outline" onClick={() => { if (revealedKey) { void copy(revealedKey.value, "Copied") } }}><CopyIcon /></Button></div><DialogFooter><Button onClick={() => setRevealedKey(undefined)}>Done</Button></DialogFooter></DialogContent></Dialog>
         <CardContent spacing="compact-stack">
-          {!data.apiKeys.length && <EmptyState title="No gateway API keys" description="Create a key before sending requests through this workspace." icon={KeyRoundIcon} variant="compact" treatment="embedded" />}
+          {!data.apiKeys.length && <EmptyState title="No gateway API keys" description="Create a key before sending requests through this workspace." icon={KeyRoundIcon} variant="compact" treatment="embedded" refreshing={refreshing} />}
           {data.apiKeys.map((key) => {
             const pendingKey = `delete-api-key:${key.id}`
             return <div key={key.id} className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">

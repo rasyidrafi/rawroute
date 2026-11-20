@@ -8,6 +8,7 @@ import useSWR from "swr"
 import { toast } from "sonner"
 
 import { LoadError, ConfirmAction, EmptyTableRow } from "@rawroute/ui/resource-feedback"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { ProviderForm } from "./provider-form"
 import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { AiContentSkeleton as DashboardContentSkeleton } from "../skeletons"
@@ -30,6 +31,7 @@ export function ProvidersView() {
 
   if (error) return <LoadError title="Dashboard unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="providers" />
+  const refreshing = isValidating
 
   const isPending = (key: string) => pending.has(key)
   const regularProviders = data.providers.filter((provider) => provider.prefix !== "codex")
@@ -68,7 +70,8 @@ export function ProvidersView() {
   }
 
   return <DashboardPage>
-      <Card>
+      <Card className="relative" aria-busy={refreshing || undefined}>
+        {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle>Providers</CardTitle>
           <CardDescription>Choose a provider to manage its connection settings and upstream API keys.</CardDescription>
@@ -106,7 +109,8 @@ export function ProvidersView() {
           </Table>
         </CardContent>
       </Card>
-      <Card>
+      <Card className="relative" aria-busy={refreshing || undefined}>
+        {refreshing && <RefreshScrim />}
         <CardHeader>
           <CardTitle variant="icon"><LinkIcon className="size-5" />Codex Providers</CardTitle>
           <CardDescription>Manage Codex accounts separately from ordinary provider API keys.</CardDescription>

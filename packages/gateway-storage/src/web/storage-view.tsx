@@ -15,6 +15,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@rawroute/ui/field"
 import { Input } from "@rawroute/ui/input"
 import { ConfirmAction, EmptyTableRow, FormSubmitButton, LoadError } from "@rawroute/ui/resource-feedback"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
+import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@rawroute/ui/select"
 import { Table, TableBody, TableCell, TableColumns, TableRow } from "@rawroute/ui/table"
 import { Textarea } from "@rawroute/ui/textarea"
@@ -108,7 +110,7 @@ function ConnectionProbeResults({ connection }: { connection: StorageConnection 
   return <div className="flex flex-wrap gap-1" aria-label="Latest probe results">{actions.map(action => <Badge key={action} variant={statusVariant(connection.capabilities[action]?.status)}>{action}: {statusLabel(connection.capabilities[action]?.status)}</Badge>)}</div>
 }
 
-function Connections({ data, busy, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
+function Connections({ data, busy, refreshing, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; refreshing: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<StorageConnection>()
   const [checking, setChecking] = useState<StorageConnection>()
@@ -132,8 +134,9 @@ function Connections({ data, busy, send, onRefresh, clearFeedback }: { data: Sto
     setChecking(undefined)
     return true
   }
-  return <Card>
-    <CardHeader><CardTitle>{pageDetails.connections.title}</CardTitle><CardDescription>{pageDetails.connections.description}</CardDescription><CardAction><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}><RefreshCwIcon />Refresh</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => { clearFeedback(); setAdding(true) }}><PlusIcon />Add connection</Button></div></CardAction></CardHeader>
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
+    <CardHeader><CardTitle>{pageDetails.connections.title}</CardTitle><CardDescription>{pageDetails.connections.description}</CardDescription><CardAction><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy || refreshing} onClick={onRefresh}>{refreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => { clearFeedback(); setAdding(true) }}><PlusIcon />Add connection</Button></div></CardAction></CardHeader>
     <Dialog open={adding || Boolean(editing)} onOpenChange={closeConnectionDialog}><DialogContent><DialogHeader><DialogTitle>{editing ? "Edit connection" : "Add S3 connection"}</DialogTitle><DialogDescription>Credentials are encrypted at rest. Endpoints use path-style addressing. Private origins require deployment approval.</DialogDescription></DialogHeader><ConnectionForm key={`${adding || Boolean(editing) ? "open" : "closed"}:${editing?.id || "new"}`} connection={editing} busy={busy} onSave={saveConnection} /></DialogContent></Dialog>
     <Dialog open={Boolean(checking)} onOpenChange={open => { if (!open) setChecking(undefined) }}><DialogContent><DialogHeader><DialogTitle>Capability checks for {checking?.name || "S3 connection"}</DialogTitle><DialogDescription>Keep only the operations verified for this connection.</DialogDescription></DialogHeader>{checking && <ConnectionCapabilitiesForm connection={checking} busy={busy} onSave={saveCapabilities} />}</DialogContent></Dialog>
     <CardContent><Table>
@@ -153,7 +156,7 @@ function Connections({ data, busy, send, onRefresh, clearFeedback }: { data: Sto
   </Card>
 }
 
-function Buckets({ data, busy, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
+function Buckets({ data, busy, refreshing, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; refreshing: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
   const [attaching, setAttaching] = useState(false)
   const [probing, setProbing] = useState<string>()
   const activeConnections = data.connections
@@ -162,8 +165,9 @@ function Buckets({ data, busy, send, onRefresh, clearFeedback }: { data: Storage
     setAttaching(false)
     return true
   }
-  return <Card>
-    <CardHeader><CardTitle>{pageDetails.buckets.title}</CardTitle><CardDescription>{pageDetails.buckets.description} A gateway name maps to an existing upstream bucket; RawRoute does not create or delete remote buckets.</CardDescription><CardAction><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}><RefreshCwIcon />Refresh</Button><Button variant="outline" size="sm" disabled={busy || !activeConnections.length} onClick={() => { clearFeedback(); setAttaching(true) }}><PlusIcon />Attach bucket</Button></div></CardAction></CardHeader>
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
+    <CardHeader><CardTitle>{pageDetails.buckets.title}</CardTitle><CardDescription>{pageDetails.buckets.description} A gateway name maps to an existing upstream bucket; RawRoute does not create or delete remote buckets.</CardDescription><CardAction><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy || refreshing} onClick={onRefresh}>{refreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button><Button variant="outline" size="sm" disabled={busy || !activeConnections.length} onClick={() => { clearFeedback(); setAttaching(true) }}><PlusIcon />Attach bucket</Button></div></CardAction></CardHeader>
     <Dialog open={attaching} onOpenChange={setAttaching}><DialogContent><DialogHeader><DialogTitle>Attach an existing bucket</DialogTitle><DialogDescription>A globally unique name is used by gateway clients.</DialogDescription></DialogHeader><DialogForm key={attaching ? "open" : "closed"} label="Attach bucket" pending={busy} onSubmit={attach}>
       <Field><FieldLabel htmlFor="storage-connection">Connection</FieldLabel><Select name="connectionId" required items={activeConnections.map(connection => ({ value: connection.id, label: connection.name || "S3 connection" }))}><SelectTrigger id="storage-connection"><SelectValue placeholder="Select a connection" /></SelectTrigger><SelectContent><SelectGroup>{activeConnections.map(connection => <SelectItem key={connection.id} value={connection.id}>{connection.name || "S3 connection"}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
       <TextField name="name" label="Gateway bucket name" /><TextField name="upstreamBucket" label="Existing upstream bucket name" />
@@ -193,7 +197,7 @@ function KeyPolicyForm({ data, clientKey, busy, onSave }: { data: StorageDashboa
   </DialogForm>
 }
 
-function Keys({ data, busy, send, credential, setCredential, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; send: Send; credential?: Credential; setCredential: (value: Credential | undefined) => void; onRefresh: () => void; clearFeedback: () => void }) {
+function Keys({ data, busy, refreshing, send, credential, setCredential, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; refreshing: boolean; send: Send; credential?: Credential; setCredential: (value: Credential | undefined) => void; onRefresh: () => void; clearFeedback: () => void }) {
   const [creating, setCreating] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<StorageClientKey>()
   const activeBuckets = data.buckets.filter(bucket => bucket.state === "active")
@@ -208,8 +212,9 @@ function Keys({ data, busy, send, credential, setCredential, onRefresh, clearFee
     return true
   }
   return <>
-    <Card>
-      <CardHeader><CardTitle>{pageDetails.keys.title}</CardTitle><CardDescription>{pageDetails.keys.description} Each key belongs to this workspace; upstream credentials are never shared with clients.</CardDescription><CardAction><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}><RefreshCwIcon />Refresh</Button><Button variant="outline" size="sm" disabled={busy || !activeBuckets.length} onClick={() => { clearFeedback(); setCredential(undefined); setCreating(true) }}><PlusIcon />Create key</Button></div></CardAction></CardHeader>
+    <Card className="relative" aria-busy={refreshing || undefined}>
+      {refreshing && <RefreshScrim />}
+      <CardHeader><CardTitle>{pageDetails.keys.title}</CardTitle><CardDescription>{pageDetails.keys.description} Each key belongs to this workspace; upstream credentials are never shared with clients.</CardDescription><CardAction><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy || refreshing} onClick={onRefresh}>{refreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button><Button variant="outline" size="sm" disabled={busy || !activeBuckets.length} onClick={() => { clearFeedback(); setCredential(undefined); setCreating(true) }}><PlusIcon />Create key</Button></div></CardAction></CardHeader>
       <Dialog open={creating} onOpenChange={setCreating}><DialogContent><DialogHeader><DialogTitle>Create a client key</DialogTitle><DialogDescription>Its policy denies every unselected bucket or action. Copy the new secret when it is shown; it will not be saved in browser storage.</DialogDescription></DialogHeader><DialogForm key={creating ? "open" : "closed"} label="Create key" pending={busy} validate={form => !form.getAll("bucketIds").length ? "Select at least one bucket." : !form.getAll("actions").length ? "Select at least one allowed action." : undefined} onSubmit={create}>
         <TextField name="name" label="Client key name" /><FieldSet><FieldLegend>Allowed buckets</FieldLegend>{activeBuckets.length ? activeBuckets.map(bucket => <Choice key={bucket.id} name="bucketIds" value={bucket.id} label={bucket.name} />) : <FieldDescription>Attach a bucket before creating a client key.</FieldDescription>}</FieldSet><FieldSet><FieldLegend>Allowed actions</FieldLegend>{storageActions.map(action => <Choice key={action} name="actions" value={action} label={action} />)}</FieldSet>
       </DialogForm></DialogContent></Dialog>
@@ -254,8 +259,9 @@ function MultipartRecoveryItem({ upload, data, busy, send, clearFeedback }: { up
   </TableRow>
 }
 
-function MultipartRecovery({ data, busy, send, clearFeedback }: { data: StorageDashboard; busy: boolean; send: Send; clearFeedback: () => void }) {
-  return <Card>
+function MultipartRecovery({ data, busy, refreshing, send, clearFeedback }: { data: StorageDashboard; busy: boolean; refreshing: boolean; send: Send; clearFeedback: () => void }) {
+  return <Card className="relative" aria-busy={refreshing || undefined}>
+    {refreshing && <RefreshScrim />}
     <CardHeader><CardTitle>Multipart recovery</CardTitle><CardDescription>Pending uploads are cleaned up before their mappings are removed. For an unclear initiation, inspect the upstream bucket before confirming an upload is absent.</CardDescription></CardHeader>
     <CardContent><Table><TableColumns columns={[{ id: "Bucket", label: "Bucket" }, { id: "Object key", label: "Object key" }, { id: "Connection / key", label: "Connection / key" }, { id: "Status", label: "Status" }, { id: "actions", label: "", variant: "sticky-action" }]} /><TableBody>
       {data.multiparts.map(upload => <MultipartRecoveryItem key={upload.id} upload={upload} data={data} busy={busy} send={send} clearFeedback={clearFeedback} />)}
@@ -264,7 +270,7 @@ function MultipartRecovery({ data, busy, send, clearFeedback }: { data: StorageD
   </Card>
 }
 
-function Overview({ data, busy, isLoading, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; isLoading: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
+function Overview({ data, busy, isLoading, refreshing, send, onRefresh, clearFeedback }: { data: StorageDashboard; busy: boolean; isLoading: boolean; refreshing: boolean; send: Send; onRefresh: () => void; clearFeedback: () => void }) {
   const activeKeys = data.keys.filter(key => !key.revokedAt).length
   const shortcuts = [
     { href: storagePagePaths.storageConnections, label: "Connections", description: "Configure upstream services.", icon: PlugIcon },
@@ -272,11 +278,11 @@ function Overview({ data, busy, isLoading, send, onRefresh, clearFeedback }: { d
     { href: storagePagePaths.storageKeys, label: "Client keys", description: "Control client access.", icon: KeyRoundIcon },
   ]
   return <>
-    <div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-2xl font-semibold tracking-tight">{pageDetails.overview.title}</h2><p className="mt-1 text-sm text-muted-foreground">{pageDetails.overview.description}</p></div><Button variant="outline" size="sm" disabled={busy || isLoading} onClick={onRefresh}><RefreshCwIcon />Refresh</Button></div>
-    <div className="grid gap-4 sm:grid-cols-3">{[{ label: "Connections", value: data.connections.length }, { label: "Attached buckets", value: data.buckets.length }, { label: "Active client keys", value: activeKeys }].map(item => <Card key={item.label}><CardHeader><CardDescription>{item.label}</CardDescription><CardTitle variant="metric">{item.value}</CardTitle></CardHeader></Card>)}</div>
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-2xl font-semibold tracking-tight">{pageDetails.overview.title}</h2><p className="mt-1 text-sm text-muted-foreground">{pageDetails.overview.description}</p></div><Button variant="outline" size="sm" disabled={busy || isLoading || refreshing} onClick={onRefresh}>{refreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button></div>
+    <div className="grid gap-4 sm:grid-cols-3">{[{ label: "Connections", value: data.connections.length }, { label: "Attached buckets", value: data.buckets.length }, { label: "Active client keys", value: activeKeys }].map(item => <Card key={item.label} className="relative" aria-busy={refreshing || undefined}>{refreshing && <RefreshScrim />}<CardHeader><CardDescription>{item.label}</CardDescription><CardTitle variant="metric">{item.value}</CardTitle></CardHeader></Card>)}</div>
     <Card><CardHeader><CardTitle variant="icon"><HardDriveIcon className="size-5" />Connect an S3 client</CardTitle><CardDescription>Clients use the Storage S3 endpoint configured for this deployment, separate from the dashboard address.</CardDescription></CardHeader><CardContent className="flex flex-col" spacing="compact-flow"><p className="text-sm text-muted-foreground">Sign requests for region <code className="rounded bg-muted px-1 py-0.5">us-east-1</code>. Use path-style bucket addressing. Unsupported S3 features are rejected rather than silently ignored.</p><p className="text-sm text-muted-foreground">Start by adding a connection, attach an existing bucket, then issue a client key with only the access it needs.</p></CardContent></Card>
     <Card><CardHeader><CardTitle>Manage storage</CardTitle><CardDescription>Each step has its own controls and workspace-scoped access.</CardDescription></CardHeader><CardContent spacing="compact-flow" className="grid sm:grid-cols-3">{shortcuts.map(item => <Link key={item.href} to={item.href} className="rounded-lg border bg-muted/20 p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><div className="flex items-center gap-2 font-medium"><item.icon className="size-4" />{item.label}<ArrowRightIcon className="ml-auto size-4" /></div><p className="mt-1 text-sm text-muted-foreground">{item.description}</p></Link>)}</CardContent></Card>
-    <MultipartRecovery data={data} busy={busy} send={send} clearFeedback={clearFeedback} />
+    <MultipartRecovery data={data} busy={busy} refreshing={refreshing} send={send} clearFeedback={clearFeedback} />
   </>
 }
 
@@ -334,10 +340,11 @@ function createStorageSender({ api, mutate, setBusy, setFeedback, setCredential 
   }
 }
 
-function StorageContent({ page, busy, isLoading, data, error, feedback, credential, send, onRefresh, clearFeedback, setCredential }: {
+function StorageContent({ page, busy, isLoading, refreshing, data, error, feedback, credential, send, onRefresh, clearFeedback, setCredential }: {
   page: StoragePage
   busy: boolean
   isLoading: boolean
+  refreshing: boolean
   data: StorageDashboard
   error?: Error
   feedback?: Feedback
@@ -348,10 +355,10 @@ function StorageContent({ page, busy, isLoading, data, error, feedback, credenti
   setCredential: (value: Credential | undefined) => void
 }) {
   const content = {
-    overview: <Overview data={data} busy={busy} isLoading={isLoading} send={send} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
-    connections: <Connections data={data} busy={busy} send={send} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
-    buckets: <Buckets data={data} busy={busy} send={send} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
-    keys: <Keys data={data} busy={busy} send={send} credential={credential} setCredential={setCredential} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
+    overview: <Overview data={data} busy={busy} isLoading={isLoading} refreshing={refreshing} send={send} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
+    connections: <Connections data={data} busy={busy} refreshing={refreshing} send={send} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
+    buckets: <Buckets data={data} busy={busy} refreshing={refreshing} send={send} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
+    keys: <Keys data={data} busy={busy} refreshing={refreshing} send={send} credential={credential} setCredential={setCredential} onRefresh={onRefresh} clearFeedback={clearFeedback} />,
   }[page]
   return <DashboardPage spacing="normal" aria-busy={busy || isLoading || undefined}>
     {feedback?.kind === "error" && <Alert variant="destructive"><CircleAlertIcon /><AlertTitle>Storage needs attention</AlertTitle><AlertDescription>{feedback.message}</AlertDescription></Alert>}
@@ -372,7 +379,7 @@ function WorkspaceStorage({ page }: { page: StoragePage }) {
   if (error && !data) return <LoadError title="Storage unavailable" error={new Error("Storage configuration could not be loaded. Retry to try again.")} retrying={isValidating} onRetry={() => { void mutate() }} />
   if (isLoading || !data) return <StorageRouteSkeleton page={pageId(page)} />
   if (!data.enabled) return <NotFoundPage defaultLanding={platformPagePaths.home} />
-  return <StorageContent page={page} busy={busy} isLoading={isLoading} data={data} error={error} feedback={feedback} credential={credential} send={send} onRefresh={() => { void mutate() }} clearFeedback={() => setFeedback(undefined)} setCredential={setCredential} />
+  return <StorageContent page={page} busy={busy} isLoading={isLoading} refreshing={!error && isValidating} data={data} error={error} feedback={feedback} credential={credential} send={send} onRefresh={() => { void mutate() }} clearFeedback={() => setFeedback(undefined)} setCredential={setCredential} />
 }
 
 export function StorageView({ page }: { page: StoragePage }) {

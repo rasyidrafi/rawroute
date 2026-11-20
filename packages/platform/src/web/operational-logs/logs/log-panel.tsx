@@ -10,6 +10,7 @@ import { Button } from "@rawroute/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@rawroute/ui/card"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@rawroute/ui/alert-dialog"
 import { LoadingSpinner } from "@rawroute/ui/loading-spinner"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { LogResults } from "./log-results"
 import { LogToolbar } from "./log-toolbar"
 
@@ -44,14 +45,15 @@ export function LogPanel({ scope }: { scope: LogScope }) {
     if (value) void refresh()
   }
   return <main className={logPageClassName}>
-    <div className="mx-auto h-full max-w-7xl"><Card className="h-full">
+    <div className="mx-auto h-full max-w-7xl"><Card className="relative h-full" aria-busy={isRefreshing}>
+      <RefreshScrim refreshing={isRefreshing} />
       <CardHeader className="flex shrink-0 flex-col sm:grid"><CardTitle>{title}</CardTitle><CardDescription>{global ? "Authentication, global administration, and service activity for this instance." : "Gateway and dashboard activity for the selected workspace."}</CardDescription><CardAction><div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={() => void refresh()}>{isRefreshing ? <LoadingSpinner /> : <RefreshCwIcon />}Refresh</Button>
         <Button variant="outline" disabled={!visible.length} onClick={() => void copy()}><ClipboardIcon />Copy</Button>
         <Button variant="destructive" disabled={busy || !entries.length} onClick={() => setClearOpen(true)}><Trash2Icon />Clear</Button>
       </div></CardAction></CardHeader>
       <CardContent spacing="flow" className="flex min-h-0 flex-1 flex-col">
-        <LogToolbar level={level} setLevel={setLevel} query={query} setQuery={setQuery} source={activeSource} setSource={setSource} sources={sources} live={live} setLive={toggleLive} />
+        <LogToolbar level={level} setLevel={setLevel} query={query} setQuery={setQuery} source={activeSource} setSource={setSource} sources={sources} live={live} setLive={toggleLive} disabled={isInitialLoading} />
         {error && <p className="text-sm text-destructive" role="alert">{error} Existing entries may be stale.</p>}
         <LogResults entries={visible} loading={isInitialLoading} hasError={Boolean(error)} />
       </CardContent>

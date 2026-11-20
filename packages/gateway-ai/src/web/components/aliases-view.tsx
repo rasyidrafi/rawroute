@@ -8,6 +8,7 @@ import { ApiRequestError } from "@rawroute/platform/web/api"
 import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { DashboardPage } from "@rawroute/ui/page-layout"
 import { LoadError, ConfirmAction, EmptyRow } from "@rawroute/ui/resource-feedback"
+import { RefreshScrim } from "@rawroute/ui/loading-layout"
 import { AiContentSkeleton as DashboardContentSkeleton } from "../skeletons"
 import { Badge } from "@rawroute/ui/badge"
 import { Button } from "@rawroute/ui/button"
@@ -30,6 +31,7 @@ export function AliasesView() {
 
   if (error) return <LoadError title="Model routing unavailable" error={error} retrying={isValidating} onRetry={() => void mutate()} />
   if (isLoading || !data) return <DashboardContentSkeleton variant="aliases" />
+  const refreshing = isValidating
 
   const withPending = async (key: string, action: () => Promise<boolean>) => {
     setPending((current) => new Set(current).add(key))
@@ -64,7 +66,8 @@ export function AliasesView() {
   const sharedById = new Map(data.sharedModels.map((model) => [model.id, model]))
 
   return <DashboardPage>
-    <Card>
+    <Card className="relative" aria-busy={refreshing || undefined}>
+      {refreshing && <RefreshScrim />}
       <CardHeader>
         <CardTitle variant="icon"><ListOrderedIcon />Combos</CardTitle>
         <CardDescription>Select one model to create an alias, or multiple models to try in fallback order.</CardDescription>
@@ -96,7 +99,8 @@ export function AliasesView() {
         })}{!data.combos.length && <EmptyRow label="No combos yet. Add one model for an alias, or multiple models for fallback." colSpan={4} />}</TableBody>
       </Table></CardContent>
     </Card>
-    <Card>
+    <Card className="relative" aria-busy={refreshing || undefined}>
+      {refreshing && <RefreshScrim />}
       <CardHeader><CardTitle variant="icon"><Share2Icon />Shared Models</CardTitle><CardDescription>Read-only models shared into this workspace. Add one to a combo to give it a local gateway ID.</CardDescription></CardHeader>
       <CardContent><Table>
         <TableColumns columns={[{ id: "Qualified model", label: "Qualified model" }, { id: "Source workspace", label: "Source workspace" }, { id: "Status", label: "Status" }, { id: "Action", label: "Action", className: "text-right" }]} />
