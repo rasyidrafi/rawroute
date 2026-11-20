@@ -27,7 +27,7 @@ function UsageCells({ event }: { event: RequestLogDisplayEvent }) {
 }
 
 function Status({ event, parent = false }: { event: RequestLogDisplayEvent; parent?: boolean }) {
-  if (parent && !requestLogComplete(event)) return <Badge variant="outline" title="The final attempt has not been recorded. This request may still be running or its history may be incomplete.">Outcome pending / unavailable</Badge>
+  if (parent && !requestLogComplete(event)) return <Badge variant="outline" title="No final result recorded yet.">Unconfirmed</Badge>
   const success = event.status >= 200 && event.status < 300
   return <Badge variant={success ? "secondary" : "destructive"}>{success ? "Success" : "Failed"} · {event.status}</Badge>
 }

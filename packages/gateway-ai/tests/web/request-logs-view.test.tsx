@@ -88,7 +88,8 @@ test("historical attempts stay separate and incomplete chains do not claim final
   expect(markup.match(/Historical attempt/g)).toHaveLength(2)
   expect(markup).not.toContain("Expand request")
   const pending = renderToStaticMarkup(<RequestLogResults data={{ events: [{ ...event("pending"), requestId: "inflight", attemptIndex: 0, requestFinal: false, status: 400 }] }} loading={false} failed={false} />)
-  expect(pending).toContain("Outcome pending / unavailable")
+  expect(pending).toContain("Unconfirmed")
+  expect(pending).toContain('title="No final result recorded yet."')
   expect(pending).not.toContain(">Failed")
 })
 
