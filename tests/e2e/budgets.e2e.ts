@@ -97,7 +97,7 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   await page.getByRole("tab", { name: "Beyond Limits" }).click()
   await expect(page.getByText("Let selected models continue after a gateway key reaches its budget.")).toBeVisible()
   await page.getByRole("checkbox", { name: "Enabled" }).click()
-  await page.getByText("Over-limit model").click()
+  await page.getByRole("tabpanel", { name: "Beyond Limits" }).getByText("Over-limit model", { exact: true }).click()
   await page.getByRole("button", { name: "Save settings" }).click()
   await expect(page.getByText("Beyond Limits settings saved")).toBeVisible()
 
@@ -111,7 +111,7 @@ test("Beyond Limits saves selected model exceptions from the budgets page", asyn
   await expect(page.getByRole("tabpanel").getByText("0 selected", { exact: true })).toBeVisible()
 
   await page.getByRole("tab", { name: "Unlimited Mode" }).click()
-  await page.getByText("Over-limit model").click()
+  await page.getByRole("tabpanel", { name: "Unlimited Mode" }).getByText("Over-limit model", { exact: true }).click()
   await page.getByRole("button", { name: "Save exclusions" }).click()
   await expect(page.getByText("Unlimited Mode exclusions saved")).toBeVisible()
   await page.getByRole("button", { name: "Activate" }).click()

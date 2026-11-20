@@ -259,9 +259,8 @@ for (const publicView of [false, true]) {
         expect(await summary.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(width >= 1280 ? 4 : width >= 640 ? 2 : 1)
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
         const usageTable = card("Usage table")
-        const hasActions = !publicView || !loading
-        await expect(usageTable.getByRole("columnheader", { name: "Actions", exact: true })).toHaveCount(hasActions ? 1 : 0)
-        await expect(usageTable.locator("tbody tr").first().locator("td")).toHaveCount(hasActions ? 9 : 8)
+        await expect(usageTable.getByRole("columnheader", { name: "Actions", exact: true })).toHaveCount(1)
+        await expect(usageTable.locator("tbody tr").first().locator("td")).toHaveCount(9)
         if (publicView && !loading) await expect(usageTable.getByText(keyRow.maskedKey, { exact: true })).toHaveCount(0)
         if (loading && !publicView) {
           const actionSkeleton = usageTable.locator("tbody tr").first().locator("td").last().locator('[data-slot="skeleton"]')
