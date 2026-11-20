@@ -21,6 +21,36 @@ async function authenticate(page: Page) {
   }
 }
 
+test("shared model rows shorten only the workspace ID and copy the full model ID", async ({ page, context }) => {
+  await authenticate(page)
+  const id = "aaeeb93b-6718-40b9-8679-f5b37b73bb55"
+  const model = "codex/gpt-5.6-luna"
+  await page.route("**/api/admin/combos", route => route.fulfill({ json: { combos: [], models: [], sharedModels: [{ id: "shared", ownerWorkspaceId: id, ownerWorkspaceName: id, sourceGatewayModelId: model, qualifiedModelId: `${id}/${model}`, status: "revoked" }] } }))
+  await page.goto("/dashboard/ai/routing")
+  await expect(page.getByText(model, { exact: true })).toBeVisible()
+  const workspace = page.getByRole("button", { name: id, exact: true })
+  await expect(workspace).toHaveText("aaeeb93b…bb55")
+  await workspace.hover()
+  await expect(page.getByRole("tooltip")).toHaveText(id)
+  await context.grantPermissions(["clipboard-read", "clipboard-write"])
+  await page.getByRole("button", { name: `Copy full model ID for ${model}` }).click()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${id}/${model}`)
+})
+
+test("combos flag a missing provider model even beyond the fallback preview", async ({ page }) => {
+  await authenticate(page)
+  const ids = ["p/one", "p/two", "p/three", "p/four", "p/deleted"]
+  await page.route("**/api/admin/combos", route => route.fulfill({ json: {
+    combos: [{ id: "route", combo: "route", name: "Test route", members: ids.map(modelId => ({ modelId, reasoning: { mode: "override", effort: "high" }, validation: { status: "verified" } })) }],
+    models: ids.slice(0, 4).map(gatewayModelId => ({ gatewayModelId })), sharedModels: [],
+  } }))
+  await page.goto("/dashboard/ai/routing")
+  const member = page.getByRole("listitem").filter({ hasText: "p/deleted" })
+  await expect(member.getByText("Unavailable", { exact: true })).toBeVisible()
+  await expect(member).not.toContainText("verified")
+  await expect(page.getByText("+1 more", { exact: true })).toBeVisible()
+})
+
 async function seedProviderAndModel(page: Page) {
   const providers = await page.request.get("/api/admin/providers", { headers: { "x-rawroute-workspace-id": "default" } })
   expect(providers.ok()).toBe(true)

@@ -3,8 +3,11 @@
 - Keep things simple; no overengineering.
 - Keep user-facing UI concise and focused on the user's task. Do not render
   unnecessary information, implementation details, internal identifiers or technical
-  jargon. Use clear labels and short, useful descriptions; explain only what users
-  need to decide or act safely. Keep essential consequences, warnings and recovery
+  jargon. Label actions by what users can do and statuses by what they mean for
+  the user's task. Omit subtitles and badges that repeat the heading, another
+  status, or an obvious control. Use technical terms only when users need them
+  to act (for example, an API key or model ID they must copy). Keep optional
+  explanations in contextual help. Keep essential consequences, warnings and recovery
   actions visible, and place confirmation-specific details in confirmation dialogs.
 - Omakase: avoid user choices and configuration unless genuinely necessary or required.
   Implementation details use fixed owner defaults, not deployment knobs. Generate
