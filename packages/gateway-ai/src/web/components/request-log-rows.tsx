@@ -7,10 +7,10 @@ import { formatAppDateTime } from "@rawroute/observability/contracts/timezone"
 import { formatCost, formatDuration, formatTokenCount } from "../../contracts/usage-display"
 import { requestLogComplete, requestLogKeyLabel, type RequestLogDisplayEvent } from "../../contracts/request-logs"
 import { RequestLogMetadata } from "./request-logs-table"
-import { ServiceTierBadge } from "./service-tier-badge"
+import { ServiceTierField } from "./service-tier-badge"
 
 export function RequestModelId({ label, value }: { label: string; value?: string }) {
-  return <div className="flex max-w-96 items-center gap-1 text-xs text-muted-foreground">
+  return <div className="flex min-w-0 items-start gap-1 text-xs text-muted-foreground">
     <span className="shrink-0">{label}:</span><span className="min-w-0 whitespace-normal break-all font-mono" title={value === undefined ? "Not recorded" : undefined}>{value ?? "—"}</span>
   </div>
 }
@@ -40,24 +40,26 @@ function ModelTitle({ event }: { event: RequestLogDisplayEvent }) {
   </span>
 }
 
-function ModelIds({ event }: { event: RequestLogDisplayEvent }) {
+function IdentityDetails({ event, nested = false, count }: { event: RequestLogDisplayEvent; nested?: boolean; count?: number }) {
   const shared = event.sharedUsage
   const resolved = shared?.role === "consumer"
     ? `${shared.peerWorkspaceId}/${shared.sourceGatewayModelId}`
     : event.routing?.modelId || shared?.sourceGatewayModelId
-  return <>
+  const requestId = nested ? event.id : event.requestId || event.id
+  return <div data-slot="request-identity-details" className="grid max-w-96 grid-cols-1 gap-x-4 whitespace-normal sm:grid-cols-2 min-[1600px]:flex min-[1600px]:max-w-none min-[1600px]:flex-wrap">
     <RequestModelId label="Payload" value={event.requestedModel} />
+    <ServiceTierField event={event} />
     <RequestModelId label="Resolved" value={resolved} />
-  </>
+    <div className="min-w-0 text-xs text-muted-foreground" title={requestId}>{nested ? "Attempt" : event.requestId ? "Request" : "Historical attempt"}: <span className="font-mono">{requestId.slice(0, 8)}</span>{count !== undefined && ` · ${count} recorded ${count === 1 ? "attempt" : "attempts"}`}</div>
+  </div>
 }
 
 export function RequestAttemptRow({ event, nested = false, id }: { event: RequestLogDisplayEvent; nested?: boolean; id?: string }) {
   return <TableRow id={id} data-slot={nested ? "request-attempt-row" : "request-log-row"}>
     <TableCell><div className={nested ? "ml-3 border-l-2 border-border pl-4" : undefined}>
       {nested && <div className="text-xs text-muted-foreground">{(event.attemptIndex ?? 0) + 1} · {event.attemptIndex === 0 ? "Main" : "Fallback"}</div>}
-      <div className="flex max-w-96 flex-wrap items-center gap-1"><ModelTitle event={event} /><ServiceTierBadge event={event} /></div>
-      <ModelIds event={event} />
-      <div className="text-xs text-muted-foreground" title={nested ? event.id : event.requestId || event.id}>{nested ? "Attempt" : event.requestId ? "Request" : "Historical attempt"}: {(nested ? event.id : event.requestId || event.id).slice(0, 8)}</div>
+      <div className="max-w-96 whitespace-normal"><ModelTitle event={event} /></div>
+      <IdentityDetails event={event} nested={nested} />
     </div></TableCell>
     <TableCell><RequestLogMetadata event={event} /></TableCell>
     <TableCell>{requestLogKeyLabel(event)}</TableCell>
@@ -88,7 +90,7 @@ export function requestGroupSummary(attempts: RequestLogDisplayEvent[]) {
 function GroupUsageCells({ summary }: { summary: ReturnType<typeof requestGroupSummary> }) {
   return <>
     {summary.singleUsage ? <TokenCell event={summary.singleUsage} /> : <TableCell>{summary.hasUsage ? formatTokenCount(summary.tokens) : "Unavailable"}<div className="text-xs text-muted-foreground">{!summary.hasUsage ? "Provider usage not recorded" : summary.partialUsage ? "Known usage · partial" : "All attempts"}</div></TableCell>}
-    <TableCell>{summary.hasCost ? formatCost(summary.cost) : "Unpriced"}<div className="text-xs text-muted-foreground">{[summary.partialCost ? "Partial cost" : "All attempts", summary.estimated ? "Estimated" : ""].filter(Boolean).join(" · ")}</div></TableCell>
+    <TableCell>{summary.hasCost ? formatCost(summary.cost) : "Unpriced"}{(!summary.partialCost || summary.estimated) && <div className="text-xs text-muted-foreground">{[!summary.partialCost ? "All attempts" : "", summary.estimated ? "Estimated" : ""].filter(Boolean).join(" · ")}</div>}</TableCell>
   </>
 }
 
@@ -98,9 +100,7 @@ function GroupIdentity({ final, count, expanded, id, toggle }: { final: RequestL
     <Button variant="ghost" size="sm" className="max-w-96 justify-start whitespace-normal text-left" aria-label={`${expanded ? "Collapse" : "Expand"} request ${requestId}`} aria-expanded={expanded} aria-controls={expanded ? id : undefined} onClick={toggle}>
       {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}<ModelTitle event={final} />
     </Button>
-    <ServiceTierBadge event={final} />
-    <ModelIds event={final} />
-    <div className="max-w-96 whitespace-normal text-xs text-muted-foreground" title={requestId}>Request: {requestId.slice(0, 8)} · {count} recorded {count === 1 ? "attempt" : "attempts"}</div>
+    <IdentityDetails event={final} count={count} />
   </TableCell>
 }
 
@@ -118,7 +118,7 @@ export function RequestLogGroup({ attempts }: { attempts: RequestLogDisplayEvent
       <TableCell>{requestLogKeyLabel(final)}</TableCell>
       <TableCell><Status event={final} parent /></TableCell>
       <GroupUsageCells summary={summary} />
-      <TableCell>{formatDuration(summary.duration)}<div className="text-xs text-muted-foreground">Recorded span</div></TableCell>
+      <TableCell>{formatDuration(summary.duration)}</TableCell>
       <TableCell>{formatAppDateTime(final.completedAt)}</TableCell>
     </TableRow>
     {expanded && attempts.map((event, index) => <RequestAttemptRow key={event.id} event={event} nested id={index === 0 ? id : undefined} />)}

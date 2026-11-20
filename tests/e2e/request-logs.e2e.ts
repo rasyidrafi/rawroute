@@ -19,7 +19,15 @@ test("fallback request expands in execution order and survives refresh", async (
   await expect(group.getByText("Success · 200", { exact: true })).toBeVisible()
   await expect(group).toContainText("80 in · 0 cache · 20 out")
   await expect(group.getByText("Known usage · partial", { exact: true })).toHaveCount(0)
-  await expect(page.getByText("Partial cost", { exact: true })).toBeVisible()
+  await expect(group).not.toContainText("Partial cost")
+  await expect(group).not.toContainText("Recorded span")
+  const details = group.locator('[data-slot="request-identity-details"]')
+  await expect(details).toContainText("Tier:")
+  for (const [width, display, columns] of [[390, "grid", 1], [1280, "grid", 2], [1800, "flex", 0]] as const) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect(details).toHaveCSS("display", display)
+    if (columns) expect(await details.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(columns)
+  }
   const expand = page.getByRole("button", { name: "Expand request chain-123", exact: true })
   await expand.focus()
   await page.keyboard.press("Enter")
@@ -40,7 +48,7 @@ test("fallback request expands in execution order and survives refresh", async (
   }
   await page.getByRole("button", { name: "Collapse request chain-123", exact: true }).click()
   await expect(children).toHaveCount(0)
-  await expect(page.getByText("Historical attempt: historic", { exact: true })).toBeVisible()
+  await expect(page.locator('[data-slot="request-log-row"]')).toContainText("Historical attempt: historic")
 })
 
 test("shared fallback with multiple recorded usages keeps the aggregate and resolves the source workspace model", async ({ page, emptyWorkspaceId }) => {
@@ -105,7 +113,7 @@ test("shared owner usage stays flat and identifies the consumer despite inherite
     await expect(row).toContainText("Shared usage · HT Non SHI")
     await expect(row).toContainText("Payload:luna")
     await expect(row).toContainText("Resolved:codex/luna")
-    await expect(row.getByText("Standard", { exact: true })).toBeVisible()
+    await expect(row.locator('[data-slot="request-identity-details"]')).toContainText("Tier: Standard")
   }
   await expect(page.getByText("Success via fallback · 200", { exact: true })).toHaveCount(0)
   await expect(page.getByText("Unknown key", { exact: false })).toHaveCount(0)

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
-import { ServiceTierBadge } from "../../src/web/components/service-tier-badge"
+import { ServiceTierField } from "../../src/web/components/service-tier-badge"
 
-test("tier badge preserves requested non-Standard tiers when upstream reports Standard", () => {
+test("tier field preserves requested non-Standard tiers when upstream reports Standard", () => {
   const cases = [
     { requestedServiceTier: "priority", sentServiceTier: "flex", effectiveServiceTier: "default", label: "Fast (OpenAI)", source: "user payload" },
     { requestedServiceTier: "ultrafast", effectiveServiceTier: "standard", label: "Ultrafast", source: "user payload" },
@@ -16,10 +16,11 @@ test("tier badge preserves requested non-Standard tiers when upstream reports St
     { requestedServiceTier: "priority", sentServiceTier: "auto", label: "Auto", source: "gateway payload" },
     { requestedServiceTier: "priority", effectiveServiceTier: "auto", label: "Fast (OpenAI)", source: "user payload" },
     { requestedServiceTier: "auto", label: "Auto", source: "user payload" },
-    { label: "Tier unknown", source: "not recorded" },
+    { label: "Unknown", source: "not recorded" },
   ]
   for (const { label, source, ...tiers } of cases) {
-    const markup = renderToStaticMarkup(<ServiceTierBadge event={{ ...tiers, pricingConfidence: "unpriced" }} />)
+    const markup = renderToStaticMarkup(<ServiceTierField event={{ ...tiers, pricingConfidence: "unpriced" }} />)
+    expect(markup).toContain("Tier:")
     expect(markup).toContain(`>${label}</span>`)
     expect(markup).toContain(`source: ${source}`)
     expect(markup).toContain("Requested:")
@@ -32,7 +33,7 @@ test("tier badge preserves requested non-Standard tiers when upstream reports St
 })
 
 test("requested-tier fallback keeps the upstream report and assumed evidence in the tooltip", () => {
-  const markup = renderToStaticMarkup(<ServiceTierBadge event={{ requestedServiceTier: "priority", sentServiceTier: "priority", effectiveServiceTier: "default", pricingConfidence: "assumed" }} />)
+  const markup = renderToStaticMarkup(<ServiceTierField event={{ requestedServiceTier: "priority", sentServiceTier: "priority", effectiveServiceTier: "default", pricingConfidence: "assumed" }} />)
   expect(markup).toContain(">Fast (OpenAI)</span>")
   expect(markup).toContain("served: default; evidence: assumed; pricing: assumed")
   expect(markup).toContain("source: user payload")
