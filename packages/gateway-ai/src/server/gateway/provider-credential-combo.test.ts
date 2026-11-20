@@ -90,6 +90,47 @@ test("tries alternate credentials and combo members before repeating a failed ta
   expect(calls[2]).toContain("retry-second.synthetic.invalid")
 })
 
+test("classifies original provider failures before conversion and tries combo alternatives", async () => {
+  await runInWorkspace(workspace, async () => {
+    const first = await providerModel("Classified retry first")
+    await upsertProviderApiKey(first.provider.id, { name: "Quota key", key: "quota-synthetic-key", enabled: true })
+    const second = await providerModel("Classified retry second")
+    await upsertCombo({ combo: "classified-retry-combo", name: "Classified retry", members: [{ modelId: first.modelId }, { modelId: second.modelId }] })
+  })
+  const calls: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${String(input)} ${new Headers(init?.headers).get("authorization")}`)
+    if (calls.length === 1) return Response.json({ error: { code: "rate_limit_exceeded", message: "Per-minute usage limit reached. Retry in 1 second." } }, { status: 429 })
+    if (calls.length === 2) return Response.json({ error: { type: "insufficient_quota" } }, { status: 429 })
+    return chatResponse()
+  }) as unknown as typeof fetch
+  const response = await comboRequest("classified-retry-combo")
+  expect(response.status).toBe(200)
+  expect(calls).toHaveLength(3)
+  expect(calls[0]).toContain("classified-retry-first.synthetic.invalid")
+  expect(calls[1]).toContain("classified-retry-first.synthetic.invalid")
+  expect(calls[0]).not.toBe(calls[1])
+  expect(calls[2]).toContain("classified-retry-second.synthetic.invalid")
+})
+
+test("preserves a cross-protocol quota failure when no alternative succeeds", async () => {
+  const model = await runInWorkspace(workspace, async () => {
+    const provider = await upsertProvider({ name: "Anthropic quota", prefix: "anthropic-quota", baseUrl: "https://quota.synthetic.invalid", protocol: "anthropic-messages", authType: "bearer", headers: {}, enabled: true })
+    await upsertProviderApiKey(provider.id, { name: "key", key: "synthetic-key", enabled: true })
+    await upsertModel(provider.id, { gatewayModelId: "quota/model", name: "Quota", upstreamModel: "quota-model", enabled: true })
+    await upsertCombo({ combo: "quota-combo", name: "Quota", members: [{ modelId: "quota/model" }] })
+    return "quota-combo"
+  })
+  let calls = 0
+  globalThis.fetch = (async () => {
+    calls++
+    return Response.json({ error: { type: "billing_error", message: "See billing", details: { error_code: "usage_limit_reached" } } }, { status: 429 })
+  }) as unknown as typeof fetch
+  const response = await comboRequest(model)
+  expect(response.status).toBe(429)
+  expect(calls).toBe(1)
+})
+
 test("retries a single target after a transient 403", async () => {
   const target = await runInWorkspace(workspace, () => providerModel("Retry single"))
   let calls = 0
@@ -112,10 +153,10 @@ test("marks an exhausted combo as failed and bounds same-target dispatches", asy
   globalThis.fetch = (async () => { calls++; return Response.json({ error: { message: "unavailable" } }, { status: 503 }) }) as unknown as typeof fetch
   const response = await comboRequest("retry-exhausted")
   expect(response.status).toBe(503)
-  expect(calls).toBe(3)
+  expect(calls).toBe(5)
   const events = await runInWorkspace(workspace, () => listUsageEvents())
-  expect(events.filter(event => event.requestedModel === "retry-exhausted").map(event => event.requestFinal)).toEqual([false, false, true])
-})
+  expect(events.filter(event => event.requestedModel === "retry-exhausted").map(event => event.requestFinal)).toEqual([false, false, false, false, true])
+}, 15_000)
 
 test("retries a pinned Responses continuation only on its original credential", async () => {
   const target = await runInWorkspace(workspace, async () => {
@@ -227,6 +268,42 @@ test("combo routing retries local RPM capacity but stops on ambiguous provider o
   expect(ambiguousResponse.status).toBe(502)
   expect((await ambiguousResponse.json()).error.code).toBe("provider_request_outcome_unknown")
   expect(ambiguousCalls).toBe(1)
+})
+
+test("retries after concurrency admission clears without recording local poll attempts", async () => {
+  const target = await runInWorkspace(workspace, () => providerModel("Polled concurrency", { maxConcurrency: 1 }))
+  const lease = providerCredentialScheduler.acquire({ ownerWorkspaceId: workspace.id, providerId: target.provider.id, credentials: [target.credential] })
+  expect(lease.ok).toBe(true)
+  if (!lease.ok) throw new Error("Expected a held concurrency slot.")
+  lease.markDispatched()
+  let calls = 0
+  globalThis.fetch = (async () => { calls++; return chatResponse() }) as unknown as typeof fetch
+  try {
+    const pending = comboRequest(target.modelId)
+    setTimeout(() => lease.release(), 50)
+    const response = await pending
+    expect(response.status).toBe(200)
+    expect(calls).toBe(1)
+    const events = await runInWorkspace(workspace, () => listUsageEvents())
+    expect(events.filter(event => event.requestedModel === target.modelId).map(event => event.status)).toEqual([200])
+  } finally {
+    lease.release()
+  }
+})
+
+test("does not dispatch the first request after its gateway deadline", async () => {
+  const target = await runInWorkspace(workspace, () => providerModel("Expired deadline"))
+  let calls = 0
+  globalThis.fetch = (async () => { calls++; return chatResponse() }) as unknown as typeof fetch
+  const response = await runInWorkspace(workspace, () => proxyGatewayRequestInWorkspace(new Request("http://rawroute.test/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: target.modelId, messages: [{ role: "user", content: "hello" }] }),
+  }), "/v1/chat/completions", { id: "synthetic-gateway-key" }, Date.now() - 1))
+  expect(response.status).toBe(503)
+  expect(calls).toBe(0)
+  const events = await runInWorkspace(workspace, () => listUsageEvents())
+  expect(events.filter(event => event.requestedModel === target.modelId)).toHaveLength(0)
 })
 
 test("combo-member policy probes use provider admission without a caller identity", async () => {

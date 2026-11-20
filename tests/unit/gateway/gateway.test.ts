@@ -433,6 +433,21 @@ test("tries combo members in order after an upstream failure", async () => {
   expect(forwardedModels).toEqual(["a", "b"])
 })
 
+test("public combo response preserves converted quota status and hides its internal marker", async () => {
+  mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "anthropic-messages", enabled: true }])
+  mocks.listModels.mockResolvedValue([{ id: "a", providerId: "p", gatewayModelId: "p/a", name: "A", upstreamModel: "a", enabled: true }])
+  mocks.listCombos.mockResolvedValue([{ id: "combo", combo: "quota", name: "Quota", members: [{ modelId: "p/a" }] }])
+  const fetchMock = spyOn(fetchTarget, "fetch").mockImplementation(mock(async () => Response.json({ error: { type: "billing_error", message: "See billing", details: { error_code: "usage_limit_reached" } } }, { status: 429 })))
+  const response = await proxyGatewayRequest(new Request("http://gateway/v1/chat/completions", {
+    method: "POST", headers: { authorization: "Bearer gateway-secret", "content-type": "application/json" },
+    body: JSON.stringify({ model: "quota", messages: [{ role: "user", content: "hello" }] }),
+  }))
+  expect(response.status).toBe(429)
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(response.headers.has("x-rawroute-quota-failure")).toBe(false)
+  expect(await response.json()).toMatchObject({ error: { message: "See billing" } })
+})
+
 test("does not try another combo member after a streaming response is exposed", async () => {
   mocks.listProviders.mockResolvedValue([{ id: "p", name: "Provider", prefix: "p", protocol: "openai-chat", authType: "none", enabled: true }])
   mocks.listModels.mockResolvedValue(["a", "b"].map((id) => ({ id, providerId: "p", gatewayModelId: `p/${id}`, name: id, upstreamModel: id, enabled: true })))

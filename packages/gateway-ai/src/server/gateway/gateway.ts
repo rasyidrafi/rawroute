@@ -22,7 +22,7 @@ import { collectStreamUsage } from "./stream-usage"
 import { withSessionPromptCacheKey } from "./prompt-cache"
 import { prepareProviderRequest, ProtocolConversionError, proxyToProvider, responseHeaders } from "./transport"
 import { applyServiceTierOverride, requestServiceTier, serviceTierProfile } from "../../contracts/service-tier"
-import { GatewayRetry } from "./retry"
+import { classifyUpstreamFailure, GatewayRetry } from "./retry"
 
 function estimateRequest(body: unknown) {
   const value = body && typeof body === "object" ? body as Record<string, unknown> : {}
@@ -171,12 +171,13 @@ async function canonicalModelsResponse() {
 }
 
 export async function proxyGatewayRequest(request: Request, path = new URL(request.url).pathname) {
+  const deadlineAt = GatewayRetry.defaultDeadlineAt()
   const authenticated = await authenticateProxyKey(request)
   if (!authenticated) {
     recordLog("gateway.authentication.rejected", { protocol: protocolForLogPath(path) }, { level: "warn" })
     return new Response(JSON.stringify({ error: { message: "Invalid gateway API key." } }), { status: 401, headers: { "content-type": "application/json" } })
   }
-  return runWithGatewayAuditIdentity(authenticated.apiKey.id, () => runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey)))
+  return runWithGatewayAuditIdentity(authenticated.apiKey.id, () => runInWorkspace(authenticated.workspace, () => proxyGatewayRequestInWorkspace(request, path, authenticated.apiKey, deadlineAt)))
     .then(normalizeRoutingFailure)
     .then(responseWithoutComboHeaders)
 }
@@ -189,11 +190,13 @@ async function releaseBudgetReservationWithLog(reservation: BudgetReservation | 
   }
 }
 
-function responseWithoutComboHeaders(response: Response) {
+function responseWithoutComboHeaders(response: Response, keepQuotaFailure = false) {
   const headers = responseHeaders(response.headers)
   headers.delete("x-rawroute-combo-terminal")
   headers.delete("x-rawroute-combo-member-unavailable")
   headers.delete("x-rawroute-retry-deadline")
+  headers.delete("x-rawroute-no-dispatch")
+  if (!keepQuotaFailure) headers.delete("x-rawroute-quota-failure")
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
@@ -224,7 +227,7 @@ function routingErrorMessage(value: unknown): string {
 function confirmedLimitError(code: string | undefined, message: string) {
   const normalizedCode = code?.replace(/[-:]/g, "_") || ""
   if (["usage_limit_reached", "insufficient_quota", "quota_exceeded", "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "requests_per_minute_exceeded"].includes(normalizedCode)) return true
-  return ["usage limit reached", "quota exceeded", "quota exhausted", "insufficient quota", "rate limit exceeded", "requests per minute", "request per minute", "too many requests", "weekly budget exceeded"].some((phrase) => message.includes(phrase))
+  return ["quota exceeded", "quota exhausted", "insufficient quota", "rate limit exceeded", "requests per minute", "request per minute", "too many requests", "weekly budget exceeded"].some((phrase) => message.includes(phrase)) || /^(?:your )?usage limit reached(?:[.!?]|$)/.test(message)
 }
 
 export async function normalizeRoutingFailure(response: Response) {
@@ -246,7 +249,9 @@ export async function normalizeRoutingFailure(response: Response) {
   const syntheticCooldownCodes = new Set(["model_cooldown", "codex_cooldown", "combo_cooldown", "combo_rate_limited"])
   const syntheticCooldown = Boolean(code && syntheticCooldownCodes.has(code)) || message.includes("cooldown is still active") || message.includes("credentials for model") && message.includes("cooling down")
   const localProviderRpmLimit = code === "provider_credential_rpm_limit"
-  const confirmedLimit = response.headers.get("x-rawroute-combo-terminal") === "1" && response.headers.get("x-rawroute-retry-deadline") !== "1" || localProviderRpmLimit || confirmedLimitError(code, message)
+  const localProviderConcurrencyLimit = code === "provider_credential_concurrency_limit"
+  const quotaFailure = response.headers.get("x-rawroute-quota-failure") === "1" || classifyUpstreamFailure(response.status, body) === "quota"
+  const confirmedLimit = response.headers.get("x-rawroute-combo-terminal") === "1" && response.headers.get("x-rawroute-retry-deadline") !== "1" || localProviderRpmLimit || localProviderConcurrencyLimit || quotaFailure || confirmedLimitError(code, message)
   if (!syntheticCooldown && confirmedLimit) return new Response(body, { status: response.status, statusText: response.statusText, headers })
 
   headers.delete("retry-after")
@@ -254,17 +259,17 @@ export async function normalizeRoutingFailure(response: Response) {
   return Response.json({ error: { code: "upstream_unavailable", message: "Upstream routing is temporarily unavailable." } }, { status: 503, headers })
 }
 
-export async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }) {
+export async function proxyGatewayRequestInWorkspace(request: Request, path: string, apiKey: { id: string; name?: string }, deadlineAt = GatewayRetry.defaultDeadlineAt()) {
   const isInference = request.method === "POST" && supportedInferencePath(path)
   if (!isInference) return proxyGatewaySingleRequest(request, path, apiKey)
   let release: () => void
   try { release = admitGatewayExecution() }
   catch { return Response.json({ error: { message: "Gateway is draining requests for maintenance." } }, { status: 503 }) }
-  try { return await routeGatewayInference(request, path, apiKey) }
+  try { return await routeGatewayInference(request, path, apiKey, deadlineAt) }
   finally { release() }
 }
 
-async function routeGatewayInference(request: Request, path: string, apiKey: { id: string; name?: string }) {
+async function routeGatewayInference(request: Request, path: string, apiKey: { id: string; name?: string }, deadlineAt: number) {
   const rawBody = new Uint8Array(await request.clone().arrayBuffer())
   let payload: Record<string, unknown> | undefined
   try {
@@ -274,9 +279,9 @@ async function routeGatewayInference(request: Request, path: string, apiKey: { i
   const requestedModel = typeof payload?.model === "string" ? payload.model.trim() : ""
   const protocol = protocolForPath(path)!
   const attempt: RequestAttempt = { requestId: crypto.randomUUID(), requestedModel: typeof payload?.model === "string" ? payload.model : undefined, requestedServiceTier: requestServiceTier(payload || {}, serviceTierProfile(protocol)), attemptIndex: 0, last: true }
-  const retry = new GatewayRetry()
+  const retry = new GatewayRetry({ deadlineAt })
   const retrySignal = AbortSignal.any([request.signal, gatewayDrainSignal()])
-  if (!requestedModel) return proxyGatewaySingleRequest(request, path, apiKey, undefined, undefined, attempt)
+  if (!requestedModel) return proxyGatewaySingleRequest(request, path, apiKey, undefined, undefined, attempt, retry)
   const combo = (await listCombos()).find((entry) => entry.combo === requestedModel)
   if (!combo) {
     let response: Response
@@ -293,9 +298,14 @@ async function routeGatewayInference(request: Request, path: string, apiKey: { i
         previousAttempt = current
       }
       if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1" || gatewayDrainSignal().aborted) { if (previousAttempt) await flushAttempt(previousAttempt, !response.ok || recordedCurrent); return response }
-      if (retry.round > 0 && retry.count === before) retry.retireReady(ready)
+      const noDispatch = response.headers.get("x-rawroute-no-dispatch") === "1" && retry.count === before
+      if (noDispatch) {
+        const previous = retry.previousFailure()
+        if (previous) response = previous
+      }
+      if (retry.round > 0 && retry.count === before && !noDispatch) retry.retireReady(ready)
       const again = await retry.nextRound(retrySignal).catch(async (error: unknown) => { if (request.signal.aborted) { if (previousAttempt) await flushAttempt(previousAttempt, true); throw error }; return false })
-      if (!again) { if (previousAttempt) await flushAttempt(previousAttempt, true); return response }
+      if (!again) { if (previousAttempt) await flushAttempt(previousAttempt, true); recordLog("gateway.retry.stopped", { reason: retry.stopReason() }); return response }
       await response.body?.cancel().catch(() => undefined)
       attempt.attemptIndex++
     } while (true)
@@ -311,6 +321,7 @@ async function routeGatewayInference(request: Request, path: string, apiKey: { i
   do {
   const roundDispatches = retry.count
   const ready = retry.readyTargets()
+  let noDispatchInRound = false
   for (const [memberIndex, member] of members.entries()) {
     if (!retry.useMember(memberIndex)) continue
     const memberModelId = member.modelId
@@ -346,13 +357,14 @@ async function routeGatewayInference(request: Request, path: string, apiKey: { i
     try { response = await normalizeRoutingFailure(await proxyGatewaySingleRequest(memberRequest, path, apiKey, resolved ? { ...resolved, reasoningEffort, reasoningPolicy, serviceTierOverride, customPayload } : undefined, requestedModel, memberAttempt, retry)) }
     catch (error) { if (lastAttempt) await flushAttempt(lastAttempt, true); throw error }
     retry.rememberMember(memberIndex)
+    noDispatchInRound ||= response.headers.get("x-rawroute-no-dispatch") === "1" && retry.count === dispatchesBefore
     if (response.ok || response.headers.get("x-rawroute-combo-terminal") === "1") {
       if (lastAttempt) await flushAttempt(lastAttempt, !memberAttempt.pending && !response.ok)
       await flushAttempt(memberAttempt, true)
       if (lastResponse) void lastResponse.body?.cancel().catch(() => undefined)
-      return responseWithoutComboHeaders(response)
+      return responseWithoutComboHeaders(response, true)
     }
-    if (!lastResponse || retry.count > dispatchesBefore || retry.round === 0) {
+    if (!lastResponse || retry.count > dispatchesBefore) {
       if (memberAttempt.pending) {
         if (lastAttempt) await flushAttempt(lastAttempt, false)
         lastAttempt = memberAttempt
@@ -363,10 +375,11 @@ async function routeGatewayInference(request: Request, path: string, apiKey: { i
     recordLog("gateway.combo.member.failed.trying.next", { comboId: combo.id, memberModelId, status: response.status }, { level: "warn" })
     if (retry.isPinned) break
   }
-  if (retry.round > 0 && retry.count === roundDispatches) retry.retireReady(ready)
+  if (retry.round > 0 && retry.count === roundDispatches && !noDispatchInRound) retry.retireReady(ready)
   } while (!gatewayDrainSignal().aborted && await retry.nextRound(retrySignal).catch(async (error: unknown) => { if (request.signal.aborted) { if (lastAttempt) await flushAttempt(lastAttempt, true); throw error }; return false }))
   if (lastAttempt) await flushAttempt(lastAttempt, true)
-  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }))
+  if (!gatewayDrainSignal().aborted) recordLog("gateway.retry.stopped", { reason: retry.stopReason() })
+  return responseWithoutComboHeaders(lastResponse || new Response(JSON.stringify({ error: { message: "No combo models are available." } }), { status: 503, headers: { "content-type": "application/json" } }), true)
 }
 
 type RequestAttempt = { routeName?: string; requestId: string; requestedModel?: string; requestedServiceTier?: string; attemptIndex: number; last: boolean; pending?: GatewayUsageRecordingInput }
@@ -563,7 +576,7 @@ async function proxyGatewaySingleRequest(request: Request, path: string, apiKey:
       return trackedResponse
     }
     const responseBody = new Uint8Array(await response.arrayBuffer())
-    if (retry && retry.count === dispatchedBefore && response.headers.get("x-rawroute-combo-terminal") === "1") {
+    if (retry && retry.count === dispatchedBefore && (response.headers.get("x-rawroute-combo-terminal") === "1" || response.headers.get("x-rawroute-no-dispatch") === "1")) {
       await releaseBudgetReservationWithLog(reservation)
       return new Response(responseBody, { status: response.status, statusText: response.statusText, headers: responseHeaders(response.headers) })
     }

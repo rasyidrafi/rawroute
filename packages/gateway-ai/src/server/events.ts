@@ -70,6 +70,8 @@ export const serverEvents = {
   "gateway.unable.to.release.routing.lease": { message: "Unable to release routing lease", source: "gateway" },
   "gateway.combo.member.policy.is.invalid": { message: "Combo member policy is invalid", source: "gateway" },
   "gateway.combo.member.failed.trying.next": { message: "Combo member failed, trying next", source: "gateway" },
+  "gateway.retry.scheduled": { message: "Gateway retry scheduled", source: "gateway" },
+  "gateway.retry.stopped": { message: "Gateway retry stopped", source: "gateway" },
   "gateway.model.resolution.failed": { message: "Model resolution failed", source: "gateway" },
   "gateway.budget.state.unavailable": { message: "Budget state unavailable", source: "gateway" },
   "gateway.budget.admission.denied": { message: "Budget admission denied", source: "gateway" },

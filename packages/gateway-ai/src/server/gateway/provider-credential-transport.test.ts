@@ -535,6 +535,16 @@ describe("ordinary provider credential transport", () => {
     expect(calls).toBe(2)
   })
 
+  test("keeps per-minute rate-limit responses separate from exhausted-quota failures", async () => {
+    const transient = await normalizeRoutingFailure(Response.json({ error: { code: "rate_limit_exceeded", message: "Per-minute usage limit reached. Retry in 1 second." } }, { status: 429 }))
+    expect(transient.status).toBe(429)
+    expect((await transient.json()).error.code).toBe("rate_limit_exceeded")
+
+    const exhausted = await normalizeRoutingFailure(Response.json({ error: { type: "insufficient_quota" } }, { status: 429 }))
+    expect(exhausted.status).toBe(429)
+    expect((await exhausted.json()).error.type).toBe("insufficient_quota")
+  })
+
   test("pre-dispatch failure refunds RPM, while local RPM blocking keeps a computed retry and normalizes as 429", async () => {
     await runInWorkspace(ownerWorkspace, async () => {
       _resetMemoryBackend()
