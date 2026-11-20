@@ -5,7 +5,7 @@ import { groupRequestLogEvents, requestLogComplete } from "../contracts/request-
 const instant = z.string().datetime().refine(value => new Date(value).toISOString() === value)
 const filters = z.object({ from: instant, to: instant, status: z.enum(["all", "success", "failed", "recovered", "incomplete"]), model: z.string().max(512), key: z.string().max(512) })
 const cursorSchema = filters.extend({ workspace: z.string(), at: instant, id: z.string().min(1).max(512) }).strict()
-export type RequestLogQuery = z.infer<typeof filters> & { after?: { at: string; id: string } }
+export type RequestLogQuery = z.infer<typeof filters> & { upstream?: string; after?: { at: string; id: string } }
 
 /** Cursors freeze the selected range and cannot be reused with other filters or workspaces. */
 export function parseRequestLogQuery(params: URLSearchParams, workspace: string): RequestLogQuery {
@@ -35,7 +35,7 @@ export function selectRequestLogGroups(events: UsageEvent[], query: RequestLogQu
     const complete = requestLogComplete(final)
     const success = final.status >= 200 && final.status < 300
     const recovered = complete && success && attempts.some(event => event.status < 200 || event.status >= 300)
-    return latest.completedAt >= query.from && (!query.model || attempts.some(event => event.gatewayModelId === query.model || event.requestedModel === query.model || event.routing?.modelId === query.model))
+    return latest.completedAt >= query.from && (!query.model || attempts.some(event => [event.gatewayModelId, event.requestedModel, event.routing?.modelId].some(id => id === query.model || (query.upstream && id === query.upstream))))
       && (!query.key || latest.gatewayKeyId === query.key)
       && (query.status === "all" || query.status === "incomplete" && !complete || query.status === "success" && complete && success || query.status === "failed" && complete && !success || query.status === "recovered" && recovered)
       && (!query.after || latest.completedAt < query.after.at || latest.completedAt === query.after.at && latest.id > query.after.id)

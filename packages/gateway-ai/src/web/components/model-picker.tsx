@@ -5,14 +5,14 @@ import { Button } from "@rawroute/ui/button"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@rawroute/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@rawroute/ui/popover"
 
-export type ModelPickerOption = { id: string; name: string; provider?: string | null }
+export type ModelPickerOption = { id: string; name: string; provider?: string | null; route?: true }
 
 /** Groups picker options by provider; IDs without a recorded provider fall into a trailing group. */
 export function groupModelOptions(options: ModelPickerOption[]) {
   const groups = new Map<string, ModelPickerOption[]>()
   for (const option of options) {
     if (!option.id) continue
-    const provider = option.provider || "Other models"
+    const provider = option.route ? "Aliases & combos" : option.provider || "Other models"
     const entries = groups.get(provider) || []
     entries.push(option)
     groups.set(provider, entries)

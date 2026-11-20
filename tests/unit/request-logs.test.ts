@@ -9,7 +9,7 @@ import { runInWorkspace } from "../../packages/platform/src/server/workspace-con
 import type { UsageEvent } from "../../packages/gateway-ai/src/contracts/domain"
 import { GET } from "../../packages/gateway-ai/src/server/routes/api/admin/request-logs/index"
 import type { RequestLogsPage } from "../../packages/gateway-ai/src/contracts/request-logs"
-import { createApiKey, deleteApiKey, upsertAlias, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
+import { createApiKey, deleteApiKey, upsertAlias, upsertCombo, upsertModel, upsertProvider } from "../../packages/gateway-ai/src/server/store"
 import { syncModelPricingGroups, updatePricingGroup } from "../../packages/gateway-ai/src/server/model-pricing"
 
 initializeAiPersistence()
@@ -135,16 +135,21 @@ test("request history and filters use resolved group names for gateway, upstream
     await updatePricingGroup(group.id, group.memberModelIds, undefined, "GPT-6.1 Sol")
     await upsertAlias({ alias: "sol-alias", name: "Alias label", targetModelId: model.gatewayModelId })
     const ids = [model.gatewayModelId, model.upstreamModel, "sol-alias"]
+    await upsertCombo({ combo: "sol-route", name: "Sol Route", members: [{ modelId: model.gatewayModelId }] })
     const empty = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))).json() as RequestLogsPage
     expect(empty.events).toHaveLength(0)
-    for (const id of ids) expect(empty.models).toContainEqual({ id, name: "GPT-6.1 Sol", provider: "Provider" })
+    expect(empty.models.filter(option => option.provider === "Provider")).toEqual([{ id: model.gatewayModelId, name: model.name, provider: "Provider" }])
+    expect(empty.models).toContainEqual({ id: "sol-alias", name: "Alias label", provider: null, route: true })
+    expect(empty.models).toContainEqual({ id: "sol-route", name: "Sol Route", provider: null, route: true })
     for (const [index, gatewayModelId] of ids.entries()) await recordUsageEvent(event(`resolved-${index}`, { gatewayModelId, providerId: provider.id }), null)
     const response = await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams(query)}`))
     expect(response.status).toBe(200)
     const page = await response.json() as RequestLogsPage
     expect(page.events).toHaveLength(3)
     expect(page.events.every(row => row.modelName === "GPT-6.1 Sol")).toBe(true)
-    for (const id of ids) expect(page.models).toContainEqual({ id, name: "GPT-6.1 Sol", provider: "Provider" })
+    expect(page.models).toEqual(empty.models)
+    const filtered = await (await GET(new Request(`http://localhost/api/admin/request-logs?${new URLSearchParams({ ...query, model: model.gatewayModelId })}`))).json() as RequestLogsPage
+    expect(filtered.events.map(row => row.gatewayModelId).sort()).toEqual(ids.slice(0, 2).sort())
   })
 })
 
