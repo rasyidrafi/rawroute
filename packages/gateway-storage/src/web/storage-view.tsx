@@ -5,7 +5,6 @@ import { ArrowRightIcon, CheckCircle2Icon, CircleAlertIcon, CopyIcon, DatabaseIc
 import { useDashboardApi } from "@rawroute/platform/web/api-context"
 import { useDashboardClipboard } from "@rawroute/platform/web/use-dashboard-clipboard"
 import { NotFoundPage } from "@rawroute/platform/web/pages/not-found"
-import { platformPagePaths } from "@rawroute/platform/contracts/dashboard"
 import { Alert, AlertDescription, AlertTitle } from "@rawroute/ui/alert"
 import { Badge } from "@rawroute/ui/badge"
 import { Button } from "@rawroute/ui/button"
@@ -371,7 +370,7 @@ function WorkspaceStorage({ page }: { page: StoragePage }) {
 
   if (error && !data) return <LoadError title="Storage unavailable" error={new Error("Storage configuration could not be loaded. Retry to try again.")} retrying={isValidating} onRetry={() => { void mutate() }} />
   if (isLoading || !data) return <StorageRouteSkeleton page={pageId(page)} />
-  if (!data.enabled) return <NotFoundPage defaultLanding={platformPagePaths.home} />
+  if (!data.enabled) return <NotFoundPage />
   return <StorageContent page={page} busy={busy} isLoading={isLoading} data={data} error={error} feedback={feedback} credential={credential} send={send} onRefresh={() => { void mutate() }} clearFeedback={() => setFeedback(undefined)} setCredential={setCredential} />
 }
 
@@ -380,6 +379,6 @@ export function StorageView({ page }: { page: StoragePage }) {
   const { data, error, isValidating, mutate } = useStorageStatus()
   if (error) return <LoadError title="Storage availability unavailable" error={new Error("Storage availability could not be checked. Retry to try again.")} retrying={isValidating} onRetry={() => { void mutate() }} />
   if (!data) return <StorageRouteSkeleton page={pageId(page)} />
-  if (data.state !== "available") return <NotFoundPage defaultLanding={platformPagePaths.home} />
+  if (data.state !== "available") return <NotFoundPage />
   return <WorkspaceStorage key={`${api.workspaceId}:${page}`} page={page} />
 }
