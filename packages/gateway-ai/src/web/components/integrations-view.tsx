@@ -35,7 +35,7 @@ export function IntegrationsView() {
           {endpoints.map(endpoint => <div key={endpoint.path} className="flex min-w-0 flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-medium">{endpoint.name}</h4><Badge variant="outline">{endpoint.protocol}</Badge></div>
             <p className="text-xs text-muted-foreground">{endpoint.description}</p>
-            <div className="flex min-w-0 items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{endpoint.path}</code><IntegrationCopyButton compact value={`${baseUrl}${endpoint.path}`} label={`Copy ${endpoint.name} endpoint`} /></div>
+            <div className="flex min-w-0 items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs text-muted-foreground">{baseUrl}{endpoint.path}</code><IntegrationCopyButton compact value={`${baseUrl}${endpoint.path}`} label={`Copy ${endpoint.name} endpoint`} /></div>
           </div>)}
         </div>
       </div></CardContent>

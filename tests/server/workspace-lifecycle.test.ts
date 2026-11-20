@@ -503,7 +503,7 @@ test("real shared native SSE settles both usage copies before owner deletion and
     expect(releasedAfterDeletion.ok).toBe(true)
     if (releasedAfterDeletion.ok) releasedAfterDeletion.release()
     const consumerUsage = await runInWorkspace(consumer, () => getDashboardPayload({ preset: "all" }))
-    expect(consumerUsage.summary.requests).toBe(2)
+    expect(consumerUsage.summary.requests).toBe(1)
     expect(consumerUsage.summary.tokens).toBe(4)
     expect(upstream).toHaveBeenCalledTimes(1)
   } finally { upstream.mockRestore() }

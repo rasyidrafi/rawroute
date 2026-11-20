@@ -101,13 +101,13 @@ test("returns the prior rate limit when a Codex retry expires during preparation
   const second = await runInWorkspace(workspace, () => addAccount("acct-deadline-b", "expired-token", new Date(Date.now() - 60_000).toISOString()))
   const target = resolved(first)
   target.upstream!.apiKeys = [first, second]
-  const retry = new GatewayRetry()
   const realNow = Date.now
   let offset = 0
   Date.now = () => realNow() + offset
+  const retry = new GatewayRetry({ now: () => Date.now() })
   let posts = 0
   setCodexOAuthFetchForTests((async () => {
-    offset = 31_000
+    offset = 51_000
     return Response.json({ access_token: "refreshed", refresh_token: "next", id_token: idToken("acct-deadline-b"), expires_in: 3600 })
   }) as unknown as typeof fetch)
   globalThis.fetch = mock(async (input, init) => {

@@ -46,7 +46,7 @@ test("request log results place reasoning and tools next to the model and preser
 
 test("groups fallback attempts and directly displays the only recorded usage", () => {
   const main = { ...event("failed"), requestId: "request-chain", requestedModel: "astra-auto", attemptIndex: 0, requestFinal: false, status: 400, usageAvailable: false, pricingConfidence: "unpriced" as const }
-  const fallback = { ...event("success"), requestId: "request-chain", requestedModel: "astra-auto", attemptIndex: 1, requestFinal: true }
+  const fallback = { ...event("success"), requestId: "request-chain", requestedModel: "astra-auto", attemptIndex: 1, requestFinal: true, pricingConfidence: "assumed" as const }
   const markup = renderToStaticMarkup(<RequestLogResults data={{ events: [fallback, main] }} loading={false} failed={false} />)
   expect(markup).toContain('aria-expanded="false"')
   expect(markup).toContain("Expand request request-chain")
@@ -55,7 +55,9 @@ test("groups fallback attempts and directly displays the only recorded usage", (
   expect(markup).not.toContain("via fallback")
   expect(markup).not.toContain("Known usage · partial")
   expect(markup).toContain("2 in · 0 cache · 1 out")
-  expect(markup).toContain("Partial cost")
+  expect(markup).not.toContain("Partial cost")
+  expect(markup).not.toContain("Recorded span")
+  expect(markup).toContain("Estimated")
   expect(markup).not.toContain('data-slot="request-attempt-row"')
   expect(requestGroupSummary([main, fallback])).toMatchObject({ tokens: 3, cost: 0, partialCost: true, partialUsage: true, singleUsage: fallback })
   const child = renderToStaticMarkup(<table><tbody><RequestAttemptRow event={main} nested /></tbody></table>)
@@ -102,6 +104,7 @@ test("shared owner renders one execution with consumer identity, not an inherite
   expect(markup).toContain("Shared usage · HT Non SHI")
   expect(markup).toContain("Payload:")
   expect(markup).toContain("Resolved:")
+  expect(markup).toContain("Tier:")
   expect(markup).toContain("codex/luna")
   expect(markup).toContain("Success")
   expect(markup).not.toContain("Fallback")

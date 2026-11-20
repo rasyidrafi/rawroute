@@ -6,9 +6,10 @@ import { createRecorder } from "@rawroute/observability/server/recorder"
 // String metadata is limited to operational identifiers and closed-format values.
 // Never accept arbitrary errors, names, URLs, bodies, headers or credential values.
 const identifierFields = new Set(["providerId", "modelId", "memberModelId", "accountId", "apiKeyId", "groupId", "versionId", "comboId", "aliasId", "workspaceId", "redeemRequestId"])
-const labelFields = new Set(["model", "upstreamModel", "protocol", "upstreamProtocol", "errorCode", "action", "setting", "method", "route", "page", "endedAt", "source"])
+const labelFields = new Set(["model", "upstreamModel", "protocol", "upstreamProtocol", "errorCode", "action", "setting", "method", "route", "page", "endedAt", "source", "reason"])
 const numericFields = new Set(["exitCode", "attempt", "restartAttempts", "status", "durationMs", "ttftMs", "inputTokens", "outputTokens", "cachedTokens", "messageCount", "toolCount", "count", "modelCount", "recipientCount", "added", "removed", "updated", "retryAfter", "providers", "keys", "models", "projectedCredentials", "projectedModels", "hourlyRows", "dailyRows", "rollupRows", "boundaryRows"])
 const booleanFields = new Set(["succeeded", "enabled", "autoDeactivateAtWindowEnd", "terminalEvent", "usageKnown", "reordered", "streaming", "promptCacheKey", "supportPromptCacheKey", "expiryEnabled", "weeklyExhaustionEnabled"])
+const safeRetryReasons = new Set(["upstream_failure", "rpm_limit", "concurrency_limit", "mixed_limits", "deadline", "dispatch_limit", "no_retryable_targets", "non_retryable_failure", "quota_exhausted"])
 
 export function safeDetails(input: Record<string, unknown>): LogDetails {
   const result: LogDetails = {}
@@ -25,6 +26,7 @@ export function safeDetails(input: Record<string, unknown>): LogDetails {
     }
     if (numericFields.has(key) && typeof value === "number" && Number.isFinite(value)) result[key] = value
     if (booleanFields.has(key) && typeof value === "boolean") result[key] = value
+    if (key === "reason" && typeof value === "string" && !safeRetryReasons.has(value)) continue
     if ((identifierFields.has(key) || labelFields.has(key)) && typeof value === "string" && value.length <= 160
       && /^[a-zA-Z0-9_.:/{} -]+$/.test(value) && !/bearer |sk-|password|secret|token=/i.test(value)) result[key] = value
   }
